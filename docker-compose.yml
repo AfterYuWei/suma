@@ -1,0 +1,19 @@
+services:
+  dockport:
+    container_name: dockport
+    build: .
+    # Keep production opt-in so it never competes with local development after reboot.
+    restart: "no"
+    ports:
+      - "8080:8080"
+    environment:
+      DOCKPORT_ADDRESS: ":8080"
+      DOCKPORT_DATA_ROOT: "${DOCKPORT_DATA_PATH:-/opt/dockport/data}"
+      DOCKPORT_DOCKER_HOST: "unix:///var/run/docker.sock"
+      DOCKPORT_COMPOSE_ROOT: "${DOCKPORT_DATA_PATH:-/opt/dockport/data}/compose"
+      DOCKPORT_BACKUP_ROOT: "${DOCKPORT_DATA_PATH:-/opt/dockport/data}/backups"
+      DOCKPORT_COMPOSE_COMMAND: "docker compose"
+    volumes:
+      # Compose bind sources must be visible to the host daemon at the same path.
+      - ${DOCKPORT_DATA_PATH:-/opt/dockport/data}:${DOCKPORT_DATA_PATH:-/opt/dockport/data}
+      - /var/run/docker.sock:/var/run/docker.sock

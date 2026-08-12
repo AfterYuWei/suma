@@ -1,0 +1,25 @@
+# Local agent metadata
+.agents/
+.codex/
+
+# Frontend dependencies and build output
+web/node_modules/
+web/dist/
+
+# Backend runtime data and binaries
+server/data/
+server/bin/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Logs, coverage, and editor files
+*.log
+coverage/
+.DS_Store
+.idea/
+.vscode/
