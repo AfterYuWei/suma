@@ -9,13 +9,18 @@ import (
 	"github.com/dockport/dockport/server/internal/api"
 	"github.com/dockport/dockport/server/internal/audit"
 	"github.com/dockport/dockport/server/internal/auth"
+	cdService "github.com/dockport/dockport/server/internal/cd"
 	composeService "github.com/dockport/dockport/server/internal/compose"
 	"github.com/dockport/dockport/server/internal/config"
+	credentialService "github.com/dockport/dockport/server/internal/credential"
 	"github.com/dockport/dockport/server/internal/database"
 	"github.com/dockport/dockport/server/internal/docker"
+	gitService "github.com/dockport/dockport/server/internal/git"
 	imageService "github.com/dockport/dockport/server/internal/image"
 	monitorService "github.com/dockport/dockport/server/internal/monitor"
 	networkService "github.com/dockport/dockport/server/internal/network"
+	nodeService "github.com/dockport/dockport/server/internal/node"
+	"github.com/dockport/dockport/server/internal/secret"
 	settingsService "github.com/dockport/dockport/server/internal/settings"
 	systemService "github.com/dockport/dockport/server/internal/system"
 	"github.com/dockport/dockport/server/internal/task"
@@ -26,11 +31,21 @@ type App struct {
 	logger *slog.Logger
 	server *http.Server
 	engine docker.Engine
+	nodes  *nodeService.Service
+	cd     *cdService.Service
 }
 
 func New(logger *slog.Logger) (*App, error) {
 	cfg := config.Load()
 	db, err := database.Open(cfg.DatabasePath)
+	if err != nil {
+		return nil, err
+	}
+	secretStore, err := secret.Open(cfg.SecretKeyFile)
+	if err != nil {
+		return nil, err
+	}
+	nodes, err := nodeService.NewService(db, secretStore, cfg.DockerHost)
 	if err != nil {
 		return nil, err
 	}
@@ -50,10 +65,24 @@ func New(logger *slog.Logger) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	gitClient, err := gitService.NewCLIClient(cfg.GitCommand, cfg.GitRoot)
+	if err != nil {
+		return nil, err
+	}
+	gitCredentials := gitService.NewCredentialService(db, secretStore)
+	registryCredentials := credentialService.NewRegistryService(db, secretStore)
+	continuousDelivery := cdService.NewService(db, gitClient, gitCredentials, runner, taskService, auditService, secretStore)
+	continuousDelivery.SetTargetResolver(nodes)
+	continuousDelivery.SetRegistryCredentials(registryCredentials)
+	if err := continuousDelivery.Recover(context.Background()); err != nil {
+		return nil, err
+	}
+	nodes.Start()
+	continuousDelivery.Start()
 	settings := settingsService.NewService(db, cfg)
 	monitor := monitorService.NewService(engine, cfg.DatabasePath)
 	system := systemService.NewService(engine, taskService)
-	return &App{logger: logger, engine: engine, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{Engine: engine, Containers: engine, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, Settings: settings, Monitor: monitor, System: system, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}, nil
+	return &App{logger: logger, engine: engine, nodes: nodes, cd: continuousDelivery, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{Engine: engine, Containers: engine, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: settings, Monitor: monitor, System: system, Nodes: nodes, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}, nil
 }
 
 func (a *App) Run() error {
@@ -65,8 +94,14 @@ func (a *App) Run() error {
 }
 
 func (a *App) Shutdown(ctx context.Context) error {
+	if a.cd != nil {
+		a.cd.Stop()
+	}
 	serverErr := a.server.Shutdown(ctx)
 	engineErr := a.engine.Close()
+	if a.nodes != nil {
+		_ = a.nodes.Close()
+	}
 	if serverErr != nil {
 		return serverErr
 	}

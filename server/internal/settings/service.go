@@ -17,7 +17,7 @@ type Service struct {
 }
 
 func NewService(db *gorm.DB, cfg config.Config) *Service {
-	return &Service{db: db, defaults: map[string]string{"general.server_name": "DockPort", "general.language": "en", "general.timezone": "UTC", "docker.socket": cfg.DockerHost, "docker.compose_command": cfg.ComposeCommand, "storage.compose_root": cfg.ComposeRoot, "storage.data_root": strings.TrimSuffix(cfg.DatabasePath, "/dockport.db"), "storage.backup_root": cfg.BackupRoot, "security.cookie_secure": fmt.Sprint(cfg.CookieSecure), "appearance.theme": "system", "registry.default": ""}}
+	return &Service{db: db, defaults: map[string]string{"general.server_name": "DockPort", "general.language": "en", "general.timezone": "UTC", "docker.compose_command": cfg.ComposeCommand, "storage.compose_root": cfg.ComposeRoot, "storage.data_root": strings.TrimSuffix(cfg.DatabasePath, "/dockport.db"), "storage.backup_root": cfg.BackupRoot, "security.cookie_secure": fmt.Sprint(cfg.CookieSecure), "appearance.theme": "system", "registry.default": ""}}
 }
 func (s *Service) Get(ctx context.Context) (map[string]string, error) {
 	result := make(map[string]string, len(s.defaults))
@@ -39,9 +39,6 @@ func (s *Service) Update(ctx context.Context, values map[string]string) (map[str
 	for key, value := range values {
 		if _, allowed := s.defaults[key]; !allowed {
 			return nil, fmt.Errorf("unsupported setting: %s", key)
-		}
-		if key == "docker.socket" && !strings.HasPrefix(value, "unix://") {
-			return nil, fmt.Errorf("Docker socket must use unix://")
 		}
 		row := database.Setting{Key: key, Value: value}
 		if err := s.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "key"}}, DoUpdates: clause.AssignmentColumns([]string{"value", "updated_at"})}).Create(&row).Error; err != nil {

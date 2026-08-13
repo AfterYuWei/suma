@@ -9,7 +9,7 @@ import { ResourceFrame } from './images'
 
 const sections: [TranslationKey, [string, TranslationKey][]][] = [
   ['general', [['general.server_name', 'serverName'], ['general.timezone', 'timezone']]],
-  ['compose', [['docker.socket', 'dockerSocket'], ['docker.compose_command', 'composeCommand']]],
+  ['compose', [['docker.compose_command', 'composeCommand']]],
   ['storage', [['storage.compose_root', 'composeRoot'], ['storage.data_root', 'dataRoot'], ['storage.backup_root', 'backupRoot']]],
   ['security', [['security.cookie_secure', 'secureCookies']]],
   ['registry', [['registry.default', 'defaultRegistry']]],

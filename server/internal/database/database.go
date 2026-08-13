@@ -17,8 +17,13 @@ func Open(path string) (*gorm.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	if err := db.AutoMigrate(&User{}, &Session{}, &Setting{}, &ComposeProject{}, &Task{}, &TaskLog{}, &AuditLog{}, &LoginLog{}); err != nil {
+	if err := db.AutoMigrate(&User{}, &Session{}, &Setting{}, &Node{}, &DockerTLSCredential{}, &DockerTLSCredentialNode{}, &GitCredentialNode{}, &RegistryCredentialNode{}, &ComposeProject{}, &DeliveryProject{}, &DeliveryProjectNode{}, &DeliveryProjectRegistryCredential{}, &DeliveryTargetState{}, &GitCredential{}, &DeliveryProjectGitCredential{}, &RegistryCredential{}, &DeliveryRelease{}, &DeliveryReleaseDeployment{}, &GitWebhookDelivery{}, &Task{}, &TaskLog{}, &AuditLog{}, &LoginLog{}); err != nil {
 		return nil, fmt.Errorf("migrate sqlite: %w", err)
+	}
+	// V1 made Compose names globally unique. V2 scopes names to a node, so the
+	// obsolete index must be removed explicitly because AutoMigrate preserves it.
+	if err := db.Exec("DROP INDEX IF EXISTS idx_compose_projects_name").Error; err != nil {
+		return nil, fmt.Errorf("drop legacy Compose name index: %w", err)
 	}
 	return db, nil
 }

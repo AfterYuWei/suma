@@ -6,26 +6,29 @@ import { useState } from 'react'
 import { LoadingState } from '../components/ui/loading-state'
 import type { ContainerMetrics, ContainerSummary } from '../features/containers/types'
 import { api } from '../lib/api'
+import { nodePath } from '../lib/nodes'
 import { useI18n } from '../lib/i18n'
 import { confirmDialog, promptDialog } from '../stores/dialog'
+import { useUIStore } from '../stores/ui'
 
 const ports = (value: ContainerSummary) => value.ports.slice(0, 2).map((port) => port.public_port ? `${port.public_port}→${port.private_port}/${port.type}` : `${port.private_port}/${port.type}`).join(', ') || '—'
 const memory = (bytes: number) => bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(2)} GB` : `${(bytes / 1024 ** 2).toFixed(0)} MB`
 const uptime = (seconds: number) => !seconds ? '—' : seconds >= 86400 ? `${Math.floor(seconds / 86400)}d` : seconds >= 3600 ? `${Math.floor(seconds / 3600)}h` : `${Math.floor(seconds / 60)}m`
 const stateLabel = (state: string, zh: boolean) => zh ? ({ running: '运行中', paused: '已暂停', restarting: '重启中', exited: '已停止', dead: '异常', created: '已创建' }[state] ?? state) : state
-const stateColor = (state: string) => state === 'running' ? 'bg-success' : state === 'paused' || state === 'restarting' ? 'bg-amber-400' : state === 'dead' ? 'bg-red-400' : 'bg-text-subtle'
-const stateTone = (state: string) => state === 'running' ? 'border-success/20 bg-success/10 text-success' : state === 'paused' || state === 'restarting' ? 'border-amber-400/20 bg-amber-400/10 text-amber-500' : state === 'dead' ? 'border-red-400/20 bg-red-400/10 text-red-400' : 'border-border bg-muted text-text-muted'
+const stateColor = (state: string) => state === 'running' ? 'bg-success' : state === 'paused' || state === 'restarting' ? 'bg-warning' : state === 'dead' ? 'bg-danger' : 'bg-neutral-status'
+const stateTone = (state: string) => state === 'running' ? 'border-success/20 bg-success-subtle text-success' : state === 'paused' || state === 'restarting' ? 'border-warning/20 bg-warning-subtle text-warning' : state === 'dead' ? 'border-danger/20 bg-danger-subtle text-danger' : 'border-border bg-muted text-text-muted'
 
 export function ContainersPage() {
+	const nodeID = useUIStore((state) => state.currentNodeID)
   const [filter, setFilter] = useState('')
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const [operationError, setOperationError] = useState('')
   const { t, language } = useI18n(); const zh = language === 'zh-CN'
   const queryClient = useQueryClient()
-  const query = useQuery({ queryKey: ['containers'], queryFn: () => api<ContainerSummary[]>('/containers'), refetchInterval: 10_000 })
-  const metrics = useQuery({ queryKey: ['container-metrics'], queryFn: () => api<ContainerMetrics[]>('/containers/metrics'), refetchInterval: 5_000 })
-  const action = useMutation({ mutationFn: ({ id, name }: { id: string; name: string }) => api(`/containers/${id}/${name}`, { method: 'POST' }), onMutate: () => setOperationError(''), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['containers'] }); queryClient.invalidateQueries({ queryKey: ['container-metrics'] }) }, onError: (error) => setOperationError(error.message) })
-  const batch = useMutation({ mutationFn: ({ ids, name }: { ids: string[]; name: string }) => api<{ results: { id: string; success: boolean }[] }>('/containers/batch', { method: 'POST', body: JSON.stringify({ ids, action: name, remove_volumes: false }) }), onMutate: () => setOperationError(''), onSuccess: async (result) => { const failed = result.results.filter((item) => !item.success).length; setSelected(new Set()); if (failed) setOperationError(zh ? `${failed} 个容器操作失败，请检查容器当前状态。` : `${failed} container operations failed. Check their current state.`); await Promise.all([queryClient.invalidateQueries({ queryKey: ['containers'] }), queryClient.invalidateQueries({ queryKey: ['container-metrics'] })]) }, onError: (error) => setOperationError(error.message) })
+  const query = useQuery({ queryKey: ['containers', nodeID], queryFn: () => api<ContainerSummary[]>(nodePath(nodeID, '/containers')), refetchInterval: 10_000 })
+  const metrics = useQuery({ queryKey: ['container-metrics', nodeID], queryFn: () => api<ContainerMetrics[]>(nodePath(nodeID, '/containers/metrics')), refetchInterval: 5_000 })
+  const action = useMutation({ mutationFn: ({ id, name }: { id: string; name: string }) => api(nodePath(nodeID, `/containers/${id}/${name}`), { method: 'POST' }), onMutate: () => setOperationError(''), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['containers', nodeID] }); queryClient.invalidateQueries({ queryKey: ['container-metrics', nodeID] }) }, onError: (error) => setOperationError(error.message) })
+  const batch = useMutation({ mutationFn: ({ ids, name }: { ids: string[]; name: string }) => api<{ results: { id: string; success: boolean }[] }>(nodePath(nodeID, '/containers/batch'), { method: 'POST', body: JSON.stringify({ ids, action: name, remove_volumes: false }) }), onMutate: () => setOperationError(''), onSuccess: async (result) => { const failed = result.results.filter((item) => !item.success).length; setSelected(new Set()); if (failed) setOperationError(zh ? `${failed} 个容器操作失败，请检查容器当前状态。` : `${failed} container operations failed. Check their current state.`); await Promise.all([queryClient.invalidateQueries({ queryKey: ['containers', nodeID] }), queryClient.invalidateQueries({ queryKey: ['container-metrics', nodeID] })]) }, onError: (error) => setOperationError(error.message) })
   const metricsById = new Map(metrics.data?.map((row) => [row.id, row]))
   const rows = query.data?.map((row) => ({ ...row, ...metricsById.get(row.id) })).filter((row) => `${row.id} ${row.name} ${row.image} ${row.state} ${row.status} ${ports(row)}`.toLowerCase().includes(filter.toLowerCase()))
   const running = query.data?.filter((row) => row.state === 'running').length ?? 0
@@ -48,8 +51,8 @@ export function ContainersPage() {
     if (!name?.trim() || name.trim() === row.name) return
     setOperationError('')
     try {
-      await api(`/containers/${row.id}`, { method: 'PATCH', body: JSON.stringify({ name: name.trim() }) })
-      await queryClient.invalidateQueries({ queryKey: ['containers'] })
+      await api(nodePath(nodeID, `/containers/${row.id}`), { method: 'PATCH', body: JSON.stringify({ name: name.trim() }) })
+      await queryClient.invalidateQueries({ queryKey: ['containers', nodeID] })
     } catch (error) { setOperationError(error instanceof Error ? error.message : String(error)) }
   }
   const removeContainer = async (row: ContainerSummary) => {
@@ -57,9 +60,9 @@ export function ContainersPage() {
     if (value !== row.name) return
     setOperationError('')
     try {
-      await api(`/containers/${row.id}?remove_volumes=false`, { method: 'DELETE' })
-      await queryClient.invalidateQueries({ queryKey: ['containers'] })
-      await queryClient.invalidateQueries({ queryKey: ['container-metrics'] })
+      await api(nodePath(nodeID, `/containers/${row.id}?remove_volumes=false`), { method: 'DELETE' })
+      await queryClient.invalidateQueries({ queryKey: ['containers', nodeID] })
+      await queryClient.invalidateQueries({ queryKey: ['container-metrics', nodeID] })
     } catch (error) { setOperationError(error instanceof Error ? error.message : String(error)) }
   }
   const killContainer = async (row: ContainerSummary) => {
@@ -73,7 +76,7 @@ export function ContainersPage() {
         <h1 className="text-xl font-semibold tracking-tight">{t('containers')}</h1>
         <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[10px] uppercase tracking-wider text-text-subtle">
           <StatusCount color="bg-success" value={running} label={zh ? '运行中' : 'running'} />
-          <StatusCount color="bg-amber-400" value={paused} label={zh ? '已暂停' : 'paused'} />
+          <StatusCount color="bg-warning" value={paused} label={zh ? '已暂停' : 'paused'} />
           <StatusCount color="bg-text-subtle" value={stopped} label={zh ? '已停止' : 'stopped'} />
           <span>{query.data?.length ?? 0} {zh ? '总计' : 'total'}</span>
         </div>
@@ -94,8 +97,8 @@ export function ContainersPage() {
     </div>
 
     {query.isPending && <LoadingState compact rows={7} label={zh ? '正在加载容器' : 'Loading containers'} />}
-    {query.isError && <div className="rounded-xl border border-red-900/50 py-12 text-center text-sm text-red-400">{zh ? '无法连接 Docker Engine。' : 'Unable to reach the Docker Engine.'}</div>}
-    {operationError && <div role="alert" className="mb-3 flex items-center rounded-xl border border-red-900/50 bg-red-950/20 px-3 py-2 text-xs text-red-400"><span>{operationError}</span><button type="button" onClick={() => setOperationError('')} className="ml-auto px-2 text-text-subtle hover:text-text">{zh ? '关闭' : 'Dismiss'}</button></div>}
+    {query.isError && <div className="rounded-xl border border-danger/30 bg-danger-subtle py-12 text-center text-sm text-danger">{zh ? '无法连接 Docker Engine。' : 'Unable to reach the Docker Engine.'}</div>}
+    {operationError && <div role="alert" className="mb-3 flex items-center rounded-xl border border-danger/30 bg-danger-subtle px-3 py-2 text-xs text-danger"><span>{operationError}</span><button type="button" onClick={() => setOperationError('')} className="ml-auto px-2 text-text-subtle hover:text-text">{zh ? '关闭' : 'Dismiss'}</button></div>}
     {rows && <div className="overflow-hidden rounded-2xl border border-border">
       <div className="hidden h-9 grid-cols-[minmax(220px,1fr)_150px_120px_58px_72px_58px_144px] items-center gap-3 border-b border-border bg-surface/45 px-3 font-mono text-[9px] uppercase tracking-[.14em] text-text-subtle lg:grid xl:grid-cols-[190px_minmax(150px,1fr)_110px_145px_130px_58px_72px_58px_220px] 2xl:grid-cols-[210px_minmax(170px,1fr)_120px_150px_140px_60px_76px_60px_252px]">
         <span className="flex items-center gap-2"><SelectionBox checked={allVisibleSelected} label={zh ? '选择全部可见容器' : 'Select all visible containers'} onChange={toggleVisible} />{zh ? '容器' : 'Container'}</span><span className="hidden xl:block">{zh ? '镜像' : 'Image'}</span><span className="hidden xl:block">{zh ? '来源' : 'Source'}</span><span>{zh ? '状态' : 'State'}</span><span>{zh ? '端口' : 'Ports'}</span><span>CPU</span><span>{zh ? '内存' : 'Memory'}</span><span>{zh ? '运行时间' : 'Uptime'}</span><span className="text-right">{zh ? '快捷操作' : 'Quick actions'}</span>
@@ -149,9 +152,9 @@ export function ContainersPage() {
 
 function StatusCount({ color, value, label }: { color: string; value: number; label: string }) { return <span className="flex items-center gap-1.5"><span className={`size-1.5 rounded-full ${color}`} /><b className="font-medium text-text-muted">{value}</b>{label}</span> }
 function SelectionBox({ checked, label, onChange }: { checked: boolean; label: string; onChange: () => void }) { return <label className="grid size-4 shrink-0 cursor-pointer place-items-center" title={label}><input type="checkbox" checked={checked} onChange={onChange} aria-label={label} className="peer sr-only" /><span className="grid size-3.5 place-items-center rounded-[5px] border border-border bg-background transition-colors peer-checked:border-accent peer-checked:bg-accent after:size-1.5 after:rounded-[2px] after:bg-accent-foreground after:opacity-0 after:content-[''] peer-checked:after:opacity-100" /></label> }
-function BatchAction({ label, icon: Icon, run, danger = false, disabled = false }: { label: string; icon: LucideIcon; run: () => void; danger?: boolean; disabled?: boolean }) { return <button type="button" title={label} aria-label={label} disabled={disabled} onClick={run} className={`grid size-7 place-items-center rounded-lg transition-colors disabled:opacity-40 ${danger ? 'text-red-400 hover:bg-red-400/10' : 'text-text-subtle hover:bg-surface-hover hover:text-text'}`}><Icon className={`size-3.5 ${disabled ? 'animate-pulse' : ''}`} /></button> }
+function BatchAction({ label, icon: Icon, run, danger = false, disabled = false }: { label: string; icon: LucideIcon; run: () => void; danger?: boolean; disabled?: boolean }) { return <button type="button" title={label} aria-label={label} disabled={disabled} onClick={run} className={`grid size-7 place-items-center rounded-lg transition-colors disabled:opacity-40 ${danger ? 'text-danger hover:bg-danger-subtle' : 'text-text-subtle hover:bg-surface-hover hover:text-text'}`}><Icon className={`size-3.5 ${disabled ? 'animate-pulse' : ''}`} /></button> }
 function Metric({ icon: Icon, value }: { icon: LucideIcon; value: string }) { return <div className="hidden min-w-0 items-center gap-1.5 lg:flex"><Icon className="size-3 shrink-0 text-text-subtle" strokeWidth={1.6} /><span className="truncate font-mono text-[10px] tabular-nums text-text-muted">{value}</span></div> }
 function QuickAction({ label, icon: Icon, run, active = false, spinning = false, disabled = false }: { label: string; icon: LucideIcon; run: () => void; active?: boolean; spinning?: boolean; disabled?: boolean }) { return <button type="button" title={label} aria-label={label} disabled={disabled} onClick={run} className={`grid size-7 place-items-center rounded-lg border transition-colors disabled:cursor-wait disabled:opacity-50 ${active ? 'border-accent/25 bg-accent/10 text-accent hover:bg-accent/15' : 'border-transparent text-text-subtle hover:border-border hover:bg-surface-hover hover:text-text'}`}><Icon className={`size-3.5 ${spinning ? 'animate-spin' : ''}`} /></button> }
 function QuickLink({ label, href, icon: Icon, disabled = false }: { label: string; href: string; icon: LucideIcon; disabled?: boolean }) { return <a href={disabled ? undefined : href} title={label} aria-label={label} aria-disabled={disabled} className={`grid size-7 place-items-center rounded-lg border border-transparent text-text-subtle transition-colors ${disabled ? 'cursor-not-allowed opacity-25' : 'hover:border-border hover:bg-surface-hover hover:text-text'}`}><Icon className="size-3.5" /></a> }
 function ContainerMenu({ row, zh, rename, pause, unpause, kill, remove }: { row: ContainerSummary; zh: boolean; rename: () => void; pause: () => void; unpause: () => void; kill: () => void; remove: () => void }) { return <Menu.Root><Menu.Trigger title={zh ? '更多操作' : 'More actions'} aria-label={zh ? '更多操作' : 'More actions'} className="grid size-7 place-items-center rounded-lg border border-transparent text-text-subtle transition-colors hover:border-border hover:bg-surface-hover hover:text-text data-[popup-open]:border-accent/25 data-[popup-open]:bg-accent/10 data-[popup-open]:text-accent 2xl:hidden"><MoreHorizontal className="size-3.5" /></Menu.Trigger><Menu.Portal><Menu.Positioner side="bottom" align="end" sideOffset={6} collisionPadding={10} className="z-[90] outline-none"><Menu.Popup className="w-44 origin-[var(--transform-origin)] overflow-hidden rounded-xl border border-border bg-elevated p-1.5 shadow-[0_18px_50px_rgba(0,0,0,.34)] outline-none transition-[transform,opacity] duration-150 data-[ending-style]:scale-[.97] data-[ending-style]:opacity-0 data-[starting-style]:scale-[.97] data-[starting-style]:opacity-0"><MenuAction className="xl:hidden" icon={Pencil} label={zh ? '重命名' : 'Rename'} run={rename} />{row.state === 'running' && <MenuAction className="xl:hidden" icon={Pause} label={zh ? '暂停' : 'Pause'} run={pause} />}{row.state === 'paused' && <MenuAction className="xl:hidden" icon={Play} label={zh ? '恢复' : 'Unpause'} run={unpause} />}{(row.state === 'running' || row.state === 'paused') && <MenuAction icon={OctagonX} label={zh ? '强制终止' : 'Force kill'} danger run={kill} />}<Menu.Separator className="my-1 h-px bg-border" /><MenuAction icon={Trash2} label={zh ? '删除容器' : 'Remove container'} danger run={remove} /></Menu.Popup></Menu.Positioner></Menu.Portal></Menu.Root> }
-function MenuAction({ label, icon: Icon, run, danger = false, className = '' }: { label: string; icon: LucideIcon; run: () => void; danger?: boolean; className?: string }) { return <Menu.Item onClick={run} className={`flex h-8 cursor-default items-center gap-2 rounded-lg px-2.5 text-left text-xs outline-none transition-colors data-[highlighted]:bg-surface-hover ${danger ? 'text-red-400' : 'text-text-muted data-[highlighted]:text-text'} ${className}`}><Icon className="size-3.5" />{label}</Menu.Item> }
+function MenuAction({ label, icon: Icon, run, danger = false, className = '' }: { label: string; icon: LucideIcon; run: () => void; danger?: boolean; className?: string }) { return <Menu.Item onClick={run} className={`flex h-8 cursor-default items-center gap-2 rounded-lg px-2.5 text-left text-xs outline-none transition-colors data-[highlighted]:bg-surface-hover ${danger ? 'text-danger' : 'text-text-muted data-[highlighted]:text-text'} ${className}`}><Icon className="size-3.5" />{label}</Menu.Item> }

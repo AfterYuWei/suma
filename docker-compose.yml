@@ -13,6 +13,9 @@ services:
       DOCKPORT_COMPOSE_ROOT: "${DOCKPORT_DATA_PATH:-/opt/dockport/data}/compose"
       DOCKPORT_BACKUP_ROOT: "${DOCKPORT_DATA_PATH:-/opt/dockport/data}/backups"
       DOCKPORT_COMPOSE_COMMAND: "docker compose"
+      DOCKPORT_GIT_COMMAND: "git"
+      DOCKPORT_GIT_ROOT: "${DOCKPORT_DATA_PATH:-/opt/dockport/data}/gitops"
+      DOCKPORT_SECRET_KEY_FILE: "${DOCKPORT_DATA_PATH:-/opt/dockport/data}/secret.key"
     volumes:
       # Compose bind sources must be visible to the host daemon at the same path.
       - ${DOCKPORT_DATA_PATH:-/opt/dockport/data}:${DOCKPORT_DATA_PATH:-/opt/dockport/data}

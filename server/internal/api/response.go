@@ -14,3 +14,11 @@ func success(c *gin.Context, data any) {
 func failure(c *gin.Context, status, code int, message string) {
 	c.JSON(status, envelope{Code: code, Message: message, Data: nil})
 }
+
+func deprecatedDefaultNode() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("Deprecation", "true")
+		c.Header("Link", `</api/v1/nodes>; rel="successor-version"`)
+		c.Next()
+	}
+}

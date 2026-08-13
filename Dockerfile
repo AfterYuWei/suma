@@ -14,9 +14,9 @@ COPY --from=web-build /web/dist ./webui/dist
 RUN CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-s -w" -o /dockport ./cmd/dockport
 
 FROM docker:29-cli
-RUN apk add --no-cache ca-certificates tzdata docker-cli-compose
+RUN apk add --no-cache ca-certificates tzdata docker-cli-compose git openssh-client
 COPY --from=server-build /dockport /usr/local/bin/dockport
-RUN mkdir -p /opt/dockport/data/compose /opt/dockport/data/backups && addgroup -S dockport && adduser -S -G dockport dockport && chown -R dockport:dockport /opt/dockport
+RUN mkdir -p /opt/dockport/data/compose /opt/dockport/data/gitops /opt/dockport/data/backups && addgroup -S dockport && adduser -S -G dockport dockport && chown -R dockport:dockport /opt/dockport
 EXPOSE 8080
 VOLUME ["/opt/dockport/data"]
 ENTRYPOINT ["dockport"]

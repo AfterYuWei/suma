@@ -1,8 +1,8 @@
 import { useUIStore, type Language } from '../stores/ui'
 
 const zh = {
-  overview: '概览', containers: '容器', compose: 'Compose', images: '镜像', networks: '网络', volumes: '存储卷',
-  operations: '运维', tasks: '任务', auditLogs: '审计日志', system: '系统', settings: '设置', dockerConnected: 'Docker 已连接',
+  overview: '概览', containers: '容器', compose: 'Compose', continuousDelivery: '持续交付', images: '镜像', networks: '网络', volumes: '存储卷',
+  operations: '运维', tasks: '任务', auditLogs: '审计日志', system: '系统', authenticationCenter: '认证中心', settings: '设置', nodes: '节点', dockerConnected: 'Docker 已连接',
   searchCommand: '搜索或执行命令', signOut: '退出登录', cancel: '取消', confirm: '确认', remove: '删除', create: '创建', save: '保存',
   language: '语言', chinese: '中文', english: 'English', appearance: '外观', chooseTheme: '选择界面主题。',
   dark: '深色', light: '浅色', systemTheme: '跟随系统', loading: '加载中…', retry: '重试',
@@ -34,8 +34,8 @@ export function translate(language: Language, key: TranslationKey, variables: Va
 }
 
 const english: Record<TranslationKey, string> = {
-  overview: 'Overview', containers: 'Containers', compose: 'Compose', images: 'Images', networks: 'Networks', volumes: 'Volumes',
-  operations: 'Operations', tasks: 'Tasks', auditLogs: 'Audit logs', system: 'System', settings: 'Settings', dockerConnected: 'Docker connected',
+  overview: 'Overview', containers: 'Containers', compose: 'Compose', continuousDelivery: 'Continuous Delivery', images: 'Images', networks: 'Networks', volumes: 'Volumes',
+  operations: 'Operations', tasks: 'Tasks', auditLogs: 'Audit logs', system: 'System', authenticationCenter: 'Authentication Center', settings: 'Settings', nodes: 'Nodes', dockerConnected: 'Docker connected',
   searchCommand: 'Search or run a command', signOut: 'Sign out', cancel: 'Cancel', confirm: 'Confirm', remove: 'Remove', create: 'Create', save: 'Save',
   language: 'Language', chinese: '中文', english: 'English', appearance: 'Appearance', chooseTheme: 'Choose the interface theme.',
   dark: 'Dark', light: 'Light', systemTheme: 'System', loading: 'Loading…', retry: 'Retry',

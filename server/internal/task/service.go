@@ -29,6 +29,7 @@ type Event struct {
 }
 type Reporter func(progress int, message string)
 type Work func(context.Context, Reporter) error
+type IdentifiedWork func(context.Context, string, Reporter) error
 type Service struct {
 	db          *gorm.DB
 	mu          sync.RWMutex
@@ -40,12 +41,33 @@ func NewService(db *gorm.DB) *Service {
 	return &Service{db: db, subscribers: map[string]map[chan Event]struct{}{}, cancels: map[string]context.CancelFunc{}}
 }
 
+func (s *Service) RecoverInterrupted(ctx context.Context) error {
+	now := time.Now()
+	return s.db.WithContext(ctx).Model(&database.Task{}).Where("status IN ?", []string{StatusPending, StatusRunning}).Updates(map[string]any{
+		"status": StatusCanceled, "progress": 0, "message": "DockPort restarted before the task completed", "finished_at": now,
+	}).Error
+}
+
 func (s *Service) Start(taskType, name string, work Work) (database.Task, error) {
+	return s.StartForNode("local", "Local", taskType, name, work)
+}
+
+func (s *Service) StartForNode(nodeID, nodeName, taskType, name string, work Work) (database.Task, error) {
+	return s.StartWithIDForNode(nodeID, nodeName, taskType, name, func(ctx context.Context, _ string, report Reporter) error {
+		return work(ctx, report)
+	})
+}
+
+func (s *Service) StartWithID(taskType, name string, work IdentifiedWork) (database.Task, error) {
+	return s.StartWithIDForNode("local", "Local", taskType, name, work)
+}
+
+func (s *Service) StartWithIDForNode(nodeID, nodeName, taskType, name string, work IdentifiedWork) (database.Task, error) {
 	id, err := randomID()
 	if err != nil {
 		return database.Task{}, err
 	}
-	row := database.Task{ID: id, NodeID: "local", Type: taskType, Name: name, Status: StatusPending}
+	row := database.Task{ID: id, NodeID: nodeID, NodeName: nodeName, Type: taskType, Name: name, Status: StatusPending}
 	if err := s.db.Create(&row).Error; err != nil {
 		return row, err
 	}
@@ -53,7 +75,7 @@ func (s *Service) Start(taskType, name string, work Work) (database.Task, error)
 	s.mu.Lock()
 	s.cancels[id] = cancel
 	s.mu.Unlock()
-	go s.run(ctx, row, work)
+	go s.run(ctx, row, func(ctx context.Context, report Reporter) error { return work(ctx, id, report) })
 	return row, nil
 }
 
@@ -94,8 +116,15 @@ func (s *Service) run(ctx context.Context, row database.Task, work Work) {
 }
 
 func (s *Service) List(ctx context.Context) ([]database.Task, error) {
+	return s.ListForNode(ctx, "")
+}
+func (s *Service) ListForNode(ctx context.Context, nodeID string) ([]database.Task, error) {
 	var rows []database.Task
-	return rows, s.db.WithContext(ctx).Order("created_at DESC").Limit(200).Find(&rows).Error
+	query := s.db.WithContext(ctx).Order("created_at DESC").Limit(200)
+	if nodeID != "" {
+		query = query.Where("node_id = ?", nodeID)
+	}
+	return rows, query.Find(&rows).Error
 }
 func (s *Service) Logs(ctx context.Context, id string) ([]database.TaskLog, error) {
 	var rows []database.TaskLog

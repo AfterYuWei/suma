@@ -2,9 +2,12 @@ package docker
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -57,6 +60,38 @@ func New(host string) (*Adapter, error) {
 	return &Adapter{client: cli}, nil
 }
 
+// NewTLS creates a Docker client from in-memory PEM material. The Docker SDK
+// TLS option accepts file names, so the files exist only for client creation
+// and are removed before this function returns.
+func NewTLS(host, ca, certificate, privateKey string) (*Adapter, error) {
+	directory, err := os.MkdirTemp("", "dockport-docker-tls-")
+	if err != nil {
+		return nil, fmt.Errorf("create Docker TLS directory: %w", err)
+	}
+	defer os.RemoveAll(directory)
+	if err := os.Chmod(directory, 0o700); err != nil {
+		return nil, fmt.Errorf("secure Docker TLS directory: %w", err)
+	}
+	paths := []struct{ name, value string }{{"ca.pem", ca}, {"cert.pem", certificate}, {"key.pem", privateKey}}
+	for _, item := range paths {
+		if strings.TrimSpace(item.value) == "" {
+			return nil, fmt.Errorf("Docker TLS %s is required", item.name)
+		}
+		if err := os.WriteFile(filepath.Join(directory, item.name), []byte(item.value), 0o600); err != nil {
+			return nil, fmt.Errorf("write Docker TLS %s: %w", item.name, err)
+		}
+	}
+	cli, err := client.NewClientWithOpts(
+		client.WithHost(host),
+		client.WithTLSClientConfig(filepath.Join(directory, "ca.pem"), filepath.Join(directory, "cert.pem"), filepath.Join(directory, "key.pem")),
+		client.WithAPIVersionNegotiation(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create Docker TLS client: %w", err)
+	}
+	return &Adapter{client: cli}, nil
+}
+
 func (a *Adapter) Ping(ctx context.Context) error {
 	if _, err := a.client.Ping(ctx); err != nil {
 		return fmt.Errorf("ping Docker: %w", err)
@@ -70,6 +105,30 @@ func (a *Adapter) Info(ctx context.Context) (Info, error) {
 		return Info{}, fmt.Errorf("read Docker info: %w", err)
 	}
 	return mapInfo(value), nil
+}
+
+func (a *Adapter) DiskUsage(ctx context.Context) (int64, error) {
+	usage, err := a.client.DiskUsage(ctx, dockertypes.DiskUsageOptions{})
+	if err != nil {
+		return 0, err
+	}
+	total := usage.LayersSize
+	for _, item := range usage.Containers {
+		if item != nil && item.SizeRw > 0 {
+			total += item.SizeRw
+		}
+	}
+	for _, item := range usage.Volumes {
+		if item != nil && item.UsageData != nil && item.UsageData.Size > 0 {
+			total += item.UsageData.Size
+		}
+	}
+	for _, item := range usage.BuildCache {
+		if item != nil && item.Size > 0 {
+			total += item.Size
+		}
+	}
+	return total, nil
 }
 
 func mapInfo(value system.Info) Info {
@@ -309,6 +368,24 @@ func (a *Adapter) InspectImage(ctx context.Context, id string) (imagedomain.Deta
 
 func (a *Adapter) PullImage(ctx context.Context, reference string) (io.ReadCloser, error) {
 	stream, err := a.client.ImagePull(ctx, reference, dockerimage.PullOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("pull image: %w", err)
+	}
+	return stream, nil
+}
+
+func (a *Adapter) PullImageAuthenticated(ctx context.Context, reference, server, username, secret string, token bool) (io.ReadCloser, error) {
+	auth := map[string]string{"serveraddress": server}
+	if token {
+		auth["identitytoken"] = secret
+	} else {
+		auth["username"], auth["password"] = username, secret
+	}
+	value, err := json.Marshal(auth)
+	if err != nil {
+		return nil, err
+	}
+	stream, err := a.client.ImagePull(ctx, reference, dockerimage.PullOptions{RegistryAuth: base64.RawURLEncoding.EncodeToString(value)})
 	if err != nil {
 		return nil, fmt.Errorf("pull image: %w", err)
 	}

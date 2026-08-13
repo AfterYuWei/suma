@@ -2,14 +2,14 @@
 
 ## Scope
 
-DockPort V1 is a monolithic, single-node Docker management application for the local Docker Engine. Do not implement remote agents, clusters, Swarm, Kubernetes, SSO, GitOps, monitoring platforms, marketplaces, or automated backups. Record such ideas under Future / V2 in `PLANS.md`.
+DockPort V2 is a monolithic, agentless multi-node Docker management application. Nodes connect only through mounted `unix://` sockets or direct `tcp://` Docker APIs. Do not implement remote agents, SSH execution, clusters, Swarm, Kubernetes, SSO, monitoring platforms, marketplaces, or automated backups. Record other ideas under Future in `PLANS.md`.
 
 ## Required stack
 
 - Web: React 19, TypeScript, Vite, Tailwind CSS v4, shadcn/ui conventions, Base UI, TanStack Router, TanStack Query, Zustand, Lucide React, Motion, Monaco Editor, xterm.js, and ECharts.
 - Server: Go, Gin, GORM, SQLite, Docker Go SDK, WebSocket, and the `docker compose` CLI.
-- Deployment: one monolith container, persistent application data, Compose, and the Unix socket at `/var/run/docker.sock`.
-- Never expose the unauthenticated Docker API over TCP 2375. Do not add Redis, message brokers, microservices, Swarm, or Kubernetes.
+- Deployment: one monolith container, persistent application data, Compose, and one or more mounted Unix sockets and/or mTLS Docker TCP endpoints.
+- TCP defaults to mutual TLS. Plaintext TCP is permitted only for loopback endpoints; never expose an unauthenticated Docker API to a network. Do not add Redis, message brokers, microservices, Swarm, or Kubernetes.
 
 ## Architecture
 
@@ -18,6 +18,7 @@ DockPort V1 is a monolithic, single-node Docker management application for the l
 - SQLite stores only DockPort-owned state. Container, image, network, volume, engine, and runtime status always come from Docker.
 - Long operations use the Task service and stream progress. Important user operations use the Audit service.
 - HTTP APIs use `/api/v1`; realtime endpoints use `/ws` and must cancel contexts and close Docker streams promptly on disconnect.
+- Docker resources and Compose are always resolved through an explicit node runtime. CD and the Authentication Center remain global and may target multiple nodes.
 
 ## Frontend design
 
@@ -34,6 +35,7 @@ DockPort V1 is a monolithic, single-node Docker management application for the l
 - Never log passwords, registry secrets, session tokens, or sensitive environment values. Mask likely secrets by default in the UI.
 - Confirm destructive actions. Volume deletion must explicitly warn about data loss and require the volume name.
 - Validate identifiers and paths. Compose project files must remain below the configured Compose root.
+- TCP-node bind mounts must use non-interpolated absolute sources inside that node's allowlist. TLS and registry material must use short-lived private temporary files and never enter logs.
 
 ## Testing and progress
 
@@ -42,4 +44,3 @@ DockPort V1 is a monolithic, single-node Docker management application for the l
 - Web gate: `npm run lint`, `npm run typecheck`, and `npm run build`.
 - Tests should exercise services and HTTP behavior without requiring a live daemon. Run a separate real-Docker smoke test before final completion.
 - Prefer simple, explicit composition. Avoid speculative abstractions, excessive interfaces, and repository layers with no behavior.
-

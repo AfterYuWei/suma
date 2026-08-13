@@ -1,30 +1,34 @@
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
-  Activity, Anchor, Boxes, ChevronRight, CircleGauge, Container, FileClock,
-  HardDrive, Layers3, Network, PanelLeftClose,
-  PanelLeftOpen, Search, Settings,
+  Activity, Boxes, ChevronRight, CircleGauge, Container, FileClock, GitPullRequest,
+  HardDrive, KeyRound, Layers3, Network, PanelLeftClose,
+  PanelLeftOpen, Search, Server, Settings,
 } from 'lucide-react'
 import { type ReactNode, useEffect } from 'react'
 import { api } from '../../lib/api'
+import type { DockerNode } from '../../lib/nodes'
 import { useI18n, type TranslationKey } from '../../lib/i18n'
 import { confirmDialog } from '../../stores/dialog'
 import { useUIStore } from '../../stores/ui'
 import { ThemeToggle } from '../ui/theme-toggle'
+import { LogoMark } from '../ui/logo-mark'
 import { CommandPalette } from './command-palette'
 
 const navigation = [
   { label: 'overview', icon: CircleGauge, path: '/' }, { heading: 'Docker' },
   { label: 'containers', icon: Container, path: '/containers' }, { label: 'compose', icon: Layers3, path: '/compose' },
   { label: 'images', icon: Boxes, path: '/images' }, { label: 'networks', icon: Network, path: '/networks' }, { label: 'volumes', icon: HardDrive, path: '/volumes' },
-  { heading: 'operations' }, { label: 'tasks', icon: Activity, path: '/tasks' }, { label: 'auditLogs', icon: FileClock, path: '/audit-logs' },
-  { heading: 'system' }, { label: 'settings', icon: Settings, path: '/settings' },
+  { heading: 'operations' }, { label: 'continuousDelivery', icon: GitPullRequest, path: '/continuous-delivery' }, { label: 'authenticationCenter', icon: KeyRound, path: '/authentication' }, { label: 'tasks', icon: Activity, path: '/tasks' }, { label: 'auditLogs', icon: FileClock, path: '/audit-logs' },
+  { heading: 'system' }, { label: 'nodes', icon: Server, path: '/nodes' }, { label: 'settings', icon: Settings, path: '/settings' },
 ]
 
 export function AppShell({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient()
-  const { commandOpen, setCommandOpen, sidebarOpen, toggleSidebar, language } = useUIStore()
+  const { commandOpen, setCommandOpen, sidebarOpen, toggleSidebar, language, currentNodeID, setCurrentNodeID } = useUIStore()
   const { t } = useI18n()
+  const nodes = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes'), refetchInterval: 30_000 })
+  useEffect(() => { if (!nodes.data?.length) return; if (!nodes.data.some((node) => node.id === currentNodeID && node.enabled)) setCurrentNodeID(nodes.data.find((node) => node.enabled && node.connection_type === 'unix')?.id ?? nodes.data.find((node) => node.enabled)?.id ?? nodes.data[0].id) }, [nodes.data, currentNodeID, setCurrentNodeID])
 
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
@@ -48,14 +52,11 @@ export function AppShell({ children }: { children: ReactNode }) {
     {sidebarOpen && <button className="fixed inset-0 z-30 bg-black/45 backdrop-blur-sm lg:hidden" onClick={toggleSidebar} aria-label="Close navigation" />}
     <aside className={`shell-sidebar fixed inset-y-0 left-0 z-40 flex w-[264px] flex-col bg-sidebar px-4 py-4 backdrop-blur-2xl transition-[transform,width,padding] duration-300 lg:z-30 lg:translate-x-0 ${sidebarOpen ? 'translate-x-0 lg:w-[264px]' : '-translate-x-full lg:w-20 lg:px-3'}`}>
       <div className={`flex h-11 items-center gap-3 ${sidebarOpen ? 'px-2' : 'justify-center'}`}>
-        <span className="relative grid size-9 place-items-center overflow-hidden rounded-xl border border-accent/30 bg-accent/10 text-accent">
-          <Anchor className="size-[18px]" strokeWidth={1.8} />
-          <span className="absolute inset-x-1 bottom-0 h-px bg-accent/60" />
-        </span>
+        <LogoMark className="size-8 text-accent" />
         {sidebarOpen && <>
           <div>
             <p className="text-[15px] font-semibold tracking-[-.035em]">DockPort</p>
-            <p className="font-mono text-[9px] uppercase tracking-[.2em] text-text-subtle">Local engine</p>
+            <p className="font-mono text-[9px] uppercase tracking-[.2em] text-text-subtle">Docker control plane</p>
           </div>
         </>}
       </div>
@@ -91,11 +92,14 @@ export function AppShell({ children }: { children: ReactNode }) {
         <button onClick={toggleSidebar} className="grid size-9 place-items-center rounded-xl border border-border bg-surface/60 text-text-muted transition-colors hover:bg-surface-hover hover:text-text lg:hidden" aria-label="Toggle sidebar">
           <PanelLeftOpen className="size-4" strokeWidth={1.6} />
         </button>
-        <div className="ml-4 hidden items-center gap-2 font-mono text-[10px] uppercase tracking-[.15em] text-text-subtle sm:flex">
-          <span>DockPort</span><ChevronRight className="size-3" /><span className="text-text-muted">Control plane</span>
-        </div>
+        <label className="ml-2 flex h-9 min-w-0 items-center gap-2 rounded-xl border border-border bg-surface/60 px-2 sm:ml-4 sm:px-3">
+          <span className={`size-1.5 rounded-full ${nodes.data?.find((node) => node.id === currentNodeID)?.status === 'online' ? 'bg-success' : 'bg-neutral-status'}`} />
+          <select aria-label={language === 'zh-CN' ? '当前 Docker 节点' : 'Current Docker node'} value={currentNodeID} onChange={(event) => setCurrentNodeID(event.target.value)} className="w-28 min-w-0 bg-transparent text-xs font-medium outline-none sm:w-auto sm:min-w-36">
+            {(nodes.data || []).map((node) => <option key={node.id} value={node.id} disabled={!node.enabled}>{node.name} · {node.connection_type.toUpperCase()}</option>)}
+          </select>
+        </label>
         <div className="ml-auto flex items-center gap-2">
-          <div className="mr-2 hidden items-center gap-2 text-[10px] text-text-subtle md:flex"><span className="signal-dot size-1.5 rounded-full bg-success" />Live telemetry</div>
+          <div className="mr-2 hidden items-center gap-2 text-[10px] text-text-subtle md:flex"><span className="signal-dot size-1.5 rounded-full bg-success" />Control plane online</div>
           <ThemeToggle />
           <button onClick={logout} title={t('signOut')} className="grid size-9 place-items-center rounded-xl border border-border bg-surface/60 font-mono text-[10px] font-semibold text-text-muted transition-colors hover:border-accent/30 hover:text-text">DP</button>
         </div>

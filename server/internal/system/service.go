@@ -19,5 +19,8 @@ func NewService(adapter Adapter, tasks *task.Service) *Service {
 	return &Service{adapter: adapter, tasks: tasks}
 }
 func (s *Service) Prune() (database.Task, error) {
-	return s.tasks.Start("system.prune", "Prune unused Docker resources", func(ctx context.Context, report task.Reporter) error { return s.adapter.Prune(ctx, report) })
+	return s.PruneForNode("local", "Local")
+}
+func (s *Service) PruneForNode(nodeID, nodeName string) (database.Task, error) {
+	return s.tasks.StartForNode(nodeID, nodeName, "system.prune", "Prune unused Docker resources", func(ctx context.Context, report task.Reporter) error { return s.adapter.Prune(ctx, report) })
 }

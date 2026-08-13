@@ -3,19 +3,25 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/dockport/dockport/server/internal/audit"
 	"github.com/dockport/dockport/server/internal/auth"
+	cdService "github.com/dockport/dockport/server/internal/cd"
 	composeService "github.com/dockport/dockport/server/internal/compose"
 	containerdomain "github.com/dockport/dockport/server/internal/container"
+	credentialService "github.com/dockport/dockport/server/internal/credential"
 	"github.com/dockport/dockport/server/internal/docker"
+	gitService "github.com/dockport/dockport/server/internal/git"
 	imageService "github.com/dockport/dockport/server/internal/image"
 	monitorService "github.com/dockport/dockport/server/internal/monitor"
 	networkService "github.com/dockport/dockport/server/internal/network"
+	nodeService "github.com/dockport/dockport/server/internal/node"
 	settingsService "github.com/dockport/dockport/server/internal/settings"
 	systemService "github.com/dockport/dockport/server/internal/system"
 	"github.com/dockport/dockport/server/internal/task"
@@ -28,19 +34,24 @@ import (
 const sessionCookie = "dockport_session"
 
 type Dependencies struct {
-	Engine       docker.Engine
-	Containers   containerdomain.Service
-	Auth         *auth.Service
-	Audit        *audit.Service
-	Tasks        *task.Service
-	Images       *imageService.Service
-	Networks     networkService.Service
-	Volumes      volumeService.Service
-	Compose      *composeService.Service
-	Settings     *settingsService.Service
-	Monitor      *monitorService.Service
-	System       *systemService.Service
-	CookieSecure bool
+	Engine              docker.Engine
+	Containers          containerdomain.Service
+	Auth                *auth.Service
+	Audit               *audit.Service
+	Tasks               *task.Service
+	Images              *imageService.Service
+	Networks            networkService.Service
+	Volumes             volumeService.Service
+	Compose             *composeService.Service
+	ComposeRunner       *composeService.CLIRunner
+	CD                  *cdService.Service
+	GitCredentials      *gitService.CredentialService
+	RegistryCredentials *credentialService.RegistryService
+	Settings            *settingsService.Service
+	Monitor             *monitorService.Service
+	System              *systemService.Service
+	Nodes               *nodeService.Service
+	CookieSecure        bool
 }
 type credentials struct {
 	Username string `json:"username" binding:"required"`
@@ -108,16 +119,11 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	})
 	v1.GET("/auth/session", requireAuth(deps.Auth), func(c *gin.Context) { user, _ := c.Get("user"); success(c, user) })
 
-	v1.GET("/health", func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
-		defer cancel()
-		if err := deps.Engine.Ping(ctx); err != nil {
-			c.JSON(http.StatusServiceUnavailable, envelope{Code: 10001, Message: "Docker unavailable", Data: gin.H{"status": "degraded", "docker": "unavailable"}})
-			return
-		}
-		success(c, gin.H{"status": "ok", "docker": "connected"})
-	})
-	v1.GET("/docker/info", requireAuth(deps.Auth), func(c *gin.Context) {
+	v1.GET("/health", func(c *gin.Context) { success(c, gin.H{"status": "ok", "control_plane": "available"}) })
+	if deps.Nodes != nil {
+		registerNodeRoutes(router, v1, deps)
+	}
+	v1.GET("/docker/info", requireAuth(deps.Auth), deprecatedDefaultNode(), func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 		defer cancel()
 		info, err := deps.Engine.Info(ctx)
@@ -127,7 +133,35 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		success(c, info)
 	})
-	v1.GET("/overview", requireAuth(deps.Auth), func(c *gin.Context) {
+
+	v1.POST("/webhooks/git/:hookID", func(c *gin.Context) {
+		if deps.CD == nil {
+			failure(c, http.StatusNotFound, 17501, "Webhook not found")
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(c.Request.Body, (2<<20)+1))
+		if err != nil || len(body) > 2<<20 {
+			failure(c, http.StatusRequestEntityTooLarge, 17502, "Webhook payload is too large")
+			return
+		}
+		row, err := deps.CD.HandleGitWebhook(c.Request.Context(), c.Param("hookID"), c.Request.Header, body)
+		if err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, cdService.ErrWebhookNotFound) {
+				status = http.StatusNotFound
+			}
+			if errors.Is(err, cdService.ErrWebhookSignature) {
+				status = http.StatusUnauthorized
+			}
+			if errors.Is(err, cdService.ErrWebhookDuplicate) {
+				status = http.StatusConflict
+			}
+			failure(c, status, 17503, err.Error())
+			return
+		}
+		c.JSON(http.StatusAccepted, envelope{Code: 0, Message: "success", Data: row})
+	})
+	v1.GET("/overview", requireAuth(deps.Auth), deprecatedDefaultNode(), func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 		defer cancel()
 		value, err := deps.Monitor.Overview(ctx)
@@ -137,7 +171,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		success(c, value)
 	})
-	containers := v1.Group("/containers", requireAuth(deps.Auth))
+	containers := v1.Group("/containers", requireAuth(deps.Auth), deprecatedDefaultNode())
 	containers.GET("", func(c *gin.Context) {
 		rows, err := deps.Containers.List(c.Request.Context())
 		if err != nil {
@@ -270,7 +304,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		recordAudit(c, deps.Audit, "container.remove", "container", c.Param("id"), "success")
 		success(c, gin.H{"id": c.Param("id")})
 	})
-	images := v1.Group("/images", requireAuth(deps.Auth))
+	images := v1.Group("/images", requireAuth(deps.Auth), deprecatedDefaultNode())
 	images.GET("", func(c *gin.Context) {
 		rows, err := deps.Images.List(c.Request.Context())
 		if err != nil {
@@ -331,7 +365,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		success(c, gin.H{"id": c.Param("id")})
 	})
-	networks := v1.Group("/networks", requireAuth(deps.Auth))
+	networks := v1.Group("/networks", requireAuth(deps.Auth), deprecatedDefaultNode())
 	networks.GET("", func(c *gin.Context) {
 		rows, err := deps.Networks.ListNetworks(c.Request.Context())
 		if err != nil {
@@ -379,7 +413,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		success(c, gin.H{"id": c.Param("id")})
 	})
-	volumes := v1.Group("/volumes", requireAuth(deps.Auth))
+	volumes := v1.Group("/volumes", requireAuth(deps.Auth), deprecatedDefaultNode())
 	volumes.GET("", func(c *gin.Context) {
 		rows, err := deps.Volumes.ListVolumes(c.Request.Context())
 		if err != nil {
@@ -431,7 +465,174 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		success(c, gin.H{"id": c.Param("id")})
 	})
-	compose := v1.Group("/compose", requireAuth(deps.Auth))
+	gitCredentials := v1.Group("/credentials/git", requireAuth(deps.Auth))
+	gitCredentials.GET("", func(c *gin.Context) {
+		rows, err := deps.GitCredentials.List(c.Request.Context())
+		if err != nil {
+			failure(c, http.StatusInternalServerError, 17601, "Unable to list Git credentials")
+			return
+		}
+		success(c, rows)
+	})
+	gitCredentials.POST("", func(c *gin.Context) {
+		var input gitService.CredentialInput
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, http.StatusBadRequest, 17602, "Invalid Git credential")
+			return
+		}
+		row, err := deps.GitCredentials.Create(c.Request.Context(), input)
+		if err != nil {
+			failure(c, http.StatusUnprocessableEntity, 17603, err.Error())
+			return
+		}
+		recordAudit(c, deps.Audit, "git.credential.create", "git_credential", row.Name, "success")
+		c.JSON(http.StatusCreated, envelope{Code: 0, Message: "success", Data: row})
+	})
+	gitCredentials.PUT("/:id", func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+		if err != nil {
+			failure(c, http.StatusBadRequest, 17604, "Invalid credential ID")
+			return
+		}
+		var input gitService.CredentialInput
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, http.StatusBadRequest, 17602, "Invalid Git credential")
+			return
+		}
+		row, err := deps.GitCredentials.Update(c.Request.Context(), uint(id), input)
+		if err != nil {
+			failure(c, http.StatusUnprocessableEntity, 17605, err.Error())
+			return
+		}
+		recordAudit(c, deps.Audit, "git.credential.update", "git_credential", row.Name, "success")
+		success(c, row)
+	})
+	gitCredentials.DELETE("/:id", func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+		if err != nil {
+			failure(c, http.StatusBadRequest, 17604, "Invalid credential ID")
+			return
+		}
+		if err := deps.GitCredentials.Delete(c.Request.Context(), uint(id)); err != nil {
+			failure(c, http.StatusConflict, 17606, err.Error())
+			return
+		}
+		recordAudit(c, deps.Audit, "git.credential.remove", "git_credential", c.Param("id"), "success")
+		success(c, gin.H{"id": id})
+	})
+	registryCredentials := v1.Group("/credentials/registries", requireAuth(deps.Auth))
+	registryCredentials.GET("", func(c *gin.Context) {
+		rows, err := deps.RegistryCredentials.List(c.Request.Context())
+		if err != nil {
+			failure(c, http.StatusInternalServerError, 17801, "Unable to list registry credentials")
+			return
+		}
+		success(c, rows)
+	})
+	registryCredentials.POST("", func(c *gin.Context) {
+		var input credentialService.RegistryInput
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, http.StatusBadRequest, 17802, "Invalid registry credential")
+			return
+		}
+		row, err := deps.RegistryCredentials.Create(c.Request.Context(), input)
+		if err != nil {
+			failure(c, http.StatusUnprocessableEntity, 17803, err.Error())
+			return
+		}
+		recordAudit(c, deps.Audit, "registry.credential.create", "registry_credential", row.Name, "success")
+		c.JSON(http.StatusCreated, envelope{Code: 0, Message: "success", Data: row})
+	})
+	registryCredentials.PUT("/:id", func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+		if err != nil {
+			failure(c, http.StatusBadRequest, 17804, "Invalid credential ID")
+			return
+		}
+		var input credentialService.RegistryInput
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, http.StatusBadRequest, 17802, "Invalid registry credential")
+			return
+		}
+		row, err := deps.RegistryCredentials.Update(c.Request.Context(), uint(id), input)
+		if err != nil {
+			failure(c, http.StatusUnprocessableEntity, 17805, err.Error())
+			return
+		}
+		recordAudit(c, deps.Audit, "registry.credential.update", "registry_credential", row.Name, "success")
+		success(c, row)
+	})
+	registryCredentials.DELETE("/:id", func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+		if err != nil {
+			failure(c, http.StatusBadRequest, 17804, "Invalid credential ID")
+			return
+		}
+		if err := deps.RegistryCredentials.Delete(c.Request.Context(), uint(id)); err != nil {
+			failure(c, http.StatusConflict, 17806, err.Error())
+			return
+		}
+		recordAudit(c, deps.Audit, "registry.credential.remove", "registry_credential", c.Param("id"), "success")
+		success(c, gin.H{"id": id})
+	})
+
+	delivery := v1.Group("/delivery-projects", requireAuth(deps.Auth))
+	delivery.GET("", func(c *gin.Context) {
+		rows, err := deps.CD.ListProjects(c.Request.Context())
+		if err != nil {
+			failure(c, http.StatusInternalServerError, 17711, "Unable to list delivery projects")
+			return
+		}
+		success(c, rows)
+	})
+	delivery.POST("", func(c *gin.Context) {
+		var input struct {
+			Name    string   `json:"name" binding:"required"`
+			NodeIDs []string `json:"node_ids"`
+		}
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, http.StatusBadRequest, 17712, "Project name is required")
+			return
+		}
+		if len(input.NodeIDs) == 0 {
+			input.NodeIDs = []string{"local"}
+		}
+		row, err := deps.CD.CreateProjectOnNodes(c.Request.Context(), input.Name, input.NodeIDs)
+		if err != nil {
+			failure(c, http.StatusConflict, 17713, err.Error())
+			return
+		}
+		recordAudit(c, deps.Audit, "cd.project.create", "delivery_project", input.Name, "success")
+		c.JSON(http.StatusCreated, envelope{Code: 0, Message: "success", Data: row})
+	})
+	delivery.GET("/:name", func(c *gin.Context) {
+		row, err := deps.CD.GetProject(c.Request.Context(), c.Param("name"))
+		if err != nil {
+			failure(c, http.StatusNotFound, 17701, "Delivery project not found")
+			return
+		}
+		success(c, row)
+	})
+	delivery.DELETE("/:name", func(c *gin.Context) {
+		if c.Query("confirm") != c.Param("name") {
+			failure(c, http.StatusBadRequest, 17714, "Type the project name to confirm removal")
+			return
+		}
+		force := c.Query("force") == "true"
+		preserveVolumes := c.Query("preserve_volumes") == "true"
+		if err := deps.CD.RemoveProject(c.Request.Context(), c.Param("name"), force, preserveVolumes); err != nil {
+			failure(c, http.StatusConflict, 17715, err.Error())
+			return
+		}
+		action := "cd.project.remove"
+		if force {
+			action = "cd.project.force_remove"
+		}
+		recordAudit(c, deps.Audit, action, "delivery_project", c.Param("name"), "success")
+		success(c, gin.H{"name": c.Param("name")})
+	})
+
+	compose := v1.Group("/compose", requireAuth(deps.Auth), deprecatedDefaultNode())
 	compose.GET("", func(c *gin.Context) {
 		rows, err := deps.Compose.List(c.Request.Context())
 		if err != nil {
@@ -482,6 +683,30 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		recordAudit(c, deps.Audit, "compose.create", "compose", input.Name, "success")
 		c.JSON(http.StatusCreated, envelope{Code: 0, Message: "success", Data: row})
 	})
+	compose.POST("/batch", func(c *gin.Context) {
+		var input struct {
+			Names  []string `json:"names" binding:"required"`
+			Action string   `json:"action" binding:"required"`
+		}
+		if c.ShouldBindJSON(&input) != nil || len(input.Names) == 0 || len(input.Names) > 100 {
+			failure(c, http.StatusBadRequest, 18013, "Between 1 and 100 Compose project names are required")
+			return
+		}
+		allowed := map[string]bool{"start": true, "stop": true, "restart": true, "update": true, "down": true}
+		if !allowed[input.Action] {
+			failure(c, http.StatusBadRequest, 18014, "Unsupported Compose batch action")
+			return
+		}
+		results := deps.Compose.BatchAction(c.Request.Context(), input.Names, input.Action)
+		for _, result := range results {
+			value := "failed"
+			if result.Success {
+				value = "success"
+			}
+			recordAudit(c, deps.Audit, "compose."+input.Action, "compose", result.Name, value)
+		}
+		success(c, gin.H{"action": input.Action, "results": results})
+	})
 	compose.PUT("/:name", func(c *gin.Context) {
 		var input struct {
 			Compose     string `json:"compose" binding:"required"`
@@ -504,11 +729,26 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			failure(c, http.StatusBadRequest, 18009, "Type the project name to confirm removal")
 			return
 		}
-		if err := deps.Compose.Remove(c.Request.Context(), c.Param("name")); err != nil {
+		force := c.Query("force") == "true"
+		preserveVolumes := c.Query("preserve_volumes") == "true"
+		var err error
+		if force {
+			err = deps.Compose.ForceRemove(c.Request.Context(), c.Param("name"), preserveVolumes)
+		} else {
+			err = deps.Compose.Remove(c.Request.Context(), c.Param("name"))
+		}
+		if err != nil {
 			failure(c, http.StatusConflict, 18010, "Unable to remove Compose project")
 			return
 		}
-		recordAudit(c, deps.Audit, "compose.remove", "compose", c.Param("name"), "success")
+		action := "compose.remove"
+		if force {
+			action = "compose.force_remove"
+			if preserveVolumes {
+				action = "compose.force_remove_keep_volumes"
+			}
+		}
+		recordAudit(c, deps.Audit, action, "compose", c.Param("name"), "success")
 		success(c, gin.H{"name": c.Param("name")})
 	})
 	compose.POST("/:name/validate", func(c *gin.Context) {
@@ -525,6 +765,123 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			return
 		}
 		success(c, gin.H{"valid": true})
+	})
+	delivery.GET("/:name/configuration", func(c *gin.Context) {
+		configuration, err := deps.CD.GetConfiguration(c.Request.Context(), c.Param("name"))
+		if err != nil {
+			failure(c, http.StatusNotFound, 17701, "Delivery project not found")
+			return
+		}
+		success(c, configuration)
+	})
+	delivery.PUT("/:name/configuration", func(c *gin.Context) {
+		var input cdService.ConfigureInput
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, http.StatusBadRequest, 17702, "Invalid CD configuration")
+			return
+		}
+		configuration, err := deps.CD.Configure(c.Request.Context(), c.Param("name"), input)
+		if err != nil {
+			failure(c, http.StatusUnprocessableEntity, 17703, err.Error())
+			return
+		}
+		recordAudit(c, deps.Audit, "cd.configure", "delivery_project", c.Param("name"), "success")
+		if input.Repository.Authentication.Source == gitService.CredentialSourceProject {
+			recordAudit(c, deps.Audit, "git.project_credential.update", "delivery_project", c.Param("name"), "success")
+			if input.Repository.Authentication.SaveToCenter && input.Repository.Authentication.Credential != nil {
+				recordAudit(c, deps.Audit, "git.credential.create", "git_credential", input.Repository.Authentication.Credential.Name, "success")
+			}
+		}
+		success(c, configuration)
+	})
+	delivery.POST("/:name/sync", func(c *gin.Context) {
+		row, err := deps.CD.Sync(c.Request.Context(), c.Param("name"), "manual", requestActor(c))
+		if err != nil {
+			failure(c, http.StatusConflict, 17704, err.Error())
+			return
+		}
+		c.JSON(http.StatusAccepted, envelope{Code: 0, Message: "success", Data: row})
+	})
+	delivery.GET("/:name/drift", func(c *gin.Context) {
+		drift, err := deps.CD.Drift(c.Request.Context(), c.Param("name"))
+		if err != nil {
+			failure(c, http.StatusNotFound, 17701, "Delivery project not found")
+			return
+		}
+		success(c, drift)
+	})
+	delivery.GET("/:name/releases", func(c *gin.Context) {
+		rows, err := deps.CD.ListReleases(c.Request.Context(), c.Param("name"))
+		if err != nil {
+			failure(c, http.StatusNotFound, 17701, "Delivery project not found")
+			return
+		}
+		success(c, rows)
+	})
+	delivery.GET("/:name/releases/:releaseID", func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("releaseID"), 10, 64)
+		if err != nil {
+			failure(c, http.StatusBadRequest, 17705, "Invalid release ID")
+			return
+		}
+		row, err := deps.CD.GetRelease(c.Request.Context(), c.Param("name"), uint(id))
+		if err != nil {
+			failure(c, http.StatusNotFound, 17706, "Release not found")
+			return
+		}
+		success(c, row)
+	})
+	delivery.POST("/:name/releases/:releaseID/deploy", func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("releaseID"), 10, 64)
+		if err != nil {
+			failure(c, http.StatusBadRequest, 17705, "Invalid release ID")
+			return
+		}
+		row, err := deps.CD.Deploy(c.Request.Context(), c.Param("name"), uint(id), requestActor(c))
+		if err != nil {
+			failure(c, http.StatusConflict, 17707, err.Error())
+			return
+		}
+		c.JSON(http.StatusAccepted, envelope{Code: 0, Message: "success", Data: row})
+	})
+	delivery.POST("/:name/releases/:releaseID/approve", func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("releaseID"), 10, 64)
+		if err != nil {
+			failure(c, http.StatusBadRequest, 17705, "Invalid release ID")
+			return
+		}
+		row, err := deps.CD.Approve(c.Request.Context(), c.Param("name"), uint(id), requestActor(c))
+		if err != nil {
+			failure(c, http.StatusConflict, 17709, err.Error())
+			return
+		}
+		success(c, row)
+	})
+	delivery.POST("/:name/releases/:releaseID/reject", func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("releaseID"), 10, 64)
+		if err != nil {
+			failure(c, http.StatusBadRequest, 17705, "Invalid release ID")
+			return
+		}
+		row, err := deps.CD.Reject(c.Request.Context(), c.Param("name"), uint(id), requestActor(c))
+		if err != nil {
+			failure(c, http.StatusConflict, 17710, err.Error())
+			return
+		}
+		success(c, row)
+	})
+	delivery.POST("/:name/releases/:releaseID/rollback", func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("releaseID"), 10, 64)
+		if err != nil {
+			failure(c, http.StatusBadRequest, 17705, "Invalid release ID")
+			return
+		}
+		row, err := deps.CD.Rollback(c.Request.Context(), c.Param("name"), uint(id), requestActor(c))
+		if err != nil {
+			failure(c, http.StatusConflict, 17708, err.Error())
+			return
+		}
+		c.JSON(http.StatusAccepted, envelope{Code: 0, Message: "success", Data: row})
 	})
 	compose.POST("/:name/:action", func(c *gin.Context) {
 		action := c.Param("action")
@@ -564,7 +921,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		success(c, values)
 	})
 	v1.GET("/audit-logs", requireAuth(deps.Auth), func(c *gin.Context) {
-		rows, err := deps.Audit.List(c.Request.Context(), 100)
+		rows, err := deps.Audit.ListForNode(c.Request.Context(), 100, c.Query("node_id"))
 		if err != nil {
 			failure(c, http.StatusInternalServerError, 17001, "Unable to list audit logs")
 			return
@@ -572,7 +929,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		success(c, rows)
 	})
 	v1.GET("/tasks", requireAuth(deps.Auth), func(c *gin.Context) {
-		rows, err := deps.Tasks.List(c.Request.Context())
+		rows, err := deps.Tasks.ListForNode(c.Request.Context(), c.Query("node_id"))
 		if err != nil {
 			failure(c, http.StatusInternalServerError, 16001, "Unable to list tasks")
 			return
@@ -594,7 +951,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		success(c, gin.H{"id": c.Param("id")})
 	})
-	v1.POST("/system/prune", requireAuth(deps.Auth), func(c *gin.Context) {
+	v1.POST("/system/prune", requireAuth(deps.Auth), deprecatedDefaultNode(), func(c *gin.Context) {
 		var input struct {
 			Confirm string `json:"confirm"`
 		}
@@ -610,13 +967,27 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		recordAudit(c, deps.Audit, "system.prune", "system", "local", "success")
 		c.JSON(http.StatusAccepted, envelope{Code: 0, Message: "success", Data: row})
 	})
-	ws := router.Group("/ws/containers", requireAuth(deps.Auth))
+	ws := router.Group("/ws/containers", requireAuth(deps.Auth), deprecatedDefaultNode())
 	ws.GET("/:id/logs", func(c *gin.Context) { streamLogs(c, deps.Containers) })
 	ws.GET("/:id/stats", func(c *gin.Context) { streamStats(c, deps.Containers) })
 	ws.GET("/:id/terminal", func(c *gin.Context) { streamTerminal(c, deps.Containers) })
 	taskWS := router.Group("/ws/tasks", requireAuth(deps.Auth))
 	taskWS.GET("/:id", func(c *gin.Context) { streamTask(c, deps.Tasks) })
-	router.NoRoute(gin.WrapH(webui.Handler()))
+	staticHandler := gin.WrapH(webui.Handler())
+	router.NoRoute(func(c *gin.Context) {
+		// Never let the SPA fallback turn an unknown API endpoint into a 200
+		// text/html response. Besides hiding routing/deployment mistakes, that
+		// makes clients try to parse index.html as JSON.
+		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+			failure(c, http.StatusNotFound, 10004, "API endpoint not found")
+			return
+		}
+		if strings.HasPrefix(c.Request.URL.Path, "/ws/") {
+			failure(c, http.StatusNotFound, 10005, "WebSocket endpoint not found")
+			return
+		}
+		staticHandler(c)
+	})
 	return router
 }
 
@@ -792,6 +1163,16 @@ func recordAudit(c *gin.Context, service *audit.Service, action, resourceType, r
 		userID = &user.ID
 	}
 	_ = service.Record(c.Request.Context(), userID, action, resourceType, resourceName, c.ClientIP(), result)
+}
+
+func requestActor(c *gin.Context) cdService.Actor {
+	actor := cdService.Actor{IP: c.ClientIP()}
+	if value, exists := c.Get("user"); exists {
+		user := value.(auth.User)
+		actor.UserID = &user.ID
+		actor.Name = user.Username
+	}
+	return actor
 }
 
 func requireAuth(service *auth.Service) gin.HandlerFunc {

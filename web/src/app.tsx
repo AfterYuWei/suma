@@ -12,11 +12,15 @@ import { VolumesPage } from './pages/volumes'
 import { TasksPage } from './pages/tasks'
 import { AuditLogsPage } from './pages/audit-logs'
 import { ComposePage } from './pages/compose'
+import { ContinuousDeliveryPage } from './pages/continuous-delivery'
 import { SettingsPage } from './pages/settings'
+import { AuthenticationPage } from './pages/authentication'
+import { NodesPage } from './pages/nodes'
 import { AppDialog } from './components/ui/app-dialog'
 
 const ContainerDetailPage = lazy(() => import('./pages/container-detail').then((module) => ({ default: module.ContainerDetailPage })))
 const ComposeDetailPage = lazy(() => import('./pages/compose-detail').then((module) => ({ default: module.ComposeDetailPage })))
+const ContinuousDeliveryDetailPage = lazy(() => import('./pages/continuous-delivery-detail').then((module) => ({ default: module.ContinuousDeliveryDetailPage })))
 const deferred = (Component: ComponentType) => () => <Suspense fallback={<div className="grid min-h-72 place-items-center"><div className="text-center"><LoaderCircle className="mx-auto size-5 animate-spin text-accent" /><p className="mt-3 font-mono text-[9px] uppercase tracking-[.2em] text-text-subtle">Loading module</p></div></div>}><Component /></Suspense>
 
 const rootRoute = createRootRoute({ component: () => <AuthGate><AppShell><Outlet /></AppShell></AuthGate> })
@@ -30,8 +34,12 @@ const tasksRoute = createRoute({ getParentRoute: () => rootRoute, path: '/tasks'
 const auditRoute = createRoute({ getParentRoute: () => rootRoute, path: '/audit-logs', component: AuditLogsPage })
 const composeRoute = createRoute({ getParentRoute: () => rootRoute, path: '/compose', component: ComposePage })
 const composeDetailRoute = createRoute({ getParentRoute: () => rootRoute, path: '/compose/$projectName', component: deferred(ComposeDetailPage) })
+const continuousDeliveryRoute = createRoute({ getParentRoute: () => rootRoute, path: '/continuous-delivery', component: ContinuousDeliveryPage })
+const continuousDeliveryDetailRoute = createRoute({ getParentRoute: () => rootRoute, path: '/continuous-delivery/$projectName', component: deferred(ContinuousDeliveryDetailPage) })
 const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/settings', component: SettingsPage })
-const router = createRouter({ routeTree: rootRoute.addChildren([overviewRoute, containersRoute, containerDetailRoute, imagesRoute, networksRoute, volumesRoute, tasksRoute, auditRoute, composeRoute, composeDetailRoute, settingsRoute]) })
+const authenticationRoute = createRoute({ getParentRoute: () => rootRoute, path: '/authentication', component: AuthenticationPage })
+const nodesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/nodes', component: NodesPage })
+const router = createRouter({ routeTree: rootRoute.addChildren([overviewRoute, containersRoute, containerDetailRoute, imagesRoute, networksRoute, volumesRoute, tasksRoute, auditRoute, composeRoute, composeDetailRoute, continuousDeliveryRoute, continuousDeliveryDetailRoute, authenticationRoute, nodesRoute, settingsRoute]) })
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 5_000, retry: 1 } } })
 
 declare module '@tanstack/react-router' { interface Register { router: typeof router } }

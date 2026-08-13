@@ -36,6 +36,9 @@ type Adapter interface {
 	RemoveImage(context.Context, string, bool) error
 	TagImage(context.Context, string, string) error
 }
+type AuthenticatedAdapter interface {
+	PullImageAuthenticated(context.Context, string, string, string, string, bool) (io.ReadCloser, error)
+}
 type Service struct {
 	adapter Adapter
 	tasks   *task.Service
@@ -55,8 +58,24 @@ func (s *Service) Tag(ctx context.Context, id, reference string) error {
 	return s.adapter.TagImage(ctx, id, reference)
 }
 func (s *Service) Pull(reference string) (database.Task, error) {
-	return s.tasks.Start("image.pull", "Pull "+reference, func(ctx context.Context, report task.Reporter) error {
-		stream, err := s.adapter.PullImage(ctx, reference)
+	return s.PullForNode("local", "Local", reference)
+}
+func (s *Service) PullForNode(nodeID, nodeName, reference string) (database.Task, error) {
+	return s.PullForNodeWithRegistry(nodeID, nodeName, reference, "", "", "", false)
+}
+func (s *Service) PullForNodeWithRegistry(nodeID, nodeName, reference, server, username, secret string, token bool) (database.Task, error) {
+	return s.tasks.StartForNode(nodeID, nodeName, "image.pull", "Pull "+reference, func(ctx context.Context, report task.Reporter) error {
+		var stream io.ReadCloser
+		var err error
+		if server != "" {
+			authenticated, ok := s.adapter.(AuthenticatedAdapter)
+			if !ok {
+				return fmt.Errorf("Docker adapter does not support registry authentication")
+			}
+			stream, err = authenticated.PullImageAuthenticated(ctx, reference, server, username, secret, token)
+		} else {
+			stream, err = s.adapter.PullImage(ctx, reference)
+		}
 		if err != nil {
 			return err
 		}

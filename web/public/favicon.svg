@@ -1,1 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#5de7e5"/><path d="M18 16h15c11 0 18 6 18 16s-7 16-18 16H18V16Zm10 8v16h5c6 0 9-3 9-8s-3-8-9-8h-5Z" fill="#031112"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <style>
+    .tile{fill:#E8F3FF}.mark{color:#165DFF}
+    @media(prefers-color-scheme:dark){.tile{fill:#1D3A70}.mark{color:#4080FF}}
+  </style>
+  <rect class="tile" width="64" height="64" rx="16"/>
+  <g class="mark" fill="none">
+    <circle cx="32" cy="32" r="22" stroke="currentColor" stroke-width="8" stroke-linecap="round" stroke-dasharray="109 31" transform="rotate(-36 32 32)"/>
+    <path d="m32 32 14-13" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="32" cy="32" r="7" fill="currentColor"/>
+    <circle cx="50" cy="15" r="5" fill="currentColor"/>
+  </g>
+</svg>

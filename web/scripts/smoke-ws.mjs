@@ -1,7 +1,7 @@
 import WebSocket from 'ws'
 
-const [cookie, containerId, taskId] = process.argv.slice(2)
-if (!cookie || !containerId) throw new Error('usage: node smoke-ws.mjs <cookie> <container-id> [task-id]')
+const [cookie, nodeId, containerId, taskId] = process.argv.slice(2)
+if (!cookie || !nodeId || !containerId) throw new Error('usage: node smoke-ws.mjs <cookie> <node-id> <container-id> [task-id]')
 
 function check(name, path, onOpen, accept) {
   return new Promise((resolve, reject) => {
@@ -13,9 +13,10 @@ function check(name, path, onOpen, accept) {
   })
 }
 
-await check('logs', `/ws/containers/${containerId}/logs?tail=30`, undefined, (value) => value.includes('dockport-smoke'))
-await check('stats', `/ws/containers/${containerId}/stats`, undefined, (value) => value.includes('cpu_stats'))
-await check('terminal', `/ws/containers/${containerId}/terminal`, (socket) => {
+const containerPath = `/ws/nodes/${encodeURIComponent(nodeId)}/containers/${encodeURIComponent(containerId)}`
+await check('logs', `${containerPath}/logs?tail=30`, undefined, (value) => value.includes('dockport-smoke'))
+await check('stats', `${containerPath}/stats`, undefined, (value) => value.includes('cpu_stats'))
+await check('terminal', `${containerPath}/terminal`, (socket) => {
   socket.send(JSON.stringify({ type: 'resize', cols: 100, rows: 30 }))
   socket.send(JSON.stringify({ type: 'input', data: 'echo TERMINAL_OK\nexit\n' }))
 }, (value) => value.includes('TERMINAL_OK'))

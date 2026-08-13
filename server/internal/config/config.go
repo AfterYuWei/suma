@@ -13,6 +13,9 @@ type Config struct {
 	ComposeRoot    string
 	BackupRoot     string
 	ComposeCommand string
+	GitCommand     string
+	GitRoot        string
+	SecretKeyFile  string
 	CookieSecure   bool
 	SessionMaxAge  time.Duration
 }
@@ -26,6 +29,9 @@ func Load() Config {
 		ComposeRoot:    env("DOCKPORT_COMPOSE_ROOT", filepath.Join(dataRoot, "compose")),
 		BackupRoot:     env("DOCKPORT_BACKUP_ROOT", filepath.Join(dataRoot, "backups")),
 		ComposeCommand: env("DOCKPORT_COMPOSE_COMMAND", "docker compose"),
+		GitCommand:     env("DOCKPORT_GIT_COMMAND", "git"),
+		GitRoot:        env("DOCKPORT_GIT_ROOT", filepath.Join(dataRoot, "gitops")),
+		SecretKeyFile:  env("DOCKPORT_SECRET_KEY_FILE", filepath.Join(dataRoot, "secret.key")),
 		CookieSecure:   env("DOCKPORT_COOKIE_SECURE", "false") == "true",
 		SessionMaxAge:  24 * time.Hour,
 	}
