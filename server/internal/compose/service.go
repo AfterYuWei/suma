@@ -14,6 +14,7 @@ import (
 
 	containerdomain "github.com/suma/suma/server/internal/container"
 	"github.com/suma/suma/server/internal/database"
+	projectdomain "github.com/suma/suma/server/internal/project"
 	"github.com/suma/suma/server/internal/task"
 	"gorm.io/gorm"
 )
@@ -21,19 +22,15 @@ import (
 var validName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 
 type Project struct {
-	NodeID      string    `json:"node_id"`
-	Name        string    `json:"name"`
-	Path        string    `json:"path"`
-	Source      string    `json:"source"`
-	CanManage   bool      `json:"can_manage"`
-	ConfigFiles []string  `json:"config_files"`
-	Status      string    `json:"status"`
-	Services    int       `json:"services"`
-	Containers  int       `json:"containers"`
-	Compose     string    `json:"compose"`
-	Environment string    `json:"environment"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	projectdomain.Summary
+	Path        string                  `json:"path"`
+	CanManage   bool                    `json:"can_manage"`
+	ConfigFiles []string                `json:"config_files"`
+	Services    int                     `json:"services"`
+	Containers  int                     `json:"containers"`
+	Compose     string                  `json:"compose"`
+	Environment string                  `json:"environment"`
+	Metadata    *ManagedProjectMetadata `json:"metadata,omitempty"`
 }
 
 type BatchResult struct {
@@ -150,11 +147,15 @@ func decorate(project Project, containers []containerdomain.Summary) Project {
 		}
 	}
 	project.Services = len(services)
+	project.ServiceCount = project.Services
+	project.InstanceCount = project.Containers
 	if running > 0 && running == project.Containers {
 		project.Status = "running"
 	} else if running > 0 {
 		project.Status = "degraded"
 	}
+	project.Managed = project.CanManage
+	project.Capabilities = projectdomain.ComposeCapabilities(project.CanManage)
 	return project
 }
 func (s *Service) Create(ctx context.Context, name, content, environment string) (Project, error) {
@@ -175,6 +176,10 @@ func (s *Service) Create(ctx context.Context, name, content, environment string)
 		return Project{}, err
 	}
 	if err := writeAtomic(filepath.Join(path, ".env"), environment); err != nil {
+		return Project{}, err
+	}
+	metadata := newManagedProjectMetadata(s.effectiveNodeID(), name, "created", "", time.Now().UTC())
+	if err := writeManagedProjectMetadata(path, metadata); err != nil {
 		return Project{}, err
 	}
 	return s.Get(ctx, name)
@@ -363,11 +368,13 @@ func (s *Service) managedProjects() ([]Project, error) {
 		if err != nil || !info.Mode().IsRegular() {
 			continue
 		}
-		projects = append(projects, Project{
-			NodeID: s.effectiveNodeID(), Name: entry.Name(), Path: path,
-			Source: "managed", CanManage: true, ConfigFiles: []string{composePath},
-			Status: "stopped", CreatedAt: info.ModTime(), UpdatedAt: info.ModTime(),
-		})
+		metadata, err := readManagedProjectMetadata(path, s.effectiveNodeID(), entry.Name(), info.ModTime())
+		if err != nil {
+			continue
+		}
+		summary := projectdomain.ComposeSummary(s.effectiveNodeID(), entry.Name(), "managed", "stopped", true)
+		summary.CreatedAt, summary.UpdatedAt = metadata.ClaimedAt, info.ModTime()
+		projects = append(projects, Project{Summary: summary, Path: path, CanManage: true, ConfigFiles: []string{composePath}, Metadata: &metadata})
 	}
 	return projects, nil
 }
@@ -384,11 +391,13 @@ func (s *Service) managedProject(name string) (Project, error) {
 	if err != nil || !info.Mode().IsRegular() {
 		return Project{}, fmt.Errorf("Compose project is external or unavailable")
 	}
-	return Project{
-		NodeID: s.effectiveNodeID(), Name: name, Path: path,
-		Source: "managed", CanManage: true, ConfigFiles: []string{filepath.Join(path, "compose.yml")},
-		Status: "stopped", CreatedAt: info.ModTime(), UpdatedAt: info.ModTime(),
-	}, nil
+	metadata, err := readManagedProjectMetadata(path, s.effectiveNodeID(), name, info.ModTime())
+	if err != nil {
+		return Project{}, err
+	}
+	summary := projectdomain.ComposeSummary(s.effectiveNodeID(), name, "managed", "stopped", true)
+	summary.CreatedAt, summary.UpdatedAt = metadata.ClaimedAt, info.ModTime()
+	return Project{Summary: summary, Path: path, CanManage: true, ConfigFiles: []string{filepath.Join(path, "compose.yml")}, Metadata: &metadata}, nil
 }
 
 func (s *Service) findProject(ctx context.Context, name string) (Project, error) {
@@ -413,11 +422,9 @@ func (s *Service) nodeRoot() string {
 
 func externalProjectFromContainer(nodeID, name string, container containerdomain.Summary) Project {
 	path := strings.TrimSpace(container.Labels[composeWorkingDirLabel])
-	return Project{
-		NodeID: nodeID, Name: name, Path: path, Source: "external", CanManage: false,
-		ConfigFiles: composeConfigFiles(container.Labels[composeConfigFilesLabel], path),
-		Status:      "stopped", CreatedAt: container.Created, UpdatedAt: container.Created,
-	}
+	summary := projectdomain.ComposeSummary(nodeID, name, "external", "stopped", false)
+	summary.CreatedAt, summary.UpdatedAt = container.Created, container.Created
+	return Project{Summary: summary, Path: path, CanManage: false, ConfigFiles: composeConfigFiles(container.Labels[composeConfigFilesLabel], path)}
 }
 
 func composeConfigFiles(value, workingDir string) []string {

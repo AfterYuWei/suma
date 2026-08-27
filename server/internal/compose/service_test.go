@@ -11,6 +11,7 @@ import (
 
 	containerdomain "github.com/suma/suma/server/internal/container"
 	"github.com/suma/suma/server/internal/database"
+	projectdomain "github.com/suma/suma/server/internal/project"
 	"github.com/suma/suma/server/internal/task"
 )
 
@@ -42,7 +43,7 @@ func (emptyContainers) List(context.Context) ([]containerdomain.Summary, error) 
 
 func TestDecorateMatchesComposeProjectLabel(t *testing.T) {
 	projectPath := filepath.Join(t.TempDir(), "SUMA.Project")
-	project := Project{Name: "SUMA.Project", Path: projectPath, Status: "stopped"}
+	project := Project{Summary: projectdomain.ComposeSummary("local", "SUMA.Project", "external", "stopped", false), Path: projectPath}
 	containers := []containerdomain.Summary{
 		{ID: "matching", State: "running", Labels: map[string]string{
 			"com.docker.compose.project":             project.Name,
@@ -186,6 +187,27 @@ func TestListKeepsManagedProjectWithoutContainers(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].Name != "idle" || !rows[0].CanManage || rows[0].Source != "managed" {
 		t.Fatalf("projects = %#v", rows)
+	}
+	if rows[0].Metadata == nil || rows[0].Metadata.Origin != "legacy" {
+		t.Fatalf("legacy metadata = %#v", rows[0].Metadata)
+	}
+}
+
+func TestCreateWritesManagedProjectIdentityMetadata(t *testing.T) {
+	root := t.TempDir()
+	service := &Service{root: root, containers: emptyContainers{}, nodeID: "node-a"}
+	project, err := service.Create(context.Background(), "shop", "services: {}\n", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if project.Backend != projectdomain.BackendCompose || project.Scope.Kind != projectdomain.ScopeEngine || project.Scope.ID != "node-a" || !project.Managed {
+		t.Fatalf("Project identity = %#v", project.Summary)
+	}
+	if project.Metadata == nil || project.Metadata.Origin != "created" || project.Metadata.NativeName != "shop" {
+		t.Fatalf("metadata = %#v", project.Metadata)
+	}
+	if _, err := os.Stat(filepath.Join(root, "node-a", "shop", ".suma", "project.json")); err != nil {
+		t.Fatal(err)
 	}
 }
 
