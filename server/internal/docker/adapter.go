@@ -281,7 +281,11 @@ func mapComposeRuntimeConfig(row dockertypes.ContainerJSON) composedomain.Runtim
 		value.Ports = mapComposePortBindings(value.Ports, host.PortBindings)
 	}
 	for _, mount := range row.Mounts {
-		value.Mounts = append(value.Mounts, composedomain.RuntimeMount{Type: string(mount.Type), Name: mount.Name, Source: mount.Source, Target: mount.Destination, ReadOnly: !mount.RW, Propagation: string(mount.Propagation)})
+		source := mount.Source
+		if string(mount.Type) == "volume" && mount.Name != "" {
+			source = mount.Name
+		}
+		value.Mounts = append(value.Mounts, composedomain.RuntimeMount{Type: string(mount.Type), Name: mount.Name, Source: source, Target: mount.Destination, ReadOnly: !mount.RW, Propagation: string(mount.Propagation)})
 	}
 	if row.NetworkSettings != nil {
 		for name, endpoint := range row.NetworkSettings.Networks {

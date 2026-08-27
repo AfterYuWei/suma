@@ -195,6 +195,20 @@ func (r *CLIRunner) Logs(ctx context.Context, project string, output io.Writer) 
 func (r *CLIRunner) Render(ctx context.Context, spec ExecutionSpec, output io.Writer) (string, error) {
 	return r.captureSpec(ctx, spec, output, "config", "--format", "json")
 }
+func (r *CLIRunner) Hashes(ctx context.Context, spec ExecutionSpec, output io.Writer) (map[string]string, error) {
+	value, err := r.captureSpec(ctx, spec, output, "config", "--hash")
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]string{}
+	for _, line := range strings.Split(value, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 {
+			result[fields[0]] = fields[1]
+		}
+	}
+	return result, nil
+}
 func (r *CLIRunner) ValidateRelease(ctx context.Context, spec ExecutionSpec, output io.Writer) error {
 	return r.runSpec(ctx, spec, output, "config", "--quiet")
 }
