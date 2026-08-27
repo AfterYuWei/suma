@@ -28,7 +28,9 @@ SUMA 是一个面向多节点 Docker 管理的单体控制平面：通过一个 
 
 ### Compose 项目
 
+- 自动发现现有项目：通过 Docker 的 `com.docker.compose.*` 容器标签聚合当前节点上的 Compose 项目、服务和运行状态，不依赖 SUMA 数据库登记
 - 本地 Compose 项目：compose.yml 与 .env 在 Monaco 编辑器中编辑，保存前校验
+- 外部项目默认只读：可以查看和操作容器；本地单文件项目在源目录以相同绝对路径挂载进 SUMA 后可显式导入到 `/Data/compose`
 - Git 来源只读展示：交付过来的 Compose 文件不可篡改，与 CD 域隔离
 - 批量操作：多选后一次性 start/stop/restart/up/down，逐项目汇报结果
 - 展开即看运行态：服务列表、容器状态、单容器日志与终端入口

@@ -19,13 +19,17 @@ The resource routes listed below remain deprecated aliases for the migrated defa
 - `GET /images`, `GET /images/:id`, `POST /images/pull`, `POST /images/:id/tag`, `DELETE /images/:id`
 - `GET|POST /networks`, `GET|DELETE /networks/:id`
 - `GET|POST /volumes`, `GET|DELETE /volumes/:id`
-- `GET|POST /compose`, `POST /compose/batch`, `GET|PUT|DELETE /compose/:name`, `GET /compose/:name/services`, `GET /compose/:name/logs`, `POST /compose/:name/validate`, `POST /compose/:name/{up|down|start|stop|restart|pull|build|update}`
+- `GET|POST /compose`, `POST /compose/batch`, `GET|PUT|DELETE /compose/:name`, `GET /compose/:name/services`, `GET /compose/:name/logs`, `POST /compose/:name/import`, `POST /compose/:name/validate`, `POST /compose/:name/{up|down|start|stop|restart|pull|build|update}`
 - `GET /overview` for live host CPU, memory, disk, network, uptime, platform, and Docker summary data
 - `GET /tasks`, `GET /tasks/:id/logs`, `POST /tasks/:id/cancel`
 - `GET /audit-logs`, `GET|PUT /settings`
 - `POST /system/prune` starts a confirmed task for unused containers, networks, dangling images, and anonymous volumes
 
 `DELETE /compose/:name` requires `confirm=<project-name>`. Adding `force=true` first runs `docker compose down --remove-orphans --timeout 0 --volumes`, then removes only the local Compose project. Named volumes and their data are deleted by default; add `preserve_volumes=true` to omit `--volumes` and keep them. This operation never changes a Delivery Project.
+
+`GET /compose` derives runtime projects from Docker `com.docker.compose.*` container labels instead of Compose rows in SQLite. Each response includes `source` (`managed` or `external`), `can_manage`, `config_files`, working-directory metadata, and aggregated service/container status. SUMA-owned project directories below the node Compose root are also included so a managed project remains visible after `docker compose down` removes all labeled containers. External projects are read-only at project level; their individual containers remain available through the container APIs.
+
+`POST /compose/:name/import` explicitly imports a discovered local project. Import is restricted to a single Compose config file, requires the label-reported working directory and file to be available inside the SUMA container, rejects symlink/path escape and files over 2 MiB, validates the copied Compose configuration, and writes the managed copy below the configured Compose root. Remote-node and multi-file imports are rejected.
 
 `POST /compose/batch` accepts `{ "names": ["api", "worker"], "action": "restart" }` for 1–100 projects. Supported actions are `start`, `stop`, `restart`, `update`, and `down`. Each valid project starts an independent asynchronous task; the response reports `name`, `task_id`, and `success` per project so one failure does not block the remaining projects.
 

@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/gin-gonic/gin"
 	"github.com/suma/suma/server/internal/auth"
 	composeService "github.com/suma/suma/server/internal/compose"
 	"github.com/suma/suma/server/internal/database"
@@ -15,7 +16,6 @@ import (
 	"github.com/suma/suma/server/internal/node"
 	"github.com/suma/suma/server/internal/system"
 	"github.com/suma/suma/server/internal/volume"
-	"github.com/gin-gonic/gin"
 )
 
 func registerNodeRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps Dependencies) {
@@ -345,6 +345,19 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 			return
 		}
 		recordNodeAudit(c, deps, view.ID, view.Name, "compose.create", "compose", input.Name, "success")
+		c.JSON(201, envelope{Code: 0, Message: "success", Data: row})
+	})
+	routes.POST("/:name/import", func(c *gin.Context) {
+		current, view, ok := service(c)
+		if !ok {
+			return
+		}
+		row, err := current.Import(c.Request.Context(), c.Param("name"))
+		if err != nil {
+			failure(c, 409, 20317, err.Error())
+			return
+		}
+		recordNodeAudit(c, deps, view.ID, view.Name, "compose.import", "compose", c.Param("name"), "success")
 		c.JSON(201, envelope{Code: 0, Message: "success", Data: row})
 	})
 	routes.POST("/batch", func(c *gin.Context) {

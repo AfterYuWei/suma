@@ -151,9 +151,6 @@ func NewService(db *gorm.DB, secrets *secret.Store, bootstrapHost string) (*Serv
 		}
 	}
 	// Upgrade the already-reserved local ownership columns.
-	if err := db.Model(&database.ComposeProject{}).Where("node_id = '' OR node_id IS NULL").Update("node_id", "local").Error; err != nil {
-		return nil, err
-	}
 	if err := db.Model(&database.DeliveryProject{}).Where("node_id = '' OR node_id IS NULL").Update("node_id", "local").Error; err != nil {
 		return nil, err
 	}
@@ -292,7 +289,7 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 		model any
 		query string
 	}{
-		{&database.ComposeProject{}, "node_id = ?"}, {&database.DeliveryProjectNode{}, "node_id = ?"},
+		{&database.DeliveryProjectNode{}, "node_id = ?"},
 		{&database.GitCredentialNode{}, "node_id = ?"}, {&database.RegistryCredentialNode{}, "node_id = ?"}, {&database.DockerTLSCredentialNode{}, "node_id = ?"},
 	}
 	for _, check := range checks {

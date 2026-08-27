@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,10 +21,12 @@ import (
 var validName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 
 type Project struct {
-	ID          uint      `json:"id"`
 	NodeID      string    `json:"node_id"`
 	Name        string    `json:"name"`
 	Path        string    `json:"path"`
+	Source      string    `json:"source"`
+	CanManage   bool      `json:"can_manage"`
+	ConfigFiles []string  `json:"config_files"`
 	Status      string    `json:"status"`
 	Services    int       `json:"services"`
 	Containers  int       `json:"containers"`
@@ -39,7 +42,6 @@ type BatchResult struct {
 	Success bool   `json:"success"`
 }
 type Service struct {
-	db         *gorm.DB
 	root       string
 	runner     Runner
 	tasks      *task.Service
@@ -48,7 +50,7 @@ type Service struct {
 	nodeName   string
 }
 
-func NewService(db *gorm.DB, root string, runner Runner, tasks *task.Service, containers containerdomain.Service) (*Service, error) {
+func NewService(_ *gorm.DB, root string, runner Runner, tasks *task.Service, containers containerdomain.Service) (*Service, error) {
 	absolute, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -56,60 +58,94 @@ func NewService(db *gorm.DB, root string, runner Runner, tasks *task.Service, co
 	if err := os.MkdirAll(absolute, 0o750); err != nil {
 		return nil, err
 	}
-	return &Service{db: db, root: absolute, runner: runner, tasks: tasks, containers: containers, nodeID: "local", nodeName: "Local"}, nil
+	return &Service{root: absolute, runner: runner, tasks: tasks, containers: containers, nodeID: "local", nodeName: "Local"}, nil
 }
 func (s *Service) ForNode(nodeID, nodeName string, runner Runner, containers containerdomain.Service) *Service {
-	return &Service{db: s.db, root: s.root, runner: runner, tasks: s.tasks, containers: containers, nodeID: nodeID, nodeName: nodeName}
+	return &Service{root: s.root, runner: runner, tasks: s.tasks, containers: containers, nodeID: nodeID, nodeName: nodeName}
 }
 func (s *Service) List(ctx context.Context) ([]Project, error) {
-	var rows []database.ComposeProject
-	if err := s.db.WithContext(ctx).Where("node_id = ?", s.effectiveNodeID()).Order("updated_at DESC").Find(&rows).Error; err != nil {
-		return nil, err
-	}
 	containers, err := s.containers.List(ctx)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]Project, 0, len(rows))
-	for _, row := range rows {
-		result = append(result, decorate(projectFromRow(row), containers))
+	projects, err := s.managedProjects()
+	if err != nil {
+		return nil, err
 	}
+	byName := make(map[string]Project, len(projects))
+	for _, project := range projects {
+		byName[project.Name] = project
+	}
+	for _, container := range containers {
+		name := strings.TrimSpace(container.Labels[composeProjectLabel])
+		if name == "" {
+			continue
+		}
+		project, exists := byName[name]
+		if !exists {
+			project = externalProjectFromContainer(s.effectiveNodeID(), name, container)
+		} else if project.Path == "" {
+			project.Path = container.Labels[composeWorkingDirLabel]
+		}
+		if len(project.ConfigFiles) == 0 {
+			project.ConfigFiles = composeConfigFiles(container.Labels[composeConfigFilesLabel], project.Path)
+		}
+		byName[name] = project
+	}
+	result := make([]Project, 0, len(byName))
+	for _, project := range byName {
+		result = append(result, decorate(project, containers))
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].UpdatedAt.Equal(result[j].UpdatedAt) {
+			return result[i].Name < result[j].Name
+		}
+		return result[i].UpdatedAt.After(result[j].UpdatedAt)
+	})
 	return result, nil
 }
 func (s *Service) Get(ctx context.Context, name string) (Project, error) {
-	var row database.ComposeProject
-	if err := s.db.WithContext(ctx).Where("node_id = ? AND name = ?", s.effectiveNodeID(), name).First(&row).Error; err != nil {
+	project, err := s.findProject(ctx, name)
+	if err != nil {
 		return Project{}, err
 	}
-	project := projectFromRow(row)
-	compose, err := os.ReadFile(filepath.Join(row.Path, "compose.yml"))
+	if !project.CanManage {
+		return project, nil
+	}
+	compose, err := os.ReadFile(filepath.Join(project.Path, "compose.yml"))
 	if err != nil {
 		return Project{}, err
 	}
 	project.Compose = string(compose)
-	environment, err := os.ReadFile(filepath.Join(row.Path, ".env"))
+	environment, err := os.ReadFile(filepath.Join(project.Path, ".env"))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Project{}, err
 	}
 	project.Environment = string(environment)
-	containers, err := s.containers.List(ctx)
-	if err != nil {
-		return Project{}, err
-	}
-	return decorate(project, containers), nil
+	return project, nil
 }
+
+const (
+	composeProjectLabel     = "com.docker.compose.project"
+	composeServiceLabel     = "com.docker.compose.service"
+	composeWorkingDirLabel  = "com.docker.compose.project.working_dir"
+	composeConfigFilesLabel = "com.docker.compose.project.config_files"
+)
 
 func decorate(project Project, containers []containerdomain.Summary) Project {
 	services, running := map[string]struct{}{}, 0
 	for _, row := range containers {
-		if !containerBelongsToProject(project, row) {
+		if row.Labels[composeProjectLabel] != project.Name {
 			continue
 		}
 		project.Containers++
+		if row.Created.After(project.UpdatedAt) {
+			project.UpdatedAt = row.Created
+		}
 		if row.State == "running" {
 			running++
 		}
-		if name := row.Labels["com.docker.compose.service"]; name != "" {
+		if name := row.Labels[composeServiceLabel]; name != "" {
 			services[name] = struct{}{}
 		}
 	}
@@ -120,17 +156,6 @@ func decorate(project Project, containers []containerdomain.Summary) Project {
 		project.Status = "degraded"
 	}
 	return project
-}
-
-func containerBelongsToProject(project Project, container containerdomain.Summary) bool {
-	if workingDir := container.Labels["com.docker.compose.project.working_dir"]; workingDir != "" {
-		return filepath.Clean(workingDir) == filepath.Clean(project.Path)
-	}
-	return container.Labels["com.docker.compose.project"] == project.Name
-}
-
-func projectFromRow(row database.ComposeProject) Project {
-	return Project{ID: row.ID, NodeID: row.NodeID, Name: row.Name, Path: row.Path, Status: "stopped", CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 }
 func (s *Service) Create(ctx context.Context, name, content, environment string) (Project, error) {
 	if !validName.MatchString(name) {
@@ -152,37 +177,71 @@ func (s *Service) Create(ctx context.Context, name, content, environment string)
 	if err := writeAtomic(filepath.Join(path, ".env"), environment); err != nil {
 		return Project{}, err
 	}
-	row := database.ComposeProject{NodeID: s.effectiveNodeID(), Name: name, Path: path}
-	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
-		return Project{}, err
-	}
 	return s.Get(ctx, name)
 }
+
+// Import copies a single-file local Compose project discovered through Docker
+// labels into SUMA's managed Compose root. It never follows a label outside the
+// reported working directory and is intentionally unavailable for remote nodes.
+func (s *Service) Import(ctx context.Context, name string) (Project, error) {
+	if s.effectiveNodeID() != "local" {
+		return Project{}, fmt.Errorf("external Compose import is available only for the local node")
+	}
+	project, err := s.findProject(ctx, name)
+	if err != nil {
+		return Project{}, err
+	}
+	if project.CanManage {
+		return Project{}, fmt.Errorf("Compose project is already managed")
+	}
+	if len(project.ConfigFiles) != 1 {
+		return Project{}, fmt.Errorf("only single-file Compose projects can be imported")
+	}
+	compose, err := readExternalProjectFile(project.Path, project.ConfigFiles[0], true)
+	if err != nil {
+		return Project{}, fmt.Errorf("read external Compose file: %w", err)
+	}
+	environment, err := readExternalProjectFile(project.Path, filepath.Join(project.Path, ".env"), false)
+	if err != nil {
+		return Project{}, fmt.Errorf("read external Compose environment: %w", err)
+	}
+	temp, err := os.MkdirTemp(s.nodeRoot(), ".import-")
+	if err != nil {
+		return Project{}, err
+	}
+	defer os.RemoveAll(temp)
+	if err := writeAtomic(filepath.Join(temp, "compose.yml"), string(compose)); err != nil {
+		return Project{}, err
+	}
+	if err := writeAtomic(filepath.Join(temp, ".env"), string(environment)); err != nil {
+		return Project{}, err
+	}
+	if err := s.runner.Validate(ctx, temp, io.Discard); err != nil {
+		return Project{}, fmt.Errorf("validate imported Compose project: %w", err)
+	}
+	return s.Create(ctx, name, string(compose), string(environment))
+}
 func (s *Service) Save(ctx context.Context, name, content, environment string) (Project, error) {
-	var row database.ComposeProject
-	if err := s.db.WithContext(ctx).Where("node_id = ? AND name = ?", s.effectiveNodeID(), name).First(&row).Error; err != nil {
+	project, err := s.managedProject(name)
+	if err != nil {
 		return Project{}, err
 	}
-	if err := writeAtomic(filepath.Join(row.Path, "compose.yml"), content); err != nil {
+	if err := writeAtomic(filepath.Join(project.Path, "compose.yml"), content); err != nil {
 		return Project{}, err
 	}
-	if err := writeAtomic(filepath.Join(row.Path, ".env"), environment); err != nil {
+	if err := writeAtomic(filepath.Join(project.Path, ".env"), environment); err != nil {
 		return Project{}, err
 	}
-	s.db.WithContext(ctx).Model(&database.ComposeProject{}).Where("node_id = ? AND name = ?", s.effectiveNodeID(), name).Update("updated_at", time.Now())
 	return s.Get(ctx, name)
 }
 func (s *Service) Remove(ctx context.Context, name string) error {
-	var project database.ComposeProject
-	if err := s.db.WithContext(ctx).Where("node_id = ? AND name = ?", s.effectiveNodeID(), name).First(&project).Error; err != nil {
+	project, err := s.managedProject(name)
+	if err != nil {
 		return err
 	}
 	expectedPath, err := s.safePath(name)
 	if err != nil || filepath.Clean(project.Path) != filepath.Clean(expectedPath) {
 		return errors.New("stored Compose project path is outside the configured root")
-	}
-	if err := s.db.WithContext(ctx).Where("node_id = ? AND name = ?", s.effectiveNodeID(), name).Delete(&database.ComposeProject{}).Error; err != nil {
-		return err
 	}
 	return os.RemoveAll(project.Path)
 }
@@ -190,8 +249,8 @@ func (s *Service) Remove(ctx context.Context, name string) error {
 // ForceRemove tears down runtime resources with no graceful-stop delay before
 // removing SUMA-owned state. Named volumes are deleted unless explicitly preserved.
 func (s *Service) ForceRemove(ctx context.Context, name string, preserveVolumes bool) error {
-	var project database.ComposeProject
-	if err := s.db.WithContext(ctx).Where("node_id = ? AND name = ?", s.effectiveNodeID(), name).First(&project).Error; err != nil {
+	project, err := s.managedProject(name)
+	if err != nil {
 		return err
 	}
 	expectedPath, err := s.safePath(name)
@@ -204,37 +263,36 @@ func (s *Service) ForceRemove(ctx context.Context, name string, preserveVolumes 
 	return s.Remove(ctx, name)
 }
 func (s *Service) Services(ctx context.Context, name string) ([]containerdomain.Summary, error) {
-	var stored database.ComposeProject
-	if err := s.db.WithContext(ctx).Where("node_id = ? AND name = ?", s.effectiveNodeID(), name).First(&stored).Error; err != nil {
-		return nil, err
-	}
 	rows, err := s.containers.List(ctx)
 	if err != nil {
 		return nil, err
 	}
 	result := make([]containerdomain.Summary, 0)
-	project := projectFromRow(stored)
 	for _, row := range rows {
-		if containerBelongsToProject(project, row) {
+		if row.Labels[composeProjectLabel] == name {
 			result = append(result, row)
+		}
+	}
+	if len(result) == 0 {
+		if _, err := s.managedProject(name); err != nil {
+			return nil, err
 		}
 	}
 	return result, nil
 }
 func (s *Service) Logs(ctx context.Context, name string) (string, error) {
-	var row database.ComposeProject
-	if err := s.db.WithContext(ctx).Where("node_id = ? AND name = ?", s.effectiveNodeID(), name).First(&row).Error; err != nil {
+	project, err := s.managedProject(name)
+	if err != nil {
 		return "", err
 	}
 	var output strings.Builder
-	if err := s.runner.Logs(ctx, row.Path, &output); err != nil {
+	if err := s.runner.Logs(ctx, project.Path, &output); err != nil {
 		return output.String(), err
 	}
 	return output.String(), nil
 }
 func (s *Service) Validate(ctx context.Context, name, content, environment string) error {
-	var project database.ComposeProject
-	if err := s.db.WithContext(ctx).Where("node_id = ? AND name = ?", s.effectiveNodeID(), name).First(&project).Error; err != nil {
+	if _, err := s.managedProject(name); err != nil {
 		return err
 	}
 	temp, err := os.MkdirTemp(s.root, ".validate-")
@@ -251,11 +309,10 @@ func (s *Service) Validate(ctx context.Context, name, content, environment strin
 	return s.runner.Validate(ctx, temp, io.Discard)
 }
 func (s *Service) Action(ctx context.Context, name, action string) (database.Task, error) {
-	var row database.ComposeProject
-	if err := s.db.WithContext(ctx).Where("node_id = ? AND name = ?", s.effectiveNodeID(), name).First(&row).Error; err != nil {
+	project, err := s.managedProject(name)
+	if err != nil {
 		return database.Task{}, err
 	}
-	project := projectFromRow(row)
 	return s.tasks.StartForNode(s.effectiveNodeID(), s.effectiveNodeName(), "compose."+action, strings.Title(action)+" "+name, func(ctx context.Context, report task.Reporter) error {
 		var err error
 		writer := &reportWriter{report: report}
@@ -286,6 +343,131 @@ func (s *Service) Action(ctx context.Context, name, action string) (database.Tas
 	})
 }
 
+func (s *Service) managedProjects() ([]Project, error) {
+	base := s.nodeRoot()
+	if err := os.MkdirAll(base, 0o750); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return nil, err
+	}
+	projects := make([]Project, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() || !validName.MatchString(entry.Name()) {
+			continue
+		}
+		path := filepath.Join(base, entry.Name())
+		composePath := filepath.Join(path, "compose.yml")
+		info, err := os.Stat(composePath)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		projects = append(projects, Project{
+			NodeID: s.effectiveNodeID(), Name: entry.Name(), Path: path,
+			Source: "managed", CanManage: true, ConfigFiles: []string{composePath},
+			Status: "stopped", CreatedAt: info.ModTime(), UpdatedAt: info.ModTime(),
+		})
+	}
+	return projects, nil
+}
+
+func (s *Service) managedProject(name string) (Project, error) {
+	if !validName.MatchString(name) {
+		return Project{}, fmt.Errorf("invalid project name")
+	}
+	path, err := s.safePath(name)
+	if err != nil {
+		return Project{}, err
+	}
+	info, err := os.Stat(filepath.Join(path, "compose.yml"))
+	if err != nil || !info.Mode().IsRegular() {
+		return Project{}, fmt.Errorf("Compose project is external or unavailable")
+	}
+	return Project{
+		NodeID: s.effectiveNodeID(), Name: name, Path: path,
+		Source: "managed", CanManage: true, ConfigFiles: []string{filepath.Join(path, "compose.yml")},
+		Status: "stopped", CreatedAt: info.ModTime(), UpdatedAt: info.ModTime(),
+	}, nil
+}
+
+func (s *Service) findProject(ctx context.Context, name string) (Project, error) {
+	projects, err := s.List(ctx)
+	if err != nil {
+		return Project{}, err
+	}
+	for _, project := range projects {
+		if project.Name == name {
+			return project, nil
+		}
+	}
+	return Project{}, fmt.Errorf("Compose project not found")
+}
+
+func (s *Service) nodeRoot() string {
+	if s.effectiveNodeID() == "local" {
+		return s.root
+	}
+	return filepath.Join(s.root, s.effectiveNodeID())
+}
+
+func externalProjectFromContainer(nodeID, name string, container containerdomain.Summary) Project {
+	path := strings.TrimSpace(container.Labels[composeWorkingDirLabel])
+	return Project{
+		NodeID: nodeID, Name: name, Path: path, Source: "external", CanManage: false,
+		ConfigFiles: composeConfigFiles(container.Labels[composeConfigFilesLabel], path),
+		Status:      "stopped", CreatedAt: container.Created, UpdatedAt: container.Created,
+	}
+}
+
+func composeConfigFiles(value, workingDir string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if !filepath.IsAbs(part) && workingDir != "" {
+			part = filepath.Join(workingDir, part)
+		}
+		result = append(result, filepath.Clean(part))
+	}
+	return result
+}
+
+func readExternalProjectFile(workingDir, name string, required bool) ([]byte, error) {
+	if !filepath.IsAbs(workingDir) || !filepath.IsAbs(name) {
+		return nil, fmt.Errorf("Compose working directory and file must be absolute")
+	}
+	base, err := filepath.EvalSymlinks(workingDir)
+	if err != nil {
+		return nil, fmt.Errorf("working directory is not mounted into SUMA")
+	}
+	path, err := filepath.EvalSymlinks(name)
+	if err != nil {
+		if !required && errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("file is not mounted into SUMA")
+	}
+	relative, err := filepath.Rel(base, path)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return nil, fmt.Errorf("file is outside the Compose working directory")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("file is not regular")
+	}
+	if info.Size() > 2<<20 {
+		return nil, fmt.Errorf("file exceeds 2 MiB")
+	}
+	return os.ReadFile(path)
+}
+
 func (s *Service) BatchAction(ctx context.Context, names []string, action string) []BatchResult {
 	results := make([]BatchResult, 0, len(names))
 	for _, name := range names {
@@ -301,10 +483,7 @@ func (s *Service) BatchAction(ctx context.Context, names []string, action string
 }
 
 func (s *Service) safePath(name string) (string, error) {
-	base := s.root
-	if s.effectiveNodeID() != "local" {
-		base = filepath.Join(s.root, s.effectiveNodeID())
-	}
+	base := s.nodeRoot()
 	value := filepath.Join(base, name)
 	relative, err := filepath.Rel(base, value)
 	if err != nil || strings.HasPrefix(relative, "..") || filepath.IsAbs(relative) {

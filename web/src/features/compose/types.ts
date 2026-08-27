@@ -1,7 +1,10 @@
 export interface ComposeProject {
-  id: number
+  node_id: string
   name: string
   path: string
+  source: 'managed' | 'external'
+  can_manage: boolean
+  config_files: string[]
   status: string
   services: number
   containers: number

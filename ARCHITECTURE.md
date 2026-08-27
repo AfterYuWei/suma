@@ -21,7 +21,7 @@ Browser -- HTTP / WebSocket --> Go monolith
 
 `server/internal/api` wires handlers and transport concerns. Feature services own business policy. `server/internal/docker` is the sole Docker SDK boundary. `server/internal/compose` is the sole Compose process boundary. `server/internal/git` is the sole Git process and Git-credential boundary. `server/internal/cd` owns synchronization, release records with fixed Git/config identity, deployment-source policy, deployment serialization, drift, webhook verification, and rollback policy. Handlers never import Docker SDK types and do not invoke Git or Compose commands directly.
 
-Runtime Docker resources are not mirrored into SQLite. SQLite stores node definitions/status summaries, credential grants, node-scoped Compose metadata, global Delivery Projects and target snapshots, per-node deployments, tasks, and audit history. Each Docker Engine remains authoritative for its current resources. A runtime client is captured when work starts; updating or disabling a node prevents new work without invalidating the client already held by an in-flight task.
+Runtime Docker resources and Compose project inventory are not mirrored into SQLite. SQLite stores node definitions/status summaries, credential grants, global Delivery Projects and target snapshots, per-node deployments, tasks, and audit history. Each Docker Engine remains authoritative for its current resources. Compose projects are discovered by grouping container `com.docker.compose.*` labels; SUMA-managed projects that have no remaining containers are discovered from directories below the node's configured Compose root. A runtime client is captured when work starts; updating or disabling a node prevents new work without invalidating the client already held by an in-flight task.
 
 All asynchronous work is represented by a task with pending, running, success, failed, or canceled state. A bounded in-memory event broker streams fresh task output while SQLite retains task history. The same cancellation rule applies to container logs, stats, and terminal connections: closing the browser connection cancels the Docker operation and closes its stream.
 
@@ -29,7 +29,7 @@ All asynchronous work is represented by a task with pending, running, success, f
 
 Compose and continuous delivery are separate aggregates with independent lifecycles:
 
-- A Compose project owns editable `compose.yml` and `.env` files below the configured Compose root and exposes local orchestration actions.
+- A SUMA-managed Compose project owns editable `compose.yml` and `.env` files below the configured Compose root and exposes orchestration actions. An external project discovered from Docker labels is read-only at the project level but exposes its runtime containers. A local single-file external project may be explicitly imported only when its reported working directory and config file are mounted into SUMA; the source is copied into the managed root after containment, file-size, and Compose validation checks.
 - A Delivery Project owns repository configuration, synchronization policy, credentials, releases, approvals, deployment history, drift, and rollback state.
 - Creating or deleting either project type never implicitly creates or deletes the other.
 - Compose is one deployment adapter invoked by a delivery release; it is not the CD aggregate root.

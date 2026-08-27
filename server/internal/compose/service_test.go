@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	containerdomain "github.com/suma/suma/server/internal/container"
 	"github.com/suma/suma/server/internal/database"
@@ -39,17 +40,17 @@ type emptyContainers struct{ containerdomain.Service }
 
 func (emptyContainers) List(context.Context) ([]containerdomain.Summary, error) { return nil, nil }
 
-func TestDecorateMatchesComposeWorkingDirectoryWhenRuntimeNameDiffers(t *testing.T) {
+func TestDecorateMatchesComposeProjectLabel(t *testing.T) {
 	projectPath := filepath.Join(t.TempDir(), "SUMA.Project")
 	project := Project{Name: "SUMA.Project", Path: projectPath, Status: "stopped"}
 	containers := []containerdomain.Summary{
 		{ID: "matching", State: "running", Labels: map[string]string{
-			"com.docker.compose.project":             "custom-runtime-name",
+			"com.docker.compose.project":             project.Name,
 			"com.docker.compose.project.working_dir": projectPath,
 			"com.docker.compose.service":             "web",
 		}},
 		{ID: "other", State: "running", Labels: map[string]string{
-			"com.docker.compose.project":             project.Name,
+			"com.docker.compose.project":             "other-project",
 			"com.docker.compose.project.working_dir": filepath.Join(t.TempDir(), "other"),
 			"com.docker.compose.service":             "worker",
 		}},
@@ -62,22 +63,12 @@ func TestDecorateMatchesComposeWorkingDirectoryWhenRuntimeNameDiffers(t *testing
 }
 
 func TestServicesMatchesComposeWorkingDirectory(t *testing.T) {
-	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "suma.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	projectPath := filepath.Join(root, "production")
-	project := database.ComposeProject{Name: "production", Path: projectPath}
-	if err := db.Create(&project).Error; err != nil {
-		t.Fatal(err)
-	}
+	projectName := "production"
 	container := containerdomain.Summary{ID: "container-id", Labels: map[string]string{
-		"com.docker.compose.project":             "overridden-name",
-		"com.docker.compose.project.working_dir": projectPath,
+		"com.docker.compose.project": projectName,
 	}}
-	service := &Service{db: db, containers: staticContainers{rows: []containerdomain.Summary{container}}}
-	rows, err := service.Services(context.Background(), project.Name)
+	service := &Service{root: t.TempDir(), containers: staticContainers{rows: []containerdomain.Summary{container}}}
+	rows, err := service.Services(context.Background(), projectName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,21 +101,16 @@ func TestReleaseEnvironmentDoesNotForwardSumaSecrets(t *testing.T) {
 
 func TestForceRemoveCanPreserveProjectVolumes(t *testing.T) {
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "suma.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	projectPath := filepath.Join(root, "managed")
 	if err := os.MkdirAll(projectPath, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	project := database.ComposeProject{Name: "managed", Path: projectPath}
-	if err := db.Create(&project).Error; err != nil {
+	if err := os.WriteFile(filepath.Join(projectPath, "compose.yml"), []byte("services: {}\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	runner := &forceRemoveRunner{}
-	service := &Service{db: db, root: root, runner: runner}
-	if err := service.ForceRemove(context.Background(), project.Name, true); err != nil {
+	service := &Service{root: root, runner: runner}
+	if err := service.ForceRemove(context.Background(), "managed", true); err != nil {
 		t.Fatal(err)
 	}
 	if !runner.managed || !runner.preserveVolumes {
@@ -143,21 +129,114 @@ func TestBatchActionReturnsPerProjectTasks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	root := t.TempDir()
 	for _, name := range []string{"api", "worker"} {
-		if err := db.Create(&database.ComposeProject{Name: name, Path: filepath.Join(t.TempDir(), name)}).Error; err != nil {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(path, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "compose.yml"), []byte("services: {}\n"), 0o640); err != nil {
 			t.Fatal(err)
 		}
 	}
-	service := &Service{db: db, runner: batchRunner{}, tasks: task.NewService(db)}
+	service := &Service{root: root, runner: batchRunner{}, tasks: task.NewService(db)}
 	results := service.BatchAction(context.Background(), []string{"api", "worker", "missing"}, "start")
 	if len(results) != 3 || !results[0].Success || results[0].TaskID == "" || !results[1].Success || results[1].TaskID == "" || results[2].Success {
 		t.Fatalf("batch results = %#v", results)
 	}
 }
 
+func TestListDiscoversComposeProjectsFromContainerLabels(t *testing.T) {
+	root := t.TempDir()
+	containers := staticContainers{rows: []containerdomain.Summary{
+		{ID: "web", State: "running", Created: time.Unix(200, 0), Labels: map[string]string{
+			composeProjectLabel: "external", composeServiceLabel: "web",
+			composeWorkingDirLabel: "/srv/external", composeConfigFilesLabel: "/srv/external/compose.yml",
+		}},
+		{ID: "worker", State: "exited", Created: time.Unix(100, 0), Labels: map[string]string{
+			composeProjectLabel: "external", composeServiceLabel: "worker",
+		}},
+	}}
+	service := &Service{root: filepath.Join(root, "compose"), containers: containers}
+	rows, err := service.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Name != "external" || rows[0].Source != "external" || rows[0].CanManage {
+		t.Fatalf("projects = %#v", rows)
+	}
+	if rows[0].Status != "degraded" || rows[0].Services != 2 || rows[0].Containers != 2 {
+		t.Fatalf("runtime decoration = %#v", rows[0])
+	}
+}
+
+func TestListKeepsManagedProjectWithoutContainers(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "idle")
+	if err := os.MkdirAll(path, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "compose.yml"), []byte("services: {}\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{root: root, containers: emptyContainers{}}
+	rows, err := service.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Name != "idle" || !rows[0].CanManage || rows[0].Source != "managed" {
+		t.Fatalf("projects = %#v", rows)
+	}
+}
+
+func TestImportCopiesAccessibleSingleFileProjectIntoManagedRoot(t *testing.T) {
+	externalRoot := t.TempDir()
+	composePath := filepath.Join(externalRoot, "compose.yaml")
+	if err := os.WriteFile(composePath, []byte("services:\n  web:\n    image: nginx:alpine\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(externalRoot, ".env"), []byte("PORT=8080\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	containers := staticContainers{rows: []containerdomain.Summary{{ID: "web", State: "running", Labels: map[string]string{
+		composeProjectLabel: "external", composeWorkingDirLabel: externalRoot, composeConfigFilesLabel: composePath,
+	}}}}
+	managedRoot := t.TempDir()
+	service := &Service{root: managedRoot, runner: validateRunner{}, containers: containers}
+	project, err := service.Import(context.Background(), "external")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !project.CanManage || project.Source != "managed" || !strings.Contains(project.Compose, "nginx:alpine") || project.Environment != "PORT=8080\n" {
+		t.Fatalf("imported project = %#v", project)
+	}
+	if project.Path != filepath.Join(managedRoot, "external") {
+		t.Fatalf("managed path = %q", project.Path)
+	}
+}
+
+func TestImportRejectsConfigOutsideReportedWorkingDirectory(t *testing.T) {
+	externalRoot := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "compose.yml")
+	if err := os.WriteFile(outside, []byte("services: {}\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	containers := staticContainers{rows: []containerdomain.Summary{{ID: "web", State: "running", Labels: map[string]string{
+		composeProjectLabel: "external", composeWorkingDirLabel: externalRoot, composeConfigFilesLabel: outside,
+	}}}}
+	service := &Service{root: t.TempDir(), runner: validateRunner{}, containers: containers}
+	if _, err := service.Import(context.Background(), "external"); err == nil || !strings.Contains(err.Error(), "outside") {
+		t.Fatalf("expected path rejection, got %v", err)
+	}
+}
+
 type batchRunner struct{ Runner }
 
 func (batchRunner) Start(context.Context, string, io.Writer) error { return nil }
+
+type validateRunner struct{ Runner }
+
+func (validateRunner) Validate(context.Context, string, io.Writer) error { return nil }
 
 func (r *forceRemoveRunner) ForceDown(_ context.Context, _ string, preserveVolumes bool, _ io.Writer) error {
 	r.managed = true

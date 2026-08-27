@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/auth"
 	cdService "github.com/suma/suma/server/internal/cd"
@@ -27,8 +29,6 @@ import (
 	"github.com/suma/suma/server/internal/task"
 	volumeService "github.com/suma/suma/server/internal/volume"
 	"github.com/suma/suma/server/webui"
-	"github.com/gin-gonic/gin"
-	"github.com/gorilla/websocket"
 )
 
 const sessionCookie = "suma_session"
@@ -692,6 +692,15 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			return
 		}
 		recordAudit(c, deps.Audit, "compose.create", "compose", input.Name, "success")
+		c.JSON(http.StatusCreated, envelope{Code: 0, Message: "success", Data: row})
+	})
+	compose.POST("/:name/import", func(c *gin.Context) {
+		row, err := deps.Compose.Import(c.Request.Context(), c.Param("name"))
+		if err != nil {
+			failure(c, http.StatusConflict, 18015, err.Error())
+			return
+		}
+		recordAudit(c, deps.Audit, "compose.import", "compose", c.Param("name"), "success")
 		c.JSON(http.StatusCreated, envelope{Code: 0, Message: "success", Data: row})
 	})
 	compose.POST("/batch", func(c *gin.Context) {

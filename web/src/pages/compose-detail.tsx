@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from '@tanstack/react-router'
-import { ChevronLeft, FileCheck2, Play, Save, Trash2 } from 'lucide-react'
+import { ChevronLeft, Download, FileCheck2, Play, Save, Trash2 } from 'lucide-react'
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { Button } from '../components/ui/button'
+import { Alert, AlertAction, AlertDescription, AlertTitle } from '../components/ui/alert'
 import { Card, CardContent } from '../components/ui/card'
 import { ErrorState } from '../components/ui/error-state'
 import { LoadingState } from '../components/ui/loading-state'
@@ -45,6 +46,7 @@ export function ComposeDetailPage() {
     if (!query.data) return
     setCompose(query.data.compose)
     setEnvironment(query.data.environment)
+    if (!query.data.can_manage) setView('Services')
   }, [query.data])
 
   const services = useQuery({ queryKey: ['compose-services', nodeID, projectName], queryFn: () => api<ContainerSummary[]>(nodePath(nodeID, `/compose/${encodedName}/services`)), enabled: view === 'Services', refetchInterval: 5_000 })
@@ -67,6 +69,16 @@ export function ComposeDetailPage() {
     onSuccess: () => {
       setNotice(zh ? '任务已启动。' : 'Task started.')
       void client.invalidateQueries({ queryKey: ['tasks', nodeID] })
+    },
+    onError: (error) => setNotice(error.message),
+  })
+  const importProject = useMutation({
+    mutationFn: () => api<ComposeProject>(nodePath(nodeID, `/compose/${encodedName}/import`), { method: 'POST' }),
+    onSuccess: (row) => {
+      client.setQueryData(['compose', nodeID, projectName], row)
+      void client.invalidateQueries({ queryKey: ['compose', nodeID] })
+      setNotice(zh ? '项目已复制到 SUMA Compose 目录，现在可以编辑和管理。' : 'Project copied into the SUMA Compose directory and is now manageable.')
+      setView('Files')
     },
     onError: (error) => setNotice(error.message),
   })
@@ -94,22 +106,23 @@ export function ComposeDetailPage() {
   const dirty = compose !== project.compose || environment !== project.environment
   const headerActions = <div className="flex flex-wrap items-center gap-2">
     <StatusBadge tone={statusTone(project.status)}>{project.status}</StatusBadge>
-    {['start', 'stop', 'restart', 'pull', 'build', 'down'].map((name) => <Button key={name} variant={name === 'down' ? 'destructive' : 'outline'} disabled={action.isPending} onClick={() => void run(name)}>{name}</Button>)}
-    <Button disabled={action.isPending} onClick={() => void run('up')}>{action.isPending ? <Spinner className="size-4" /> : <Play size={16} />}Up</Button>
+    {project.can_manage && ['start', 'stop', 'restart', 'pull', 'build', 'down'].map((name) => <Button key={name} variant={name === 'down' ? 'destructive' : 'outline'} disabled={action.isPending} onClick={() => void run(name)}>{name}</Button>)}
+    {project.can_manage && <Button disabled={action.isPending} onClick={() => void run('up')}>{action.isPending ? <Spinner className="size-4" /> : <Play size={16} />}Up</Button>}
   </div>
   return <div className="flex w-full flex-col items-start gap-4">
     <Button variant="ghost" size="sm" className="-ml-2 text-muted-foreground" onClick={() => void navigate({ to: '/compose' })}><ChevronLeft />Compose</Button>
-    <ResourceFrame title={projectName} detail={dirty ? (zh ? '本地管理 · 有未保存更改' : 'Locally managed · Unsaved changes') : (zh ? '本地管理 · 已保存' : 'Locally managed · Saved')} action={headerActions}>
+    <ResourceFrame title={projectName} detail={project.can_manage ? (dirty ? (zh ? 'SUMA 托管 · 有未保存更改' : 'SUMA managed · Unsaved changes') : (zh ? 'SUMA 托管 · 已保存' : 'SUMA managed · Saved')) : (zh ? '从 Docker Compose 标签发现 · 只读' : 'Discovered from Docker Compose labels · Read-only')} action={headerActions}>
       <div className="flex w-full flex-col items-start gap-3">
+        {!project.can_manage && <Alert className="w-full pr-28"><AlertTitle>{zh ? '外部 Compose 项目' : 'External Compose project'}</AlertTitle><AlertDescription>{zh ? 'SUMA 从 Docker 容器标签发现了该项目。当前可以查看服务并操作单个容器；本地单文件项目可显式导入后管理。' : 'SUMA discovered this project from Docker container labels. You can inspect services and operate individual containers; local single-file projects can be explicitly imported for management.'}{project.config_files?.length ? <span className="mt-1 block font-mono text-xs">{project.config_files.join(', ')}</span> : null}</AlertDescription><AlertAction><Button size="sm" variant="outline" disabled={importProject.isPending || project.config_files?.length !== 1} onClick={() => importProject.mutate()} title={project.config_files?.length !== 1 ? (zh ? '仅支持导入单文件 Compose 项目' : 'Only single-file Compose projects can be imported') : undefined}>{importProject.isPending ? <Spinner className="size-3.5" /> : <Download />}{zh ? '导入' : 'Import'}</Button></AlertAction></Alert>}
         {notice && <p className={`text-sm ${action.isError ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'}`}>{notice}</p>}
         <Tabs value={view} onValueChange={(value) => setView(value as View)}>
           <TabsList variant="line">
-            {(['Files', 'Services', 'Logs'] as View[]).map((name) => <TabsTrigger key={name} value={name}>{name === 'Files' ? (zh ? 'Compose 文件' : 'Compose files') : name === 'Services' ? (zh ? '服务' : 'Services') : (zh ? '日志' : 'Logs')}</TabsTrigger>)}
+            {(project.can_manage ? ['Files', 'Services', 'Logs'] : ['Services']).map((name) => <TabsTrigger key={name} value={name}>{name === 'Files' ? (zh ? 'Compose 文件' : 'Compose files') : name === 'Services' ? (zh ? '服务' : 'Services') : (zh ? '日志' : 'Logs')}</TabsTrigger>)}
           </TabsList>
         </Tabs>
-        {view === 'Files' && <ComposeFiles dark={dark} file={file} compose={compose} environment={environment} dirty={dirty} notice={notice} zh={zh} setFile={setFile} setCompose={setCompose} setEnvironment={setEnvironment} onRemove={() => void remove()} onValidate={() => validate.mutate()} onSave={() => save.mutate()} onDeploy={() => void deploy()} validating={validate.isPending} saving={save.isPending} />}
+        {view === 'Files' && project.can_manage && <ComposeFiles dark={dark} file={file} compose={compose} environment={environment} dirty={dirty} notice={notice} zh={zh} setFile={setFile} setCompose={setCompose} setEnvironment={setEnvironment} onRemove={() => void remove()} onValidate={() => validate.mutate()} onSave={() => save.mutate()} onDeploy={() => void deploy()} validating={validate.isPending} saving={save.isPending} />}
         {view === 'Services' && <Services rows={services.data} loading={services.isPending} zh={zh} />}
-        {view === 'Logs' && <Logs value={logs.data?.logs} loading={logs.isPending} error={logs.isError} zh={zh} />}
+        {view === 'Logs' && project.can_manage && <Logs value={logs.data?.logs} loading={logs.isPending} error={logs.isError} zh={zh} />}
       </div>
     </ResourceFrame>
   </div>

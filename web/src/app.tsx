@@ -17,6 +17,7 @@ import { AuthenticationPage } from './pages/authentication'
 import { NodesPage } from './pages/nodes'
 import { AppDialog } from './components/ui/app-dialog'
 import { Spinner } from './components/ui/spinner'
+import { TooltipProvider } from './components/ui/tooltip'
 
 const ContainerDetailPage = lazy(() => import('./pages/container-detail').then((module) => ({ default: module.ContainerDetailPage })))
 const ComposeDetailPage = lazy(() => import('./pages/compose-detail').then((module) => ({ default: module.ComposeDetailPage })))
@@ -45,5 +46,5 @@ const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 5_
 declare module '@tanstack/react-router' { interface Register { router: typeof router } }
 
 export function App() {
-  return <QueryClientProvider client={queryClient}><RouterProvider router={router} /><AppDialog /></QueryClientProvider>
+  return <QueryClientProvider client={queryClient}><TooltipProvider><RouterProvider router={router} /><AppDialog /></TooltipProvider></QueryClientProvider>
 }

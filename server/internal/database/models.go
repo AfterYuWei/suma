@@ -111,18 +111,9 @@ type DeliveryTargetState struct {
 	UpdatedAt       time.Time `json:"updated_at"`
 }
 
-type ComposeProject struct {
-	ID        uint   `gorm:"primaryKey"`
-	NodeID    string `gorm:"size:64;not null;default:local;uniqueIndex:idx_compose_node_name"`
-	Name      string `gorm:"size:128;not null;uniqueIndex:idx_compose_node_name"`
-	Path      string `gorm:"not null"`
-	CreatedAt time.Time
-	UpdatedAt time.Time
-}
-
 // DeliveryProject is the aggregate root for continuous delivery. It is
-// intentionally independent from ComposeProject: Compose is a deployment
-// adapter used by a release, not the identity or lifecycle owner of CD.
+// intentionally independent from the Docker-label Compose inventory: Compose
+// is a deployment adapter used by a release, not the identity or lifecycle owner of CD.
 type DeliveryProject struct {
 	ID                  uint   `gorm:"primaryKey"`
 	NodeID              string `gorm:"size:64;not null;default:local;index"`
