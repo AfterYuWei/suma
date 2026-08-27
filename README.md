@@ -22,7 +22,7 @@ DockPort continuous delivery consumes an already deployable Compose declaration 
 
 ## Technology
 
-The web application uses React 19, TypeScript, Vite, Tailwind CSS v4, shadcn-style primitives, Base UI, TanStack Router and Query, Zustand, Lucide, Motion, Monaco, xterm.js, and ECharts. The server uses Go, Gin, GORM, SQLite, the Docker Go SDK, Gorilla WebSocket, the Docker Compose CLI, and the Git CLI. OpenSSH is used for SSH Git remotes.
+The web application uses React 19, TypeScript, Vite, Tailwind CSS v4, Semi Design's React 19 package with the official Feishu Universe Design theme, TanStack Router and Query, Zustand, Lucide, Motion, Monaco, xterm.js, and ECharts. Universe Design owns component appearance; project CSS is limited to responsive structure and document-level accessibility rules. Run `npm run audit:universe` to enforce that boundary. The server uses Go, Gin, GORM, SQLite, the Docker Go SDK, Gorilla WebSocket, the Docker Compose CLI, and the Git CLI. OpenSSH is used for SSH Git remotes.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md), [API.md](API.md), [PLANS.md](PLANS.md), and [MVP-CHECKLIST.md](MVP-CHECKLIST.md).
 

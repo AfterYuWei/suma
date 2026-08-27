@@ -1,10 +1,15 @@
+import { Fragment, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, ChevronDown, CircleAlert, LoaderCircle, Timer } from 'lucide-react'
-import { useState } from 'react'
+import { cn } from '@/lib/utils'
 import { LoadingState } from '../components/ui/loading-state'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { Progress } from '../components/ui/progress'
+import { Spinner } from '../components/ui/spinner'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { api } from '../lib/api'
-import { nodePath } from '../lib/nodes'
 import { useI18n } from '../lib/i18n'
+import { nodePath } from '../lib/nodes'
 import { promptDialog } from '../stores/dialog'
 import { useUIStore } from '../stores/ui'
 import { ResourceFrame } from './images'
@@ -12,18 +17,97 @@ import { ResourceFrame } from './images'
 interface Task { id: string; type: string; name: string; status: string; progress: number; message: string; created_at: string }
 interface Log { id: number; level: string; message: string; created_at: string }
 
+function StatusBadge({ status }: { status: string }) {
+  if (status === 'success') return <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:bg-emerald-500/15 dark:text-emerald-400">{status}</Badge>
+  if (status === 'failed') return <Badge variant="destructive">{status}</Badge>
+  if (status === 'running') return <Badge>{status}</Badge>
+  return <Badge variant="secondary">{status}</Badge>
+}
+
 export function TasksPage() {
-	const nodeID = useUIStore((state) => state.currentNodeID)
-  const client = useQueryClient(); const { t, language } = useI18n()
+  const nodeID = useUIStore((state) => state.currentNodeID)
+  const client = useQueryClient()
+  const { t, language } = useI18n()
+  const zh = language === 'zh-CN'
+  const [expandedID, setExpandedID] = useState<string | null>(null)
   const query = useQuery({ queryKey: ['tasks', nodeID], queryFn: () => api<Task[]>(`/tasks?node_id=${encodeURIComponent(nodeID)}`), refetchInterval: 2_000 })
   const prune = useMutation({ mutationFn: () => api(nodePath(nodeID, '/system/prune'), { method: 'POST', body: JSON.stringify({ confirm: 'PRUNE' }) }), onSuccess: () => client.invalidateQueries({ queryKey: ['tasks', nodeID] }) })
   const startPrune = async () => { const value = await promptDialog({ title: t('systemPrune'), description: t('systemPruneDescription'), confirmLabel: t('systemPrune'), danger: true, input: { label: t('typeToConfirm', { value: 'PRUNE' }), requiredValue: 'PRUNE' } }); if (value === 'PRUNE') prune.mutate() }
-  return <ResourceFrame eyebrow={t('operations')} title={t('tasks')} detail={language === 'zh-CN' ? '长时间运行的 Docker 与 Compose 操作' : 'Long-running Docker and Compose operations'} action={<button onClick={() => void startPrune()} className="h-8 rounded-md border border-danger/30 bg-surface px-3 text-xs text-danger hover:bg-danger-subtle">{t('systemPrune')}</button>}>{query.isPending ? <LoadingState label={language === 'zh-CN' ? '正在加载任务' : 'Loading tasks'} /> : <div className="divide-y divide-border border-y border-border">{query.data?.map((row) => <TaskRow key={row.id} row={row} />)}</div>}</ResourceFrame>
+
+  return (
+    <ResourceFrame
+      title={t('tasks')}
+      detail={zh ? '长时间运行的 Docker 与 Compose 操作' : 'Long-running Docker and Compose operations'}
+      action={(
+        <Button variant="outline" className="text-destructive hover:text-destructive" disabled={prune.isPending} onClick={() => void startPrune()}>
+          {prune.isPending && <Spinner className="size-4" />}
+          {t('systemPrune')}
+        </Button>
+      )}
+    >
+      {query.isPending
+        ? <LoadingState label={zh ? '正在加载任务' : 'Loading tasks'} />
+        : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{zh ? '任务' : 'Task'}</TableHead>
+                  <TableHead className="w-56">{zh ? '进度' : 'Progress'}</TableHead>
+                  <TableHead className="w-28">{zh ? '状态' : 'Status'}</TableHead>
+                  <TableHead className="w-44">{zh ? '创建时间' : 'Created'}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(query.data ?? []).length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">{zh ? '暂无任务' : 'No tasks'}</TableCell>
+                  </TableRow>
+                )}
+                {(query.data ?? []).map((row) => (
+                  <Fragment key={row.id}>
+                    <TableRow
+                      aria-expanded={expandedID === row.id}
+                      className="cursor-pointer"
+                      onClick={() => setExpandedID((current) => current === row.id ? null : row.id)}
+                    >
+                      <TableCell className="max-w-72 whitespace-normal">
+                        <div className="font-medium">{row.name}</div>
+                        <div className="text-xs text-muted-foreground">{row.message || row.type}</div>
+                      </TableCell>
+                      <TableCell><Progress value={Number(row.progress)} /></TableCell>
+                      <TableCell><StatusBadge status={row.status} /></TableCell>
+                      <TableCell className="text-muted-foreground tabular-nums">{new Date(row.created_at).toLocaleString(language)}</TableCell>
+                    </TableRow>
+                    {expandedID === row.id && (
+                      <TableRow className="hover:bg-transparent">
+                        <TableCell colSpan={4} className="whitespace-normal bg-muted/40">
+                          <TaskLogs task={row} />
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </Fragment>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+    </ResourceFrame>
+  )
 }
 
-function TaskRow({ row }: { row: Task }) {
-  const [open, setOpen] = useState(false); const { language } = useI18n()
-  const logs = useQuery({ queryKey: ['task-logs', row.id], queryFn: () => api<Log[]>(`/tasks/${row.id}/logs`), enabled: open, refetchInterval: row.status === 'running' ? 1_000 : false })
-  const Icon = row.status === 'success' ? Check : row.status === 'failed' ? CircleAlert : row.status === 'running' ? LoaderCircle : Timer
-  return <div><button onClick={() => setOpen(!open)} className="grid min-h-16 w-full grid-cols-[24px_minmax(0,1fr)_120px_100px_24px] items-center gap-3 px-2 text-left hover:bg-surface/60"><Icon className={`size-4 ${row.status === 'running' ? 'animate-spin text-accent' : row.status === 'success' ? 'text-success' : 'text-text-subtle'}`} /><div className="min-w-0"><p className="truncate text-sm font-medium">{row.name}</p><p className="truncate text-[10px] text-text-subtle">{row.message || row.type}</p></div><div className="h-1 overflow-hidden rounded-full bg-muted"><div className="h-full bg-accent" style={{ width: `${row.progress}%` }} /></div><p className="text-right text-xs capitalize text-text-muted">{row.status}</p><ChevronDown className={`size-3.5 text-text-subtle transition-transform ${open ? 'rotate-180' : ''}`} /></button>{open && <div className="max-h-64 overflow-auto border-t border-border bg-[var(--code-background)] px-4 py-3 font-mono text-[11px] leading-5 text-text-muted">{logs.isPending && <span className="flex items-center gap-2 text-text-subtle"><LoaderCircle className="size-3.5 animate-spin text-accent" />{language === 'zh-CN' ? '正在加载任务输出…' : 'Loading task output…'}</span>}{logs.data?.map((log) => <div key={log.id}><span className="mr-3 text-text-subtle">{new Date(log.created_at).toLocaleTimeString(language)}</span><span className={log.level === 'error' ? 'text-danger' : ''}>{log.message}</span></div>)}{logs.data?.length === 0 && <span className="text-text-subtle">{language === 'zh-CN' ? '等待任务输出…' : 'Waiting for task output…'}</span>}</div>}</div>
+function TaskLogs({ task }: { task: Task }) {
+  const { language } = useI18n()
+  const zh = language === 'zh-CN'
+  const logs = useQuery({ queryKey: ['task-logs', task.id], queryFn: () => api<Log[]>(`/tasks/${task.id}/logs`), refetchInterval: task.status === 'running' ? 1_000 : false })
+  if (logs.isPending) return <LoadingState embedded compact rows={3} label={zh ? '正在加载任务输出' : 'Loading task output'} />
+  return (
+    <div className="flex max-h-64 flex-col gap-1.5 overflow-y-auto">
+      {(logs.data ?? []).length === 0 && <p className="py-2 text-center text-sm text-muted-foreground">{zh ? '等待任务输出…' : 'Waiting for task output…'}</p>}
+      {(logs.data ?? []).map((log) => (
+        <div key={log.id} className="flex items-baseline gap-3">
+          <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">{new Date(log.created_at).toLocaleTimeString(language)}</span>
+          <span className={cn('font-mono text-xs break-all', log.level === 'error' ? 'text-destructive' : 'text-foreground')}>{log.message}</span>
+        </div>
+      ))}
+    </div>
+  )
 }

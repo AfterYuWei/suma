@@ -11,18 +11,44 @@ This file records the completed MVP implementation. Every checked phase was veri
 - [x] Docker resources: image, network, and volume lifecycle operations with usage checks and confirmations.
 - [x] Compose: project lifecycle, Monaco Compose/`.env` editor, validation, changed-file summary, service/log views, and one centralized `ComposeRunner`.
 - [x] Operations: persistent tasks and logs, realtime task progress, audit log, confirmed system prune, and settings.
-- [x] UX: global command palette, Chinese/English localization, custom accessible dialogs, loading/error/empty states, responsive layout, Base UI primitives, and dark/light/system themes.
+- [x] UX: global command palette, Chinese/English localization, accessible dialogs, loading/error/empty states, responsive layout, design-system primitives, and dark/light/system themes.
 - [x] Deployment: multi-stage Dockerfile, Compose deployment, persistent database/project storage, same-path bind mounts, and complete README.
 - [x] Verification: backend tests/build, frontend lint/typecheck/build, production image, persistence restart, and complete live-engine smoke suite.
 
 ## Frontend redesign
 
+- [x] Semi Design foundation: replace Base UI with the React 19-specific `@douyinfe/semi-ui-19`, install global locale/theme providers, and migrate shared Select, dialog, checkbox, switch, and dropdown primitives. Verification: `npm run lint`, `npm run typecheck`, and `npm run build`.
+- [x] Semi Design forms and actions: migrate native credential, node, settings, Compose, CD, and resource controls to Semi Input/TextArea/Select/Checkbox/Button/Form without changing validation, secret-masking, or destructive-confirmation behavior. Verification: frontend gates plus isolated Chrome interaction smoke tests for authentication, settings, node SideSheet, Compose, and resource actions.
+- [x] Semi Design navigation and feedback: migrate shell navigation actions, command palette, tabs, disclosure, loading/error/empty feedback, and task status surfaces; remove obsolete compatibility CSS and unused primitive helpers. Verification: frontend gates plus isolated Chrome navigation, overlay, keyboard-dismissal, tab, desktop, and mobile smoke tests.
+- [x] Semi Design visual acceptance: verify dark/light/system themes, Chinese/English locale, responsive dense lists, keyboard navigation, overlays, Monaco/xterm/ECharts integration, and production bundle splitting. Verification: frontend gates and Chrome 152.0.7977.64 browser smoke tests passed with no page errors; system theme follows live OS color-scheme changes.
+
+### Universe Design realignment
+
+The completed items above cover the Semi component-layer migration. They are superseded for visual acceptance by the stricter requirement in `SEMI-MIGRATION.md`: DockPort must not maintain an independent visual language, and the Feishu Universe Design theme must own component appearance.
+
+- [x] Universe theme gate: integrate official `@douyinfe/semi-vite-plugin` and `@semi-bot/semi-theme-universedesign`; prove the published theme package against React 19 Semi `2.102.x`, light/dark mode, lazy chunks, and production build. Verification: Universe `1.0.13` tokens resolved in Chrome and the production build passed with Semi `2.102.x`.
+- [x] Universe application frame: rebuild shell, authentication, command palette, navigation, theme controls, typography, spacing, and overlays from Semi compositions; remove project styling for those surfaces. Verification: desktop/mobile Nav, authentication, command palette, overlays, and theme controls passed isolated browser checks.
+- [x] Universe resource language: migrate resource lists, metadata, statuses, forms, validation, details, disclosures, and operation controls to Semi Table/List/Descriptions/Tag/Badge/Form/Card/Tabs/Collapse patterns while retaining dense Docker workflows. Verification: all resource routes and node/CD forms passed component and interaction checks.
+- [x] Universe page migration: remove the custom cockpit, signal/orbit, glass, grid, scanline, gradient, shadow, radius, palette, and component-state styling from every page; Tailwind is permitted only for responsive structure and placement. Verification: global CSS reduced to 30 lines and the source audit found no project visual utilities or component overrides.
+- [x] Universe integration styling: source ECharts colors from `--semi-color-data-*`, use built-in Monaco light/dark themes and Semi tokens for xterm, and retain only structural sizing/overflow CSS for third-party surfaces. Verification: Monaco, ECharts, and xterm rendered in the isolated browser suite.
+- [x] Universe enforcement and acceptance: prohibit `.semi-*` appearance overrides and visual Tailwind utilities, reduce global CSS to the approved boundary, then pass frontend gates and isolated light/dark/system, locale, responsive, keyboard, overlay, destructive-flow, Monaco/xterm/ECharts visual smoke tests. Verification: `npm run audit:universe`, lint, typecheck, production build, diff check, and Chrome 152.0.7977.64 completed with zero page errors.
 - [x] Immersive operations cockpit: unified Lucide iconography, emoji-free interface, redesigned navigation, authentication, command center, live host canvas, semantic materials, responsive behavior, and reduced-motion support. Verification: `npm run lint`, `npm run typecheck`, and `npm run build`.
 - [x] Dense Compose project list: compact desktop columns and responsive mobile rows expose path, runtime status, service/container counts, and precise update time without inline action-button clutter. Verification: `npm run lint`, `npm run typecheck`, and `npm run build`.
 - [x] Expandable Compose operations: independent multi-row expansion, project start/stop/restart/update/down actions, live container status, and per-container start/stop/resume/restart/log/terminal shortcuts. Verification: `npm run lint`, `npm run typecheck`, and `npm run build`.
 - [x] Container-style Compose list and batch operations: rounded dense resource rows, right-aligned expand controls, multi-select, and batch start/stop/restart/update/down tasks with per-project results. Verification: `go test ./...`, `go build ./...`, `npm run lint`, `npm run typecheck`, and `npm run build`.
 - [x] Unified dense resource lists: Continuous Delivery, images, networks, and volumes now share the rounded high-density list language, responsive rows, semantic icons, compact metadata, empty/error states, and right-aligned actions used by containers and Compose. Verification: `npm run lint`, `npm run typecheck`, and `npm run build`.
 - [x] Reliable Compose runtime attribution: correlate containers by Compose working-directory labels rather than assuming the Docker Compose runtime name equals the DockPort project name. Verification: `go test ./...` and `go build ./...`.
+
+### shadcn/ui foundation
+
+This section supersedes the Semi Design and Universe Design phases above (`SEMI-MIGRATION.md` is obsolete): the base UI layer is now shadcn/ui in the official `base-nova` style on `@base-ui/react` primitives with Tailwind v4 design tokens, dark-first defaults, light/dark/system themes, and the Lucide icon library.
+
+- [x] Foundation: `components.json`, official `@theme inline` token layer in `src/styles.css` (oklch light/dark), `@/lib/utils` `cn()`, `@` path aliases, `shadcn/tailwind.css` utilities, and dependency swap from Semi to `@base-ui/react`. Verification: `npm run typecheck`.
+- [x] Registry components: all shared primitives (`button badge card input input-group textarea label select checkbox switch radio-group dialog alert-dialog alert dropdown-menu popover tooltip sheet command progress skeleton spinner separator collapsible tabs table scroll-area`) installed from the official base-nova registry source. Verification: `npm run typecheck`, `npm run lint`.
+- [x] Shell and primitives rewrite: app shell sidebar/header/mobile Sheet navigation, Base UI Select node switcher, theme-toggle dropdown, AppDialog (confirm/prompt/choice flows preserved via the dialog store), Command palette rebuilt on `command`, ErrorState on `alert`, LoadingState on `skeleton`+`spinner`. Verification: `npm run typecheck`, `npm run lint`, `npm run build`.
+- [x] Page and feature migration: all pages and feature modules rewritten from Semi components to shadcn patterns with identical business logic, i18n, destructive confirmations, volume-name prompts, and secret masking; xterm/ECharts palettes now read shadcn tokens (`--background`, `--foreground`, `--chart-*`). Verification: frontend gates (`npm run lint`, `npm run typecheck`, `npm run build`) pass with zero `@douyinfe` references.
+- [x] Cleanup: Semi dependencies, the Semi Vite theming plugin, and the Universe audit gate removed; `oxlint` retained as lint gate.
+- [ ] Visual acceptance in Chrome against official shadcn demos (light/dark/system, locale, overlays, Monaco/xterm/ECharts) plus the real-Docker smoke suite.
 
 ## Authentication center
 

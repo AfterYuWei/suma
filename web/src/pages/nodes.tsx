@@ -1,31 +1,180 @@
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2, CircleOff, Pencil, Plus, RefreshCw, Server, Trash2, X } from 'lucide-react'
-import { type FormEvent, useState } from 'react'
+import { Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { LoadingState } from '../components/ui/loading-state'
+import { Alert, AlertDescription } from '../components/ui/alert'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { Checkbox } from '../components/ui/checkbox'
+import { Input } from '../components/ui/input'
+import { Label } from '../components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../components/ui/sheet'
+import { Spinner } from '../components/ui/spinner'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
+import { Textarea } from '../components/ui/textarea'
 import { api } from '../lib/api'
-import type { DockerNode } from '../lib/nodes'
 import { useI18n } from '../lib/i18n'
+import type { DockerNode } from '../lib/nodes'
 import { confirmDialog } from '../stores/dialog'
 import { ResourceFrame } from './images'
 
 interface TLSCredential { id: number; name: string; fingerprint: string; authorized_node_ids: string[] }
 interface NodeInput { name: string; connection_type: 'unix' | 'tcp'; endpoint: string; tls_mode: 'required' | 'disabled'; tls_credential_id?: number; allowed_bind_roots: string[]; enabled: boolean }
-const blank = (): NodeInput => ({ name: '', connection_type: 'unix', endpoint: 'unix:///var/run/docker.sock', tls_mode: 'disabled', allowed_bind_roots: [], enabled: true })
-const inputClass = 'h-9 w-full rounded-md border border-border bg-surface px-3 font-mono text-xs outline-none focus:border-accent'
+interface NodeFormValues extends Omit<NodeInput, 'allowed_bind_roots'> { allowed_bind_roots: string }
 
-export function NodesPage() {
-  const { language } = useI18n(); const zh = language === 'zh-CN'; const client = useQueryClient()
-  const query = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes'), refetchInterval: 15_000 })
-  const credentials = useQuery({ queryKey: ['docker-tls-credentials'], queryFn: () => api<TLSCredential[]>('/credentials/docker-tls') })
-  const [editing, setEditing] = useState<DockerNode | null>(null); const [input, setInput] = useState<NodeInput>(blank); const [open, setOpen] = useState(false)
-  const save = useMutation({ mutationFn: () => api<DockerNode>(editing ? `/nodes/${editing.id}` : '/nodes', { method: editing ? 'PUT' : 'POST', body: JSON.stringify(input) }), onSuccess: async () => { setOpen(false); await client.invalidateQueries({ queryKey: ['nodes'] }) } })
-  const test = useMutation({ mutationFn: (id: string) => api(`/nodes/${id}/test`, { method: 'POST' }), onSuccess: () => client.invalidateQueries({ queryKey: ['nodes'] }) })
-  const edit = (node: DockerNode) => { setEditing(node); setInput({ name: node.name, connection_type: node.connection_type, endpoint: node.endpoint, tls_mode: node.tls_mode, tls_credential_id: node.tls_credential_id, allowed_bind_roots: node.allowed_bind_roots, enabled: node.enabled }); setOpen(true) }
-  const remove = async (node: DockerNode) => { if (!await confirmDialog({ title: zh ? `删除节点 ${node.name}？` : `Delete node ${node.name}?`, description: zh ? '必须先解绑 Compose、CD 和全部凭据授权。历史任务和审计记录会保留。' : 'Compose, CD, and credential grants must be detached first. Historical tasks and audits remain.', confirmLabel: zh ? '删除节点' : 'Delete node', danger: true })) return; await api(`/nodes/${node.id}`, { method: 'DELETE' }); await client.invalidateQueries({ queryKey: ['nodes'] }) }
-  return <ResourceFrame eyebrow={zh ? '系统' : 'System'} title={zh ? 'Docker 节点' : 'Docker nodes'} detail={zh ? '通过本地 Unix Socket 或受保护的 Docker TCP API 管理多个 Engine。' : 'Manage Docker Engines through local Unix sockets or protected Docker TCP APIs.'} action={<button onClick={() => { setEditing(null); setInput(blank()); setOpen(true) }} className="flex h-9 items-center gap-2 rounded-xl bg-accent px-3 text-xs font-semibold text-accent-foreground"><Plus className="size-3.5" />{zh ? '添加节点' : 'Add node'}</button>}>
-    {query.isPending ? <LoadingState compact rows={4} label={zh ? '正在加载节点' : 'Loading nodes'} /> : <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border">{query.data?.map((node) => <div key={node.id} className="grid min-h-20 grid-cols-[minmax(0,1fr)_120px_120px_auto] items-center gap-4 px-4 hover:bg-surface/45"><div className="flex min-w-0 items-center gap-3"><span className="grid size-9 place-items-center rounded-xl border border-border bg-surface"><Server className="size-4 text-text-subtle" /></span><div className="min-w-0"><p className="truncate text-sm font-medium">{node.name}</p><p className="mt-1 truncate font-mono text-[10px] text-text-subtle">{node.endpoint}</p>{node.last_error && <p className="mt-1 truncate text-[10px] text-danger">{node.last_error}</p>}</div></div><span className="font-mono text-[10px] text-text-muted">{node.connection_type.toUpperCase()} · {node.tls_mode === 'required' ? 'mTLS' : 'PLAIN'}</span><span className={`flex items-center gap-2 text-xs ${node.status === 'online' ? 'text-success' : 'text-text-subtle'}`}>{node.status === 'online' ? <CheckCircle2 className="size-3.5" /> : <CircleOff className="size-3.5" />}{node.status}</span><div className="flex gap-1"><button title={zh ? '测试连接' : 'Test connection'} onClick={() => test.mutate(node.id)} className="grid size-8 place-items-center rounded-lg hover:bg-surface-hover"><RefreshCw className={`size-3.5 ${test.isPending && test.variables === node.id ? 'animate-spin' : ''}`} /></button><button title={zh ? '编辑' : 'Edit'} onClick={() => edit(node)} className="grid size-8 place-items-center rounded-lg hover:bg-surface-hover"><Pencil className="size-3.5" /></button><button disabled={node.id === 'local'} title={zh ? '删除' : 'Delete'} onClick={() => void remove(node)} className="grid size-8 place-items-center rounded-lg text-danger hover:bg-danger-subtle disabled:opacity-30"><Trash2 className="size-3.5" /></button></div></div>)}</div>}
-    {open && <div className="fixed inset-0 z-50 flex justify-end bg-black/45" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false) }}><form onSubmit={(event: FormEvent) => { event.preventDefault(); save.mutate() }} className="h-full w-full max-w-lg overflow-y-auto border-l border-border bg-background p-6 shadow-2xl"><header className="mb-7 flex items-center"><div><p className="text-lg font-semibold">{editing ? (zh ? '编辑节点' : 'Edit node') : (zh ? '添加节点' : 'Add node')}</p><p className="mt-1 text-xs text-text-subtle">{zh ? '保存前会连接 Engine 并校验身份。' : 'The Engine identity is verified before saving.'}</p></div><button type="button" onClick={() => setOpen(false)} className="ml-auto grid size-8 place-items-center"><X className="size-4" /></button></header><div className="space-y-5"><Field label={zh ? '节点名称' : 'Node name'}><input required className={inputClass} value={input.name} onChange={(e) => setInput({ ...input, name: e.target.value })} /></Field><Field label={zh ? '连接方式' : 'Connection type'}><select className={inputClass} value={input.connection_type} onChange={(e) => { const connection = e.target.value as 'unix' | 'tcp'; setInput({ ...input, connection_type: connection, endpoint: connection === 'unix' ? 'unix:///var/run/docker.sock' : 'tcp://docker.example.com:2376', tls_mode: connection === 'unix' ? 'disabled' : 'required', tls_credential_id: undefined }) }}><option value="unix">Unix Socket</option><option value="tcp">Docker TCP</option></select></Field><Field label="Endpoint"><input required className={inputClass} value={input.endpoint} onChange={(e) => setInput({ ...input, endpoint: e.target.value })} /></Field>{input.connection_type === 'tcp' && <><Field label="TLS"><select className={inputClass} value={input.tls_mode} onChange={(e) => setInput({ ...input, tls_mode: e.target.value as 'required' | 'disabled', tls_credential_id: undefined })}><option value="required">mTLS ({zh ? '推荐' : 'recommended'})</option><option value="disabled">{zh ? '无 TLS（仅回环地址）' : 'No TLS (loopback only)'}</option></select></Field>{input.tls_mode === 'required' && <Field label={zh ? 'Docker TLS 凭据' : 'Docker TLS credential'}><select required className={inputClass} value={input.tls_credential_id ?? ''} onChange={(e) => setInput({ ...input, tls_credential_id: Number(e.target.value) || undefined })}><option value="">{zh ? '选择凭据' : 'Choose credential'}</option>{credentials.data?.map((credential) => <option key={credential.id} value={credential.id}>{credential.name} · {credential.fingerprint}</option>)}</select></Field>}<Field label={zh ? '允许的 Bind 根目录' : 'Allowed bind roots'} hint={zh ? '每行一个远端绝对路径；留空会禁止远端 bind mount。' : 'One remote absolute path per line. Empty disables remote bind mounts.'}><textarea className={`${inputClass} min-h-28 py-2`} value={input.allowed_bind_roots.join('\n')} onChange={(e) => setInput({ ...input, allowed_bind_roots: e.target.value.split('\n').map((v) => v.trim()).filter(Boolean) })} /></Field></>}<label className="flex items-center gap-3 text-xs"><input type="checkbox" checked={input.enabled} onChange={(e) => setInput({ ...input, enabled: e.target.checked })} />{zh ? '启用节点' : 'Enable node'}</label>{save.isError && <p className="rounded-lg bg-danger-subtle p-3 text-xs text-danger">{save.error.message}</p>}</div><div className="mt-8 flex justify-end gap-2 border-t border-border pt-5"><button type="button" onClick={() => setOpen(false)} className="h-9 rounded-md border border-border px-4 text-xs">{zh ? '取消' : 'Cancel'}</button><button disabled={save.isPending} className="h-9 rounded-md bg-accent px-4 text-xs font-semibold text-accent-foreground">{save.isPending ? (zh ? '正在验证…' : 'Validating…') : (zh ? '保存节点' : 'Save node')}</button></div></form></div>}
-  </ResourceFrame>
+const blank = (): NodeFormValues => ({ name: '', connection_type: 'unix', endpoint: 'unix:///var/run/docker.sock', tls_mode: 'disabled', allowed_bind_roots: '', enabled: true })
+
+const connectionLabels: Record<string, string> = { unix: 'Unix Socket', tcp: 'Docker TCP' }
+
+function StatusBadge({ status }: { status: string }) {
+  return status === 'online'
+    ? <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:bg-emerald-500/15 dark:text-emerald-400">{status}</Badge>
+    : <Badge variant="secondary">{status}</Badge>
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) { return <label className="block"><span className="mb-1.5 block text-xs font-medium">{label}</span>{children}{hint && <span className="mt-1.5 block text-[10px] leading-4 text-text-subtle">{hint}</span>}</label> }
+export function NodesPage() {
+  const { language } = useI18n()
+  const zh = language === 'zh-CN'
+  const client = useQueryClient()
+  const query = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes'), refetchInterval: 15_000 })
+  const credentials = useQuery({ queryKey: ['docker-tls-credentials'], queryFn: () => api<TLSCredential[]>('/credentials/docker-tls') })
+  const [editing, setEditing] = useState<DockerNode | null>(null)
+  const [values, setValues] = useState<NodeFormValues>(blank)
+  const [open, setOpen] = useState(false)
+  const save = useMutation({ mutationFn: (form: NodeFormValues) => { const input: NodeInput = { ...form, allowed_bind_roots: form.allowed_bind_roots.split('\n').map((item) => item.trim()).filter(Boolean) }; return api<DockerNode>(editing ? `/nodes/${editing.id}` : '/nodes', { method: editing ? 'PUT' : 'POST', body: JSON.stringify(input) }) }, onSuccess: async () => { setOpen(false); await client.invalidateQueries({ queryKey: ['nodes'] }) } })
+  const test = useMutation({ mutationFn: (id: string) => api(`/nodes/${id}/test`, { method: 'POST' }), onSuccess: () => client.invalidateQueries({ queryKey: ['nodes'] }) })
+  const edit = (node: DockerNode) => { setEditing(node); setValues({ name: node.name, connection_type: node.connection_type, endpoint: node.endpoint, tls_mode: node.tls_mode, tls_credential_id: node.tls_credential_id, allowed_bind_roots: node.allowed_bind_roots.join('\n'), enabled: node.enabled }); setOpen(true) }
+  const remove = async (node: DockerNode) => { if (!await confirmDialog({ title: zh ? `删除节点 ${node.name}？` : `Delete node ${node.name}?`, description: zh ? '必须先解绑 Compose、CD 和全部凭据授权。历史任务和审计记录会保留。' : 'Compose, CD, and credential grants must be detached first. Historical tasks and audits remain.', confirmLabel: zh ? '删除节点' : 'Delete node', danger: true })) return; await api(`/nodes/${node.id}`, { method: 'DELETE' }); await client.invalidateQueries({ queryKey: ['nodes'] }) }
+  const createNode = () => { setEditing(null); setValues(blank()); setOpen(true) }
+  const update = (patch: Partial<NodeFormValues>) => setValues((previous) => ({ ...previous, ...patch }))
+  const tcp = values.connection_type === 'tcp'
+
+  return <ResourceFrame title={zh ? 'Docker 节点' : 'Docker nodes'} detail={zh ? '通过本地 Unix Socket 或受保护的 Docker TCP API 管理多个 Engine。' : 'Manage Docker Engines through local Unix sockets or protected Docker TCP APIs.'} action={<Button onClick={createNode}><Plus />{zh ? '添加节点' : 'Add node'}</Button>}>
+    {query.isPending
+      ? <LoadingState compact rows={4} label={zh ? '正在加载节点' : 'Loading nodes'} />
+      : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{zh ? '节点' : 'Node'}</TableHead>
+                <TableHead className="w-44">{zh ? '连接' : 'Connection'}</TableHead>
+                <TableHead className="w-28">{zh ? '状态' : 'Status'}</TableHead>
+                <TableHead className="w-28 text-right">{zh ? '操作' : 'Actions'}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(query.data ?? []).length === 0 && (
+                <TableRow><TableCell colSpan={4} className="h-24 text-center text-muted-foreground">{zh ? '暂无节点' : 'No nodes'}</TableCell></TableRow>
+              )}
+              {(query.data ?? []).map((node) => (
+                <TableRow key={node.id}>
+                  <TableCell className="max-w-80 whitespace-normal">
+                    <div className="font-medium">{node.name}</div>
+                    <div className="truncate text-xs text-muted-foreground" title={node.endpoint}>{node.endpoint}</div>
+                    {node.last_error && <div className="mt-0.5 text-xs break-all text-destructive">{node.last_error}</div>}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1.5">
+                      <Badge variant="outline" className="font-mono text-xs">{node.connection_type.toUpperCase()}</Badge>
+                      <Badge variant="outline" className="text-xs">{node.tls_mode === 'required' ? 'mTLS' : 'PLAIN'}</Badge>
+                    </div>
+                  </TableCell>
+                  <TableCell><StatusBadge status={node.status} /></TableCell>
+                  <TableCell>
+                    <div className="flex items-center justify-end gap-0.5">
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={zh ? '测试连接' : 'Test connection'}
+                        title={zh ? '测试连接' : 'Test connection'}
+                        disabled={test.isPending && test.variables === node.id}
+                        onClick={() => test.mutate(node.id)}
+                      ><RefreshCw className={cn(test.isPending && test.variables === node.id && 'animate-spin')} /></Button>
+                      <Button variant="ghost" size="icon-sm" aria-label={zh ? '编辑' : 'Edit'} title={zh ? '编辑' : 'Edit'} onClick={() => edit(node)}><Pencil /></Button>
+                      <Button
+                        variant="destructive"
+                        size="icon-sm"
+                        disabled={node.id === 'local'}
+                        aria-label={zh ? '删除' : 'Delete'}
+                        title={zh ? '删除' : 'Delete'}
+                        onClick={() => void remove(node)}
+                      ><Trash2 /></Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+
+    <Sheet open={open} onOpenChange={(next) => setOpen(next)} disablePointerDismissal>
+      <SheetContent side="right" className="w-full sm:max-w-[520px]">
+        <SheetHeader>
+          <SheetTitle>{editing ? (zh ? '编辑节点' : 'Edit node') : (zh ? '添加节点' : 'Add node')}</SheetTitle>
+          <SheetDescription>{zh ? '保存前会连接 Engine 并校验身份。' : 'The Engine identity is verified before saving.'}</SheetDescription>
+        </SheetHeader>
+        <form onSubmit={(event) => { event.preventDefault(); save.mutate(values) }} className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 pb-4">
+          <div className="grid gap-1.5">
+            <Label htmlFor="node-name">{zh ? '节点名称' : 'Node name'}</Label>
+            <Input id="node-name" required value={values.name} onChange={(event) => update({ name: event.target.value })} />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="node-connection">{zh ? '连接方式' : 'Connection type'}</Label>
+            <Select<'unix' | 'tcp'> value={values.connection_type} onValueChange={(next) => { if (next === null) return; const isTCP = next === 'tcp'; update({ connection_type: next, endpoint: isTCP ? 'tcp://docker.example.com:2376' : 'unix:///var/run/docker.sock', tls_mode: isTCP ? 'required' : 'disabled', tls_credential_id: undefined }) }}>
+              <SelectTrigger id="node-connection" aria-label={zh ? '连接方式' : 'Connection type'} className="w-full"><SelectValue>{connectionLabels[values.connection_type]}</SelectValue></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="unix">Unix Socket</SelectItem>
+                <SelectItem value="tcp">Docker TCP</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="node-endpoint">Endpoint</Label>
+            <Input id="node-endpoint" required value={values.endpoint} onChange={(event) => update({ endpoint: event.target.value })} />
+          </div>
+          {tcp && <>
+            <div className="grid gap-1.5">
+              <Label>TLS</Label>
+              <Select<'required' | 'disabled'> value={values.tls_mode} onValueChange={(next) => { if (next !== null) update({ tls_mode: next }) }}>
+                <SelectTrigger aria-label="TLS" className="w-full"><SelectValue>{values.tls_mode === 'required' ? `mTLS (${zh ? '推荐' : 'recommended'})` : (zh ? '无 TLS（仅回环地址）' : 'No TLS (loopback only)')}</SelectValue></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="required">{`mTLS (${zh ? '推荐' : 'recommended'})`}</SelectItem>
+                  <SelectItem value="disabled">{zh ? '无 TLS（仅回环地址）' : 'No TLS (loopback only)'}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {values.tls_mode === 'required' && (
+              <div className="grid gap-1.5">
+                <Label htmlFor="node-tls-credential">{zh ? 'Docker TLS 凭据' : 'Docker TLS credential'}</Label>
+                <Select<number> value={values.tls_credential_id ?? null} onValueChange={(next) => update({ tls_credential_id: next === null ? undefined : next })}>
+                  <SelectTrigger id="node-tls-credential" className="w-full"><SelectValue>{(selected: number | null) => selected == null ? (zh ? '选择凭据' : 'Choose credential') : (() => { const credential = credentials.data?.find((item) => item.id === selected); return credential ? `${credential.name} · ${credential.fingerprint}` : String(selected) })()}</SelectValue></SelectTrigger>
+                  <SelectContent>
+                    {(credentials.data ?? []).map((credential) => (
+                      <SelectItem key={credential.id} value={credential.id}>{`${credential.name} · ${credential.fingerprint}`}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <div className="grid gap-1.5">
+              <Label htmlFor="node-bind-roots">{zh ? '允许的 Bind 根目录' : 'Allowed bind roots'}</Label>
+              <Textarea id="node-bind-roots" rows={5} className="min-h-32" value={values.allowed_bind_roots} onChange={(event) => update({ allowed_bind_roots: event.target.value })} />
+              <p className="text-xs text-muted-foreground">{zh ? '每行一个远端绝对路径；留空会禁止远端 bind mount。' : 'One remote absolute path per line. Empty disables remote bind mounts.'}</p>
+            </div>
+          </>}
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox checked={values.enabled} onCheckedChange={(checked) => update({ enabled: Boolean(checked) })} />
+            {zh ? '启用节点' : 'Enable node'}
+          </label>
+          {save.isError && <Alert variant="destructive"><AlertDescription>{save.error.message}</AlertDescription></Alert>}
+          <div className="mt-auto flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>{zh ? '取消' : 'Cancel'}</Button>
+            <Button type="submit" disabled={save.isPending}>{save.isPending && <Spinner className="size-4" />}{zh ? '保存节点' : 'Save node'}</Button>
+          </div>
+        </form>
+      </SheetContent>
+    </Sheet>
+  </ResourceFrame>
+}

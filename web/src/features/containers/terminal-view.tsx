@@ -8,10 +8,13 @@ export function TerminalView({ nodeID, containerId }: { nodeID: string; containe
   const theme = useUIStore((state) => state.theme)
   useEffect(() => {
     if (!host.current) return
-    const dark = theme === 'dark' || (theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
-    const terminal = new Terminal({ cursorBlink: true, convertEol: true, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, theme: dark
-      ? { background: '#121417', foreground: '#f2f3f5', cursor: '#4080ff', selectionBackground: '#1d3a70' }
-      : { background: '#f7f8fa', foreground: '#1d2129', cursor: '#165dff', selectionBackground: '#e8f3ff' } })
+    const styles = getComputedStyle(document.documentElement)
+    const terminal = new Terminal({ cursorBlink: true, convertEol: true, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, theme: {
+      background: styles.getPropertyValue('--background'),
+      foreground: styles.getPropertyValue('--foreground'),
+      cursor: styles.getPropertyValue('--primary'),
+      selectionBackground: styles.getPropertyValue('--accent'),
+    } })
     terminal.open(host.current)
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
     const socket = new WebSocket(`${protocol}//${location.host}/ws/nodes/${encodeURIComponent(nodeID)}/containers/${containerId}/terminal`)
@@ -24,5 +27,5 @@ export function TerminalView({ nodeID, containerId }: { nodeID: string; containe
     resize.observe(host.current)
     return () => { resize.disconnect(); input.dispose(); socket.close(); terminal.dispose() }
   }, [nodeID, containerId, theme])
-  return <div ref={host} className="h-[56vh] overflow-hidden rounded-md border border-border bg-[var(--code-background)] p-2" />
+  return <div ref={host} className="h-[56vh] overflow-hidden" />
 }

@@ -1,34 +1,52 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
+import { Link, useRouterState } from '@tanstack/react-router'
 import {
-  Activity, Boxes, ChevronRight, CircleGauge, Container, FileClock, GitPullRequest,
+  Activity, Boxes, CircleGauge, Container, FileClock, GitPullRequest,
   HardDrive, KeyRound, Layers3, Network, PanelLeftClose,
   PanelLeftOpen, Search, Server, Settings,
 } from 'lucide-react'
-import { type ReactNode, useEffect } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { api } from '../../lib/api'
-import type { DockerNode } from '../../lib/nodes'
 import { useI18n, type TranslationKey } from '../../lib/i18n'
+import type { DockerNode } from '../../lib/nodes'
 import { confirmDialog } from '../../stores/dialog'
 import { useUIStore } from '../../stores/ui'
-import { ThemeToggle } from '../ui/theme-toggle'
 import { LogoMark } from '../ui/logo-mark'
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '../ui/select'
+import { Separator } from '../ui/separator'
+import { Sheet, SheetContent, SheetTitle } from '../ui/sheet'
+import { Badge } from '../ui/badge'
+import { Button } from '../ui/button'
+import { ThemeToggle } from '../ui/theme-toggle'
+import { cn } from '@/lib/utils'
 import { CommandPalette } from './command-palette'
 
-const navigation = [
-  { label: 'overview', icon: CircleGauge, path: '/' }, { heading: 'Docker' },
-  { label: 'containers', icon: Container, path: '/containers' }, { label: 'compose', icon: Layers3, path: '/compose' },
-  { label: 'images', icon: Boxes, path: '/images' }, { label: 'networks', icon: Network, path: '/networks' }, { label: 'volumes', icon: HardDrive, path: '/volumes' },
-  { heading: 'operations' }, { label: 'continuousDelivery', icon: GitPullRequest, path: '/continuous-delivery' }, { label: 'authenticationCenter', icon: KeyRound, path: '/authentication' }, { label: 'tasks', icon: Activity, path: '/tasks' }, { label: 'auditLogs', icon: FileClock, path: '/audit-logs' },
-  { heading: 'system' }, { label: 'nodes', icon: Server, path: '/nodes' }, { label: 'settings', icon: Settings, path: '/settings' },
-]
+const navigationSections = [
+  { key: 'docker', label: 'Docker', rawLabel: false, items: [{ label: 'containers', path: '/containers', icon: Container }, { label: 'compose', path: '/compose', icon: Layers3 }, { label: 'images', path: '/images', icon: Boxes }, { label: 'networks', path: '/networks', icon: Network }, { label: 'volumes', path: '/volumes', icon: HardDrive }] },
+  { key: 'operations', label: 'operations', rawLabel: true, items: [{ label: 'continuousDelivery', path: '/continuous-delivery', icon: GitPullRequest }, { label: 'authenticationCenter', path: '/authentication', icon: KeyRound }, { label: 'tasks', path: '/tasks', icon: Activity }, { label: 'auditLogs', path: '/audit-logs', icon: FileClock }] },
+  { key: 'system', label: 'system', rawLabel: true, items: [{ label: 'nodes', path: '/nodes', icon: Server }, { label: 'settings', path: '/settings', icon: Settings }] },
+] as const
+
+interface NavEntry { key: string; label: string; icon: typeof Container }
+interface NavSection { key: string; label: string; items: NavEntry[] }
 
 export function AppShell({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient()
   const { commandOpen, setCommandOpen, sidebarOpen, toggleSidebar, language, currentNodeID, setCurrentNodeID } = useUIStore()
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const { t } = useI18n()
+  const zh = language === 'zh-CN'
+  const pathname = useRouterState({ select: (state) => state.location.pathname })
   const nodes = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes'), refetchInterval: 30_000 })
-  useEffect(() => { if (!nodes.data?.length) return; if (!nodes.data.some((node) => node.id === currentNodeID && node.enabled)) setCurrentNodeID(nodes.data.find((node) => node.enabled && node.connection_type === 'unix')?.id ?? nodes.data.find((node) => node.enabled)?.id ?? nodes.data[0].id) }, [nodes.data, currentNodeID, setCurrentNodeID])
+
+  useEffect(() => {
+    if (!nodes.data?.length) return
+    if (!nodes.data.some((node) => node.id === currentNodeID && node.enabled)) {
+      setCurrentNodeID(nodes.data.find((node) => node.enabled && node.connection_type === 'unix')?.id ?? nodes.data.find((node) => node.enabled)?.id ?? nodes.data[0].id)
+    }
+  }, [nodes.data, currentNodeID, setCurrentNodeID])
 
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
@@ -36,11 +54,23 @@ export function AppShell({ children }: { children: ReactNode }) {
         event.preventDefault()
         setCommandOpen(!commandOpen)
       }
-      if (event.key === 'Escape') setCommandOpen(false)
     }
     window.addEventListener('keydown', listener)
     return () => window.removeEventListener('keydown', listener)
   }, [commandOpen, setCommandOpen])
+
+  const selectedPath = pathname === '/'
+    ? '/'
+    : navigationSections.map((section) => section.items.find((item) => pathname.startsWith(item.path))?.path).find(Boolean) ?? ''
+
+  const sections: NavSection[] = [
+    { key: 'overview', label: '', items: [{ key: '/', label: t('overview'), icon: CircleGauge }] },
+    ...navigationSections.map((section) => ({
+      key: section.key,
+      label: section.rawLabel ? t(section.label as TranslationKey) : 'Docker',
+      items: section.items.map(({ label, path, icon }) => ({ key: path, label: t(label as TranslationKey), icon })),
+    })),
+  ]
 
   const logout = async () => {
     if (!await confirmDialog({ title: t('signOutTitle'), description: t('signOutDescription'), confirmLabel: t('signOut') })) return
@@ -48,64 +78,130 @@ export function AppShell({ children }: { children: ReactNode }) {
     queryClient.setQueryData(['session'], null)
   }
 
-  return <div className="min-h-screen bg-background text-text">
-    {sidebarOpen && <button className="fixed inset-0 z-30 bg-black/45 backdrop-blur-sm lg:hidden" onClick={toggleSidebar} aria-label="Close navigation" />}
-    <aside className={`shell-sidebar fixed inset-y-0 left-0 z-40 flex w-[264px] flex-col bg-sidebar px-4 py-4 backdrop-blur-2xl transition-[transform,width,padding] duration-300 lg:z-30 lg:translate-x-0 ${sidebarOpen ? 'translate-x-0 lg:w-[264px]' : '-translate-x-full lg:w-20 lg:px-3'}`}>
-      <div className={`flex h-11 items-center gap-3 ${sidebarOpen ? 'px-2' : 'justify-center'}`}>
-        <LogoMark className="size-8 text-accent" />
-        {sidebarOpen && <>
-          <div>
-            <p className="text-[15px] font-semibold tracking-[-.035em]">DockPort</p>
-            <p className="font-mono text-[9px] uppercase tracking-[.2em] text-text-subtle">Docker control plane</p>
+  const NavLink = ({ entry }: { entry: NavEntry }) => {
+    const Icon = entry.icon
+    const collapsed = !sidebarOpen
+    const active = selectedPath === entry.key
+    return (
+      <Button
+        variant="ghost"
+        size="sm"
+        className={cn('w-full font-normal', collapsed ? 'justify-center px-0' : 'justify-start gap-2')}
+        data-active={active}
+        aria-current={active ? 'page' : undefined}
+        onClick={() => setMobileNavOpen(false)}
+        render={<Link to={entry.key as never} />}
+      >
+        <Icon />
+        <span className={collapsed ? 'sr-only' : undefined}>{entry.label}</span>
+      </Button>
+    )
+  }
+
+  const navigation = (mobile = false) => {
+    const collapsed = !sidebarOpen && !mobile
+    return (
+      <div className="flex h-full flex-col">
+        <div className={cn('flex h-14 items-center gap-2 px-3', collapsed && 'justify-center px-0')}>
+          <LogoMark className="size-7" />
+          {!collapsed && <span className="text-sm font-semibold">DockPort</span>}
+        </div>
+        <nav aria-label={zh ? '主导航' : 'Primary navigation'} className="flex-1 overflow-y-auto px-2 pb-3">
+          {sections.map((section, index) => (
+            <div key={section.key}>
+              {index > 0 && <Separator className="my-2 opacity-60" />}
+              {section.label ? (
+                <p className={cn('px-2 py-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase', collapsed && 'text-center text-[10px] normal-case')}>
+                  {collapsed ? section.label.slice(0, 1).toUpperCase() : section.label}
+                </p>
+              ) : (
+                <div className="h-1" />
+              )}
+              <div className="flex flex-col gap-0.5">
+                {section.items.map((entry) => <NavLink key={entry.key} entry={{ ...entry, icon: entry.icon as unknown as typeof Container }} />)}
+              </div>
+            </div>
+          ))}
+        </nav>
+        {!mobile && (
+          <div className="border-t p-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn('w-full font-normal text-muted-foreground', collapsed ? 'justify-center px-0' : 'justify-start gap-2')}
+              onClick={toggleSidebar}
+            >
+              {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
+              <span className={collapsed ? 'sr-only' : undefined}>{collapsed ? (zh ? '展开菜单' : 'Expand') : (zh ? '收起菜单' : 'Collapse')}</span>
+            </Button>
           </div>
-        </>}
+        )}
+      </div>
+    )
+  }
+
+  const currentNode = nodes.data?.find((node) => node.id === currentNodeID)
+
+  return (
+    <div className="flex min-h-screen">
+      <aside className="sticky top-0 hidden h-screen shrink-0 overflow-hidden border-r bg-sidebar text-sidebar-foreground transition-all lg:block" style={{ width: sidebarOpen ? 240 : 72 }}>
+        {navigation()}
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 z-40 flex h-14 shrink-0 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur md:px-6">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="lg:hidden"
+            aria-label={zh ? '打开导航' : 'Open navigation'}
+            onClick={() => setMobileNavOpen(true)}
+          >
+            <PanelLeftOpen />
+          </Button>
+
+          <div className="flex items-center gap-2">
+            <Badge variant={currentNode?.status === 'online' ? 'outline' : 'ghost'} className={cn('rounded-full', currentNode?.status === 'online' && 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400')} >
+              <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
+              {currentNode?.status === 'online' ? (zh ? '在线' : 'Online') : (zh ? '未知' : 'Offline')}
+            </Badge>
+            <Select value={currentNodeID} onValueChange={(value) => setCurrentNodeID(String(value))}>
+              <SelectTrigger aria-label={zh ? '当前 Docker 节点' : 'Current Docker node'} className="w-28 sm:w-48">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(nodes.data ?? []).map((node) => (
+                  <SelectItem key={node.id} value={node.id} disabled={!node.enabled}>
+                    {`${node.name} · ${node.connection_type.toUpperCase()}`}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="ml-auto flex items-center gap-1.5">
+            <span className="hidden text-sm text-muted-foreground md:inline">{zh ? '控制平面在线' : 'Control plane online'}</span>
+            <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground" onClick={() => setCommandOpen(true)}>
+              <Search />
+              <span className="hidden sm:inline">{t('searchCommand')}</span>
+            </Button>
+            <ThemeToggle />
+            <Button variant="ghost" size="sm" className="hidden text-xs font-semibold sm:inline-flex" title={t('signOut')} onClick={() => void logout()}>
+              DP
+            </Button>
+          </div>
+        </header>
+
+        <main className="min-w-0 flex-1 px-4 py-5 md:px-6 xl:px-8">{children}</main>
       </div>
 
-      <button onClick={() => setCommandOpen(true)} title={sidebarOpen ? undefined : t('searchCommand')} className={`group mt-5 flex h-10 items-center overflow-hidden rounded-xl border border-border bg-surface/60 text-xs text-text-subtle transition-all hover:border-accent/30 hover:bg-surface-hover hover:text-text ${sidebarOpen ? 'px-3' : 'justify-center px-0'}`}>
-        <Search className="size-3.5 shrink-0 transition-transform group-hover:scale-110" />
-        <span className={`flex min-w-0 items-center overflow-hidden transition-[max-width,opacity,margin] ${sidebarOpen ? 'ml-auto max-w-16 opacity-100 delay-300 duration-150' : 'ml-0 max-w-0 opacity-0 duration-75'}`}>
-          <kbd className="shrink-0 rounded-md border border-border bg-background/60 px-1.5 py-0.5 font-mono text-[9px] tracking-wide">CTRL K</kbd>
-        </span>
-      </button>
-
-      <nav className={`mt-5 flex-1 overflow-y-auto ${sidebarOpen ? 'pr-1' : ''}`}>
-        {navigation.map((item, index) => {
-          if ('heading' in item) return sidebarOpen
-            ? <p key={item.heading} className="mb-2 mt-6 px-3 font-mono text-[9px] font-medium uppercase tracking-[.22em] text-text-subtle">{item.heading === 'Docker' ? 'Docker' : t(item.heading as TranslationKey)}</p>
-            : <div key={item.heading} className="mx-2 my-4 border-t border-border" />
-          const Icon = item.icon
-          return <Link key={`${item.label}-${index}`} to={item.path} title={sidebarOpen ? undefined : t(item.label as TranslationKey)} activeOptions={{ exact: item.path === '/' }} className={`group relative mb-1 flex h-10 items-center overflow-hidden rounded-xl text-[13px] text-text-muted transition-all hover:bg-surface-hover hover:text-text [&.active]:bg-surface-hover [&.active]:font-medium [&.active]:text-text ${sidebarOpen ? 'gap-3 px-3' : 'justify-center'}`}>
-            <Icon className="size-[17px] text-text-subtle transition-colors group-hover:text-text group-[.active]:text-accent" strokeWidth={1.6} />
-            {sidebarOpen && <><span>{t(item.label as TranslationKey)}</span><ChevronRight className="ml-auto size-3 translate-x-1 text-text-subtle opacity-0 transition-all group-hover:translate-x-0 group-hover:opacity-100 group-[.active]:translate-x-0 group-[.active]:opacity-100" /></>}
-          </Link>
-        })}
-      </nav>
-
-      <button onClick={toggleSidebar} className={`mt-4 flex h-10 items-center rounded-xl text-text-muted transition-colors hover:bg-surface-hover hover:text-text ${sidebarOpen ? 'gap-3 px-3' : 'justify-center'}`} aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'} title={sidebarOpen ? undefined : 'Open sidebar'}>
-        {sidebarOpen ? <PanelLeftClose className="size-[17px]" strokeWidth={1.6} /> : <PanelLeftOpen className="size-[17px]" strokeWidth={1.6} />}
-        {sidebarOpen && <span className="text-[13px]">{language === 'zh-CN' ? '收起菜单' : 'Collapse sidebar'}</span>}
-      </button>
-    </aside>
-
-    <div className={`min-h-screen transition-[padding] duration-300 ${sidebarOpen ? 'lg:pl-[264px]' : 'lg:pl-20'}`}>
-      <header className="shell-header sticky top-0 z-20 flex h-16 items-center bg-background/55 px-4 backdrop-blur-2xl sm:px-6 lg:px-8">
-        <button onClick={toggleSidebar} className="grid size-9 place-items-center rounded-xl border border-border bg-surface/60 text-text-muted transition-colors hover:bg-surface-hover hover:text-text lg:hidden" aria-label="Toggle sidebar">
-          <PanelLeftOpen className="size-4" strokeWidth={1.6} />
-        </button>
-        <label className="ml-2 flex h-9 min-w-0 items-center gap-2 rounded-xl border border-border bg-surface/60 px-2 sm:ml-4 sm:px-3">
-          <span className={`size-1.5 rounded-full ${nodes.data?.find((node) => node.id === currentNodeID)?.status === 'online' ? 'bg-success' : 'bg-neutral-status'}`} />
-          <select aria-label={language === 'zh-CN' ? '当前 Docker 节点' : 'Current Docker node'} value={currentNodeID} onChange={(event) => setCurrentNodeID(event.target.value)} className="w-28 min-w-0 bg-transparent text-xs font-medium outline-none sm:w-auto sm:min-w-36">
-            {(nodes.data || []).map((node) => <option key={node.id} value={node.id} disabled={!node.enabled}>{node.name} · {node.connection_type.toUpperCase()}</option>)}
-          </select>
-        </label>
-        <div className="ml-auto flex items-center gap-2">
-          <div className="mr-2 hidden items-center gap-2 text-[10px] text-text-subtle md:flex"><span className="signal-dot size-1.5 rounded-full bg-success" />Control plane online</div>
-          <ThemeToggle />
-          <button onClick={logout} title={t('signOut')} className="grid size-9 place-items-center rounded-xl border border-border bg-surface/60 font-mono text-[10px] font-semibold text-text-muted transition-colors hover:border-accent/30 hover:text-text">DP</button>
-        </div>
-      </header>
-      <main className="mx-auto max-w-[1540px] px-4 py-7 sm:px-6 lg:px-10 lg:py-10">{children}</main>
+      <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+        <SheetContent side="left" className="w-60 bg-sidebar p-0" showCloseButton={false}>
+          <SheetTitle className="sr-only">{zh ? '主导航' : 'Primary navigation'}</SheetTitle>
+          {navigation(true)}
+        </SheetContent>
+      </Sheet>
+      <CommandPalette open={commandOpen} close={() => setCommandOpen(false)} />
     </div>
-    <CommandPalette open={commandOpen} close={() => setCommandOpen(false)} />
-  </div>
+  )
 }

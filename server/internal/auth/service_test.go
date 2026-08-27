@@ -57,3 +57,14 @@ func TestRejectsInvalidCredentials(t *testing.T) {
 		t.Fatalf("expected invalid credentials: %v", err)
 	}
 }
+
+func TestInitializePasswordLength(t *testing.T) {
+	ctx := context.Background()
+	service := testService(t)
+	if _, err := service.Initialize(ctx, "admin", "1234567"); err == nil {
+		t.Fatal("expected a seven-character password to be rejected")
+	}
+	if _, err := service.Initialize(ctx, "admin", "12345678"); err != nil {
+		t.Fatalf("expected an eight-character password to be accepted: %v", err)
+	}
+}

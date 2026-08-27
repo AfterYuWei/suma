@@ -1,10 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Box, Clock3, Download, HardDrive, Package, Tag, Trash2, X, type LucideIcon } from 'lucide-react'
+import { Download, Package, Tag as TagIcon, Trash2 } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
+import { Button } from '../components/ui/button'
+import { Input } from '../components/ui/input'
 import { LoadingState } from '../components/ui/loading-state'
+import { ErrorState } from '../components/ui/error-state'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../components/ui/sheet'
+import { Spinner } from '../components/ui/spinner'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { api } from '../lib/api'
-import { nodePath } from '../lib/nodes'
 import { useI18n } from '../lib/i18n'
+import { nodePath } from '../lib/nodes'
 import { confirmDialog, promptDialog } from '../stores/dialog'
 import { useUIStore } from '../stores/ui'
 
@@ -13,23 +20,108 @@ interface RegistryCredential { id: number; name: string; server_address: string;
 
 export function ImagesPage() {
   const nodeID = useUIStore((state) => state.currentNodeID)
-  const client = useQueryClient(); const [reference, setReference] = useState(''); const [selected, setSelected] = useState(''); const [credentialID, setCredentialID] = useState(''); const { t, language } = useI18n()
-  const query = useQuery({ queryKey: ['images', nodeID], queryFn: () => api<Image[]>(nodePath(nodeID, '/images')) }); const detail = useQuery({ queryKey: ['image', nodeID, selected], queryFn: () => api<Image>(nodePath(nodeID, `/images/${encodeURIComponent(selected)}`)), enabled: !!selected })
+  const client = useQueryClient()
+  const [reference, setReference] = useState('')
+  const [selected, setSelected] = useState('')
+  const [credentialID, setCredentialID] = useState('')
+  const { t, language } = useI18n()
+  const zh = language === 'zh-CN'
+  const query = useQuery({ queryKey: ['images', nodeID], queryFn: () => api<Image[]>(nodePath(nodeID, '/images')) })
+  const detail = useQuery({ queryKey: ['image', nodeID, selected], queryFn: () => api<Image>(nodePath(nodeID, `/images/${encodeURIComponent(selected)}`)), enabled: !!selected })
   const credentials = useQuery({ queryKey: ['registry-credentials'], queryFn: () => api<RegistryCredential[]>('/credentials/registries') })
   const pull = useMutation({ mutationFn: () => api(nodePath(nodeID, '/images/pull'), { method: 'POST', body: JSON.stringify({ reference, credential_id: credentialID ? Number(credentialID) : undefined }) }), onSuccess: () => { setReference(''); client.invalidateQueries({ queryKey: ['tasks', nodeID] }) } })
   const remove = useMutation({ mutationFn: (id: string) => api(nodePath(nodeID, `/images/${encodeURIComponent(id)}?force=false`), { method: 'DELETE' }), onSuccess: () => { setSelected(''); client.invalidateQueries({ queryKey: ['images', nodeID] }) } })
   const tag = async (row: Image) => { const value = await promptDialog({ title: t('newImageTag'), description: t('tagDescription'), confirmLabel: t('tag'), input: { label: t('newImageTag'), initialValue: row.tags?.[0] || 'repository:tag' } }); if (!value) return; await api(nodePath(nodeID, `/images/${encodeURIComponent(row.id)}/tag`), { method: 'POST', body: JSON.stringify({ reference: value }) }); await client.invalidateQueries({ queryKey: ['images', nodeID] }) }
   const removeImage = async (row: Image) => { const name = row.tags?.[0] || row.id; if (await confirmDialog({ title: t('removeImage'), description: t('removeImageDescription', { name }), confirmLabel: t('remove'), danger: true })) remove.mutate(row.id) }
   const size = (bytes: number) => `${(bytes / 1024 ** 2).toFixed(1)} MB`
+  const credentialOptions = [{ value: '', label: zh ? '匿名拉取' : 'Anonymous' }, ...(credentials.data || []).filter((row) => row.authorized_node_ids?.includes(nodeID)).map((row) => ({ value: String(row.id), label: `${row.name} · ${row.server_address}` }))]
 
-  return <ResourceFrame eyebrow="Docker" title={t('images')} detail={language === 'zh-CN' ? `${query.data?.length ?? 0} 个本地镜像` : `${query.data?.length ?? 0} local images`} action={<form onSubmit={(event) => { event.preventDefault(); if (reference) pull.mutate() }} className="flex gap-2"><input value={reference} onChange={(event) => setReference(event.target.value)} className="h-9 w-52 rounded-xl border border-border bg-surface px-3 text-xs outline-none focus:border-accent/50" placeholder="nginx:latest" /><select value={credentialID} onChange={(event) => setCredentialID(event.target.value)} className="h-9 max-w-44 rounded-xl border border-border bg-surface px-2 text-xs"><option value="">{language === 'zh-CN' ? '匿名拉取' : 'Anonymous'}</option>{credentials.data?.filter((row) => row.authorized_node_ids?.includes(nodeID)).map((row) => <option key={row.id} value={row.id}>{row.name} · {row.server_address}</option>)}</select><button disabled={pull.isPending} className="flex h-9 items-center gap-2 rounded-xl bg-accent px-3 text-xs font-semibold text-accent-foreground disabled:opacity-60"><Download className="size-3.5" />Pull</button></form>}>
-    {query.isPending ? <LoadingState compact rows={7} label={language === 'zh-CN' ? '正在加载镜像' : 'Loading images'} /> : query.isError ? <div className="rounded-xl border border-danger/30 bg-danger-subtle py-12 text-center text-sm text-danger">{query.error.message}</div> : query.data?.length ? <div className="overflow-hidden rounded-2xl border border-border"><div className="hidden h-9 grid-cols-[minmax(220px,1fr)_120px_100px_150px_72px] items-center gap-3 border-b border-border bg-surface/45 px-3 font-mono text-[9px] uppercase tracking-[.14em] text-text-subtle lg:grid"><span>{language === 'zh-CN' ? '镜像 / ID' : 'Image / ID'}</span><span>{language === 'zh-CN' ? '大小' : 'Size'}</span><span>{language === 'zh-CN' ? '引用' : 'Usage'}</span><span>{language === 'zh-CN' ? '创建时间' : 'Created'}</span><span className="text-right">{language === 'zh-CN' ? '操作' : 'Actions'}</span></div><div className="divide-y divide-border">{query.data.map((row) => <div key={row.id} className="group grid min-h-16 grid-cols-[minmax(0,1fr)_72px] items-center gap-3 px-3 transition-colors hover:bg-surface/55 lg:grid-cols-[minmax(220px,1fr)_120px_100px_150px_72px]"><button onClick={() => setSelected(row.id)} className="flex min-w-0 items-center gap-3 py-2 text-left"><span className="grid size-8 shrink-0 place-items-center rounded-xl border border-border bg-surface/70 text-text-subtle transition-colors group-hover:text-accent"><Package className="size-3.5" strokeWidth={1.6} /></span><span className="min-w-0"><span className="block truncate text-[13px] font-medium">{row.tags?.[0] || '<none>:<none>'}</span><span className="mt-1 block truncate font-mono text-[9px] text-text-subtle">{row.id.replace('sha256:', '').slice(0, 12)}<span className="lg:hidden"> · {size(row.size)} · {row.containers < 0 ? '—' : `${row.containers} ${language === 'zh-CN' ? '个引用' : 'used'}`}</span></span></span></button><ResourceMetric icon={HardDrive} value={size(row.size)} /><ResourceMetric icon={Box} value={row.containers < 0 ? '—' : String(row.containers)} /><ResourceMetric icon={Clock3} value={new Date(row.created).toLocaleString(language)} /><div className="flex justify-end gap-1"><IconAction label={t('tag')} icon={Tag} run={() => void tag(row)} /><IconAction label={t('removeImage')} icon={Trash2} danger run={() => void removeImage(row)} /></div></div>)}</div></div> : <EmptyState icon={<Package className="size-5" />} title={language === 'zh-CN' ? '暂无本地镜像' : 'No local images'} detail={language === 'zh-CN' ? '输入镜像引用并拉取后会显示在这里。' : 'Pull an image reference to see it here.'} />}
-    {selected && <aside className="fixed inset-y-0 right-0 z-40 w-full max-w-md border-l border-border bg-elevated p-6 shadow-2xl"><button onClick={() => setSelected('')} className="absolute right-5 top-5 grid size-8 place-items-center rounded-md hover:bg-surface-hover"><X className="size-4" /></button><p className="text-xs uppercase tracking-wider text-text-subtle">{language === 'zh-CN' ? '镜像详情' : 'Image inspect'}</p><h2 className="mt-2 max-w-[80%] truncate text-lg font-semibold">{detail.data?.tags?.[0] || selected.slice(0, 19)}</h2>{detail.isPending ? <div className="mt-7"><LoadingState compact rows={5} label={language === 'zh-CN' ? '正在加载镜像详情' : 'Loading image details'} /></div> : <dl className="mt-7 divide-y divide-border border-y border-border">{[['ID', detail.data?.id], [language === 'zh-CN' ? '大小' : 'Size', detail.data ? size(detail.data.size) : '—'], [language === 'zh-CN' ? '平台' : 'Platform', `${detail.data?.os || '—'} / ${detail.data?.architecture || '—'}`], [language === 'zh-CN' ? '创建时间' : 'Created', detail.data?.created ? new Date(detail.data.created).toLocaleString(language) : '—'], [language === 'zh-CN' ? '层数' : 'Layers', detail.data?.layers?.length ?? 0]].map(([label, value]) => <div key={label} className="grid min-h-11 grid-cols-[100px_1fr] items-center text-xs"><dt className="text-text-muted">{label}</dt><dd className="truncate font-mono">{value}</dd></div>)}</dl>}</aside>}
+  const pullForm = <form onSubmit={(event) => { event.preventDefault(); if (reference) pull.mutate() }} className="flex flex-wrap items-center gap-2">
+    <Input value={reference} onChange={(event) => setReference(event.target.value)} className="w-[210px]" placeholder="nginx:latest" aria-label={t('newImageTag')} />
+    <Select items={credentialOptions} value={credentialID} onValueChange={(value) => setCredentialID(String(value ?? ''))}>
+      <SelectTrigger aria-label={zh ? '镜像仓库凭据' : 'Registry credential'}><SelectValue /></SelectTrigger>
+      <SelectContent>
+        {credentialOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
+      </SelectContent>
+    </Select>
+    <Button type="submit" disabled={!reference || pull.isPending}>{pull.isPending ? <Spinner /> : <Download />}Pull</Button>
+  </form>
+
+  return <ResourceFrame title={t('images')} detail={zh ? `${query.data?.length ?? 0} 个本地镜像` : `${query.data?.length ?? 0} local images`} action={pullForm}>
+    {query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载镜像' : 'Loading images'} /> : query.isError ? <ErrorState description={query.error.message} /> : (query.data ?? []).length === 0 ? <EmptyState icon={<Package size={20} />} title={zh ? '暂无本地镜像' : 'No local images'} detail={zh ? '输入镜像引用并拉取后会显示在这里。' : 'Pull an image reference to see it here.'} /> :
+      <div className="w-full overflow-hidden rounded-xl border border-border bg-card">
+        <Table>
+          <TableHeader>
+            <TableRow className="bg-muted/40 hover:bg-muted/40">
+              <TableHead>{zh ? '镜像' : 'Image'}</TableHead>
+              <TableHead className="min-w-[110px]">{zh ? '大小' : 'Size'}</TableHead>
+              <TableHead className="min-w-[90px]">{zh ? '引用' : 'Usage'}</TableHead>
+              <TableHead className="min-w-[180px]">{zh ? '创建时间' : 'Created'}</TableHead>
+              <TableHead className="min-w-[96px]">{zh ? '操作' : 'Actions'}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {(query.data ?? []).map((row) => (
+              <TableRow key={row.id}>
+                <TableCell>
+                  <button type="button" onClick={() => setSelected(row.id)} className="-ml-2 flex items-center gap-2.5 rounded-md px-2 py-1 text-left outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50">
+                    <Package className="size-5 shrink-0 text-muted-foreground" />
+                    <span className="flex flex-col">
+                      <span className="max-w-[300px] truncate font-medium" title={row.tags?.[0] || '<none>:<none>'}>{row.tags?.[0] || '<none>:<none>'}</span>
+                      <span className="font-mono text-xs text-muted-foreground">{row.id.replace('sha256:', '').slice(0, 12)}</span>
+                    </span>
+                  </button>
+                </TableCell>
+                <TableCell>{size(row.size)}</TableCell>
+                <TableCell>{row.containers < 0 ? '—' : String(row.containers)}</TableCell>
+                <TableCell>{new Date(row.created).toLocaleString(language)}</TableCell>
+                <TableCell>
+                  <div className="flex items-center gap-1">
+                    <Button variant="ghost" size="icon-sm" title={t('tag')} aria-label={t('tag')} onClick={() => void tag(row)}><TagIcon /></Button>
+                    <Button variant="destructive" size="icon-sm" title={t('removeImage')} aria-label={t('removeImage')} onClick={() => void removeImage(row)}><Trash2 /></Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>}
+
+    <Sheet open={!!selected} onOpenChange={(open) => { if (!open) setSelected('') }}>
+      <SheetContent side="right" className="w-[448px] max-w-full gap-0 sm:max-w-[448px]">
+        <SheetHeader className="border-b"><SheetTitle className="truncate pr-6">{detail.data?.tags?.[0] || selected.slice(0, 19)}</SheetTitle></SheetHeader>
+        <div className="flex-1 overflow-y-auto p-4">
+          {detail.isPending ? <LoadingState compact embedded rows={5} label={zh ? '正在加载镜像详情' : 'Loading image details'} /> : <div className="divide-y divide-border">
+            {([[ 'ID', detail.data?.id ?? '—' ], [zh ? '大小' : 'Size', detail.data ? size(detail.data.size) : '—'], [zh ? '平台' : 'Platform', `${detail.data?.os || '—'} / ${detail.data?.architecture || '—'}`], [zh ? '创建时间' : 'Created', detail.data?.created ? new Date(detail.data.created).toLocaleString(language) : '—'], [zh ? '层数' : 'Layers', String(detail.data?.layers?.length ?? 0)]] as [string, string][]).map(([key, value]) => (
+              <div key={key} className="flex items-start justify-between gap-6 py-2.5 first:pt-0 last:pb-0">
+                <span className="shrink-0 text-xs text-muted-foreground">{key}</span>
+                <span className="min-w-0 break-all text-right font-mono text-xs">{value}</span>
+              </div>
+            ))}
+          </div>}
+        </div>
+      </SheetContent>
+    </Sheet>
   </ResourceFrame>
 }
 
-export function ResourceFrame({ title, detail, action, children }: { eyebrow?: string; title: string; detail: string; action?: ReactNode; children: ReactNode }) { return <div><header className="mb-5 flex flex-wrap items-end gap-4"><div><h1 className="text-xl font-semibold tracking-tight">{title}</h1><p className="mt-1 text-xs text-text-muted">{detail}</p></div><div className="ml-auto">{action}</div></header>{children}</div> }
+export function ResourceFrame({ title, detail, action, children }: { eyebrow?: string; title: string; detail: string; action?: ReactNode; children: ReactNode }) {
+  return <div className="flex w-full flex-col items-start gap-5">
+    <header className="flex w-full flex-wrap items-center gap-4">
+      <div className="min-w-0">
+        <h2 className="cn-font-heading text-lg leading-none font-semibold tracking-tight">{title}</h2>
+        <p className="mt-1.5 text-sm text-muted-foreground">{detail}</p>
+      </div>
+      {action && <div className="ml-auto">{action}</div>}
+    </header>
+    <div className="w-full">{children}</div>
+  </div>
+}
 
-function ResourceMetric({ icon: Icon, value }: { icon: LucideIcon; value: string }) { return <span className="hidden min-w-0 items-center gap-2 text-[10px] text-text-muted lg:flex"><Icon className="size-3.5 shrink-0 text-text-subtle" strokeWidth={1.5} /><span className="truncate">{value}</span></span> }
-function IconAction({ label, icon: Icon, run, danger = false }: { label: string; icon: LucideIcon; run: () => void; danger?: boolean }) { return <button type="button" title={label} aria-label={label} onClick={run} className={`grid size-7 place-items-center rounded-lg border border-transparent transition-colors ${danger ? 'text-danger hover:border-danger/20 hover:bg-danger-subtle' : 'text-text-subtle hover:border-border hover:bg-surface-hover hover:text-text'}`}><Icon className="size-3.5" /></button> }
-export function EmptyState({ icon, title, detail }: { icon: ReactNode; title: string; detail: string }) { return <div className="rounded-2xl border border-border py-16 text-center"><span className="mx-auto block w-fit text-text-subtle">{icon}</span><p className="mt-3 text-sm font-medium">{title}</p><p className="mt-1 text-xs text-text-subtle">{detail}</p></div> }
+export function EmptyState({ icon, title, detail }: { icon: ReactNode; title: string; detail: string }) {
+  return <div className="flex w-full flex-col items-center justify-center gap-1 rounded-xl border border-dashed py-12 text-center">
+    <div className="mb-1.5 flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground [&_svg]:size-5">{icon}</div>
+    <p className="text-sm font-medium">{title}</p>
+    <p className="max-w-sm text-sm text-muted-foreground">{detail}</p>
+  </div>
+}

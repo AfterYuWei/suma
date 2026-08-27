@@ -1,30 +1,101 @@
-import { Switch } from '@base-ui/react/switch'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Cable, Globe2, Network as NetworkIcon, Plus, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { Network as NetworkIcon, Plus, Trash2 } from 'lucide-react'
+import { useState, type ChangeEvent, type FormEvent } from 'react'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
+import { ErrorState } from '../components/ui/error-state'
+import { Input } from '../components/ui/input'
+import { Label } from '../components/ui/label'
 import { LoadingState } from '../components/ui/loading-state'
+import { Spinner } from '../components/ui/spinner'
+import { Switch } from '../components/ui/switch'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { api } from '../lib/api'
-import { nodePath } from '../lib/nodes'
 import { useI18n } from '../lib/i18n'
+import { nodePath } from '../lib/nodes'
 import { confirmDialog } from '../stores/dialog'
 import { useUIStore } from '../stores/ui'
-import { EmptyState, ResourceFrame } from './images'
+import { ResourceFrame } from './images'
 
 interface Network { id: string; name: string; driver: string; scope: string; ipv6: boolean; internal: boolean; ipam: { subnet: string; gateway: string }[]; containers: number }
+interface NetworkValues { name: string; driver: string; subnet: string; gateway: string; ipv6: boolean }
+
+const emptyNetwork: NetworkValues = { name: '', driver: 'bridge', subnet: '', gateway: '', ipv6: false }
 
 export function NetworksPage() {
-	const nodeID = useUIStore((state) => state.currentNodeID)
-  const client = useQueryClient(); const { t, language } = useI18n()
-  const [creating, setCreating] = useState(false); const [name, setName] = useState(''); const [driver, setDriver] = useState('bridge'); const [subnet, setSubnet] = useState(''); const [gateway, setGateway] = useState(''); const [ipv6, setIPv6] = useState(false)
+  const nodeID = useUIStore((state) => state.currentNodeID)
+  const client = useQueryClient()
+  const { t, language } = useI18n()
+  const zh = language === 'zh-CN'
+  const [creating, setCreating] = useState(false)
+  const [values, setValues] = useState<NetworkValues>(emptyNetwork)
   const query = useQuery({ queryKey: ['networks', nodeID], queryFn: () => api<Network[]>(nodePath(nodeID, '/networks')) })
-  const create = useMutation({ mutationFn: () => api(nodePath(nodeID, '/networks'), { method: 'POST', body: JSON.stringify({ name, driver, subnet, gateway, ipv6 }) }), onSuccess: () => { setName(''); setSubnet(''); setGateway(''); setCreating(false); client.invalidateQueries({ queryKey: ['networks', nodeID] }) } })
+  const create = useMutation({ mutationFn: (values: NetworkValues) => api(nodePath(nodeID, '/networks'), { method: 'POST', body: JSON.stringify(values) }), onSuccess: () => { setCreating(false); client.invalidateQueries({ queryKey: ['networks', nodeID] }) } })
   const remove = useMutation({ mutationFn: (id: string) => api(nodePath(nodeID, `/networks/${id}?confirm=true`), { method: 'DELETE' }), onSuccess: () => client.invalidateQueries({ queryKey: ['networks', nodeID] }) })
   const removeNetwork = async (row: Network) => { if (await confirmDialog({ title: t('deleteNetwork'), description: t('deleteNetworkDescription', { name: row.name }), confirmLabel: t('remove'), danger: true })) remove.mutate(row.id) }
+  const toggleCreate = () => { setValues(emptyNetwork); setCreating(!creating) }
+  const submitCreate = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); create.mutate(values) }
+  const field = (key: keyof Omit<NetworkValues, 'ipv6'>) => ({ value: values[key], onChange: (event: ChangeEvent<HTMLInputElement>) => setValues({ ...values, [key]: event.target.value }) })
 
-  return <ResourceFrame eyebrow="Docker" title={t('networks')} detail={language === 'zh-CN' ? `${query.data?.length ?? 0} 个网络` : `${query.data?.length ?? 0} networks`} action={<button onClick={() => setCreating(!creating)} className="flex h-9 items-center gap-2 rounded-xl border border-border bg-surface px-3 text-xs"><Plus className="size-3.5" />{t('create')}</button>}>
-    {creating && <form onSubmit={(event) => { event.preventDefault(); if (name) create.mutate() }} className="mb-5 grid gap-3 rounded-2xl border border-border bg-surface/50 p-4 sm:grid-cols-2 lg:grid-cols-5"><Field label={language === 'zh-CN' ? '名称' : 'Name'} value={name} set={setName} placeholder="app-network" /><Field label={language === 'zh-CN' ? '驱动' : 'Driver'} value={driver} set={setDriver} /><Field label={language === 'zh-CN' ? '子网' : 'Subnet'} value={subnet} set={setSubnet} placeholder="172.24.0.0/16" /><Field label={language === 'zh-CN' ? '网关' : 'Gateway'} value={gateway} set={setGateway} placeholder="172.24.0.1" /><div className="flex items-end gap-3"><label className="flex h-8 items-center gap-2 text-xs"><Switch.Root checked={ipv6} onCheckedChange={setIPv6} className="relative h-5 w-9 rounded-full bg-muted transition-colors data-[checked]:bg-accent"><Switch.Thumb className="block size-4 translate-x-0.5 rounded-full bg-white shadow transition-transform data-[checked]:translate-x-[18px]" /></Switch.Root>IPv6</label><button disabled={create.isPending} className="ml-auto h-8 rounded-lg bg-accent px-3 text-xs font-semibold text-accent-foreground disabled:opacity-60">{t('create')}</button></div></form>}
-    {query.isPending ? <LoadingState compact rows={7} label={language === 'zh-CN' ? '正在加载网络' : 'Loading networks'} /> : query.isError ? <div className="rounded-xl border border-danger/30 bg-danger-subtle py-12 text-center text-sm text-danger">{query.error.message}</div> : query.data?.length ? <div className="overflow-hidden rounded-2xl border border-border"><div className="hidden h-9 grid-cols-[minmax(220px,1fr)_130px_minmax(180px,1fr)_110px_44px] items-center gap-3 border-b border-border bg-surface/45 px-3 font-mono text-[9px] uppercase tracking-[.14em] text-text-subtle lg:grid"><span>{language === 'zh-CN' ? '网络 / ID' : 'Network / ID'}</span><span>{language === 'zh-CN' ? '驱动 / 范围' : 'Driver / scope'}</span><span>{language === 'zh-CN' ? '子网 / 网关' : 'Subnet / gateway'}</span><span>{language === 'zh-CN' ? '连接' : 'Attached'}</span><span /></div><div className="divide-y divide-border">{query.data.map((row) => <div key={row.id} className="group grid min-h-16 grid-cols-[minmax(0,1fr)_44px] items-center gap-3 px-3 transition-colors hover:bg-surface/55 lg:grid-cols-[minmax(220px,1fr)_130px_minmax(180px,1fr)_110px_44px]"><div className="flex min-w-0 items-center gap-3 py-2"><span className="grid size-8 shrink-0 place-items-center rounded-xl border border-border bg-surface/70 text-text-subtle transition-colors group-hover:text-accent"><NetworkIcon className="size-3.5" strokeWidth={1.6} /></span><span className="min-w-0"><span className="block truncate text-[13px] font-medium">{row.name}</span><span className="mt-1 block truncate font-mono text-[9px] text-text-subtle">{row.id.slice(0, 12)}<span className="lg:hidden"> · {row.driver} · {row.containers} {language === 'zh-CN' ? '个连接' : 'attached'}</span></span></span></div><div className="hidden min-w-0 items-center gap-2 lg:flex"><Cable className="size-3.5 shrink-0 text-text-subtle" /><span className="truncate text-[10px] text-text-muted">{row.driver} · {row.scope}</span></div><div className="hidden min-w-0 items-center gap-2 lg:flex"><Globe2 className="size-3.5 shrink-0 text-text-subtle" /><span className="truncate font-mono text-[9px] text-text-muted">{row.ipam?.[0]?.subnet || '—'} · {row.ipam?.[0]?.gateway || '—'}</span></div><span className="hidden text-[10px] text-text-muted lg:block">{row.containers} {language === 'zh-CN' ? '个连接' : 'attached'}{row.ipv6 ? ' · IPv6' : ''}</span><button type="button" onClick={() => void removeNetwork(row)} title={t('deleteNetwork')} aria-label={t('deleteNetwork')} className="grid size-7 place-items-center justify-self-end rounded-lg border border-transparent text-danger transition-colors hover:border-danger/20 hover:bg-danger-subtle"><Trash2 className="size-3.5" /></button></div>)}</div></div> : <EmptyState icon={<NetworkIcon className="size-5" />} title={language === 'zh-CN' ? '暂无网络' : 'No networks'} detail={language === 'zh-CN' ? '创建网络后会显示在这里。' : 'Create a network to see it here.'} />}
+  return <ResourceFrame title={t('networks')} detail={zh ? `${query.data?.length ?? 0} 个网络` : `${query.data?.length ?? 0} networks`} action={<Button onClick={toggleCreate}><Plus size={16} />{t('create')}</Button>}>
+    <div className="flex w-full flex-col items-start gap-4">
+      {creating && <Card className="w-full">
+        <CardHeader><CardTitle>{zh ? '创建网络' : 'Create network'}</CardTitle></CardHeader>
+        <CardContent>
+          <form onSubmit={submitCreate} className="flex flex-col gap-4">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="network-name">{zh ? '名称' : 'Name'}</Label>
+                <Input id="network-name" required placeholder="app-network" {...field('name')} />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="network-driver">{zh ? '驱动' : 'Driver'}</Label>
+                <Input id="network-driver" {...field('driver')} />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="network-subnet">{zh ? '子网' : 'Subnet'}</Label>
+                <Input id="network-subnet" placeholder="172.24.0.0/16" {...field('subnet')} />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="network-gateway">{zh ? '网关' : 'Gateway'}</Label>
+                <Input id="network-gateway" placeholder="172.24.0.1" {...field('gateway')} />
+              </div>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="network-ipv6"><Switch id="network-ipv6" checked={values.ipv6} onCheckedChange={(checked) => setValues({ ...values, ipv6: checked === true })} />IPv6</Label>
+              <Button type="submit" disabled={create.isPending}>{create.isPending && <Spinner className="size-4" />}{t('create')}</Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>}
+      {query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载网络' : 'Loading networks'} /> : query.isError ? <ErrorState description={query.error.message} /> : (query.data ?? []).length === 0 ? <div className="flex w-full flex-col items-center gap-1 rounded-xl bg-card px-4 py-10 text-center ring-1 ring-foreground/10">
+        <NetworkIcon className="size-5 text-muted-foreground" />
+        <p className="text-sm font-medium">{zh ? '暂无网络' : 'No networks'}</p>
+        <p className="text-sm text-muted-foreground">{zh ? '创建网络后会显示在这里。' : 'Create a network to see it here.'}</p>
+      </div> : <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>{zh ? '网络' : 'Network'}</TableHead>
+            <TableHead>{zh ? '驱动 / 范围' : 'Driver / scope'}</TableHead>
+            <TableHead>{zh ? '子网 / 网关' : 'Subnet / gateway'}</TableHead>
+            <TableHead>{zh ? '连接' : 'Attached'}</TableHead>
+            <TableHead className="w-16"><span className="sr-only">{t('deleteNetwork')}</span></TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {(query.data ?? []).map((row) => (
+            <TableRow key={row.id}>
+              <TableCell><div><span className="font-medium">{row.name}</span><span className="block text-xs text-muted-foreground">{row.id.slice(0, 12)}</span></div></TableCell>
+              <TableCell><div className="flex items-center gap-2"><Badge variant="outline">{row.driver}</Badge><span className="text-sm text-muted-foreground">{row.scope}</span></div></TableCell>
+              <TableCell className="text-muted-foreground">{row.ipam?.[0]?.subnet || '—'} · {row.ipam?.[0]?.gateway || '—'}</TableCell>
+              <TableCell><div className="flex items-center gap-2">{row.containers}{row.ipv6 && <Badge variant="secondary">IPv6</Badge>}{row.internal && <Badge variant="outline">{zh ? '内部' : 'Internal'}</Badge>}</div></TableCell>
+              <TableCell><Button variant="ghost" size="icon-sm" className="text-red-600 hover:text-red-600 dark:text-red-400 dark:hover:text-red-400" onClick={() => void removeNetwork(row)} title={t('deleteNetwork')} aria-label={t('deleteNetwork')}><Trash2 /></Button></TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>}
+      {create.isError && <ErrorState description={create.error.message} />}
+    </div>
   </ResourceFrame>
 }
-
-function Field({ label, value, set, placeholder }: { label: string; value: string; set: (value: string) => void; placeholder?: string }) { return <label><span className="mb-1 block text-[10px] uppercase tracking-wider text-text-subtle">{label}</span><input required={label === 'Name' || label === '名称'} value={value} onChange={(event) => set(event.target.value)} placeholder={placeholder} className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs outline-none" /></label> }

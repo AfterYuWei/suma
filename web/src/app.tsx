@@ -1,7 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Outlet, RouterProvider, createRootRoute, createRoute, createRouter } from '@tanstack/react-router'
 import { lazy, Suspense, type ComponentType } from 'react'
-import { LoaderCircle } from 'lucide-react'
 import { AppShell } from './components/shell/app-shell'
 import { AuthGate } from './features/auth/auth-gate'
 import { OverviewPage } from './pages/overview'
@@ -17,11 +16,12 @@ import { SettingsPage } from './pages/settings'
 import { AuthenticationPage } from './pages/authentication'
 import { NodesPage } from './pages/nodes'
 import { AppDialog } from './components/ui/app-dialog'
+import { Spinner } from './components/ui/spinner'
 
 const ContainerDetailPage = lazy(() => import('./pages/container-detail').then((module) => ({ default: module.ContainerDetailPage })))
 const ComposeDetailPage = lazy(() => import('./pages/compose-detail').then((module) => ({ default: module.ComposeDetailPage })))
 const ContinuousDeliveryDetailPage = lazy(() => import('./pages/continuous-delivery-detail').then((module) => ({ default: module.ContinuousDeliveryDetailPage })))
-const deferred = (Component: ComponentType) => () => <Suspense fallback={<div className="grid min-h-72 place-items-center"><div className="text-center"><LoaderCircle className="mx-auto size-5 animate-spin text-accent" /><p className="mt-3 font-mono text-[9px] uppercase tracking-[.2em] text-text-subtle">Loading module</p></div></div>}><Component /></Suspense>
+const deferred = (Component: ComponentType) => () => <Suspense fallback={<div role="status" className="grid min-h-72 place-items-center gap-2 text-muted-foreground"><Spinner /><span className="text-sm">Loading module</span></div>}><Component /></Suspense>
 
 const rootRoute = createRootRoute({ component: () => <AuthGate><AppShell><Outlet /></AppShell></AuthGate> })
 const overviewRoute = createRoute({ getParentRoute: () => rootRoute, path: '/', component: OverviewPage })

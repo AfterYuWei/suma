@@ -1,14 +1,20 @@
 import { useQuery } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
-import { ArrowUpRight, Boxes, Cpu, Gauge, HardDrive, Layers3, MemoryStick, Network, Workflow } from 'lucide-react'
-import { motion } from 'motion/react'
+import { useNavigate } from '@tanstack/react-router'
+import { ArrowUpRight, Boxes, Cpu, HardDrive, Layers3, MemoryStick, Network } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { LoadingState } from '../components/ui/loading-state'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
+import { Progress } from '../components/ui/progress'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import type { ContainerSummary } from '../features/containers/types'
 import { api } from '../lib/api'
-import { nodePath } from '../lib/nodes'
-import { useUIStore } from '../stores/ui'
 import { displayDockerId } from '../lib/docker-id'
 import { useI18n } from '../lib/i18n'
+import { nodePath } from '../lib/nodes'
+import { useUIStore } from '../stores/ui'
+import { ResourceFrame } from './images'
 
 interface Overview {
   host: { hostname: string; os: string; kernel: string; architecture: string; uptime_seconds: number; cpu_percent: number; cpus: number; memory_used: number; memory_total: number; disk_used: number; disk_total: number; network_rx: number; network_tx: number }
@@ -20,7 +26,8 @@ const bytes = (value = 0) => value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed
 const percent = (value = 0, total = 100) => total > 0 ? Math.max(0, Math.min(100, value / total * 100)) : 0
 
 export function OverviewPage() {
-	const nodeID = useUIStore((state) => state.currentNodeID)
+  const navigate = useNavigate()
+  const nodeID = useUIStore((state) => state.currentNodeID)
   const { language } = useI18n()
   const zh = language === 'zh-CN'
   const overview = useQuery({ queryKey: ['overview', nodeID], queryFn: () => api<Overview>(nodePath(nodeID, '/overview')), refetchInterval: 10_000 })
@@ -32,93 +39,147 @@ export function OverviewPage() {
   const data = overview.data
   const cpu = data?.host.cpu_percent ?? 0
 
-  const resources = [
-    { label: zh ? '容器 CPU' : 'Container CPU', value: `${data ? cpu.toFixed(1) : '—'}%`, detail: zh ? '运行容器指标聚合' : 'running-container aggregate', progress: cpu, showProgress: true, icon: Cpu },
-    { label: zh ? '容器内存' : 'Container memory', value: bytes(data?.host.memory_used), detail: zh ? `Engine 内存 ${bytes(data?.host.memory_total)}` : `Engine memory ${bytes(data?.host.memory_total)}`, progress: percent(data?.host.memory_used, data?.host.memory_total), showProgress: true, icon: MemoryStick },
-    { label: zh ? 'Docker 磁盘占用' : 'Docker disk usage', value: bytes(data?.host.disk_used), detail: zh ? 'Docker system df 数据' : 'Docker system df data', progress: 0, showProgress: false, icon: HardDrive },
-    { label: zh ? '镜像' : 'Images', value: String(data?.docker.images ?? '—'), detail: zh ? 'Docker Engine 镜像数' : 'Docker Engine image count', progress: 0, showProgress: false, icon: Boxes },
+  const resourceCards = [
+    { label: zh ? '容器 CPU' : 'Container CPU', value: `${data ? cpu.toFixed(1) : '—'}%`, detail: zh ? '运行容器指标聚合' : 'Running-container aggregate', progress: cpu, icon: Cpu },
+    { label: zh ? '容器内存' : 'Container memory', value: bytes(data?.host.memory_used), detail: zh ? `Engine 总内存 ${bytes(data?.host.memory_total)}` : `Engine total ${bytes(data?.host.memory_total)}`, progress: percent(data?.host.memory_used, data?.host.memory_total), icon: MemoryStick },
+    { label: zh ? 'Docker 磁盘占用' : 'Docker disk usage', value: bytes(data?.host.disk_used), detail: zh ? 'Docker system df 数据' : 'Docker system df data', icon: HardDrive },
+    { label: zh ? '镜像' : 'Images', value: String(data?.docker.images ?? '—'), detail: zh ? 'Docker Engine 镜像数' : 'Docker Engine image count', icon: Boxes },
   ]
 
-  return <div className="space-y-8 lg:space-y-10">
-    <motion.section className="glass-panel scanline data-grid relative overflow-hidden rounded-[1.75rem]" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .55, ease: [0.22, 1, 0.36, 1] }}>
-      <div className="pointer-events-none absolute -right-24 -top-28 size-80 rounded-full bg-accent/[.07] blur-3xl" />
-      <div className="grid min-h-[410px] lg:grid-cols-[minmax(0,1.15fr)_minmax(380px,.85fr)]">
-        <div className="relative flex flex-col justify-between border-b border-border p-6 sm:p-9 lg:border-b-0 lg:border-r lg:p-12">
-          <div className="flex flex-1 flex-col">
-            <div className="flex flex-wrap items-center gap-3">
-              <span className={`signal-dot size-2 rounded-full ${overview.isSuccess ? 'bg-success' : 'bg-text-subtle'}`} />
-              <span className="font-mono text-[10px] uppercase tracking-[.2em] text-text-muted">{overview.isSuccess ? (zh ? '引擎在线' : 'Engine online') : (zh ? '正在建立连接' : 'Establishing connection')}</span>
-              <span className="h-px w-8 bg-border" />
-              <span className="font-mono text-[10px] text-text-subtle">{data?.host.architecture ?? 'ARCH_PENDING'}</span>
-            </div>
-            <div className="flex flex-1 flex-col justify-center py-10 lg:translate-y-2">
-              <p className="mb-3 text-xs font-medium uppercase tracking-[.18em] text-text-subtle">{zh ? '主机控制平面' : 'Host control plane'}</p>
-              <h1 className="max-w-3xl break-words text-[clamp(2.5rem,6vw,5.8rem)] font-medium leading-[.88] tracking-[-.075em]">
-                {data?.host.hostname ?? (zh ? '等待主机' : 'Awaiting host')}<span className="text-accent">.</span>
-              </h1>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-x-8 gap-y-4 border-t border-border pt-5 font-mono text-[10px] uppercase tracking-[.12em] text-text-subtle">
-            <span><b className="mr-2 font-medium text-text-muted">OS</b>{data?.host.os ?? '—'}</span>
-            <span><b className="mr-2 font-medium text-text-muted">Kernel</b>{data?.host.kernel ?? '—'}</span>
-            <span><b className="mr-2 font-medium text-text-muted">Docker</b>{data?.docker.server_version ?? '—'}</span>
-          </div>
-        </div>
+  const resourceTotals = [
+    { label: zh ? '网络' : 'Networks', value: networks.data?.length ?? 0, icon: Network },
+    { label: zh ? '存储卷' : 'Volumes', value: volumes.data?.length ?? 0, icon: HardDrive },
+    { label: 'Compose', value: projects.data?.length ?? 0, icon: Layers3 },
+  ]
 
-        <div className="relative grid place-items-center p-8 sm:p-12">
-          <div className="relative grid aspect-square w-full max-w-[310px] place-items-center rounded-full border border-border bg-background/40">
-            <div className="absolute inset-5 rounded-full border border-dashed border-border" />
-            <div className="absolute inset-9 rounded-full" style={{ background: `conic-gradient(var(--accent) ${cpu * 3.6}deg, var(--muted) 0deg)`, maskImage: 'radial-gradient(transparent 62%, black 63%)' }} />
-            <div className="absolute inset-[4.65rem] rounded-full border border-border bg-elevated/80 shadow-[0_0_60px_var(--ambient)] backdrop-blur-xl" />
-            <div className="relative text-center">
-              <Gauge className="mx-auto mb-3 size-5 text-accent" strokeWidth={1.5} />
-              <p className="text-4xl font-medium tracking-[-.06em] tabular-nums">{data ? cpu.toFixed(1) : '—'}<span className="ml-1 text-base text-text-subtle">%</span></p>
-              <p className="mt-2 font-mono text-[9px] uppercase tracking-[.2em] text-text-subtle">Container CPU</p>
-            </div>
-            <span className="absolute left-1/2 top-3 -translate-x-1/2 rounded-full border border-border bg-background px-2 py-1 font-mono text-[8px] text-text-subtle">LIVE</span>
-          </div>
-          <div className="absolute bottom-5 left-6 right-6 flex justify-between font-mono text-[9px] uppercase tracking-wider text-text-subtle sm:bottom-8 sm:left-9 sm:right-9">
-            <span>Docker {data?.docker.server_version ?? '—'}</span><span>{data?.host.cpus ?? 0} vCPU</span>
-          </div>
-        </div>
-      </div>
-    </motion.section>
+  const engineInfo = [
+    { key: zh ? '架构' : 'Architecture', value: data?.host.architecture ?? '—' },
+    { key: 'Docker', value: data?.docker.server_version ?? '—' },
+    { key: 'vCPU', value: String(data?.host.cpus ?? 0) },
+    { key: zh ? '运行 / 停止' : 'Running / stopped', value: `${data?.docker.containers_running ?? 0} / ${data?.docker.containers_stopped ?? 0}` },
+  ]
 
-    <section className="grid gap-px overflow-hidden rounded-[1.4rem] border border-border bg-border sm:grid-cols-2 xl:grid-cols-4">
-      {resources.map(({ label, value, detail, progress, showProgress, icon: Icon }, index) => <motion.article key={label} className="group relative bg-background/90 p-5 transition-colors hover:bg-surface-hover sm:p-6" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .12 + index * .06 }}>
-        <div className="mb-8 flex items-center justify-between"><span className="font-mono text-[10px] uppercase tracking-[.18em] text-text-subtle">0{index + 1} / {label}</span><Icon className="size-4 text-text-subtle transition-colors group-hover:text-accent" strokeWidth={1.5} /></div>
-        <div className="flex items-end justify-between gap-3"><div><strong className="text-2xl font-medium tracking-[-.04em] tabular-nums">{value}</strong><p className="mt-1 text-[11px] text-text-subtle">{detail}</p></div>{showProgress && <span className="font-mono text-[9px] text-text-subtle">{progress.toFixed(0).padStart(2, '0')}%</span>}</div>
-        {showProgress && <div className="mt-5 h-px overflow-hidden bg-muted"><motion.div className="h-full bg-accent shadow-[0_0_8px_var(--accent)]" initial={{ width: 0 }} animate={{ width: `${progress}%` }} transition={{ duration: .8, delay: .2 + index * .08 }} /></div>}
-      </motion.article>)}
-    </section>
+  const stateBadge = (state: string) => state === 'running'
+    ? <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:bg-emerald-500/15 dark:text-emerald-400">{state}</Badge>
+    : <Badge variant="secondary">{state}</Badge>
 
-    <section className="grid gap-6 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,.5fr)]">
-      <div className="min-w-0">
-        <div className="mb-4 flex items-end gap-4 px-1">
-          <div><p className="font-mono text-[9px] uppercase tracking-[.2em] text-text-subtle">Runtime inventory</p><h2 className="mt-1 text-lg font-medium tracking-[-.025em]">{zh ? '活跃容器' : 'Active containers'}</h2></div>
-          <div className="ml-auto flex items-center gap-3 text-[10px] text-text-subtle"><span><b className="mr-1 font-medium text-success">{data?.docker.containers_running ?? 0}</b>{zh ? '运行' : 'running'}</span><span><b className="mr-1 font-medium text-text-muted">{data?.docker.containers_stopped ?? 0}</b>{zh ? '停止' : 'stopped'}</span></div>
-          <Link to="/containers" className="grid size-9 place-items-center rounded-xl border border-border bg-surface/60 text-text-muted transition-all hover:border-accent/30 hover:text-accent" aria-label={zh ? '查看所有容器' : 'View all containers'}><ArrowUpRight className="size-4" /></Link>
-        </div>
-        <div className="glass-panel overflow-hidden rounded-[1.4rem]">
-          {containers.isPending ? <LoadingState embedded rows={6} label={zh ? '正在加载容器' : 'Loading containers'} /> : containers.data?.slice(0, 6).map((row, index) => <Link key={row.id} to="/containers/$containerId" params={{ containerId: row.id }} className="group grid min-h-[72px] grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-b border-border px-5 transition-colors last:border-b-0 hover:bg-surface-hover sm:grid-cols-[minmax(0,1fr)_130px_140px_auto]">
-            <div className="flex min-w-0 items-center gap-3.5"><span className="font-mono text-[9px] text-text-subtle">{String(index + 1).padStart(2, '0')}</span><span className={`size-1.5 rounded-full ${row.state === 'running' ? 'signal-dot bg-success' : 'bg-text-subtle'}`} /><div className="min-w-0"><p className="truncate text-[13px] font-medium">{row.name}</p><p className="mt-1 truncate font-mono text-[9px] text-text-subtle">{row.image}</p></div></div>
-            <p className="hidden truncate font-mono text-[10px] text-text-muted sm:block">{row.ports?.[0]?.public_port ? `${row.ports[0].public_port}:${row.ports[0].private_port}` : 'NO PUBLIC PORT'}</p>
-            <div className="hidden sm:block"><p className="text-[11px] capitalize text-text-muted">{row.state}</p><p className="mt-1 truncate text-[9px] text-text-subtle">{row.status}</p></div>
-            <ArrowUpRight className="size-3.5 text-text-subtle opacity-0 transition-all group-hover:text-accent group-hover:opacity-100" />
-          </Link>)}
-          {!containers.isPending && containers.data?.length === 0 && <div className="grid min-h-40 place-items-center text-center"><div><Boxes className="mx-auto mb-3 size-5 text-text-subtle" /><p className="text-xs text-text-muted">{zh ? '暂无容器' : 'No containers found'}</p></div></div>}
-        </div>
+  if (overview.isPending) return <LoadingState label={zh ? '正在加载概览' : 'Loading overview'} rows={8} />
+
+  return <ResourceFrame
+    title={data?.host.hostname ?? (zh ? '概览' : 'Overview')}
+    detail={`${data?.host.os ?? '—'} · ${data?.host.kernel ?? '—'}`}
+    action={<Badge variant="secondary" className={cn(overview.isSuccess && 'bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:bg-emerald-500/15 dark:text-emerald-400')}>{overview.isSuccess ? (zh ? 'Docker Engine 在线' : 'Docker Engine online') : (zh ? '正在连接' : 'Connecting')}</Badge>}
+  >
+    <div className="flex w-full flex-col gap-6">
+      <div className="grid w-full gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {resourceCards.map(({ label, value, detail, progress: valueProgress, icon: Icon }) => (
+          <Card key={label}>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm"><Icon className="size-4 text-muted-foreground" />{label}</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-2">
+              <div className="text-2xl leading-none font-semibold tracking-tight tabular-nums">{value}</div>
+              <CardDescription>{detail}</CardDescription>
+              {valueProgress !== undefined && <Progress value={valueProgress} />}
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
-      <aside className="glass-panel flex min-h-[360px] flex-col rounded-[1.4rem] p-5 sm:p-6">
-        <div className="flex items-start"><div><p className="font-mono text-[9px] uppercase tracking-[.2em] text-text-subtle">Event stream</p><h2 className="mt-1 text-lg font-medium tracking-[-.025em]">{zh ? '最近活动' : 'Recent activity'}</h2></div><Link to="/audit-logs" className="ml-auto grid size-9 place-items-center rounded-xl border border-border text-text-subtle hover:text-accent" aria-label={zh ? '打开审计日志' : 'Open audit log'}><ArrowUpRight className="size-4" /></Link></div>
-        {audits.isPending ? <div className="mt-7 flex-1"><LoadingState embedded compact rows={4} label={zh ? '正在加载最近活动' : 'Loading recent activity'} /></div> : <div className="mt-7 flex-1 space-y-5 border-l border-border pl-5">
-          {audits.data?.slice(0, 5).map((row) => <div key={row.id} className="relative"><span className="absolute -left-[23px] top-1.5 size-1.5 rounded-full bg-text-subtle ring-4 ring-background" /><div className="flex gap-3"><Workflow className="mt-0.5 size-3.5 shrink-0 text-text-subtle" strokeWidth={1.5} /><div className="min-w-0"><p className="truncate text-xs font-medium">{row.resource_name ? row.resource_type === 'container' ? displayDockerId(row.resource_name) : row.resource_name : row.action}</p><p className="mt-1 font-mono text-[9px] uppercase tracking-wider text-text-subtle">{new Date(row.created_at).toLocaleTimeString(language)} / {row.action}</p></div></div></div>)}
-        </div>}
-        <div className="mt-7 grid grid-cols-3 gap-px overflow-hidden rounded-xl border border-border bg-border text-center">
-          {[{ icon: Network, value: networks.data?.length ?? 0, label: zh ? '网络' : 'Networks' }, { icon: HardDrive, value: volumes.data?.length ?? 0, label: zh ? '存储卷' : 'Volumes' }, { icon: Layers3, value: projects.data?.length ?? 0, label: 'Compose' }].map(({ icon: Icon, value, label }) => <div key={label} className="bg-background/80 px-2 py-3"><Icon className="mx-auto mb-2 size-3.5 text-text-subtle" strokeWidth={1.5} /><b className="block text-sm font-medium tabular-nums">{value}</b><span className="text-[9px] text-text-subtle">{label}</span></div>)}
+      <div className="grid w-full gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(300px,1fr)]">
+        <Card>
+          <CardHeader>
+            <CardTitle>{zh ? '活跃容器' : 'Active containers'}</CardTitle>
+            <CardAction>
+              <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => void navigate({ to: '/containers' })}><ArrowUpRight className="size-4" />{zh ? '查看全部' : 'View all'}</Button>
+            </CardAction>
+          </CardHeader>
+          <CardContent>
+            {containers.isPending
+              ? <LoadingState embedded rows={5} label={zh ? '正在加载容器' : 'Loading containers'} />
+              : (containers.data?.slice(0, 6) ?? []).length === 0
+                ? <p className="py-8 text-center text-sm text-muted-foreground">{zh ? '暂无容器' : 'No containers'}</p>
+                : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>{zh ? '容器' : 'Container'}</TableHead>
+                          <TableHead>{zh ? '镜像' : 'Image'}</TableHead>
+                          <TableHead className="w-24">{zh ? '状态' : 'State'}</TableHead>
+                          <TableHead className="w-20">{zh ? '端口' : 'Port'}</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {(containers.data ?? []).slice(0, 6).map((row) => (
+                          <TableRow key={row.id}>
+                            <TableCell><a href={`/containers/${row.id}`} className="font-medium underline-offset-4 hover:underline">{row.name}</a></TableCell>
+                            <TableCell className="max-w-56 truncate text-muted-foreground" title={row.image}>{row.image}</TableCell>
+                            <TableCell>{stateBadge(row.state)}</TableCell>
+                            <TableCell className="tabular-nums">{row.ports?.[0]?.public_port ? `${row.ports[0].public_port}:${row.ports[0].private_port}` : '—'}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+          </CardContent>
+        </Card>
+
+        <div className="flex w-full flex-col gap-4">
+          <Card>
+            <CardHeader><CardTitle>{zh ? 'Engine 信息' : 'Engine information'}</CardTitle></CardHeader>
+            <CardContent>
+              <dl className="flex flex-col divide-y divide-border text-sm">
+                {engineInfo.map((item) => (
+                  <div key={item.key} className="flex items-center justify-between gap-4 py-1.5 first:pt-0 last:pb-0">
+                    <dt className="text-muted-foreground">{item.key}</dt>
+                    <dd className="font-medium tabular-nums">{item.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>{zh ? '最近活动' : 'Recent activity'}</CardTitle>
+              <CardAction>
+                <Button variant="ghost" size="icon-sm" aria-label={zh ? '查看审计日志' : 'View audit logs'} onClick={() => void navigate({ to: '/audit-logs' })}><ArrowUpRight /></Button>
+              </CardAction>
+            </CardHeader>
+            <CardContent>
+              {audits.isPending
+                ? <LoadingState embedded compact rows={4} label={zh ? '正在加载最近活动' : 'Loading recent activity'} />
+                : (audits.data ?? []).length === 0
+                  ? <p className="py-6 text-center text-sm text-muted-foreground">{zh ? '暂无活动记录' : 'No recent activity'}</p>
+                  : (
+                      <ol className="ml-1.5 flex list-none flex-col border-l border-border">
+                        {(audits.data ?? []).slice(0, 5).map((row) => (
+                          <li key={row.id} className="relative pb-4 pl-5 last:pb-0">
+                            <span className={cn('absolute top-1 -left-[7px] size-2.5 rounded-full border-2 border-card', row.result === 'success' ? 'bg-emerald-500' : 'bg-red-500')} />
+                            <div className="text-sm font-medium">{row.resource_name ? (row.resource_type === 'container' ? displayDockerId(row.resource_name) : row.resource_name) : row.action}</div>
+                            <div className="text-xs text-muted-foreground">{new Date(row.created_at).toLocaleTimeString(language)} · {row.action}</div>
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><CardTitle>{zh ? '资源统计' : 'Resource totals'}</CardTitle></CardHeader>
+            <CardContent>
+              <dl className="flex items-start justify-between gap-4">
+                {resourceTotals.map(({ label, value, icon: Icon }) => (
+                  <div key={label} className="flex flex-col gap-1">
+                    <dt className="flex items-center gap-1.5 text-xs text-muted-foreground"><Icon className="size-3.5" />{label}</dt>
+                    <dd className="text-lg leading-none font-semibold tabular-nums">{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </CardContent>
+          </Card>
         </div>
-      </aside>
-    </section>
-  </div>
+      </div>
+    </div>
+  </ResourceFrame>
 }

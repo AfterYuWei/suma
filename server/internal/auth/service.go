@@ -47,8 +47,8 @@ func (s *Service) Initialize(ctx context.Context, username, password string) (Us
 	if len(username) < 3 || len(username) > 64 {
 		return User{}, fmt.Errorf("username must contain 3 to 64 characters")
 	}
-	if len(password) < 10 || len(password) > 128 {
-		return User{}, fmt.Errorf("password must contain 10 to 128 characters")
+	if len(password) < 8 || len(password) > 128 {
+		return User{}, fmt.Errorf("password must contain 8 to 128 characters")
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {

@@ -1,7 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate, useParams } from '@tanstack/react-router'
-import { ChevronLeft, GitBranch, RefreshCw, Trash2 } from 'lucide-react'
+import { useNavigate, useParams } from '@tanstack/react-router'
+import { ChevronLeft, RefreshCw, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { Spinner } from '../components/ui/spinner'
+import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
+import { ErrorState } from '../components/ui/error-state'
 import { LoadingState } from '../components/ui/loading-state'
 import { CDOverview, ReleasePanel, type ReleaseOperation } from '../features/delivery/releases'
 import { CDSettings } from '../features/delivery/settings'
@@ -9,7 +14,9 @@ import type { CDConfiguration, CDDrift, DeliveryProject, DeliveryRelease } from 
 import { hasActiveRelease, shortCommit } from '../features/delivery/types'
 import { api, ApiError } from '../lib/api'
 import { useI18n } from '../lib/i18n'
+import { cn } from '../lib/utils'
 import { confirmDialog, promptDialog, promptWithCheckboxDialog } from '../stores/dialog'
+import { ResourceFrame } from './images'
 
 type View = 'Overview' | 'Releases' | 'Settings'
 
@@ -92,20 +99,29 @@ export function ContinuousDeliveryDetailPage() {
   }
 
   if (projectQuery.isPending || cdQuery.isPending) return <LoadingState label={zh ? '正在加载持续交付项目' : 'Loading delivery project'} rows={6} />
-  if (projectQuery.isError || cdQuery.isError || !projectQuery.data || !cdQuery.data) return <div className="border-y border-danger/25 bg-danger-subtle px-4 py-8 text-center"><p className="text-sm font-medium text-danger">{zh ? '无法加载持续交付项目' : 'Unable to load delivery project'}</p><p className="mt-2 text-xs text-text-muted">{loadErrorMessage(projectQuery.error || cdQuery.error, zh)}</p></div>
+  if (projectQuery.isError || cdQuery.isError || !projectQuery.data || !cdQuery.data) return <ErrorState title={zh ? '无法加载持续交付项目' : 'Unable to load delivery project'} description={loadErrorMessage(projectQuery.error || cdQuery.error, zh)} />
   const project = projectQuery.data
   const configuration = cdQuery.data
   const activeDelivery = hasActiveRelease(releasesQuery.data)
   const tabs: View[] = isGit ? ['Overview', 'Releases', 'Settings'] : ['Settings']
-  return <div>
-    <Link to="/continuous-delivery" className="mb-6 inline-flex items-center gap-1 text-xs text-text-muted hover:text-text"><ChevronLeft className="size-3.5" />{zh ? '持续交付' : 'Continuous Delivery'}</Link>
-    <header className="flex flex-wrap items-start gap-3 border-b border-border pb-6"><div className="min-w-0"><div className="flex items-center gap-2"><GitBranch className={`size-4 ${isGit ? 'text-accent' : 'text-text-subtle'}`} /><h1 className="truncate text-xl font-semibold">{project.name}</h1></div><p className="mt-1 text-xs text-text-muted">{isGit ? <>{configuration.repository.ref_type}:{configuration.repository.ref} · {shortCommit(configuration.desired_commit)} · {modeLabel(configuration.reconcile_mode, zh)}</> : (zh ? '尚未配置 Git 持续交付' : 'Git continuous delivery is not configured')}</p>{notice && <p className={`mt-1.5 text-[10px] ${sync.isError || releaseAction.isError ? 'text-danger' : 'text-text-subtle'}`}>{notice}</p>}</div>
-      <div className="ml-auto flex flex-wrap gap-2"><button disabled={activeDelivery} onClick={() => void removeProject(false)} className="flex h-8 items-center gap-1.5 rounded-md border border-danger/30 bg-surface px-3 text-xs text-danger hover:bg-danger-subtle disabled:cursor-not-allowed disabled:opacity-50" title={activeDelivery ? (zh ? '交付任务进行中，暂时无法删除' : 'Cannot delete while a delivery is active') : undefined}><Trash2 className="size-3.5" />{zh ? '删除项目' : 'Delete project'}</button><button disabled={activeDelivery} onClick={() => void removeProject(true)} className="flex h-8 items-center gap-1.5 rounded-md bg-danger px-3 text-xs font-semibold text-white hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50" title={activeDelivery ? (zh ? '交付任务进行中，暂时无法强制删除' : 'Cannot force delete while a delivery is active') : undefined}><Trash2 className="size-3.5" />{zh ? '强制删除' : 'Force delete'}</button>{isGit && <button disabled={sync.isPending || activeDelivery} onClick={() => sync.mutate()} className="flex h-8 items-center gap-2 rounded-md bg-accent px-3 text-xs font-semibold text-accent-foreground disabled:opacity-50"><RefreshCw className={`size-3.5 ${sync.isPending || activeDelivery ? 'animate-spin' : ''}`} />{activeDelivery ? (zh ? '交付中' : 'Delivering') : sync.isPending ? (zh ? '启动中' : 'Starting') : (zh ? '同步 Git' : 'Sync Git')}</button>}</div>
-    </header>
-    <nav className="flex h-12 items-center gap-7 border-b border-border text-xs">{tabs.map((name) => <button key={name} onClick={() => setView(name)} className={`h-full ${view === name ? 'border-b border-accent font-medium text-text' : 'text-text-muted hover:text-text'}`}>{name === 'Overview' ? (zh ? '概览' : 'Overview') : name === 'Releases' ? (zh ? 'Release' : 'Releases') : (zh ? '设置' : 'Settings')}</button>)}</nav>
-    {view === 'Overview' && isGit && <CDOverview configuration={configuration} drift={driftQuery.data} releases={releasesQuery.data} zh={zh} />}
-    {view === 'Releases' && isGit && (releasesQuery.isPending ? <div className="py-6"><LoadingState label={zh ? '正在加载 Release' : 'Loading releases'} /></div> : <div className="py-6"><ReleasePanel configuration={configuration} releases={releasesQuery.data} pendingReleaseID={releaseAction.isPending ? releaseAction.variables?.release.id : undefined} zh={zh} onAction={(release, operation) => void runReleaseAction(release, operation)} /></div>)}
-    {view === 'Settings' && <div className="py-6"><CDSettings projectName={projectName} configuration={configuration} zh={zh} onSaved={(value) => { client.setQueryData(['delivery-configuration', projectName], value); void client.invalidateQueries({ queryKey: ['delivery-projects'] }); setNotice(zh ? '持续交付配置已保存。' : 'Continuous delivery configuration saved.'); if (value.configured) setView('Overview') }} /></div>}
+  const headerActions = <div className="flex flex-wrap items-center gap-2"><Badge variant="outline" className={cn(isGit ? 'border-transparent bg-primary/10 text-primary' : 'text-muted-foreground')}>{isGit ? modeLabel(configuration.reconcile_mode, zh) : (zh ? '待配置' : 'Setup')}</Badge><Button disabled={activeDelivery} onClick={() => void removeProject(false)} title={activeDelivery ? (zh ? '交付任务进行中，暂时无法删除' : 'Cannot delete while a delivery is active') : undefined}><Trash2 />{zh ? '删除项目' : 'Delete project'}</Button><Button disabled={activeDelivery} onClick={() => void removeProject(true)} className="bg-destructive text-white hover:bg-destructive/90" title={activeDelivery ? (zh ? '交付任务进行中，暂时无法强制删除' : 'Cannot force delete while a delivery is active') : undefined}><Trash2 />{zh ? '强制删除' : 'Force delete'}</Button>{isGit && <Button disabled={activeDelivery || sync.isPending} onClick={() => sync.mutate()}>{sync.isPending ? <Spinner /> : null}{activeDelivery ? (zh ? '交付中' : 'Delivering') : sync.isPending ? (zh ? '启动中' : 'Starting') : (zh ? '同步 Git' : 'Sync Git')}{!sync.isPending && !activeDelivery && <RefreshCw />}</Button>}</div>
+  return <div className="flex w-full flex-col gap-4">
+    <Button variant="ghost" size="sm" className="-ml-2 w-fit gap-1 text-muted-foreground" onClick={() => void navigate({ to: '/continuous-delivery' })}><ChevronLeft className="size-4" />{zh ? '持续交付' : 'Continuous Delivery'}</Button>
+    <ResourceFrame title={project.name} detail={isGit ? `${configuration.repository.ref_type}:${configuration.repository.ref} · ${shortCommit(configuration.desired_commit)}` : (zh ? '尚未配置 Git 持续交付' : 'Git continuous delivery is not configured')} action={headerActions}>
+      <div className="flex flex-col gap-4">
+        {notice && <p className={cn('text-sm', sync.isError || releaseAction.isError ? 'text-destructive' : 'text-muted-foreground')}>{notice}</p>}
+        <Tabs value={view} onValueChange={(value) => setView(value as View)}>
+          <TabsList variant="line">
+            {tabs.map((name) => (
+              <TabsTrigger key={name} value={name}>{name === 'Overview' ? (zh ? '概览' : 'Overview') : name === 'Releases' ? (zh ? 'Release' : 'Releases') : (zh ? '设置' : 'Settings')}</TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+        {view === 'Overview' && isGit && <CDOverview configuration={configuration} drift={driftQuery.data} releases={releasesQuery.data} zh={zh} />}
+        {view === 'Releases' && isGit && (releasesQuery.isPending ? <LoadingState label={zh ? '正在加载 Release' : 'Loading releases'} /> : <ReleasePanel configuration={configuration} releases={releasesQuery.data} pendingReleaseID={releaseAction.isPending ? releaseAction.variables?.release.id : undefined} zh={zh} onAction={(release, operation) => void runReleaseAction(release, operation)} />)}
+        {view === 'Settings' && <CDSettings projectName={projectName} configuration={configuration} zh={zh} onSaved={(value) => { client.setQueryData(['delivery-configuration', projectName], value); void client.invalidateQueries({ queryKey: ['delivery-projects'] }); setNotice(zh ? '持续交付配置已保存。' : 'Continuous delivery configuration saved.'); if (value.configured) setView('Overview') }} />}
+      </div>
+    </ResourceFrame>
   </div>
 }
 

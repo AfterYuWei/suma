@@ -1,27 +1,72 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Box, Clock3, Database, HardDrive, Plus, Trash2 } from 'lucide-react'
-import type { ReactNode } from 'react'
-import { useState } from 'react'
+import { Database, Plus, Trash2 } from 'lucide-react'
+import { useState, type FormEvent } from 'react'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { ErrorState } from '../components/ui/error-state'
+import { Input } from '../components/ui/input'
 import { LoadingState } from '../components/ui/loading-state'
+import { Spinner } from '../components/ui/spinner'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { api } from '../lib/api'
-import { nodePath } from '../lib/nodes'
 import { useI18n } from '../lib/i18n'
+import { nodePath } from '../lib/nodes'
 import { promptDialog } from '../stores/dialog'
 import { useUIStore } from '../stores/ui'
-import { EmptyState, ResourceFrame } from './images'
+import { ResourceFrame } from './images'
 
 interface Volume { name: string; driver: string; mountpoint: string; created_at: string; used_by: string[]; size: number }
+interface VolumeValues { name: string }
+
 export function VolumesPage() {
   const nodeID = useUIStore((state) => state.currentNodeID)
-  const client = useQueryClient(); const [name, setName] = useState(''); const { t, language } = useI18n(); const query = useQuery({ queryKey: ['volumes', nodeID], queryFn: () => api<Volume[]>(nodePath(nodeID, '/volumes')) })
-  const create = useMutation({ mutationFn: () => api(nodePath(nodeID, '/volumes'), { method: 'POST', body: JSON.stringify({ name, driver: 'local' }) }), onSuccess: () => { setName(''); client.invalidateQueries({ queryKey: ['volumes', nodeID] }) } })
+  const client = useQueryClient()
+  const { t, language } = useI18n()
+  const zh = language === 'zh-CN'
+  const [name, setName] = useState('')
+  const query = useQuery({ queryKey: ['volumes', nodeID], queryFn: () => api<Volume[]>(nodePath(nodeID, '/volumes')) })
+  const create = useMutation({ mutationFn: ({ name }: VolumeValues) => api(nodePath(nodeID, '/volumes'), { method: 'POST', body: JSON.stringify({ name, driver: 'local' }) }), onSuccess: () => client.invalidateQueries({ queryKey: ['volumes', nodeID] }) })
   const remove = useMutation({ mutationFn: (name: string) => api(nodePath(nodeID, `/volumes/${encodeURIComponent(name)}?confirm=${encodeURIComponent(name)}`), { method: 'DELETE' }), onSuccess: () => client.invalidateQueries({ queryKey: ['volumes', nodeID] }) })
   const removeVolume = async (row: Volume) => { const value = await promptDialog({ title: t('deleteVolume'), description: t('deleteVolumeDescription', { name: row.name }), confirmLabel: t('remove'), danger: true, input: { label: t('typeToConfirm', { value: row.name }), requiredValue: row.name } }); if (value === row.name) remove.mutate(row.name) }
   const formatSize = (bytes: number) => bytes > 0 ? `${(bytes / 1024 ** 2).toFixed(1)} MB` : '—'
-  return <ResourceFrame eyebrow="Docker" title={t('volumes')} detail={language === 'zh-CN' ? `${query.data?.length ?? 0} 个持久存储卷` : `${query.data?.length ?? 0} persistent volumes`} action={<form onSubmit={(event) => { event.preventDefault(); if (name) create.mutate() }} className="flex gap-2"><input value={name} onChange={(event) => setName(event.target.value)} className="h-9 w-48 rounded-xl border border-border bg-surface px-3 text-xs outline-none focus:border-accent/50" placeholder={language === 'zh-CN' ? '存储卷名称' : 'Volume name'} /><button disabled={create.isPending} className="flex h-9 items-center gap-2 rounded-xl border border-border bg-surface px-3 text-xs disabled:opacity-60"><Plus className="size-3.5" />{t('create')}</button></form>}>
-    {query.isPending ? <LoadingState compact rows={7} label={language === 'zh-CN' ? '正在加载存储卷' : 'Loading volumes'} /> : query.isError ? <div className="rounded-xl border border-danger/30 bg-danger-subtle py-12 text-center text-sm text-danger">{query.error.message}</div> : query.data?.length ? <div className="overflow-hidden rounded-2xl border border-border"><div className="hidden h-9 grid-cols-[minmax(240px,1fr)_100px_110px_minmax(160px,1fr)_150px_44px] items-center gap-3 border-b border-border bg-surface/45 px-3 font-mono text-[9px] uppercase tracking-[.14em] text-text-subtle lg:grid"><span>{language === 'zh-CN' ? '存储卷 / 挂载点' : 'Volume / mountpoint'}</span><span>{language === 'zh-CN' ? '驱动' : 'Driver'}</span><span>{language === 'zh-CN' ? '大小' : 'Size'}</span><span>{language === 'zh-CN' ? '使用者' : 'Used by'}</span><span>{language === 'zh-CN' ? '创建时间' : 'Created'}</span><span /></div><div className="divide-y divide-border">{query.data.map((row) => <div key={row.name} className="group grid min-h-16 grid-cols-[minmax(0,1fr)_44px] items-center gap-3 px-3 transition-colors hover:bg-surface/55 lg:grid-cols-[minmax(240px,1fr)_100px_110px_minmax(160px,1fr)_150px_44px]"><div className="flex min-w-0 items-center gap-3 py-2"><span className="grid size-8 shrink-0 place-items-center rounded-xl border border-border bg-surface/70 text-text-subtle transition-colors group-hover:text-accent"><Database className="size-3.5" strokeWidth={1.6} /></span><span className="min-w-0"><span className="block truncate text-[13px] font-medium">{row.name}</span><span className="mt-1 block truncate font-mono text-[9px] text-text-subtle" title={row.mountpoint}>{row.mountpoint}<span className="lg:hidden"> · {row.driver} · {row.used_by.length ? `${row.used_by.length} ${language === 'zh-CN' ? '个使用者' : 'users'}` : (language === 'zh-CN' ? '未使用' : 'unused')}</span></span></span></div><VolumeMetric icon={<HardDrive className="size-3.5" />} value={row.driver} /><VolumeMetric icon={<Database className="size-3.5" />} value={formatSize(row.size)} /><VolumeMetric icon={<Box className="size-3.5" />} value={row.used_by.length ? row.used_by.join(', ') : (language === 'zh-CN' ? '未使用' : 'Unused')} /><VolumeMetric icon={<Clock3 className="size-3.5" />} value={row.created_at ? new Date(row.created_at).toLocaleString(language) : '—'} /><button disabled={row.used_by.length > 0} onClick={() => void removeVolume(row)} title={row.used_by.length ? (language === 'zh-CN' ? '存储卷正在使用中' : 'Volume is in use') : t('deleteVolume')} aria-label={t('deleteVolume')} className="grid size-7 place-items-center justify-self-end rounded-lg border border-transparent text-danger transition-colors hover:border-danger/20 hover:bg-danger-subtle disabled:cursor-not-allowed disabled:opacity-20"><Trash2 className="size-3.5" /></button></div>)}</div></div> : <EmptyState icon={<Database className="size-5" />} title={language === 'zh-CN' ? '暂无存储卷' : 'No volumes'} detail={language === 'zh-CN' ? '创建持久存储卷后会显示在这里。' : 'Create a persistent volume to see it here.'} />}
-    {create.isError && <p className="mt-3 text-xs text-danger">{create.error.message}</p>}
+  const submitCreate = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); create.mutate({ name }); setName('') }
+
+  const action = <form onSubmit={submitCreate} className="flex items-center gap-2">
+    <Input value={name} onChange={(event) => setName(event.target.value)} required aria-label={zh ? '存储卷名称' : 'Volume name'} placeholder={zh ? '存储卷名称' : 'Volume name'} className="w-44" />
+    <Button type="submit" disabled={create.isPending}>{create.isPending ? <Spinner className="size-4" /> : <Plus size={16} />}{t('create')}</Button>
+  </form>
+
+  return <ResourceFrame title={t('volumes')} detail={zh ? `${query.data?.length ?? 0} 个持久存储卷` : `${query.data?.length ?? 0} persistent volumes`} action={action}>
+    <div className="flex w-full flex-col items-start gap-4">
+      {query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载存储卷' : 'Loading volumes'} /> : query.isError ? <ErrorState description={query.error.message} /> : (query.data ?? []).length === 0 ? <div className="flex w-full flex-col items-center gap-1 rounded-xl bg-card px-4 py-10 text-center ring-1 ring-foreground/10">
+        <Database className="size-5 text-muted-foreground" />
+        <p className="text-sm font-medium">{zh ? '暂无存储卷' : 'No volumes'}</p>
+        <p className="text-sm text-muted-foreground">{zh ? '创建持久存储卷后会显示在这里。' : 'Create a persistent volume to see it here.'}</p>
+      </div> : <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>{zh ? '存储卷' : 'Volume'}</TableHead>
+            <TableHead>{zh ? '驱动' : 'Driver'}</TableHead>
+            <TableHead>{zh ? '大小' : 'Size'}</TableHead>
+            <TableHead>{zh ? '使用者' : 'Used by'}</TableHead>
+            <TableHead>{zh ? '创建时间' : 'Created'}</TableHead>
+            <TableHead className="w-16"><span className="sr-only">{t('deleteVolume')}</span></TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {(query.data ?? []).map((row) => (
+            <TableRow key={row.name}>
+              <TableCell><div><span className="font-medium">{row.name}</span><span title={row.mountpoint} className="block max-w-72 truncate text-xs text-muted-foreground">{row.mountpoint}</span></div></TableCell>
+              <TableCell><Badge variant="outline">{row.driver}</Badge></TableCell>
+              <TableCell>{formatSize(row.size)}</TableCell>
+              <TableCell>{row.used_by.length ? <div className="flex max-w-64 flex-wrap gap-1">{row.used_by.map((used) => <Badge key={used} variant="secondary">{used}</Badge>)}</div> : <span className="text-sm text-muted-foreground">{zh ? '未使用' : 'Unused'}</span>}</TableCell>
+              <TableCell className="text-muted-foreground">{row.created_at ? new Date(row.created_at).toLocaleString(language) : '—'}</TableCell>
+              <TableCell><Button variant="ghost" size="icon-sm" className="text-red-600 hover:text-red-600 dark:text-red-400 dark:hover:text-red-400" disabled={row.used_by.length > 0} onClick={() => void removeVolume(row)} title={row.used_by.length ? (zh ? '存储卷正在使用中' : 'Volume is in use') : t('deleteVolume')} aria-label={t('deleteVolume')}><Trash2 /></Button></TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>}
+      {create.isError && <ErrorState description={create.error.message} />}
+    </div>
   </ResourceFrame>
 }
-
-function VolumeMetric({ icon, value }: { icon: ReactNode; value: string }) { return <span className="hidden min-w-0 items-center gap-2 text-[10px] text-text-muted lg:flex"><span className="shrink-0 text-text-subtle">{icon}</span><span className="truncate" title={value}>{value}</span></span> }
