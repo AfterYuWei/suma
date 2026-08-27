@@ -72,10 +72,16 @@ export function ContainersPage() {
   }
   const killContainer = async (row: ContainerSummary) => { if (await confirmDialog({ title: zh ? `强制终止 ${row.name}？` : `Force kill ${row.name}?`, description: zh ? '容器主进程会被立即终止，不会等待正常退出。' : 'The main process will be killed immediately without a graceful shutdown.', confirmLabel: zh ? '强制终止' : 'Force kill', danger: true })) action.mutate({ id: row.id, name: 'kill' }) }
 
+  const selectionBar = selected.size > 0 && <div className="flex flex-wrap items-center gap-2">
+    <Badge variant="outline">{selected.size} {zh ? '已选' : 'selected'}</Badge>
+    <Button size="sm" variant="outline" disabled={batch.isPending} onClick={() => void runBatch('start')}>{batch.isPending ? <Spinner /> : <Play />}{zh ? '启动' : 'Start'}</Button>
+    <Button size="sm" variant="outline" disabled={batch.isPending} onClick={() => void runBatch('stop')}>{batch.isPending ? <Spinner /> : <Square />}{zh ? '停止' : 'Stop'}</Button>
+    <Button size="sm" variant="outline" disabled={batch.isPending} onClick={() => void runBatch('restart')}>{batch.isPending ? <Spinner /> : <RefreshCw />}{zh ? '重启' : 'Restart'}</Button>
+    <Button size="sm" variant="destructive" disabled={batch.isPending} onClick={() => void runBatch('remove')}>{batch.isPending ? <Spinner /> : <Trash2 />}{zh ? '删除' : 'Remove'}</Button>
+  </div>
+
   const toolbar = <div className="flex flex-wrap items-center gap-2">
-    <StatusBadge tone="success">{running} {zh ? '运行中' : 'running'}</StatusBadge>
-    <StatusBadge tone="warning">{paused} {zh ? '已暂停' : 'paused'}</StatusBadge>
-    <Badge variant="outline" className="text-muted-foreground">{stopped} {zh ? '已停止' : 'stopped'}</Badge>
+    {selectionBar}
     <InputGroup className="w-[260px]">
       <InputGroupAddon align="inline-start"><Search /></InputGroupAddon>
       <InputGroupInput value={filter} onChange={(event) => setFilter(event.target.value)} placeholder={zh ? '名称、镜像、状态、端口…' : 'Name, image, status, port…'} aria-label={zh ? '筛选容器' : 'Filter containers'} />
@@ -83,17 +89,13 @@ export function ContainersPage() {
     </InputGroup>
   </div>
 
-  return <ResourceFrame title={t('containers')} detail={zh ? `${query.data?.length ?? 0} 个容器` : `${query.data?.length ?? 0} containers`} action={toolbar}>
-    <div className="flex w-full flex-col items-start gap-5">
-      {!!selected.size && (
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="outline">{selected.size} {zh ? '已选' : 'selected'}</Badge>
-          <Button size="sm" variant="outline" disabled={batch.isPending} onClick={() => void runBatch('start')}>{batch.isPending ? <Spinner /> : <Play />}{zh ? '启动' : 'Start'}</Button>
-          <Button size="sm" variant="outline" disabled={batch.isPending} onClick={() => void runBatch('stop')}>{batch.isPending ? <Spinner /> : <Square />}{zh ? '停止' : 'Stop'}</Button>
-          <Button size="sm" variant="outline" disabled={batch.isPending} onClick={() => void runBatch('restart')}>{batch.isPending ? <Spinner /> : <RefreshCw />}{zh ? '重启' : 'Restart'}</Button>
-          <Button size="sm" variant="destructive" disabled={batch.isPending} onClick={() => void runBatch('remove')}>{batch.isPending ? <Spinner /> : <Trash2 />}{zh ? '删除' : 'Remove'}</Button>
-        </div>
-      )}
+  const statusStrip = <>
+    <StatusBadge tone="success">{running} {zh ? '运行中' : 'running'}</StatusBadge>
+    <StatusBadge tone="warning">{paused} {zh ? '已暂停' : 'paused'}</StatusBadge>
+    <Badge variant="outline" className="text-muted-foreground">{stopped} {zh ? '已停止' : 'stopped'}</Badge>
+  </>
+
+  return <ResourceFrame title={t('containers')} detail={zh ? `${query.data?.length ?? 0} 个容器` : `${query.data?.length ?? 0} containers`} lead={statusStrip} action={toolbar}>
       {query.isPending && <LoadingState compact rows={7} label={zh ? '正在加载容器' : 'Loading containers'} />}
       {query.isError && <ErrorState description={zh ? '无法连接 Docker Engine。' : 'Unable to reach the Docker Engine.'} />}
       {!!operationError && (
@@ -118,7 +120,7 @@ export function ContainersPage() {
                 <TableHead className="min-w-[140px]">{zh ? '状态 / 运行时间' : 'State / uptime'}</TableHead>
                 <TableHead className="min-w-[130px]">{zh ? '资源' : 'Resources'}</TableHead>
                 <TableHead className="min-w-[160px]">{zh ? '端口' : 'Ports'}</TableHead>
-                <TableHead className="min-w-[210px]">{zh ? '操作' : 'Actions'}</TableHead>
+                <TableHead className="min-w-[210px] text-right">{zh ? '操作' : 'Actions'}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -163,7 +165,6 @@ export function ContainersPage() {
             </TableBody>
           </Table>
         </ListShell>)}
-    </div>
   </ResourceFrame>
 }
 
