@@ -694,13 +694,42 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		recordAudit(c, deps.Audit, "compose.create", "compose", input.Name, "success")
 		c.JSON(http.StatusCreated, envelope{Code: 0, Message: "success", Data: row})
 	})
-	compose.POST("/:name/import", func(c *gin.Context) {
-		row, err := deps.Compose.Import(c.Request.Context(), c.Param("name"))
+	compose.POST("/:name/takeover/preview", func(c *gin.Context) {
+		draft, err := deps.Compose.BuildTakeoverDraft(c.Request.Context(), c.Param("name"))
 		if err != nil {
 			failure(c, http.StatusConflict, 18015, err.Error())
 			return
 		}
-		recordAudit(c, deps.Audit, "compose.import", "compose", c.Param("name"), "success")
+		success(c, draft)
+	})
+	compose.POST("/:name/takeover/render", func(c *gin.Context) {
+		var input struct {
+			Fingerprint string                             `json:"fingerprint"`
+			Choices     []composeService.EnvironmentChoice `json:"choices"`
+		}
+		if c.ShouldBindJSON(&input) != nil || input.Fingerprint == "" {
+			failure(c, http.StatusBadRequest, 18016, "Takeover fingerprint is required")
+			return
+		}
+		draft, err := deps.Compose.RenderTakeoverDraft(c.Request.Context(), c.Param("name"), input.Fingerprint, input.Choices)
+		if err != nil {
+			failure(c, http.StatusConflict, 18017, err.Error())
+			return
+		}
+		success(c, draft)
+	})
+	compose.POST("/:name/takeover", func(c *gin.Context) {
+		var input composeService.TakeoverInput
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, http.StatusBadRequest, 18018, "Invalid Project takeover request")
+			return
+		}
+		row, err := deps.Compose.Takeover(c.Request.Context(), c.Param("name"), input)
+		if err != nil {
+			failure(c, http.StatusConflict, 18019, err.Error())
+			return
+		}
+		recordAudit(c, deps.Audit, "project.takeover", "project", c.Param("name"), "success")
 		c.JSON(http.StatusCreated, envelope{Code: 0, Message: "success", Data: row})
 	})
 	compose.POST("/batch", func(c *gin.Context) {

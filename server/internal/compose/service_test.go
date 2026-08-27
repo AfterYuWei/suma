@@ -235,47 +235,6 @@ func TestCreateWritesManagedProjectIdentityMetadata(t *testing.T) {
 	}
 }
 
-func TestImportCopiesAccessibleSingleFileProjectIntoManagedRoot(t *testing.T) {
-	externalRoot := t.TempDir()
-	composePath := filepath.Join(externalRoot, "compose.yaml")
-	if err := os.WriteFile(composePath, []byte("services:\n  web:\n    image: nginx:alpine\n"), 0o640); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(externalRoot, ".env"), []byte("PORT=8080\n"), 0o640); err != nil {
-		t.Fatal(err)
-	}
-	containers := staticContainers{rows: []containerdomain.Summary{{ID: "web", State: "running", Labels: map[string]string{
-		composeProjectLabel: "external", composeWorkingDirLabel: externalRoot, composeConfigFilesLabel: composePath,
-	}}}}
-	managedRoot := t.TempDir()
-	service := &Service{root: managedRoot, runner: validateRunner{}, containers: containers}
-	project, err := service.Import(context.Background(), "external")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !project.CanManage || project.Source != "managed" || !strings.Contains(project.Compose, "nginx:alpine") || project.Environment != "PORT=8080\n" {
-		t.Fatalf("imported project = %#v", project)
-	}
-	if project.Path != filepath.Join(managedRoot, "external") {
-		t.Fatalf("managed path = %q", project.Path)
-	}
-}
-
-func TestImportRejectsConfigOutsideReportedWorkingDirectory(t *testing.T) {
-	externalRoot := t.TempDir()
-	outside := filepath.Join(t.TempDir(), "compose.yml")
-	if err := os.WriteFile(outside, []byte("services: {}\n"), 0o640); err != nil {
-		t.Fatal(err)
-	}
-	containers := staticContainers{rows: []containerdomain.Summary{{ID: "web", State: "running", Labels: map[string]string{
-		composeProjectLabel: "external", composeWorkingDirLabel: externalRoot, composeConfigFilesLabel: outside,
-	}}}}
-	service := &Service{root: t.TempDir(), runner: validateRunner{}, containers: containers}
-	if _, err := service.Import(context.Background(), "external"); err == nil || !strings.Contains(err.Error(), "outside") {
-		t.Fatalf("expected path rejection, got %v", err)
-	}
-}
-
 type batchRunner struct{ Runner }
 
 func (batchRunner) Start(context.Context, string, io.Writer) error { return nil }

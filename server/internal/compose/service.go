@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	containerdomain "github.com/suma/suma/server/internal/container"
@@ -39,12 +40,13 @@ type BatchResult struct {
 	Success bool   `json:"success"`
 }
 type Service struct {
-	root       string
-	runner     Runner
-	tasks      *task.Service
-	containers containerdomain.Service
-	nodeID     string
-	nodeName   string
+	root         string
+	runner       Runner
+	tasks        *task.Service
+	containers   containerdomain.Service
+	nodeID       string
+	nodeName     string
+	projectLocks *sync.Map
 }
 
 func NewService(_ *gorm.DB, root string, runner Runner, tasks *task.Service, containers containerdomain.Service) (*Service, error) {
@@ -55,10 +57,10 @@ func NewService(_ *gorm.DB, root string, runner Runner, tasks *task.Service, con
 	if err := os.MkdirAll(absolute, 0o750); err != nil {
 		return nil, err
 	}
-	return &Service{root: absolute, runner: runner, tasks: tasks, containers: containers, nodeID: "local", nodeName: "Local"}, nil
+	return &Service{root: absolute, runner: runner, tasks: tasks, containers: containers, nodeID: "local", nodeName: "Local", projectLocks: &sync.Map{}}, nil
 }
 func (s *Service) ForNode(nodeID, nodeName string, runner Runner, containers containerdomain.Service) *Service {
-	return &Service{root: s.root, runner: runner, tasks: s.tasks, containers: containers, nodeID: nodeID, nodeName: nodeName}
+	return &Service{root: s.root, runner: runner, tasks: s.tasks, containers: containers, nodeID: nodeID, nodeName: nodeName, projectLocks: s.projectLocks}
 }
 func (s *Service) List(ctx context.Context) ([]Project, error) {
 	containers, err := s.containers.List(ctx)
@@ -200,47 +202,6 @@ func (s *Service) Create(ctx context.Context, name, content, environment string)
 	return s.Get(ctx, name)
 }
 
-// Import copies a single-file local Compose project discovered through Docker
-// labels into SUMA's managed Compose root. It never follows a label outside the
-// reported working directory and is intentionally unavailable for remote nodes.
-func (s *Service) Import(ctx context.Context, name string) (Project, error) {
-	if s.effectiveNodeID() != "local" {
-		return Project{}, fmt.Errorf("external Compose import is available only for the local node")
-	}
-	project, err := s.findProject(ctx, name)
-	if err != nil {
-		return Project{}, err
-	}
-	if project.CanManage {
-		return Project{}, fmt.Errorf("Compose project is already managed")
-	}
-	if len(project.ConfigFiles) != 1 {
-		return Project{}, fmt.Errorf("only single-file Compose projects can be imported")
-	}
-	compose, err := readExternalProjectFile(project.Path, project.ConfigFiles[0], true)
-	if err != nil {
-		return Project{}, fmt.Errorf("read external Compose file: %w", err)
-	}
-	environment, err := readExternalProjectFile(project.Path, filepath.Join(project.Path, ".env"), false)
-	if err != nil {
-		return Project{}, fmt.Errorf("read external Compose environment: %w", err)
-	}
-	temp, err := os.MkdirTemp(s.nodeRoot(), ".import-")
-	if err != nil {
-		return Project{}, err
-	}
-	defer os.RemoveAll(temp)
-	if err := writeAtomic(filepath.Join(temp, "compose.yml"), string(compose)); err != nil {
-		return Project{}, err
-	}
-	if err := writeAtomic(filepath.Join(temp, ".env"), string(environment)); err != nil {
-		return Project{}, err
-	}
-	if err := s.runner.Validate(ctx, temp, io.Discard); err != nil {
-		return Project{}, fmt.Errorf("validate imported Compose project: %w", err)
-	}
-	return s.Create(ctx, name, string(compose), string(environment))
-}
 func (s *Service) Save(ctx context.Context, name, content, environment string) (Project, error) {
 	project, err := s.managedProject(name)
 	if err != nil {
@@ -359,6 +320,9 @@ func (s *Service) Action(ctx context.Context, name, action string) (database.Tas
 		default:
 			err = fmt.Errorf("unknown compose action")
 		}
+		if err == nil && (action == "up" || action == "update") {
+			_ = s.markDeployed(project)
+		}
 		return err
 	})
 }
@@ -458,38 +422,6 @@ func composeConfigFiles(value, workingDir string) []string {
 	return result
 }
 
-func readExternalProjectFile(workingDir, name string, required bool) ([]byte, error) {
-	if !filepath.IsAbs(workingDir) || !filepath.IsAbs(name) {
-		return nil, fmt.Errorf("Compose working directory and file must be absolute")
-	}
-	base, err := filepath.EvalSymlinks(workingDir)
-	if err != nil {
-		return nil, fmt.Errorf("working directory is not mounted into SUMA")
-	}
-	path, err := filepath.EvalSymlinks(name)
-	if err != nil {
-		if !required && errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("file is not mounted into SUMA")
-	}
-	relative, err := filepath.Rel(base, path)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
-		return nil, fmt.Errorf("file is outside the Compose working directory")
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("file is not regular")
-	}
-	if info.Size() > 2<<20 {
-		return nil, fmt.Errorf("file exceeds 2 MiB")
-	}
-	return os.ReadFile(path)
-}
-
 func (s *Service) BatchAction(ctx context.Context, names []string, action string) []BatchResult {
 	results := make([]BatchResult, 0, len(names))
 	for _, name := range names {
@@ -524,6 +456,27 @@ func (s *Service) effectiveNodeName() string {
 		return "Local"
 	}
 	return s.nodeName
+}
+
+func (s *Service) lockProject(name string) func() {
+	if s.projectLocks == nil {
+		s.projectLocks = &sync.Map{}
+	}
+	key := s.effectiveNodeID() + "\x00" + name
+	value, _ := s.projectLocks.LoadOrStore(key, &sync.Mutex{})
+	lock := value.(*sync.Mutex)
+	lock.Lock()
+	return lock.Unlock
+}
+
+func (s *Service) markDeployed(project Project) error {
+	metadata, err := readManagedProjectMetadata(project.Path, s.effectiveNodeID(), project.Name, project.UpdatedAt)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	metadata.LastDeployedAt = &now
+	return writeManagedProjectMetadata(project.Path, metadata)
 }
 func writeAtomic(path, content string) error {
 	temp, err := os.CreateTemp(filepath.Dir(path), ".suma-")

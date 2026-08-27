@@ -208,6 +208,7 @@ func registerNodeRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps Dependenci
 	registerNodeNetworkRoutes(resources, deps)
 	registerNodeVolumeRoutes(resources, deps)
 	registerNodeComposeRoutes(resources, deps)
+	registerNodeProjectRoutes(resources, deps)
 	resources.POST("/system/prune", func(c *gin.Context) {
 		adapter, view, ok := resolveNode(c, deps)
 		if !ok {
@@ -347,17 +348,59 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 		recordNodeAudit(c, deps, view.ID, view.Name, "compose.create", "compose", input.Name, "success")
 		c.JSON(201, envelope{Code: 0, Message: "success", Data: row})
 	})
-	routes.POST("/:name/import", func(c *gin.Context) {
+	routes.POST("/:name/takeover/preview", func(c *gin.Context) {
 		current, view, ok := service(c)
 		if !ok {
 			return
 		}
-		row, err := current.Import(c.Request.Context(), c.Param("name"))
+		draft, err := current.BuildTakeoverDraft(c.Request.Context(), c.Param("name"))
 		if err != nil {
 			failure(c, 409, 20317, err.Error())
 			return
 		}
-		recordNodeAudit(c, deps, view.ID, view.Name, "compose.import", "compose", c.Param("name"), "success")
+		_ = view
+		success(c, draft)
+	})
+	routes.POST("/:name/takeover/render", func(c *gin.Context) {
+		current, _, ok := service(c)
+		if !ok {
+			return
+		}
+		var input struct {
+			Fingerprint string                             `json:"fingerprint"`
+			Choices     []composeService.EnvironmentChoice `json:"choices"`
+		}
+		if c.ShouldBindJSON(&input) != nil || input.Fingerprint == "" {
+			failure(c, 400, 20318, "Takeover fingerprint is required")
+			return
+		}
+		draft, err := current.RenderTakeoverDraft(c.Request.Context(), c.Param("name"), input.Fingerprint, input.Choices)
+		if err != nil {
+			failure(c, 409, 20319, err.Error())
+			return
+		}
+		success(c, draft)
+	})
+	routes.POST("/:name/takeover", func(c *gin.Context) {
+		current, view, ok := service(c)
+		if !ok {
+			return
+		}
+		var input composeService.TakeoverInput
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, 400, 20320, "Invalid Project takeover request")
+			return
+		}
+		if err := validatePolicy(view, input.Compose); err != nil {
+			failure(c, 422, 20307, err.Error())
+			return
+		}
+		row, err := current.Takeover(c.Request.Context(), c.Param("name"), input)
+		if err != nil {
+			failure(c, 409, 20321, err.Error())
+			return
+		}
+		recordNodeAudit(c, deps, view.ID, view.Name, "project.takeover", "project", c.Param("name"), "success")
 		c.JSON(201, envelope{Code: 0, Message: "success", Data: row})
 	})
 	routes.POST("/batch", func(c *gin.Context) {
@@ -481,6 +524,280 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 		}
 		recordNodeAudit(c, deps, view.ID, view.Name, "compose."+action, "compose", c.Param("name"), "success")
 		c.JSON(202, envelope{Code: 0, Message: "success", Data: row})
+	})
+}
+
+func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
+	if deps.Compose == nil || deps.ComposeRunner == nil {
+		return
+	}
+	projects := group.Group("/projects")
+	service := func(c *gin.Context) (*composeService.Service, node.View, bool) {
+		adapter, view, ok := resolveNode(c, deps)
+		if !ok {
+			return nil, view, false
+		}
+		target, _, err := deps.Nodes.ComposeTarget(c.Request.Context(), view.ID)
+		if err != nil {
+			failure(c, 503, 20401, err.Error())
+			return nil, view, false
+		}
+		return deps.Compose.ForNode(view.ID, view.Name, deps.ComposeRunner.ForTarget(target), adapter), view, true
+	}
+	validatePolicy := func(view node.View, content string) error {
+		if view.ConnectionType == node.ConnectionTCP {
+			return composeService.ValidateRemoteBindMounts(content, view.AllowedBindRoots)
+		}
+		return nil
+	}
+	projects.GET("", func(c *gin.Context) {
+		current, _, ok := service(c)
+		if !ok {
+			return
+		}
+		rows, err := current.List(c.Request.Context())
+		if err != nil {
+			failure(c, 500, 20402, "Unable to list Projects")
+			return
+		}
+		success(c, rows)
+	})
+	projects.POST("", func(c *gin.Context) {
+		current, view, ok := service(c)
+		if !ok {
+			return
+		}
+		var input struct {
+			Backend     string `json:"backend"`
+			Name        string `json:"name"`
+			Compose     string `json:"compose"`
+			Environment string `json:"environment"`
+		}
+		if c.ShouldBindJSON(&input) != nil || input.Name == "" || input.Compose == "" || (input.Backend != "" && input.Backend != "compose") {
+			failure(c, 400, 20403, "A Compose Project name and Compose YAML are required")
+			return
+		}
+		if err := validatePolicy(view, input.Compose); err != nil {
+			failure(c, 422, 20404, err.Error())
+			return
+		}
+		row, err := current.Create(c.Request.Context(), input.Name, input.Compose, input.Environment)
+		if err != nil {
+			failure(c, 409, 20405, err.Error())
+			return
+		}
+		recordNodeAudit(c, deps, view.ID, view.Name, "project.create", "project", input.Name, "success")
+		c.JSON(201, envelope{Code: 0, Message: "success", Data: row})
+	})
+	projects.POST("/batch", func(c *gin.Context) {
+		current, view, ok := service(c)
+		if !ok {
+			return
+		}
+		var input struct {
+			Backend string   `json:"backend"`
+			Names   []string `json:"names"`
+			Action  string   `json:"action"`
+		}
+		if c.ShouldBindJSON(&input) != nil || (input.Backend != "" && input.Backend != "compose") || len(input.Names) == 0 || len(input.Names) > 100 {
+			failure(c, 400, 20406, "Between 1 and 100 Compose Project names are required")
+			return
+		}
+		allowed := map[string]bool{"start": true, "stop": true, "restart": true, "update": true, "down": true}
+		if !allowed[input.Action] {
+			failure(c, 400, 20407, "Unsupported Project batch action")
+			return
+		}
+		results := current.BatchAction(c.Request.Context(), input.Names, input.Action)
+		for _, result := range results {
+			outcome := "failed"
+			if result.Success {
+				outcome = "success"
+			}
+			recordNodeAudit(c, deps, view.ID, view.Name, "project."+input.Action, "project", result.Name, outcome)
+		}
+		success(c, gin.H{"backend": "compose", "action": input.Action, "results": results})
+	})
+	compose := projects.Group("/compose")
+	compose.GET("/:name", func(c *gin.Context) {
+		current, _, ok := service(c)
+		if !ok {
+			return
+		}
+		row, err := current.Get(c.Request.Context(), c.Param("name"))
+		if err != nil {
+			failure(c, 404, 20408, "Project not found")
+			return
+		}
+		success(c, row)
+	})
+	compose.GET("/:name/services", func(c *gin.Context) {
+		current, _, ok := service(c)
+		if !ok {
+			return
+		}
+		rows, err := current.Services(c.Request.Context(), c.Param("name"))
+		if err != nil {
+			failure(c, 404, 20409, "Unable to list Project services")
+			return
+		}
+		success(c, rows)
+	})
+	compose.GET("/:name/logs", func(c *gin.Context) {
+		current, _, ok := service(c)
+		if !ok {
+			return
+		}
+		value, err := current.Logs(c.Request.Context(), c.Param("name"))
+		if err != nil {
+			failure(c, 409, 20410, value)
+			return
+		}
+		success(c, gin.H{"logs": value})
+	})
+	compose.PUT("/:name", func(c *gin.Context) {
+		current, view, ok := service(c)
+		if !ok {
+			return
+		}
+		var input struct {
+			Compose     string `json:"compose"`
+			Environment string `json:"environment"`
+		}
+		if c.ShouldBindJSON(&input) != nil || input.Compose == "" {
+			failure(c, 400, 20403, "Compose YAML is required")
+			return
+		}
+		if err := validatePolicy(view, input.Compose); err != nil {
+			failure(c, 422, 20404, err.Error())
+			return
+		}
+		row, err := current.Save(c.Request.Context(), c.Param("name"), input.Compose, input.Environment)
+		if err != nil {
+			failure(c, 409, 20411, "Unable to save Project")
+			return
+		}
+		recordNodeAudit(c, deps, view.ID, view.Name, "project.save", "project", c.Param("name"), "success")
+		success(c, row)
+	})
+	compose.POST("/:name/validate", func(c *gin.Context) {
+		current, view, ok := service(c)
+		if !ok {
+			return
+		}
+		var input struct {
+			Compose     string `json:"compose"`
+			Environment string `json:"environment"`
+		}
+		if c.ShouldBindJSON(&input) != nil || input.Compose == "" {
+			failure(c, 400, 20403, "Compose YAML is required")
+			return
+		}
+		if err := validatePolicy(view, input.Compose); err != nil {
+			failure(c, 422, 20404, err.Error())
+			return
+		}
+		if err := current.Validate(c.Request.Context(), c.Param("name"), input.Compose, input.Environment); err != nil {
+			failure(c, 422, 20412, err.Error())
+			return
+		}
+		success(c, gin.H{"valid": true})
+	})
+	compose.DELETE("/:name", func(c *gin.Context) {
+		current, view, ok := service(c)
+		if !ok {
+			return
+		}
+		if c.Query("confirm") != c.Param("name") {
+			failure(c, 400, 20413, "Type the Project name to confirm removal")
+			return
+		}
+		force, preserve := c.Query("force") == "true", c.Query("preserve_volumes") == "true"
+		var err error
+		if force {
+			err = current.ForceRemove(c.Request.Context(), c.Param("name"), preserve)
+		} else {
+			err = current.Remove(c.Request.Context(), c.Param("name"))
+		}
+		if err != nil {
+			failure(c, 409, 20414, "Unable to remove Project")
+			return
+		}
+		recordNodeAudit(c, deps, view.ID, view.Name, "project.delete", "project", c.Param("name"), "success")
+		success(c, gin.H{"name": c.Param("name")})
+	})
+	compose.POST("/:name/actions/:action", func(c *gin.Context) {
+		current, view, ok := service(c)
+		if !ok {
+			return
+		}
+		action := c.Param("action")
+		allowed := map[string]bool{"up": true, "down": true, "start": true, "stop": true, "restart": true, "pull": true, "build": true, "update": true}
+		if !allowed[action] {
+			failure(c, 404, 20415, "Unknown Project action")
+			return
+		}
+		row, err := current.Action(c.Request.Context(), c.Param("name"), action)
+		if err != nil {
+			failure(c, 409, 20416, "Unable to start Project action")
+			return
+		}
+		recordNodeAudit(c, deps, view.ID, view.Name, "project."+action, "project", c.Param("name"), "success")
+		c.JSON(202, envelope{Code: 0, Message: "success", Data: row})
+	})
+	compose.POST("/:name/takeover/preview", func(c *gin.Context) {
+		current, _, ok := service(c)
+		if !ok {
+			return
+		}
+		draft, err := current.BuildTakeoverDraft(c.Request.Context(), c.Param("name"))
+		if err != nil {
+			failure(c, 409, 20417, err.Error())
+			return
+		}
+		success(c, draft)
+	})
+	compose.POST("/:name/takeover/render", func(c *gin.Context) {
+		current, _, ok := service(c)
+		if !ok {
+			return
+		}
+		var input struct {
+			Fingerprint string                             `json:"fingerprint"`
+			Choices     []composeService.EnvironmentChoice `json:"choices"`
+		}
+		if c.ShouldBindJSON(&input) != nil || input.Fingerprint == "" {
+			failure(c, 400, 20418, "Takeover fingerprint is required")
+			return
+		}
+		draft, err := current.RenderTakeoverDraft(c.Request.Context(), c.Param("name"), input.Fingerprint, input.Choices)
+		if err != nil {
+			failure(c, 409, 20419, err.Error())
+			return
+		}
+		success(c, draft)
+	})
+	compose.POST("/:name/takeover", func(c *gin.Context) {
+		current, view, ok := service(c)
+		if !ok {
+			return
+		}
+		var input composeService.TakeoverInput
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, 400, 20420, "Invalid Project takeover request")
+			return
+		}
+		if err := validatePolicy(view, input.Compose); err != nil {
+			failure(c, 422, 20404, err.Error())
+			return
+		}
+		row, err := current.Takeover(c.Request.Context(), c.Param("name"), input)
+		if err != nil {
+			failure(c, 409, 20421, err.Error())
+			return
+		}
+		recordNodeAudit(c, deps, view.ID, view.Name, "project.takeover", "project", c.Param("name"), "success")
+		c.JSON(201, envelope{Code: 0, Message: "success", Data: row})
 	})
 }
 
