@@ -133,6 +133,6 @@ function modeLabel(value: string, zh: boolean) {
 
 function loadErrorMessage(error: Error | null, zh: boolean) {
   if (!error) return zh ? '服务端没有返回项目数据。' : 'The server did not return project data.'
-  if (zh && error instanceof ApiError && error.code === -1) return `后端没有为当前 API 返回 JSON。请重新构建并重启 DockPort 后端，同时检查 /api 反向代理。详情：${error.message}`
+  if (zh && error instanceof ApiError && error.code === -1) return `后端没有为当前 API 返回 JSON。请重新构建并重启 SUMA 后端，同时检查 /api 反向代理。详情：${error.message}`
   return error.message
 }

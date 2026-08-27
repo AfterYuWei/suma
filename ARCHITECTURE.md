@@ -1,8 +1,8 @@
-# DockPort Architecture
+# SUMA Architecture
 
 ## System
 
-DockPort is a single Go process serving the compiled React application, REST APIs, and WebSockets. Its node runtime registry connects to mounted Unix sockets or direct Docker TCP APIs and keeps only DockPort-owned records in SQLite.
+SUMA is a single Go process serving the compiled React application, REST APIs, and WebSockets. Its node runtime registry connects to mounted Unix sockets or direct Docker TCP APIs and keeps only SUMA-owned records in SQLite.
 
 ```text
 Browser -- HTTP / WebSocket --> Go monolith
@@ -52,7 +52,7 @@ manual sync, periodic reconciliation, or verified webhook
   -> aggregate release/task/audit final status
 ```
 
-An in-process reservation plus project lock serializes sync, approval/rejection, delivery, and rollback for each Delivery Project, including work queued before its task goroutine starts. The background reconciler checks due projects at startup and every 15 seconds, using each project's configured synchronization interval. The Compose adapter always receives a stable explicit runtime name, project directory, ordered file list, and optional environment file, so different commit worktree paths do not change runtime identity. DockPort does not execute repository scripts, build application source, run tests, or build/publish images.
+An in-process reservation plus project lock serializes sync, approval/rejection, delivery, and rollback for each Delivery Project, including work queued before its task goroutine starts. The background reconciler checks due projects at startup and every 15 seconds, using each project's configured synchronization interval. The Compose adapter always receives a stable explicit runtime name, project directory, ordered file list, and optional environment file, so different commit worktree paths do not change runtime identity. SUMA does not execute repository scripts, build application source, run tests, or build/publish images.
 
 Approval and rejection are explicit release state transitions; approval alone does not deploy. Rollback creates and deploys a new release record based on a previously successful release. It never runs `down -v` and never reverses application data or database migrations. Manual rollback changes an `auto` project to `manual` before restoration. An automatic restoration after a failed Compose apply also changes the project to `manual`, preventing the polling reconciler from immediately replaying the newer revision. Git remains the desired source, so a long-term rollback should also revert or fix the repository revision.
 
@@ -64,7 +64,7 @@ Semantic tokens (`background`, `surface`, `surface-hover`, `border`, `muted`, `t
 
 ## Storage and paths
 
-- Container deployment data root: `/opt/dockport/data` by default, configurable with `DOCKPORT_DATA_PATH`
+- Container deployment data root: `/opt/suma/data` by default, configurable with `SUMA_DATA_PATH`
 - Default Compose root: `<data-root>/compose`
 - Default Git root: `<data-root>/gitops`
 - Default backup root: `<data-root>/backups`

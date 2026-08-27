@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <style>
-    .tile{fill:#E8F3FF}.mark{color:#165DFF}
-    @media(prefers-color-scheme:dark){.tile{fill:#1D3A70}.mark{color:#4080FF}}
+    .tile{fill:#fafafa;stroke:#e5e5e5;stroke-width:2}.mark{color:#171717}
+    @media(prefers-color-scheme:dark){.tile{fill:#252525;stroke:#3a3a3a}.mark{color:#ededed}}
   </style>
   <rect class="tile" width="64" height="64" rx="16"/>
   <g class="mark" fill="none">

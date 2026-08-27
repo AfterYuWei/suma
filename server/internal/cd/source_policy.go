@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/dockport/dockport/server/internal/compose"
+	"github.com/suma/suma/server/internal/compose"
 	"github.com/goccy/go-yaml"
 )
 
@@ -64,7 +64,7 @@ func validateComposeSourceFile(file, projectDir, root string) error {
 	for name, raw := range services {
 		service, _ := raw.(map[string]any)
 		if value, exists := service["build"]; exists && value != nil {
-			return fmt.Errorf("service %q uses build; DockPort CD only deploys prebuilt images", name)
+			return fmt.Errorf("service %q uses build; SUMA CD only deploys prebuilt images", name)
 		}
 		if _, exists := service["extends"]; exists {
 			return fmt.Errorf("service %q uses extends, which is not allowed for Git delivery", name)

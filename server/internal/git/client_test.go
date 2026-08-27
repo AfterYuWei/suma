@@ -19,8 +19,8 @@ func TestCLIClientSyncsLocalRepositoryIntoImmutableWorktrees(t *testing.T) {
 	}
 	origin := filepath.Join(t.TempDir(), "origin")
 	runGit(t, gitCommand, "", "init", "--initial-branch=main", origin)
-	runGit(t, gitCommand, origin, "config", "user.name", "DockPort Test")
-	runGit(t, gitCommand, origin, "config", "user.email", "dockport@example.test")
+	runGit(t, gitCommand, origin, "config", "user.name", "SUMA Test")
+	runGit(t, gitCommand, origin, "config", "user.email", "suma@example.test")
 	composePath := filepath.Join(origin, "compose.yml")
 	if err := os.WriteFile(composePath, []byte("services:\n  app:\n    image: example/app:1\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -59,7 +59,7 @@ exec %s "$@"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if revision.CommitSHA != firstCommit || revision.CommitAuthor != "DockPort Test" || revision.CommitMessage != "first release" {
+	if revision.CommitSHA != firstCommit || revision.CommitAuthor != "SUMA Test" || revision.CommitMessage != "first release" {
 		t.Fatalf("unexpected revision: %#v", revision)
 	}
 	assertWorktreeFile(t, revision.WorktreePath, "example/app:1")
@@ -127,7 +127,7 @@ exec %s "$@"
 func TestCLIClientRedactsCredentialFromOutputAndErrors(t *testing.T) {
 	secretValue := "token-SHOULD-NOT-LEAK-91f44e"
 	wrapper := filepath.Join(t.TempDir(), "failing-git.sh")
-	script := "#!/bin/sh\nprintf 'authentication failed for %s\\n' \"$DOCKPORT_GIT_PASSWORD\" >&2\nexit 17\n"
+	script := "#!/bin/sh\nprintf 'authentication failed for %s\\n' \"$SUMA_GIT_PASSWORD\" >&2\nexit 17\n"
 	if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}

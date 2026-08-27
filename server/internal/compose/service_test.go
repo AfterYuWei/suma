@@ -8,14 +8,14 @@ import (
 	"strings"
 	"testing"
 
-	containerdomain "github.com/dockport/dockport/server/internal/container"
-	"github.com/dockport/dockport/server/internal/database"
-	"github.com/dockport/dockport/server/internal/task"
+	containerdomain "github.com/suma/suma/server/internal/container"
+	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/task"
 )
 
 func TestCreateComposeDoesNotCreateDeliveryProject(t *testing.T) {
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "dockport.db"))
+	db, err := database.Open(filepath.Join(root, "suma.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,8 +40,8 @@ type emptyContainers struct{ containerdomain.Service }
 func (emptyContainers) List(context.Context) ([]containerdomain.Summary, error) { return nil, nil }
 
 func TestDecorateMatchesComposeWorkingDirectoryWhenRuntimeNameDiffers(t *testing.T) {
-	projectPath := filepath.Join(t.TempDir(), "DockPort.Project")
-	project := Project{Name: "DockPort.Project", Path: projectPath, Status: "stopped"}
+	projectPath := filepath.Join(t.TempDir(), "SUMA.Project")
+	project := Project{Name: "SUMA.Project", Path: projectPath, Status: "stopped"}
 	containers := []containerdomain.Summary{
 		{ID: "matching", State: "running", Labels: map[string]string{
 			"com.docker.compose.project":             "custom-runtime-name",
@@ -63,7 +63,7 @@ func TestDecorateMatchesComposeWorkingDirectoryWhenRuntimeNameDiffers(t *testing
 
 func TestServicesMatchesComposeWorkingDirectory(t *testing.T) {
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "dockport.db"))
+	db, err := database.Open(filepath.Join(root, "suma.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,13 +95,13 @@ func (service staticContainers) List(context.Context) ([]containerdomain.Summary
 	return service.rows, nil
 }
 
-func TestReleaseEnvironmentDoesNotForwardDockPortSecrets(t *testing.T) {
-	t.Setenv("DOCKPORT_SECRET_KEY_FILE", "/sensitive/key")
-	t.Setenv("DOCKPORT_GIT_PASSWORD", "sensitive-token")
+func TestReleaseEnvironmentDoesNotForwardSumaSecrets(t *testing.T) {
+	t.Setenv("SUMA_SECRET_KEY_FILE", "/sensitive/key")
+	t.Setenv("SUMA_GIT_PASSWORD", "sensitive-token")
 	t.Setenv("DOCKER_HOST", "unix:///var/run/docker.sock")
 	values := strings.Join(releaseEnvironment(), "\n")
-	if strings.Contains(values, "DOCKPORT_SECRET") || strings.Contains(values, "DOCKPORT_GIT_PASSWORD") {
-		t.Fatalf("release environment leaked DockPort secrets: %s", values)
+	if strings.Contains(values, "SUMA_SECRET") || strings.Contains(values, "SUMA_GIT_PASSWORD") {
+		t.Fatalf("release environment leaked SUMA secrets: %s", values)
 	}
 	if !strings.Contains(values, "DOCKER_HOST=unix:///var/run/docker.sock") {
 		t.Fatalf("release environment omitted Docker connectivity: %s", values)
@@ -110,7 +110,7 @@ func TestReleaseEnvironmentDoesNotForwardDockPortSecrets(t *testing.T) {
 
 func TestForceRemoveCanPreserveProjectVolumes(t *testing.T) {
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "dockport.db"))
+	db, err := database.Open(filepath.Join(root, "suma.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ type forceRemoveRunner struct {
 }
 
 func TestBatchActionReturnsPerProjectTasks(t *testing.T) {
-	db, err := database.Open(filepath.Join(t.TempDir(), "dockport.db"))
+	db, err := database.Open(filepath.Join(t.TempDir(), "suma.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,8 +3,8 @@ package system
 import (
 	"context"
 
-	"github.com/dockport/dockport/server/internal/database"
-	"github.com/dockport/dockport/server/internal/task"
+	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/task"
 )
 
 type Adapter interface {

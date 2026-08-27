@@ -14,7 +14,7 @@ function check(name, path, onOpen, accept) {
 }
 
 const containerPath = `/ws/nodes/${encodeURIComponent(nodeId)}/containers/${encodeURIComponent(containerId)}`
-await check('logs', `${containerPath}/logs?tail=30`, undefined, (value) => value.includes('dockport-smoke'))
+await check('logs', `${containerPath}/logs?tail=30`, undefined, (value) => value.includes('suma-smoke'))
 await check('stats', `${containerPath}/stats`, undefined, (value) => value.includes('cpu_stats'))
 await check('terminal', `${containerPath}/terminal`, (socket) => {
   socket.send(JSON.stringify({ type: 'resize', cols: 100, rows: 30 }))

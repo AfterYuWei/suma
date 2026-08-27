@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dockport/dockport/server/internal/compose"
+	"github.com/suma/suma/server/internal/compose"
 )
 
 func TestValidateComposeSourcesAcceptsRepositoryLocalReferences(t *testing.T) {

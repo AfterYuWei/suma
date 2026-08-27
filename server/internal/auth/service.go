@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dockport/dockport/server/internal/database"
+	"github.com/suma/suma/server/internal/database"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )

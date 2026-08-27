@@ -252,7 +252,7 @@ func (r *CLIRunner) commandEnvironment() ([]string, func(), error) {
 	if !r.target.TLSRequired && r.target.DockerConfig == "" {
 		return filtered, func() {}, nil
 	}
-	directory, err := os.MkdirTemp("", "dockport-compose-tls-")
+	directory, err := os.MkdirTemp("", "suma-compose-tls-")
 	if err != nil {
 		return nil, func() {}, fmt.Errorf("create Compose TLS directory: %w", err)
 	}

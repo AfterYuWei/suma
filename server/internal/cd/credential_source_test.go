@@ -5,15 +5,15 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dockport/dockport/server/internal/database"
-	gitrepo "github.com/dockport/dockport/server/internal/git"
-	"github.com/dockport/dockport/server/internal/secret"
-	"github.com/dockport/dockport/server/internal/task"
+	"github.com/suma/suma/server/internal/database"
+	gitrepo "github.com/suma/suma/server/internal/git"
+	"github.com/suma/suma/server/internal/secret"
+	"github.com/suma/suma/server/internal/task"
 )
 
 func TestProjectCredentialCanMoveToAuthenticationCenter(t *testing.T) {
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "dockport.db"))
+	db, err := database.Open(filepath.Join(root, "suma.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

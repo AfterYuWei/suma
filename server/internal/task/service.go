@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dockport/dockport/server/internal/database"
+	"github.com/suma/suma/server/internal/database"
 	"gorm.io/gorm"
 )
 
@@ -44,7 +44,7 @@ func NewService(db *gorm.DB) *Service {
 func (s *Service) RecoverInterrupted(ctx context.Context) error {
 	now := time.Now()
 	return s.db.WithContext(ctx).Model(&database.Task{}).Where("status IN ?", []string{StatusPending, StatusRunning}).Updates(map[string]any{
-		"status": StatusCanceled, "progress": 0, "message": "DockPort restarted before the task completed", "finished_at": now,
+		"status": StatusCanceled, "progress": 0, "message": "SUMA restarted before the task completed", "finished_at": now,
 	}).Error
 }
 

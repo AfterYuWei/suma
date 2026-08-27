@@ -1,6 +1,6 @@
-# DockPort API
+# SUMA API
 
-All REST responses use `{ "code": 0, "message": "success", "data": ... }`. Errors use a nonzero code and an appropriate HTTP status. Authentication uses the `dockport_session` HttpOnly cookie.
+All REST responses use `{ "code": 0, "message": "success", "data": ... }`. Errors use a nonzero code and an appropriate HTTP status. Authentication uses the `suma_session` HttpOnly cookie.
 
 ## REST `/api/v1`
 
@@ -31,7 +31,7 @@ The resource routes listed below remain deprecated aliases for the migrated defa
 
 ## Authentication center
 
-These routes require a valid DockPort session:
+These routes require a valid SUMA session:
 
 - `GET|POST /credentials/git`
 - `PUT|DELETE /credentials/git/:id`
@@ -106,13 +106,13 @@ Repository constraints:
 - `sync_interval_seconds` accepts 30 through 86400 seconds. The background reconciler scans for due Git projects at startup and every 15 seconds; manual and verified-webhook triggers are also available.
 - `deployment_timeout` accepts 10 through 3600 seconds and is passed to Compose health waiting.
 
-Before creating a release, DockPort enforces the deployment-source policy described below. Before every deployment or rollback it also verifies that the detached worktree is still at the recorded commit and contains no tracked modifications, untracked files, or ignored generated files. A dirty worktree fails the operation; DockPort does not reset or clean it automatically. Local `/compose` APIs never expose or mutate Delivery Projects.
+Before creating a release, SUMA enforces the deployment-source policy described below. Before every deployment or rollback it also verifies that the detached worktree is still at the recorded commit and contains no tracked modifications, untracked files, or ignored generated files. A dirty worktree fails the operation; SUMA does not reset or clean it automatically. Local `/compose` APIs never expose or mutate Delivery Projects.
 
 ### Git deployment-source policy
 
 For Git delivery, every configured Compose/environment file, implicit project `.env`, and referenced local source must resolve inside the Git worktree, be a regular file, and be no larger than 2 MiB. The policy also applies to Compose `env_file`, `label_file`, and file-backed top-level `configs` and `secrets`.
 
-DockPort rejects:
+SUMA rejects:
 
 - Compose `include` and service `extends`;
 - every service `build` declaration or service without a prebuilt `image`;
@@ -123,7 +123,7 @@ DockPort rejects:
 
 Named volumes remain supported. Repository bind sources must already exist and be read-only. This is a deliberately strict single-host delivery policy, not a general-purpose Compose compatibility promise.
 
-When DockPort generates a webhook ID or secret, `GET` never reveals the stored secret. Treat a secret returned by the configuration update as one-time material.
+When SUMA generates a webhook ID or secret, `GET` never reveals the stored secret. Treat a secret returned by the configuration update as one-time material.
 
 ## Git webhooks
 
@@ -133,23 +133,23 @@ The webhook route is deliberately outside session-cookie authentication:
 POST /api/v1/webhooks/git/:hookID
 ```
 
-It accepts at most 2 MiB, verifies the per-project secret before enqueueing work, checks the repository and configured branch/tag, deduplicates delivery IDs, then returns `202 Accepted`. The payload does not become deployment input; DockPort fetches the configured remote and resolves the exact commit itself.
+It accepts at most 2 MiB, verifies the per-project secret before enqueueing work, checks the repository and configured branch/tag, deduplicates delivery IDs, then returns `202 Accepted`. The payload does not become deployment input; SUMA fetches the configured remote and resolves the exact commit itself.
 
-DockPort selects a compatible payload adapter from standard request headers; this is not persisted as repository-provider configuration.
+SUMA selects a compatible payload adapter from standard request headers; this is not persisted as repository-provider configuration.
 
 ### GitHub-compatible request
 
 - Configure a Push event webhook.
 - Sign the raw body with the project secret and send `X-Hub-Signature-256: sha256=<hex>`.
-- DockPort uses `X-GitHub-Delivery` for idempotency and requires `X-GitHub-Event: push`.
+- SUMA uses `X-GitHub-Delivery` for idempotency and requires `X-GitHub-Event: push`.
 
 ### GitLab-compatible request
 
 - Configure Push Hook and, when tracking tags, Tag Push Hook.
-- Configure GitLab's secret token; DockPort verifies the standard `X-Gitlab-Token` using constant-time comparison. An ingress or compatible sender may instead provide `Webhook-Signature: sha256=<hex>` with a fresh `Webhook-Timestamp`.
+- Configure GitLab's secret token; SUMA verifies the standard `X-Gitlab-Token` using constant-time comparison. An ingress or compatible sender may instead provide `Webhook-Signature: sha256=<hex>` with a fresh `Webhook-Timestamp`.
 - `X-Gitlab-Webhook-UUID` or `X-Gitlab-Event-UUID` is used for idempotency when present.
 
-The webhook URL points to DockPort, not the configured GitLab base URL, so a self-managed GitLab must have network access to that HTTPS endpoint.
+The webhook URL points to SUMA, not the configured GitLab base URL, so a self-managed GitLab must have network access to that HTTPS endpoint.
 
 ### Generic request
 
@@ -164,7 +164,7 @@ The webhook URL points to DockPort, not the configured GitLab base URL, so a sel
 }
 ```
 
-DockPort still fetches its stored clone URL; the request cannot choose a Compose file, command, image, or commit to execute.
+SUMA still fetches its stored clone URL; the request cannot choose a Compose file, command, image, or commit to execute.
 
 ## Approval, delivery, and rollback behavior
 

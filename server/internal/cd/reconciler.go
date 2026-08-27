@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dockport/dockport/server/internal/database"
+	"github.com/suma/suma/server/internal/database"
 )
 
 func (s *Service) Recover(ctx context.Context) error {
 	finished := time.Now()
 	interrupted := []string{StatusPulling, StatusDeploying, StatusVerifying, StatusRollingBack, StatusValidating}
 	if err := s.db.WithContext(ctx).Model(&database.DeliveryRelease{}).Where("status IN ?", interrupted).Updates(map[string]any{
-		"status": StatusFailed, "failure_reason": "DockPort restarted before the release completed", "finished_at": finished,
+		"status": StatusFailed, "failure_reason": "SUMA restarted before the release completed", "finished_at": finished,
 	}).Error; err != nil {
 		return fmt.Errorf("recover interrupted releases: %w", err)
 	}
@@ -76,6 +76,6 @@ func (s *Service) reconcileDue(ctx context.Context) {
 		if project.LastSyncAt != nil && now.Sub(*project.LastSyncAt) < interval {
 			continue
 		}
-		_, _ = s.Sync(ctx, project.Name, "poll", Actor{Name: "DockPort reconciler"})
+		_, _ = s.Sync(ctx, project.Name, "poll", Actor{Name: "SUMA reconciler"})
 	}
 }

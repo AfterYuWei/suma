@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dockport/dockport/server/internal/database"
-	secretstore "github.com/dockport/dockport/server/internal/secret"
+	"github.com/suma/suma/server/internal/database"
+	secretstore "github.com/suma/suma/server/internal/secret"
 	"gorm.io/gorm"
 )
 
@@ -202,7 +202,7 @@ func TestCredentialNamesAreUnique(t *testing.T) {
 func newCredentialTestService(t *testing.T) (*gorm.DB, *CredentialService) {
 	t.Helper()
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "dockport.db"))
+	db, err := database.Open(filepath.Join(root, "suma.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

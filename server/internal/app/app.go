@@ -6,25 +6,25 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/dockport/dockport/server/internal/api"
-	"github.com/dockport/dockport/server/internal/audit"
-	"github.com/dockport/dockport/server/internal/auth"
-	cdService "github.com/dockport/dockport/server/internal/cd"
-	composeService "github.com/dockport/dockport/server/internal/compose"
-	"github.com/dockport/dockport/server/internal/config"
-	credentialService "github.com/dockport/dockport/server/internal/credential"
-	"github.com/dockport/dockport/server/internal/database"
-	"github.com/dockport/dockport/server/internal/docker"
-	gitService "github.com/dockport/dockport/server/internal/git"
-	imageService "github.com/dockport/dockport/server/internal/image"
-	monitorService "github.com/dockport/dockport/server/internal/monitor"
-	networkService "github.com/dockport/dockport/server/internal/network"
-	nodeService "github.com/dockport/dockport/server/internal/node"
-	"github.com/dockport/dockport/server/internal/secret"
-	settingsService "github.com/dockport/dockport/server/internal/settings"
-	systemService "github.com/dockport/dockport/server/internal/system"
-	"github.com/dockport/dockport/server/internal/task"
-	volumeService "github.com/dockport/dockport/server/internal/volume"
+	"github.com/suma/suma/server/internal/api"
+	"github.com/suma/suma/server/internal/audit"
+	"github.com/suma/suma/server/internal/auth"
+	cdService "github.com/suma/suma/server/internal/cd"
+	composeService "github.com/suma/suma/server/internal/compose"
+	"github.com/suma/suma/server/internal/config"
+	credentialService "github.com/suma/suma/server/internal/credential"
+	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/docker"
+	gitService "github.com/suma/suma/server/internal/git"
+	imageService "github.com/suma/suma/server/internal/image"
+	monitorService "github.com/suma/suma/server/internal/monitor"
+	networkService "github.com/suma/suma/server/internal/network"
+	nodeService "github.com/suma/suma/server/internal/node"
+	"github.com/suma/suma/server/internal/secret"
+	settingsService "github.com/suma/suma/server/internal/settings"
+	systemService "github.com/suma/suma/server/internal/system"
+	"github.com/suma/suma/server/internal/task"
+	volumeService "github.com/suma/suma/server/internal/volume"
 )
 
 type App struct {
@@ -86,7 +86,7 @@ func New(logger *slog.Logger) (*App, error) {
 }
 
 func (a *App) Run() error {
-	a.logger.Info("DockPort listening", "address", a.server.Addr)
+	a.logger.Info("SUMA listening", "address", a.server.Addr)
 	if err := a.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("listen: %w", err)
 	}

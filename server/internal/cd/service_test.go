@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dockport/dockport/server/internal/compose"
-	"github.com/dockport/dockport/server/internal/database"
-	gitrepo "github.com/dockport/dockport/server/internal/git"
-	"github.com/dockport/dockport/server/internal/secret"
-	"github.com/dockport/dockport/server/internal/task"
+	"github.com/suma/suma/server/internal/compose"
+	"github.com/suma/suma/server/internal/database"
+	gitrepo "github.com/suma/suma/server/internal/git"
+	"github.com/suma/suma/server/internal/secret"
+	"github.com/suma/suma/server/internal/task"
 	"gorm.io/gorm"
 )
 
@@ -49,7 +49,7 @@ func TestExecutionSpecConfinesComposeFilesToGitWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spec.ProjectName != "dockport-cd-0" || spec.ProjectDir != production || !reflect.DeepEqual(spec.Files, []string{composeFile, overrideFile}) || !reflect.DeepEqual(spec.EnvFiles, []string{environmentFile}) {
+	if spec.ProjectName != "suma-cd-0" || spec.ProjectDir != production || !reflect.DeepEqual(spec.Files, []string{composeFile, overrideFile}) || !reflect.DeepEqual(spec.EnvFiles, []string{environmentFile}) {
 		t.Fatalf("unexpected execution spec: %#v", spec)
 	}
 
@@ -381,7 +381,7 @@ type cdHarness struct {
 func newCDHarness(t *testing.T, mode string) *cdHarness {
 	t.Helper()
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "dockport.db"))
+	db, err := database.Open(filepath.Join(root, "suma.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

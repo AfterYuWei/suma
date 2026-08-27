@@ -1,4 +1,4 @@
-module github.com/dockport/dockport/server
+module github.com/suma/suma/server
 
 go 1.26
 

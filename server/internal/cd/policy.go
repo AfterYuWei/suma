@@ -44,10 +44,10 @@ func validateDeploymentPolicy(worktreeRoot string, rendered string) error {
 	for name, service := range document.Services {
 		prefix := fmt.Sprintf("service %q", name)
 		if service.Image == "" {
-			return fmt.Errorf("%s must reference a prebuilt image; DockPort CD does not build images", prefix)
+			return fmt.Errorf("%s must reference a prebuilt image; SUMA CD does not build images", prefix)
 		}
 		if len(service.Build) > 0 && string(service.Build) != "null" && string(service.Build) != "{}" {
-			return fmt.Errorf("%s uses build; DockPort CD only deploys prebuilt images", prefix)
+			return fmt.Errorf("%s uses build; SUMA CD only deploys prebuilt images", prefix)
 		}
 		if service.Privileged {
 			return fmt.Errorf("%s cannot use privileged mode", prefix)

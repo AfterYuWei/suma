@@ -17,7 +17,6 @@ import {
 } from '../ui/select'
 import { Separator } from '../ui/separator'
 import { Sheet, SheetContent, SheetTitle } from '../ui/sheet'
-import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { ThemeToggle } from '../ui/theme-toggle'
 import { cn } from '@/lib/utils'
@@ -31,6 +30,16 @@ const navigationSections = [
 
 interface NavEntry { key: string; label: string; icon: typeof Container }
 interface NavSection { key: string; label: string; items: NavEntry[] }
+
+/** Latency tiers shared by trigger and items: dot + text color. */
+function latencyTone(node: DockerNode) {
+  if (node.status !== 'online' || node.last_latency_ms == null) {
+    return { dot: 'bg-muted-foreground/60 text-muted-foreground/60', text: 'text-muted-foreground/60' }
+  }
+  if (node.last_latency_ms < 150) return { dot: 'bg-emerald-500 text-emerald-600 dark:text-emerald-400', text: 'text-emerald-600 dark:text-emerald-400' }
+  if (node.last_latency_ms < 500) return { dot: 'bg-amber-500 text-amber-600 dark:text-amber-400', text: 'text-amber-600 dark:text-amber-400' }
+  return { dot: 'bg-red-500 text-red-600 dark:text-red-400', text: 'text-red-600 dark:text-red-400' }
+}
 
 export function AppShell({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient()
@@ -86,7 +95,11 @@ export function AppShell({ children }: { children: ReactNode }) {
       <Button
         variant="ghost"
         size="sm"
-        className={cn('w-full font-normal', collapsed ? 'justify-center px-0' : 'justify-start gap-2')}
+        className={cn(
+          'w-full font-normal',
+          collapsed ? 'justify-center px-0' : 'justify-start gap-2',
+          active && 'bg-muted font-medium text-foreground aria-expanded:bg-muted aria-expanded:text-foreground'
+        )}
         data-active={active}
         aria-current={active ? 'page' : undefined}
         onClick={() => setMobileNavOpen(false)}
@@ -104,7 +117,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="flex h-full flex-col">
         <div className={cn('flex h-14 items-center gap-2 px-3', collapsed && 'justify-center px-0')}>
           <LogoMark className="size-7" />
-          {!collapsed && <span className="text-sm font-semibold">DockPort</span>}
+          {!collapsed && <span className="text-sm font-semibold">SUMA</span>}
         </div>
         <nav aria-label={zh ? '主导航' : 'Primary navigation'} className="flex-1 overflow-y-auto px-2 pb-3">
           {sections.map((section, index) => (
@@ -124,7 +137,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           ))}
         </nav>
         {!mobile && (
-          <div className="border-t p-2">
+          <div className="p-2">
             <Button
               variant="ghost"
               size="sm"
@@ -161,29 +174,49 @@ export function AppShell({ children }: { children: ReactNode }) {
           </Button>
 
           <div className="flex items-center gap-2">
-            <Badge variant={currentNode?.status === 'online' ? 'outline' : 'ghost'} className={cn('rounded-full', currentNode?.status === 'online' && 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400')} >
-              <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
-              {currentNode?.status === 'online' ? (zh ? '在线' : 'Online') : (zh ? '未知' : 'Offline')}
-            </Badge>
             <Select value={currentNodeID} onValueChange={(value) => setCurrentNodeID(String(value))}>
-              <SelectTrigger aria-label={zh ? '当前 Docker 节点' : 'Current Docker node'} className="w-28 sm:w-48">
-                <SelectValue />
+              <SelectTrigger aria-label={zh ? '当前 Docker 节点' : 'Current Docker node'} className="w-32 sm:w-52">
+                <SelectValue>
+                  {currentNode && (
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span aria-hidden="true" className={cn('size-1.5 shrink-0 rounded-full bg-current', latencyTone(currentNode).dot)} />
+                      <span className="truncate">{currentNode.name}</span>
+                      <span className={cn('ml-auto shrink-0 text-xs leading-none tabular-nums', latencyTone(currentNode).text)}>
+                        {currentNode.status === 'online' && currentNode.last_latency_ms != null ? `${currentNode.last_latency_ms}ms` : zh ? '离线' : 'offline'}
+                      </span>
+                    </span>
+                  )}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                {(nodes.data ?? []).map((node) => (
-                  <SelectItem key={node.id} value={node.id} disabled={!node.enabled}>
-                    {`${node.name} · ${node.connection_type.toUpperCase()}`}
-                  </SelectItem>
-                ))}
+                {(nodes.data ?? []).map((node) => {
+                  const tone = latencyTone(node)
+                  return (
+                    <SelectItem key={node.id} value={node.id} disabled={!node.enabled}>
+                      <span className="flex w-full items-center gap-2">
+                        <span aria-hidden="true" className={cn('size-1.5 shrink-0 rounded-full bg-current', tone.dot)} />
+                        <span className="truncate">{`${node.name} · ${node.connection_type.toUpperCase()}`}</span>
+                        <span className={cn('ml-auto shrink-0 text-xs leading-none tabular-nums', tone.text)}>
+                          {node.status === 'online' && node.last_latency_ms != null ? `${node.last_latency_ms}ms` : zh ? '离线' : 'offline'}
+                        </span>
+                      </span>
+                    </SelectItem>
+                  )
+                })}
               </SelectContent>
             </Select>
           </div>
 
           <div className="ml-auto flex items-center gap-1.5">
-            <span className="hidden text-sm text-muted-foreground md:inline">{zh ? '控制平面在线' : 'Control plane online'}</span>
-            <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground" onClick={() => setCommandOpen(true)}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="text-muted-foreground"
+              title={`${t('searchCommand')} (Ctrl+K)`}
+              aria-label={t('searchCommand')}
+              onClick={() => setCommandOpen(true)}
+            >
               <Search />
-              <span className="hidden sm:inline">{t('searchCommand')}</span>
             </Button>
             <ThemeToggle />
             <Button variant="ghost" size="sm" className="hidden text-xs font-semibold sm:inline-flex" title={t('signOut')} onClick={() => void logout()}>
@@ -193,7 +226,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </header>
 
         <main className="min-h-0 min-w-0 flex-1 px-4 pb-4 md:px-6 md:pb-6">
-          <div className="h-full overflow-y-auto rounded-xl border border-border/60 bg-card px-4 py-5 md:px-6 xl:px-8">{children}</div>
+          <div className="h-full overflow-y-auto rounded-xl border border-border/60 bg-card shadow-sm ring-1 ring-black/[0.03] px-4 py-5 md:px-6 xl:px-8 dark:shadow-none dark:ring-white/[0.04]">{children}</div>
         </main>
       </div>
 

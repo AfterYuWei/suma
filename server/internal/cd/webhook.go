@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dockport/dockport/server/internal/database"
-	gitrepo "github.com/dockport/dockport/server/internal/git"
+	"github.com/suma/suma/server/internal/database"
+	gitrepo "github.com/suma/suma/server/internal/git"
 	"gorm.io/gorm"
 )
 

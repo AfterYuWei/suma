@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dockport/dockport/server/internal/database"
+	"github.com/suma/suma/server/internal/database"
 )
 
 func testService(t *testing.T) *Service {

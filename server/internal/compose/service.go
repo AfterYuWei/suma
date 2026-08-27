@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	containerdomain "github.com/dockport/dockport/server/internal/container"
-	"github.com/dockport/dockport/server/internal/database"
-	"github.com/dockport/dockport/server/internal/task"
+	containerdomain "github.com/suma/suma/server/internal/container"
+	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/task"
 	"gorm.io/gorm"
 )
 
@@ -188,7 +188,7 @@ func (s *Service) Remove(ctx context.Context, name string) error {
 }
 
 // ForceRemove tears down runtime resources with no graceful-stop delay before
-// removing DockPort-owned state. Named volumes are deleted unless explicitly preserved.
+// removing SUMA-owned state. Named volumes are deleted unless explicitly preserved.
 func (s *Service) ForceRemove(ctx context.Context, name string, preserveVolumes bool) error {
 	var project database.ComposeProject
 	if err := s.db.WithContext(ctx).Where("node_id = ? AND name = ?", s.effectiveNodeID(), name).First(&project).Error; err != nil {
@@ -325,7 +325,7 @@ func (s *Service) effectiveNodeName() string {
 	return s.nodeName
 }
 func writeAtomic(path, content string) error {
-	temp, err := os.CreateTemp(filepath.Dir(path), ".dockport-")
+	temp, err := os.CreateTemp(filepath.Dir(path), ".suma-")
 	if err != nil {
 		return err
 	}

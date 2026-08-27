@@ -110,7 +110,7 @@ export function CDSettings({ projectName, configuration, zh, onSaved }: { projec
   return <form onSubmit={submit} className="flex w-full max-w-[960px] flex-col gap-8">
     {!configuration.configured && <Alert>
       <AlertTitle>{zh ? '连接 Git 持续交付' : 'Connect Git continuous delivery'}</AlertTitle>
-      <AlertDescription>{zh ? '保存后 Git 将成为部署期望状态来源，DockPort 中的 Compose 文件会切换为只读。' : 'After saving, Git becomes the deployment source of truth and Compose files become read-only in DockPort.'}</AlertDescription>
+      <AlertDescription>{zh ? '保存后 Git 将成为部署期望状态来源，SUMA 中的 Compose 文件会切换为只读。' : 'After saving, Git becomes the deployment source of truth and Compose files become read-only in SUMA.'}</AlertDescription>
     </Alert>}
 
     <SettingsSection title={zh ? '目标节点' : 'Target nodes'} description={zh ? '一次审批后并行发布到全部选中节点；修改只影响后续 Release。' : 'One approval deploys to every selected node in parallel. Changes affect only future releases.'}>
@@ -123,7 +123,7 @@ export function CDSettings({ projectName, configuration, zh, onSaved }: { projec
       </Field>
     </SettingsSection>
 
-    <SettingsSection title={zh ? '版本与文件' : 'Revision and files'} description={zh ? 'DockPort 会检出精确 Commit，并按仓库根目录相对路径依次合并 Compose 文件。' : 'DockPort checks out an exact commit and merges repository-root-relative Compose files in order.'}>
+    <SettingsSection title={zh ? '版本与文件' : 'Revision and files'} description={zh ? 'SUMA 会检出精确 Commit，并按仓库根目录相对路径依次合并 Compose 文件。' : 'SUMA checks out an exact commit and merges repository-root-relative Compose files in order.'}>
       <div className="grid gap-4 sm:grid-cols-[150px_1fr]">
         <Field label={zh ? '引用类型' : 'Reference type'}>
           <Select value={draft.repository.ref_type} onValueChange={(value) => updateRepository('ref_type', value as CDConfigureInput['repository']['ref_type'])}>
@@ -198,14 +198,14 @@ export function CDSettings({ projectName, configuration, zh, onSaved }: { projec
       </label>
     </SettingsSection>
 
-    <SettingsSection title="Webhook" description={zh ? 'Webhook 只触发安全的 Git 拉取；Commit 和配置始终由 DockPort 从仓库读取。轮询仍作为兜底。' : 'Webhooks only trigger a safe Git fetch. DockPort always reads commits and configuration from the repository; polling remains the fallback.'}>
+    <SettingsSection title="Webhook" description={zh ? 'Webhook 只触发安全的 Git 拉取；Commit 和配置始终由 SUMA 从仓库读取。轮询仍作为兜底。' : 'Webhooks only trigger a safe Git fetch. SUMA always reads commits and configuration from the repository; polling remains the fallback.'}>
       <label className="flex w-fit cursor-pointer items-center gap-2">
         <Checkbox checked={draft.webhook_enabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, webhook_enabled: !!checked }))} />
         <span className="text-sm">{zh ? '启用仓库 Webhook' : 'Enable repository webhook'}</span>
       </label>
       {draft.webhook_enabled && <Card size="sm" className="w-full"><CardContent className="flex flex-col gap-4">
         {webhookURL && <Field label="Webhook URL"><Input readOnly value={webhookURL} /></Field>}
-        <Field label={zh ? 'Webhook Secret' : 'Webhook secret'} hint={configuration.webhook_id && !configuration.webhook_secret ? (zh ? '留空以保留已保存的 Secret；输入新值可轮换。' : 'Leave empty to keep the stored secret, or enter a new value to rotate it.') : (zh ? '留空时 DockPort 会生成随机 Secret，并只显示一次。' : 'Leave empty and DockPort generates a random secret that is shown once.')}>
+        <Field label={zh ? 'Webhook Secret' : 'Webhook secret'} hint={configuration.webhook_id && !configuration.webhook_secret ? (zh ? '留空以保留已保存的 Secret；输入新值可轮换。' : 'Leave empty to keep the stored secret, or enter a new value to rotate it.') : (zh ? '留空时 SUMA 会生成随机 Secret，并只显示一次。' : 'Leave empty and SUMA generates a random secret that is shown once.')}>
           <Input type="password" autoComplete="new-password" value={draft.webhook_secret} onChange={(event) => setDraft((current) => ({ ...current, webhook_secret: event.target.value }))} placeholder={configuration.webhook_id ? '••••••••••••••••' : (zh ? '自动生成' : 'Generate automatically')} />
         </Field>
         {revealedWebhookSecret && <Alert variant="destructive">

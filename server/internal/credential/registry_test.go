@@ -7,13 +7,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dockport/dockport/server/internal/database"
-	"github.com/dockport/dockport/server/internal/secret"
+	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/secret"
 )
 
 func TestRegistryCredentialLifecycleEncryptsSecrets(t *testing.T) {
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "dockport.db"))
+	db, err := database.Open(filepath.Join(root, "suma.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

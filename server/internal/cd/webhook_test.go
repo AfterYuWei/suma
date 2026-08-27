@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dockport/dockport/server/internal/database"
-	"github.com/dockport/dockport/server/internal/task"
+	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/task"
 )
 
 func TestGitHubWebhookSignatureDuplicateAndRepositoryMatching(t *testing.T) {

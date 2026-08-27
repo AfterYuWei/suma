@@ -1,7 +1,7 @@
 import type { SVGProps } from 'react'
 import { cn } from '@/lib/utils'
 
-/** DockPort radar-berth mark. Brand asset; product actions continue to use Lucide. */
+/** SUMA radar-berth mark. Brand asset; product actions continue to use Lucide. */
 export function LogoMark({ className, ...props }: SVGProps<SVGSVGElement>) {
   return <svg
     viewBox="0 0 32 32"

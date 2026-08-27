@@ -25,7 +25,7 @@ type Setting struct {
 	UpdatedAt time.Time
 }
 
-// Node is a Docker Engine endpoint managed by this DockPort control plane.
+// Node is a Docker Engine endpoint managed by this SUMA control plane.
 // Runtime Docker state is never persisted here; the status fields only record
 // the result of the most recent connectivity probe.
 type Node struct {

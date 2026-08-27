@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dockport/dockport/server/internal/database"
-	"github.com/dockport/dockport/server/internal/secret"
+	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/secret"
 )
 
 func TestValidateEndpointSecurity(t *testing.T) {
@@ -38,7 +38,7 @@ func TestValidateEndpointSecurity(t *testing.T) {
 }
 
 func TestNormalizeRootsRejectsProtectedPaths(t *testing.T) {
-	for _, value := range []string{"relative", "/", "/etc/dockport", "/var/run/docker"} {
+	for _, value := range []string{"relative", "/", "/etc/suma", "/var/run/docker"} {
 		if _, _, err := normalizeRoots([]string{value}); err == nil {
 			t.Fatalf("expected %q to be rejected", value)
 		}
@@ -53,7 +53,7 @@ func TestNormalizeRootsRejectsProtectedPaths(t *testing.T) {
 }
 
 func TestTLSCredentialIsEncryptedAndRedacted(t *testing.T) {
-	db, err := database.Open(filepath.Join(t.TempDir(), "dockport.db"))
+	db, err := database.Open(filepath.Join(t.TempDir(), "suma.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

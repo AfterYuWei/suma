@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-DockPort is an agentless multi-node Docker management application: one Go monolith (`server/`) serving a React 19 SPA (`web/`), versioned REST APIs under `/api/v1`, and WebSockets under `/ws`. Nodes are reached only through mounted `unix://` sockets or direct `tcp://` Docker APIs — never agents, SSH execution, Swarm, or Kubernetes.
+SUMA is an agentless multi-node Docker management application: one Go monolith (`server/`) serving a React 19 SPA (`web/`), versioned REST APIs under `/api/v1`, and WebSockets under `/ws`. Nodes are reached only through mounted `unix://` sockets or direct `tcp://` Docker APIs — never agents, SSH execution, Swarm, or Kubernetes.
 
-Authoritative docs, in order of usefulness: `AGENTS.md` (engineering rules — read it, they are binding), `ARCHITECTURE.md`, `CD-DESIGN.md`, `SEMI-MIGRATION.md` (frontend styling boundary), `API.md`, `PLANS.md` (progress source of truth), `README.md` (env vars, deployment).
+Authoritative docs, in order of usefulness: `AGENTS.md` (engineering rules — read it, they are binding), `ARCHITECTURE.md`, `CD-DESIGN.md`, `API.md`, `PLANS.md` (progress source of truth), `README.md` (env vars, deployment), `LAUNCH_REPORT.md` (pre-launch verification status).
 
 ## Commands
 
@@ -25,7 +25,7 @@ Overrides: `make dev DEV_HOST=0.0.0.0 DEV_WEB_PORT=3000 DEV_API_PORT=9080`.
 Single Go test / package:
 
 ```bash
-cd server && GOCACHE=/tmp/dockport-go-cache go test ./internal/cd/ -run TestReleasePolicy -v
+cd server && GOCACHE=/tmp/suma-go-cache go test ./internal/cd/ -run TestReleasePolicy -v
 ```
 
 Real-Docker smoke tests are behind a build tag and excluded from `go test ./...`:
@@ -52,7 +52,7 @@ Always use `-buildvcs=false` for Go builds. Lint is `oxlint`, not ESLint. There 
 - `internal/api/router.go` (~1200 lines) wires every route and transport concern; new endpoints go here.
 - `internal/app/app.go` composes services at startup.
 
-SQLite (GORM) stores **only** DockPort-owned state: users, sessions, settings, node definitions, credential grants, Compose/CD metadata, releases, tasks, audit records. Container/image/network/volume/status data is always read live from Docker — never mirror it into SQLite.
+SQLite (GORM) stores **only** SUMA-owned state: users, sessions, settings, node definitions, credential grants, Compose/CD metadata, releases, tasks, audit records. Container/image/network/volume/status data is always read live from Docker — never mirror it into SQLite.
 
 Every Docker resource operation resolves through an explicit node runtime. A runtime client is captured when work starts, so disabling/updating a node blocks new work without killing in-flight tasks. Long operations go through `internal/task` (pending/running/success/failed/canceled + streamed logs); user-visible mutations go through `internal/audit`. WebSocket handlers (logs, stats, exec) must cancel their context and close the Docker stream on disconnect.
 
@@ -70,15 +70,14 @@ Creating or deleting one never touches the other. Compose is merely a deployment
 `web/src/`: `pages/` (route views), `features/<domain>/` (composed domain UI), `components/shell` + `components/ui` (shared primitives), `stores/` (Zustand), `lib/` (api client, i18n, node helpers).
 
 - TanStack Query owns all server state; **every Docker-resource query key must include `node_id`**. CD and Authentication Center queries are global. Zustand holds only UI state (theme, selected node, filters, palette, dialogs).
-- Semi Design (`@douyinfe/semi-ui-19`) with the Feishu Universe Design theme (`@semi-bot/semi-theme-universedesign`, compiled via `@douyinfe/semi-vite-plugin`) owns **all** appearance: colors, typography, radii, borders, shadows, density, states, motion.
-- Project code may own only responsive structure (display, grid/flex, placement, sizing, gap, overflow, breakpoints), Docker information architecture, and Monaco/xterm/ECharts configuration.
-- Forbidden and mechanically checked by `npm run audit:universe`: `.semi-*` selector overrides, literal colors in CSS, and visual Tailwind utilities in `className` (`bg-*`, text/border colors, `rounded-*`, `shadow-*`, `font-*`, gradients…). Tailwind is layout-only. ECharts colors come from `--semi-color-data-*`.
-- Note `AGENTS.md` still lists shadcn/Base UI in the stack; that has been superseded by the Semi/Universe migration described in `SEMI-MIGRATION.md`.
+- shadcn/ui conventions on Base UI primitives (official base-nova style) provide all shared components; appearance comes from Tailwind CSS v4 semantic design tokens (`@theme inline` oklch light/dark layers in `web/src/styles.css`). Dark mode is the default.
+- Shared primitives live in `web/src/components/ui`; Docker domain components live in `web/src/components/docker`. Keep styling token-driven (semantic tokens like `bg-background`, `text-muted-foreground`, `--chart-*`) — no literal palette colors or one-off visual overrides.
+- ECharts/xterm read design tokens from documentElement (`--chart-*`, `--background`, `--foreground`) so charts and terminals follow the active theme automatically.
 - Dark-first with dark/light/system themes; Chinese/English localization is persistent; `Cmd/Ctrl+K` command palette is a primary navigation surface. Prefer dense lists, inline/context actions, tabs, sheets, progressive disclosure — not dashboard card grids or rows of action buttons.
 
 ## Security invariants
 
-Sessions are opaque, hashed server-side, in HttpOnly SameSite cookies; passwords are bcrypt; the first user becomes administrator. Secrets (Git/registry credentials, SSH keys, Docker TLS material, webhook secrets) are AES-GCM encrypted in SQLite under the key at `DOCKPORT_SECRET_KEY_FILE` (mode `0600`) — losing it makes stored credentials unrecoverable. Credential material is passed to subprocesses through `0700` temp dirs / `0600` files removed on completion, failure, or cancellation. Never log passwords, tokens, secrets, or sensitive env values; mask likely secrets in API/UI output. Destructive actions require explicit confirmation and are audited — volume deletion requires typing the volume name. Validate identifiers and paths: Compose files stay under the Compose root, delivery files stay inside the detached worktree after symlink resolution. Clone URLs are HTTPS/SSH only, no embedded passwords. Plaintext Docker TCP is rejected unless loopback.
+Sessions are opaque, hashed server-side, in HttpOnly SameSite cookies; passwords are bcrypt; the first user becomes administrator. Secrets (Git/registry credentials, SSH keys, Docker TLS material, webhook secrets) are AES-GCM encrypted in SQLite under the key at `SUMA_SECRET_KEY_FILE` (mode `0600`) — losing it makes stored credentials unrecoverable. Credential material is passed to subprocesses through `0700` temp dirs / `0600` files removed on completion, failure, or cancellation. Never log passwords, tokens, secrets, or sensitive env values; mask likely secrets in API/UI output. Destructive actions require explicit confirmation and are audited — volume deletion requires typing the volume name. Validate identifiers and paths: Compose files stay under the Compose root, delivery files stay inside the detached worktree after symlink resolution. Clone URLs are HTTPS/SSH only, no embedded passwords. Plaintext Docker TCP is rejected unless loopback.
 
 ## Working conventions
 

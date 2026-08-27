@@ -1,8 +1,8 @@
-# DockPort Engineering Rules
+# SUMA Engineering Rules
 
 ## Scope
 
-DockPort V2 is a monolithic, agentless multi-node Docker management application. Nodes connect only through mounted `unix://` sockets or direct `tcp://` Docker APIs. Do not implement remote agents, SSH execution, clusters, Swarm, Kubernetes, SSO, monitoring platforms, marketplaces, or automated backups. Record other ideas under Future in `PLANS.md`.
+SUMA V2 is a monolithic, agentless multi-node Docker management application. Nodes connect only through mounted `unix://` sockets or direct `tcp://` Docker APIs. Do not implement remote agents, SSH execution, clusters, Swarm, Kubernetes, SSO, monitoring platforms, marketplaces, or automated backups. Record other ideas under Future in `PLANS.md`.
 
 ## Required stack
 
@@ -15,7 +15,7 @@ DockPort V2 is a monolithic, agentless multi-node Docker management application.
 
 - HTTP handlers call domain services; domain services call adapters; only adapters import the Docker SDK.
 - Compose operations go through one `ComposeRunner`. Business packages must not call `exec.Command` directly.
-- SQLite stores only DockPort-owned state. Container, image, network, volume, engine, and runtime status always come from Docker.
+- SQLite stores only SUMA-owned state. Container, image, network, volume, engine, and runtime status always come from Docker.
 - Long operations use the Task service and stream progress. Important user operations use the Audit service.
 - HTTP APIs use `/api/v1`; realtime endpoints use `/ws` and must cancel contexts and close Docker streams promptly on disconnect.
 - Docker resources and Compose are always resolved through an explicit node runtime. CD and the Authentication Center remain global and may target multiple nodes.

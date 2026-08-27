@@ -3,7 +3,7 @@ package audit
 import (
 	"context"
 
-	"github.com/dockport/dockport/server/internal/database"
+	"github.com/suma/suma/server/internal/database"
 	"gorm.io/gorm"
 )
 

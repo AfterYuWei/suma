@@ -191,7 +191,7 @@ func (c *CLIClient) capture(ctx context.Context, directory string, environment [
 }
 
 func authenticationEnvironment(credential CredentialMaterial) ([]string, func(), error) {
-	directory, err := os.MkdirTemp("", "dockport-git-")
+	directory, err := os.MkdirTemp("", "suma-git-")
 	if err != nil {
 		return nil, func() {}, err
 	}
@@ -213,12 +213,12 @@ func authenticationEnvironment(credential CredentialMaterial) ([]string, func(),
 			username = "oauth2"
 		}
 		taskPass := filepath.Join(directory, "askpass.sh")
-		script := "#!/bin/sh\ncase \"$1\" in\n  *Username*) printf '%s' \"$DOCKPORT_GIT_USERNAME\" ;;\n  *) printf '%s' \"$DOCKPORT_GIT_PASSWORD\" ;;\nesac\n"
+		script := "#!/bin/sh\ncase \"$1\" in\n  *Username*) printf '%s' \"$SUMA_GIT_USERNAME\" ;;\n  *) printf '%s' \"$SUMA_GIT_PASSWORD\" ;;\nesac\n"
 		if err := os.WriteFile(taskPass, []byte(script), 0o700); err != nil {
 			cleanup()
 			return nil, func() {}, err
 		}
-		environment = append(environment, "GIT_ASKPASS="+taskPass, "DOCKPORT_GIT_USERNAME="+username, "DOCKPORT_GIT_PASSWORD="+credential.Secret)
+		environment = append(environment, "GIT_ASKPASS="+taskPass, "SUMA_GIT_USERNAME="+username, "SUMA_GIT_PASSWORD="+credential.Secret)
 	case AuthSSHKey:
 		if credential.PrivateKey == "" || credential.KnownHosts == "" {
 			cleanup()
@@ -238,11 +238,11 @@ func authenticationEnvironment(credential CredentialMaterial) ([]string, func(),
 		environment = append(environment, "GIT_SSH_COMMAND="+sshCommand)
 		if credential.Passphrase != "" {
 			taskPass := filepath.Join(directory, "ssh-askpass.sh")
-			if err := os.WriteFile(taskPass, []byte("#!/bin/sh\nprintf '%s' \"$DOCKPORT_GIT_PASSPHRASE\"\n"), 0o700); err != nil {
+			if err := os.WriteFile(taskPass, []byte("#!/bin/sh\nprintf '%s' \"$SUMA_GIT_PASSPHRASE\"\n"), 0o700); err != nil {
 				cleanup()
 				return nil, func() {}, err
 			}
-			environment = append(environment, "SSH_ASKPASS="+taskPass, "SSH_ASKPASS_REQUIRE=force", "DOCKPORT_GIT_PASSPHRASE="+credential.Passphrase, "DISPLAY=dockport:0")
+			environment = append(environment, "SSH_ASKPASS="+taskPass, "SSH_ASKPASS_REQUIRE=force", "SUMA_GIT_PASSPHRASE="+credential.Passphrase, "DISPLAY=suma:0")
 		}
 	default:
 		cleanup()

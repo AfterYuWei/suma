@@ -10,28 +10,28 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dockport/dockport/server/internal/audit"
-	"github.com/dockport/dockport/server/internal/auth"
-	cdService "github.com/dockport/dockport/server/internal/cd"
-	composeService "github.com/dockport/dockport/server/internal/compose"
-	containerdomain "github.com/dockport/dockport/server/internal/container"
-	credentialService "github.com/dockport/dockport/server/internal/credential"
-	"github.com/dockport/dockport/server/internal/docker"
-	gitService "github.com/dockport/dockport/server/internal/git"
-	imageService "github.com/dockport/dockport/server/internal/image"
-	monitorService "github.com/dockport/dockport/server/internal/monitor"
-	networkService "github.com/dockport/dockport/server/internal/network"
-	nodeService "github.com/dockport/dockport/server/internal/node"
-	settingsService "github.com/dockport/dockport/server/internal/settings"
-	systemService "github.com/dockport/dockport/server/internal/system"
-	"github.com/dockport/dockport/server/internal/task"
-	volumeService "github.com/dockport/dockport/server/internal/volume"
-	"github.com/dockport/dockport/server/webui"
+	"github.com/suma/suma/server/internal/audit"
+	"github.com/suma/suma/server/internal/auth"
+	cdService "github.com/suma/suma/server/internal/cd"
+	composeService "github.com/suma/suma/server/internal/compose"
+	containerdomain "github.com/suma/suma/server/internal/container"
+	credentialService "github.com/suma/suma/server/internal/credential"
+	"github.com/suma/suma/server/internal/docker"
+	gitService "github.com/suma/suma/server/internal/git"
+	imageService "github.com/suma/suma/server/internal/image"
+	monitorService "github.com/suma/suma/server/internal/monitor"
+	networkService "github.com/suma/suma/server/internal/network"
+	nodeService "github.com/suma/suma/server/internal/node"
+	settingsService "github.com/suma/suma/server/internal/settings"
+	systemService "github.com/suma/suma/server/internal/system"
+	"github.com/suma/suma/server/internal/task"
+	volumeService "github.com/suma/suma/server/internal/volume"
+	"github.com/suma/suma/server/webui"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
 
-const sessionCookie = "dockport_session"
+const sessionCookie = "suma_session"
 
 type Dependencies struct {
 	Engine              docker.Engine
@@ -122,6 +122,17 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	v1.GET("/health", func(c *gin.Context) { success(c, gin.H{"status": "ok", "control_plane": "available"}) })
 	if deps.Nodes != nil {
 		registerNodeRoutes(router, v1, deps)
+		registerFleetRoutes(v1, deps)
+	}
+	if deps.CD != nil {
+		v1.GET("/cd/overview", requireAuth(deps.Auth), func(c *gin.Context) {
+			value, err := deps.CD.Overview(c.Request.Context())
+			if err != nil {
+				failure(c, http.StatusInternalServerError, 17720, "Unable to read CD overview")
+				return
+			}
+			success(c, value)
+		})
 	}
 	v1.GET("/docker/info", requireAuth(deps.Auth), deprecatedDefaultNode(), func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
@@ -917,7 +928,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			failure(c, http.StatusBadRequest, 19003, err.Error())
 			return
 		}
-		recordAudit(c, deps.Audit, "settings.update", "settings", "DockPort", "success")
+		recordAudit(c, deps.Audit, "settings.update", "settings", "SUMA", "success")
 		success(c, values)
 	})
 	v1.GET("/audit-logs", requireAuth(deps.Auth), func(c *gin.Context) {

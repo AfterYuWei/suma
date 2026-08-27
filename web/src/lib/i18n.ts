@@ -6,7 +6,7 @@ const zh = {
   searchCommand: '搜索或执行命令', signOut: '退出登录', cancel: '取消', confirm: '确认', remove: '删除', create: '创建', save: '保存',
   language: '语言', chinese: '中文', english: 'English', appearance: '外观', chooseTheme: '选择界面主题。',
   dark: '深色', light: '浅色', systemTheme: '跟随系统', loading: '加载中…', retry: '重试',
-  signOutTitle: '退出 DockPort？', signOutDescription: '当前浏览器会话将被注销。',
+  signOutTitle: '退出 SUMA？', signOutDescription: '当前浏览器会话将被注销。',
   dangerWarning: '此操作可能无法撤销，请确认后继续。', typeToConfirm: '输入 {value} 以确认',
   newImageTag: '新镜像标签', tagDescription: '输入 repository:tag 格式的新标签。', tag: '添加标签',
   removeImage: '删除镜像', removeImageDescription: '确定删除镜像 {name}？正在使用的镜像不会被强制删除。',
@@ -22,7 +22,7 @@ const zh = {
   composeDown: '停止并移除项目资源', composeDownDescription: 'Compose down 将删除 {name} 的容器和网络。',
   general: '常规', storage: '存储', security: '安全', registry: '镜像仓库', serverName: '服务器名称', timezone: '时区',
   dockerSocket: 'Docker Socket', composeCommand: 'Compose 命令', composeRoot: 'Compose 根目录', dataRoot: '数据目录', backupRoot: '备份目录',
-  secureCookies: '安全 Cookie', defaultRegistry: '默认镜像仓库', localConfiguration: 'DockPort 本地配置', saveChanges: '保存更改', settingsSaved: '设置已保存',
+  secureCookies: '安全 Cookie', defaultRegistry: '默认镜像仓库', localConfiguration: 'SUMA 本地配置', saveChanges: '保存更改', settingsSaved: '设置已保存',
 } as const
 
 export type TranslationKey = keyof typeof zh
@@ -39,7 +39,7 @@ const english: Record<TranslationKey, string> = {
   searchCommand: 'Search or run a command', signOut: 'Sign out', cancel: 'Cancel', confirm: 'Confirm', remove: 'Remove', create: 'Create', save: 'Save',
   language: 'Language', chinese: '中文', english: 'English', appearance: 'Appearance', chooseTheme: 'Choose the interface theme.',
   dark: 'Dark', light: 'Light', systemTheme: 'System', loading: 'Loading…', retry: 'Retry',
-  signOutTitle: 'Sign out of DockPort?', signOutDescription: 'The current browser session will be signed out.',
+  signOutTitle: 'Sign out of SUMA?', signOutDescription: 'The current browser session will be signed out.',
   dangerWarning: 'This action may not be reversible. Confirm before continuing.', typeToConfirm: 'Type {value} to confirm',
   newImageTag: 'New image tag', tagDescription: 'Enter a new tag in repository:tag format.', tag: 'Tag image',
   removeImage: 'Remove image', removeImageDescription: 'Remove image {name}? Images in use will not be forced.',
@@ -55,7 +55,7 @@ const english: Record<TranslationKey, string> = {
   composeDown: 'Stop and remove project resources', composeDownDescription: 'Compose down will remove containers and networks for {name}.',
   general: 'General', storage: 'Storage', security: 'Security', registry: 'Registry', serverName: 'Server name', timezone: 'Timezone',
   dockerSocket: 'Docker socket', composeCommand: 'Compose command', composeRoot: 'Compose root', dataRoot: 'Data root', backupRoot: 'Backup root',
-  secureCookies: 'Secure cookies', defaultRegistry: 'Default registry', localConfiguration: 'Local DockPort configuration', saveChanges: 'Save changes', settingsSaved: 'Settings saved',
+  secureCookies: 'Secure cookies', defaultRegistry: 'Default registry', localConfiguration: 'Local SUMA configuration', saveChanges: 'Save changes', settingsSaved: 'Settings saved',
 }
 
 export function useI18n() {

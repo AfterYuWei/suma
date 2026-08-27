@@ -24,7 +24,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     body = JSON.parse(payload) as ApiEnvelope<T>
   } catch {
     const detail = contentType.includes('text/html') || payload.trimStart().startsWith('<!doctype') || payload.trimStart().startsWith('<html')
-      ? `The server returned the web application instead of the API response for ${path}. Restart or upgrade the DockPort backend and check the /api proxy.`
+      ? `The server returned the web application instead of the API response for ${path}. Restart or upgrade the SUMA backend and check the /api proxy.`
       : `The API returned an invalid response for ${path} (HTTP ${response.status}).`
     throw new ApiError(detail, -1, response.status)
   }

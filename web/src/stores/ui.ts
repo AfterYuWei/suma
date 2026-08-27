@@ -26,15 +26,15 @@ function applyTheme(theme: Theme) {
 
 const colorSchemeQuery = matchMedia('(prefers-color-scheme: dark)')
 const syncSystemTheme = () => {
-  if (localStorage.getItem('dockport-theme') === 'system') applyTheme('system')
+  if (localStorage.getItem('suma-theme') === 'system') applyTheme('system')
 }
 colorSchemeQuery.addEventListener('change', syncSystemTheme)
 if (import.meta.hot) {
   import.meta.hot.dispose(() => colorSchemeQuery.removeEventListener('change', syncSystemTheme))
 }
 
-const storedTheme = (localStorage.getItem('dockport-theme') as Theme | null) ?? 'dark'
-const storedLanguage = (localStorage.getItem('dockport-language') as Language | null) ?? (navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US')
+const storedTheme = (localStorage.getItem('suma-theme') as Theme | null) ?? 'dark'
+const storedLanguage = (localStorage.getItem('suma-language') as Language | null) ?? (navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US')
 applyTheme(storedTheme)
 document.documentElement.lang = storedLanguage
 
@@ -43,18 +43,18 @@ export const useUIStore = create<UIState>((set) => ({
   language: storedLanguage,
   commandOpen: false,
   sidebarOpen: matchMedia('(min-width: 1024px)').matches,
-	currentNodeID: localStorage.getItem('dockport-node') || 'local',
+	currentNodeID: localStorage.getItem('suma-node') || 'local',
   setTheme: (theme) => {
-    localStorage.setItem('dockport-theme', theme)
+    localStorage.setItem('suma-theme', theme)
     applyTheme(theme)
     set({ theme })
   },
   setLanguage: (language) => {
-    localStorage.setItem('dockport-language', language)
+    localStorage.setItem('suma-language', language)
     document.documentElement.lang = language
     set({ language })
   },
   setCommandOpen: (commandOpen) => set({ commandOpen }),
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
-	setCurrentNodeID: (currentNodeID) => { localStorage.setItem('dockport-node', currentNodeID); set({ currentNodeID }) },
+	setCurrentNodeID: (currentNodeID) => { localStorage.setItem('suma-node', currentNodeID); set({ currentNodeID }) },
 }))

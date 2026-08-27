@@ -11,12 +11,12 @@ COPY server/go.mod server/go.sum ./
 RUN go mod download
 COPY server/ ./
 COPY --from=web-build /web/dist ./webui/dist
-RUN CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-s -w" -o /dockport ./cmd/dockport
+RUN CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-s -w" -o /suma ./cmd/suma
 
 FROM docker:29-cli
 RUN apk add --no-cache ca-certificates tzdata docker-cli-compose git openssh-client
-COPY --from=server-build /dockport /usr/local/bin/dockport
-RUN mkdir -p /opt/dockport/data/compose /opt/dockport/data/gitops /opt/dockport/data/backups && addgroup -S dockport && adduser -S -G dockport dockport && chown -R dockport:dockport /opt/dockport
+COPY --from=server-build /suma /usr/local/bin/suma
+RUN mkdir -p /opt/suma/data/compose /opt/suma/data/gitops /opt/suma/data/backups && addgroup -S suma && adduser -S -G suma suma && chown -R suma:suma /opt/suma
 EXPOSE 8080
-VOLUME ["/opt/dockport/data"]
-ENTRYPOINT ["dockport"]
+VOLUME ["/opt/suma/data"]
+ENTRYPOINT ["suma"]

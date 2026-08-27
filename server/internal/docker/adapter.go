@@ -21,11 +21,11 @@ import (
 	dockervolume "github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
-	domain "github.com/dockport/dockport/server/internal/container"
-	imagedomain "github.com/dockport/dockport/server/internal/image"
-	networkdomain "github.com/dockport/dockport/server/internal/network"
-	"github.com/dockport/dockport/server/internal/task"
-	volumedomain "github.com/dockport/dockport/server/internal/volume"
+	domain "github.com/suma/suma/server/internal/container"
+	imagedomain "github.com/suma/suma/server/internal/image"
+	networkdomain "github.com/suma/suma/server/internal/network"
+	"github.com/suma/suma/server/internal/task"
+	volumedomain "github.com/suma/suma/server/internal/volume"
 )
 
 type Info struct {
@@ -64,7 +64,7 @@ func New(host string) (*Adapter, error) {
 // TLS option accepts file names, so the files exist only for client creation
 // and are removed before this function returns.
 func NewTLS(host, ca, certificate, privateKey string) (*Adapter, error) {
-	directory, err := os.MkdirTemp("", "dockport-docker-tls-")
+	directory, err := os.MkdirTemp("", "suma-docker-tls-")
 	if err != nil {
 		return nil, fmt.Errorf("create Docker TLS directory: %w", err)
 	}

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dockport/dockport/server/internal/config"
-	"github.com/dockport/dockport/server/internal/database"
+	"github.com/suma/suma/server/internal/config"
+	"github.com/suma/suma/server/internal/database"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -17,7 +17,7 @@ type Service struct {
 }
 
 func NewService(db *gorm.DB, cfg config.Config) *Service {
-	return &Service{db: db, defaults: map[string]string{"general.server_name": "DockPort", "general.language": "en", "general.timezone": "UTC", "docker.compose_command": cfg.ComposeCommand, "storage.compose_root": cfg.ComposeRoot, "storage.data_root": strings.TrimSuffix(cfg.DatabasePath, "/dockport.db"), "storage.backup_root": cfg.BackupRoot, "security.cookie_secure": fmt.Sprint(cfg.CookieSecure), "appearance.theme": "system", "registry.default": ""}}
+	return &Service{db: db, defaults: map[string]string{"general.server_name": "SUMA", "general.language": "en", "general.timezone": "UTC", "docker.compose_command": cfg.ComposeCommand, "storage.compose_root": cfg.ComposeRoot, "storage.data_root": strings.TrimSuffix(cfg.DatabasePath, "/suma.db"), "storage.backup_root": cfg.BackupRoot, "security.cookie_secure": fmt.Sprint(cfg.CookieSecure), "appearance.theme": "system", "registry.default": ""}}
 }
 func (s *Service) Get(ctx context.Context) (map[string]string, error) {
 	result := make(map[string]string, len(s.defaults))

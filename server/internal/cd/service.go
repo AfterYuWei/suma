@@ -18,13 +18,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dockport/dockport/server/internal/audit"
-	"github.com/dockport/dockport/server/internal/compose"
-	credentialrepo "github.com/dockport/dockport/server/internal/credential"
-	"github.com/dockport/dockport/server/internal/database"
-	gitrepo "github.com/dockport/dockport/server/internal/git"
-	"github.com/dockport/dockport/server/internal/secret"
-	"github.com/dockport/dockport/server/internal/task"
+	"github.com/suma/suma/server/internal/audit"
+	"github.com/suma/suma/server/internal/compose"
+	credentialrepo "github.com/suma/suma/server/internal/credential"
+	"github.com/suma/suma/server/internal/database"
+	gitrepo "github.com/suma/suma/server/internal/git"
+	"github.com/suma/suma/server/internal/secret"
+	"github.com/suma/suma/server/internal/task"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -759,7 +759,7 @@ func (s *Service) deployLocked(ctx context.Context, project database.DeliveryPro
 			var previous database.DeliveryRelease
 			if loadErr := s.db.WithContext(ctx).First(&previous, *release.PreviousReleaseID).Error; loadErr == nil {
 				report(80, "Deployment failed; restoring previous release")
-				restore := database.DeliveryRelease{ProjectID: previous.ProjectID, RepositoryURL: previous.RepositoryURL, GitRef: previous.GitRef, CommitSHA: previous.CommitSHA, CommitMessage: previous.CommitMessage, CommitAuthor: previous.CommitAuthor, ConfigHash: previous.ConfigHash, ImageReferences: previous.ImageReferences, TaskID: taskID, Status: StatusAwaitingApproval, TriggerType: "automatic_rollback", TriggerActor: "DockPort", PreviousReleaseID: &release.ID, WorktreePath: previous.WorktreePath, ComposeFilesJSON: previous.ComposeFilesJSON, EnvironmentFile: previous.EnvironmentFile}
+				restore := database.DeliveryRelease{ProjectID: previous.ProjectID, RepositoryURL: previous.RepositoryURL, GitRef: previous.GitRef, CommitSHA: previous.CommitSHA, CommitMessage: previous.CommitMessage, CommitAuthor: previous.CommitAuthor, ConfigHash: previous.ConfigHash, ImageReferences: previous.ImageReferences, TaskID: taskID, Status: StatusAwaitingApproval, TriggerType: "automatic_rollback", TriggerActor: "SUMA", PreviousReleaseID: &release.ID, WorktreePath: previous.WorktreePath, ComposeFilesJSON: previous.ComposeFilesJSON, EnvironmentFile: previous.EnvironmentFile}
 				if createErr := s.db.WithContext(ctx).Create(&restore).Error; createErr == nil {
 					_ = s.deployLocked(ctx, project, restore, taskID, true, report)
 				}
@@ -1406,7 +1406,7 @@ func executionSpec(project database.DeliveryProject, repository gitrepo.Reposito
 	return releaseExecutionSpec(runtimeName(project), release)
 }
 
-func deliveryRuntimeName(projectID uint) string { return fmt.Sprintf("dockport-cd-%d", projectID) }
+func deliveryRuntimeName(projectID uint) string { return fmt.Sprintf("suma-cd-%d", projectID) }
 
 func runtimeName(project database.DeliveryProject) string {
 	if project.DeploymentName != "" {

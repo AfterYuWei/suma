@@ -23,7 +23,7 @@ function AuthFrame({ title, description, children }: { title: string; descriptio
       <CardContent className="flex flex-col items-start gap-6">
         <div className="flex items-center gap-2.5">
           <LogoMark width={32} height={32} />
-          <span className="text-lg font-semibold tracking-tight">DockPort</span>
+          <span className="text-lg font-semibold tracking-tight">SUMA</span>
         </div>
         <div className="flex flex-col gap-1.5">
           <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
@@ -78,17 +78,17 @@ export function AuthGate({ children }: { children: ReactNode }) {
     return <main className="grid min-h-screen place-items-center"><div className="flex flex-col items-center gap-2"><Spinner className="size-6 text-muted-foreground" /><p className="text-sm text-muted-foreground">{t('loading')}</p></div></main>
   }
   if (status.isError) {
-    return <AuthFrame title={zh ? 'DockPort 暂不可用' : 'DockPort is unavailable'} description={zh ? '服务器没有响应，请检查 DockPort 服务后重试。' : 'The server did not respond. Check the DockPort service and try again.'}>
+    return <AuthFrame title={zh ? 'SUMA 暂不可用' : 'SUMA is unavailable'} description={zh ? '服务器没有响应，请检查 SUMA 服务后重试。' : 'The server did not respond. Check the SUMA service and try again.'}>
       <Button variant="outline" size="lg" className="w-full" onClick={() => status.refetch()}>{t('retry')}</Button>
     </AuthFrame>
   }
   if (status.data?.needs_setup) {
-    return <AuthFrame title={zh ? '创建管理员' : 'Create administrator'} description={zh ? '为此 DockPort 实例设置本地管理员账户。' : 'Set up the local administrator account for this DockPort instance.'}>
+    return <AuthFrame title={zh ? '创建管理员' : 'Create administrator'} description={zh ? '为此 SUMA 实例设置本地管理员账户。' : 'Set up the local administrator account for this SUMA instance.'}>
       <AuthForm setup pending={initialize.isPending} error={error} onSubmit={(values) => initialize.mutate(values)} />
     </AuthFrame>
   }
   if (!session.data) {
-    return <AuthFrame title={zh ? '登录 DockPort' : 'Sign in to DockPort'} description={zh ? '使用本地管理员账户管理此 Docker 主机。' : 'Manage this Docker host with your local administrator account.'}>
+    return <AuthFrame title={zh ? '登录 SUMA' : 'Sign in to SUMA'} description={zh ? '使用本地管理员账户管理此 Docker 主机。' : 'Manage this Docker host with your local administrator account.'}>
       <AuthForm setup={false} pending={login.isPending} error={error} onSubmit={(values) => login.mutate(values)} />
     </AuthFrame>
   }

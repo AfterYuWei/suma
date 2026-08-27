@@ -2,9 +2,9 @@
 
 ## Purpose and scope
 
-DockPort continuously delivers an already deployable Docker Compose declaration from Git to one or more selected Docker nodes. Git is the desired-state source; each exact Git commit, rendered Compose configuration, and immutable target-node snapshot becomes a traceable release.
+SUMA continuously delivers an already deployable Docker Compose declaration from Git to one or more selected Docker nodes. Git is the desired-state source; each exact Git commit, rendered Compose configuration, and immutable target-node snapshot becomes a traceable release.
 
-This capability is CD only. DockPort does not:
+This capability is CD only. SUMA does not:
 
 - compile application source or execute repository-provided scripts;
 - run unit, integration, end-to-end, or security tests;
@@ -12,11 +12,11 @@ This capability is CD only. DockPort does not:
 - orchestrate GitHub Actions, GitLab pipelines, build runners, or build-status gates;
 - deploy through remote agents, SSH, clusters, Swarm, or Kubernetes.
 
-An external build system may create the referenced images, but DockPort neither integrates with nor depends on that system. Its contract begins when a repository commit contains valid Compose files that reference pullable images.
+An external build system may create the referenced images, but SUMA neither integrates with nor depends on that system. Its contract begins when a repository commit contains valid Compose files that reference pullable images.
 
 ## Domain ownership
 
-DockPort models local Compose orchestration and continuous delivery as independent domains:
+SUMA models local Compose orchestration and continuous delivery as independent domains:
 
 | Domain | Aggregate root | Owned lifecycle | Compose relationship |
 | --- | --- | --- | --- |
@@ -38,7 +38,7 @@ The Compose workspace does not call CD project, configuration, drift, release, a
 
 Repository configuration has no hosting-provider selector. A single `clone_url` accepts any standards-compatible HTTPS, `ssh://`, or SCP-style Git remote, including public services, self-managed forges, and bare SSH servers. Authentication is selected only from the transport: public/HTTP credentials for HTTPS or an SSH key with pinned `known_hosts` for SSH. A credential-scoped private CA supports internal HTTPS services.
 
-Webhook payload formats are request adapters rather than repository configuration. The single project webhook URL recognizes GitHub-compatible and GitLab-compatible push headers, with a generic bearer-authenticated JSON form as the universal fallback. DockPort does not call provider APIs or infer external pipeline status.
+Webhook payload formats are request adapters rather than repository configuration. The single project webhook URL recognizes GitHub-compatible and GitLab-compatible push headers, with a generic bearer-authenticated JSON form as the universal fallback. SUMA does not call provider APIs or infer external pipeline status.
 
 ## Repository configuration
 
@@ -57,7 +57,7 @@ A Delivery Project records:
 | `deployment_timeout` | 10–3600 seconds for Compose `--wait-timeout` |
 | `auto_rollback` | Whether a failed new delivery may attempt to restore the previous successful release |
 
-All configured file paths are relative to the repository root. DockPort evaluates symlinks and rejects a Compose file or environment file that resolves outside its detached worktree. Compose files are passed in list order; the first file establishes the Compose project directory for relative paths, and later files override or extend earlier files using Docker Compose merge rules. Deployment files must be regular files no larger than 2 MiB. Clone URL validation rejects embedded passwords, local filesystem remotes, `file://`, `git://`, external Git transports, query strings, fragments, and traversal-like repository paths.
+All configured file paths are relative to the repository root. SUMA evaluates symlinks and rejects a Compose file or environment file that resolves outside its detached worktree. Compose files are passed in list order; the first file establishes the Compose project directory for relative paths, and later files override or extend earlier files using Docker Compose merge rules. Deployment files must be regular files no larger than 2 MiB. Clone URL validation rejects embedded passwords, local filesystem remotes, `file://`, `git://`, external Git transports, query strings, fragments, and traversal-like repository paths.
 
 ## Credential model
 
@@ -68,11 +68,11 @@ Credential types are:
 - `http_basic`: explicit username and password/token through Git AskPass;
 - `ssh_key`: private key plus mandatory pinned `known_hosts`, with an optional passphrase.
 
-A credential may also contain a custom CA certificate for an internal HTTPS Git service. DockPort does not provide a skip-TLS-verification switch.
+A credential may also contain a custom CA certificate for an internal HTTPS Git service. SUMA does not provide a skip-TLS-verification switch.
 
-Sensitive fields are encrypted with AES-GCM before SQLite storage. A 32-byte key is loaded from `DOCKPORT_SECRET_KEY_FILE`; when absent it is generated atomically with file mode `0600`. The database stores only ciphertext and a non-secret fingerprint. API responses expose metadata but never plaintext.
+Sensitive fields are encrypted with AES-GCM before SQLite storage. A 32-byte key is loaded from `SUMA_SECRET_KEY_FILE`; when absent it is generated atomically with file mode `0600`. The database stores only ciphertext and a non-secret fingerprint. API responses expose metadata but never plaintext.
 
-For each Git operation DockPort creates a private temporary directory, writes only the needed AskPass, CA, SSH key, and `known_hosts` files, disables terminal prompts with `GIT_TERMINAL_PROMPT=0`, and removes the directory afterward. Known secrets are redacted from captured Git output. A token is never embedded in the stored or logged clone URL.
+For each Git operation SUMA creates a private temporary directory, writes only the needed AskPass, CA, SSH key, and `known_hosts` files, disables terminal prompts with `GIT_TERMINAL_PROMPT=0`, and removes the directory afterward. Known secrets are redacted from captured Git output. A token is never embedded in the stored or logged clone URL.
 
 The database and encryption key form one recovery set. Losing the key makes stored credentials and webhook secrets undecryptable; exposing it together with the database exposes them. Back up and restrict them accordingly.
 
@@ -81,18 +81,18 @@ The database and encryption key form one recovery set. Losing the key makes stor
 The synchronization transaction is deliberately separate from deployment:
 
 1. An authenticated webhook, periodic reconciliation, or authenticated manual request queues a task.
-2. DockPort takes the per-project lock and reloads project configuration.
+2. SUMA takes the per-project lock and reloads project configuration.
 3. The common Git client clones when necessary, then updates the remote URL and fetches branches/tags.
 4. The configured branch, tag, or commit is resolved to an exact commit SHA.
-5. DockPort creates or reuses a detached worktree named by that SHA.
+5. SUMA creates or reuses a detached worktree named by that SHA.
 6. It verifies that the worktree is inside the configured Git root, `HEAD` matches the SHA, and Git reports no tracked changes, untracked files, or ignored files.
 7. It resolves repository-root-relative Compose files and the optional env file, then enforces deployment-source policy and worktree containment.
 8. `docker compose config --quiet` validates syntax and interpolation.
 9. `docker compose config --format json` produces the canonical rendered model, which is checked by the rendered deployment policy.
-10. DockPort hashes that rendered model, extracts referenced images, and deduplicates an already reconciled `commit SHA + config hash`.
+10. SUMA hashes that rendered model, extracts referenced images, and deduplicates an already reconciled `commit SHA + config hash`.
 11. It creates a release whose commit/config identity is fixed and links it to the previous active release, task, trigger, actor, and worktree.
 
-Configuration validation is a deployment preflight. It does not execute service commands or arbitrary repository code. Worktree verification is fail-closed: DockPort never runs `git reset` or `git clean` to repair a contaminated release directory. Removing the Delivery Project is the operation that removes its complete Git clone/worktree directory; it does not remove a local Compose Project.
+Configuration validation is a deployment preflight. It does not execute service commands or arbitrary repository code. Worktree verification is fail-closed: SUMA never runs `git reset` or `git clean` to repair a contaminated release directory. Removing the Delivery Project is the operation that removes its complete Git clone/worktree directory; it does not remove a local Compose Project.
 
 ### Deployment-source policy
 
@@ -122,7 +122,7 @@ All webhook adapters use:
 POST /api/v1/webhooks/git/:hookID
 ```
 
-The endpoint is not protected by a DockPort session because Git servers call it directly. Security is supplied by an unguessable hook ID, a strong per-project secret, HTTPS at the reverse proxy, payload verification, repository/ref matching, and delivery deduplication.
+The endpoint is not protected by a SUMA session because Git servers call it directly. Security is supplied by an unguessable hook ID, a strong per-project secret, HTTPS at the reverse proxy, payload verification, repository/ref matching, and delivery deduplication.
 
 Common behavior:
 
@@ -146,7 +146,7 @@ The generic JSON body identifies the repository and may contain a ref. It cannot
 
 ## Deployment
 
-A prepared release is delivered under the same per-project reservation and lock. After one approval, DockPort runs the following flow concurrently for every node in the release target snapshot:
+A prepared release is delivered under the same per-project reservation and lock. After one approval, SUMA runs the following flow concurrently for every node in the release target snapshot:
 
 1. Re-verify that the release worktree is at the recorded commit and clean; reject it if it was modified since synchronization.
 2. Mark the release `pulling` (or `rolling_back`).
@@ -159,7 +159,7 @@ A prepared release is delivered under the same per-project reservation and lock.
 
 `--wait` can only use the health semantics available in the Compose file. A service without a healthcheck may be considered ready when its container is merely running. Production repositories should define meaningful healthchecks for critical services.
 
-Images may use tags or immutable digests. Digests are recommended for reproducibility, but DockPort currently records and pulls the declaration; it does not build, scan, sign, or certify an image.
+Images may use tags or immutable digests. Digests are recommended for reproducibility, but SUMA currently records and pulls the declaration; it does not build, scan, sign, or certify an image.
 
 ## Release and drift model
 
@@ -194,18 +194,18 @@ Rollback does not:
 
 A Compose service cannot use a writable bind mount in Git delivery. Use named volumes for writable persistent data; any bind mount must resolve inside the worktree and be read-only. Release identity protects the recorded Git/config reference; it is not an application-data snapshot.
 
-If automatic rollback is enabled and a node deployment fails, DockPort restores that node's own previous active Release. Successful nodes remain on the new Release. Multi-node delivery is not atomic and does not attempt a cross-node transaction. Operators should disable automatic rollback for deployments with irreversible migrations and should revert/fix Git after restoration so desired and active state converge.
+If automatic rollback is enabled and a node deployment fails, SUMA restores that node's own previous active Release. Successful nodes remain on the new Release. Multi-node delivery is not atomic and does not attempt a cross-node transaction. Operators should disable automatic rollback for deployments with irreversible migrations and should revert/fix Git after restoration so desired and active state converge.
 
 ## Runtime configuration
 
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
-| `DOCKPORT_GIT_COMMAND` | `git` | Single Git executable path/name used by the adapter |
-| `DOCKPORT_GIT_ROOT` | `<data-root>/gitops` | Repository clones and detached worktrees |
-| `DOCKPORT_SECRET_KEY_FILE` | `<data-root>/secret.key` | 32-byte AES-GCM key for credential and webhook secrets |
-| `DOCKPORT_COMPOSE_COMMAND` | `docker compose` | Sole Compose process boundary |
-| `DOCKPORT_COMPOSE_ROOT` | `<data-root>/compose` | Managed-mode Compose root |
-| `DOCKPORT_DATA_ROOT` | `./data` | Base path for default persistent locations |
+| `SUMA_GIT_COMMAND` | `git` | Single Git executable path/name used by the adapter |
+| `SUMA_GIT_ROOT` | `<data-root>/gitops` | Repository clones and detached worktrees |
+| `SUMA_SECRET_KEY_FILE` | `<data-root>/secret.key` | 32-byte AES-GCM key for credential and webhook secrets |
+| `SUMA_COMPOSE_COMMAND` | `docker compose` | Sole Compose process boundary |
+| `SUMA_COMPOSE_ROOT` | `<data-root>/compose` | Managed-mode Compose root |
+| `SUMA_DATA_ROOT` | `./data` | Base path for default persistent locations |
 
 The production image includes Git, OpenSSH client tools, CA certificates, Docker CLI, and the Compose plugin. The Compose/Git data root is mounted at the same absolute host/container path because bind sources are interpreted by the host Docker daemon.
 
@@ -220,10 +220,10 @@ The production image includes Git, OpenSSH client tools, CA certificates, Docker
 - Use named volumes for writable data; Git delivery rejects writable or out-of-worktree bind mounts.
 - Review Compose privileges, host mounts, devices, ports, and Docker socket mounts before automatic delivery.
 - Back up SQLite, `secret.key`, and required release/worktree data as one controlled recovery set.
-- Treat access to DockPort and `/var/run/docker.sock` as root-equivalent host access.
+- Treat access to SUMA and `/var/run/docker.sock` as root-equivalent host access.
 
 ## Delivery guarantees and non-guarantees
 
-DockPort provides serialized per-project command execution, exact Git commit attribution, clean-worktree enforcement, canonical Compose configuration hashing, task progress, and an auditable active-release transition after successful Compose execution and runtime-state validation.
+SUMA provides serialized per-project command execution, exact Git commit attribution, clean-worktree enforcement, canonical Compose configuration hashing, task progress, and an auditable active-release transition after successful Compose execution and runtime-state validation.
 
 Docker Compose on one node is not a transactional deployment platform. A failed `up` can leave partially changed containers, service health depends on declared healthchecks, bind mounts and volumes can carry state across releases, and application migrations can be irreversible. Release history and rollback reduce operational risk but do not provide database backup, zero-downtime rollout, or cluster-grade reconciliation.

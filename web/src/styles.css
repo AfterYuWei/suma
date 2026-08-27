@@ -4,6 +4,33 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Bundled fonts: MiSans (SIL OFL 1.1, npm `misans`) for CJK+Latin UI text is
+   linked from index.html (unicode-range split css in public/fonts/misans);
+   JetBrains Mono (OFL) is the bundled monospace face. */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono/jetbrains-mono-latin-400-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono/jetbrains-mono-latin-500-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono/jetbrains-mono-latin-700-normal.woff2") format("woff2");
+}
+
 :root {
   --radius: 0.625rem;
   --background: oklch(1 0 0);
@@ -75,6 +102,8 @@
 
 @theme inline {
   --font-heading: var(--font-sans);
+  --font-sans: "MiSans", -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -117,6 +146,39 @@
     @apply border-border outline-ring/50;
   }
 
+  /* Scrollbars follow the shadcn design tokens: thin, transparent track, and
+     a rounded --border thumb that darkens on hover (matches ScrollArea). */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background-color: var(--border);
+    background-clip: padding-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover,
+  ::-webkit-scrollbar-thumb:focus-visible {
+    background-color: color-mix(in oklab, var(--muted-foreground) 50%, transparent);
+  }
+
+  ::-webkit-scrollbar-thumb:active {
+    background-color: color-mix(in oklab, var(--muted-foreground) 70%, transparent);
+  }
+
   html {
     scroll-behavior: smooth;
   }
@@ -127,7 +189,16 @@
     min-width: 320px;
     min-height: 100vh;
     overflow-x: hidden;
+    /* Latin glyphs render in MiSans' own Latin set; falls back to system UI
+       fonts if bundled MiSans fails to load. */
+    font-family: "MiSans", -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
     font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  code,
+  pre,
+  kbd {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
   }
 }
 

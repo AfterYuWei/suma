@@ -9,7 +9,7 @@ import (
 )
 
 func TestOpenMigratesDatabase(t *testing.T) {
-	db, err := Open(filepath.Join(t.TempDir(), "dockport.db"))
+	db, err := Open(filepath.Join(t.TempDir(), "suma.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -19,7 +19,7 @@ func TestOpenMigratesDatabase(t *testing.T) {
 }
 
 func TestOpenReplacesLegacyComposeNameUniqueness(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "dockport.db")
+	path := filepath.Join(t.TempDir(), "suma.db")
 	legacy, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)

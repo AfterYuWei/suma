@@ -2,17 +2,19 @@ package api
 
 import (
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 
-	"github.com/dockport/dockport/server/internal/auth"
-	composeService "github.com/dockport/dockport/server/internal/compose"
-	"github.com/dockport/dockport/server/internal/database"
-	"github.com/dockport/dockport/server/internal/docker"
-	"github.com/dockport/dockport/server/internal/image"
-	"github.com/dockport/dockport/server/internal/network"
-	"github.com/dockport/dockport/server/internal/node"
-	"github.com/dockport/dockport/server/internal/system"
-	"github.com/dockport/dockport/server/internal/volume"
+	"github.com/suma/suma/server/internal/auth"
+	composeService "github.com/suma/suma/server/internal/compose"
+	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/docker"
+	"github.com/suma/suma/server/internal/image"
+	"github.com/suma/suma/server/internal/network"
+	"github.com/suma/suma/server/internal/node"
+	"github.com/suma/suma/server/internal/system"
+	"github.com/suma/suma/server/internal/volume"
 	"github.com/gin-gonic/gin"
 )
 
@@ -155,7 +157,7 @@ func registerNodeRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps Dependenci
 		success(c, info)
 	})
 	resources.GET("/overview", func(c *gin.Context) {
-		adapter, _, ok := resolveNode(c, deps)
+		adapter, view, ok := resolveNode(c, deps)
 		if !ok {
 			return
 		}
@@ -172,7 +174,34 @@ func registerNodeRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps Dependenci
 			cpu += value.CPUPercent
 			memory += value.MemoryBytes
 		}
-		success(c, gin.H{"host": gin.H{"hostname": info.Name, "os": info.OperatingSystem, "kernel": info.KernelVersion, "architecture": info.Architecture, "cpus": info.CPUs, "cpu_percent": cpu, "memory_used": memory, "memory_total": info.MemoryBytes, "disk_used": diskUsage, "disk_total": 0, "network_rx": 0, "network_tx": 0, "uptime_seconds": 0}, "docker": info, "docker_disk_usage_bytes": diskUsage})
+		containersAggregate := gin.H{"cpu_percent": cpu, "memory_bytes": memory}
+		host := gin.H{"hostname": info.Name, "os": info.OperatingSystem, "kernel": info.KernelVersion, "architecture": info.Architecture, "cpus": info.CPUs, "memory_total": info.MemoryBytes}
+		// Host-wide metrics come from this process's own OS. Unix sockets are
+		// filesystem-local and loopback TCP implies the same machine; remote TCP
+		// nodes stay with engine-provided totals only.
+		if coLocatedNode(view) {
+			if snapshot, err := deps.Monitor.Snapshot(); err == nil {
+				if snapshot.CPUPercent != nil {
+					host["cpu_percent"] = *snapshot.CPUPercent
+				}
+				if snapshot.UptimeSeconds != nil {
+					host["uptime_seconds"] = *snapshot.UptimeSeconds
+				}
+				if snapshot.MemoryTotal != nil {
+					host["memory_total"] = *snapshot.MemoryTotal
+				}
+				if snapshot.MemoryUsed != nil {
+					host["memory_used"] = *snapshot.MemoryUsed
+				}
+				if snapshot.DiskTotal != nil {
+					host["disk_total"] = *snapshot.DiskTotal
+				}
+				if snapshot.DiskUsed != nil {
+					host["disk_used"] = *snapshot.DiskUsed
+				}
+			}
+		}
+		success(c, gin.H{"host": host, "containers": containersAggregate, "docker": info, "docker_disk_usage_bytes": diskUsage})
 	})
 	registerNodeContainerRoutes(resources, router, deps)
 	registerNodeImageRoutes(resources, deps)
@@ -843,6 +872,24 @@ func registerNodeVolumeRoutes(group *gin.RouterGroup, deps Dependencies) {
 		}
 		success(c, gin.H{"name": c.Param("name")})
 	})
+}
+
+func coLocatedNode(view node.View) bool {
+	if view.ConnectionType == node.ConnectionUnix {
+		return true
+	}
+	endpoint, err := url.Parse(view.Endpoint)
+	if err != nil {
+		return false
+	}
+	switch hostname := endpoint.Hostname(); hostname {
+	case "localhost", "::1":
+		return true
+	}
+	if strings.HasPrefix(view.Endpoint, "tcp://127.") {
+		return true
+	}
+	return false
 }
 
 func resolveNode(c *gin.Context, deps Dependencies) (*docker.Adapter, node.View, bool) {

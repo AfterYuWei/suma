@@ -1,22 +1,22 @@
 services:
-  dockport:
-    container_name: dockport
+  suma:
+    container_name: suma
     build: .
     # Keep production opt-in so it never competes with local development after reboot.
     restart: "no"
     ports:
       - "8080:8080"
     environment:
-      DOCKPORT_ADDRESS: ":8080"
-      DOCKPORT_DATA_ROOT: "${DOCKPORT_DATA_PATH:-/opt/dockport/data}"
-      DOCKPORT_DOCKER_HOST: "unix:///var/run/docker.sock"
-      DOCKPORT_COMPOSE_ROOT: "${DOCKPORT_DATA_PATH:-/opt/dockport/data}/compose"
-      DOCKPORT_BACKUP_ROOT: "${DOCKPORT_DATA_PATH:-/opt/dockport/data}/backups"
-      DOCKPORT_COMPOSE_COMMAND: "docker compose"
-      DOCKPORT_GIT_COMMAND: "git"
-      DOCKPORT_GIT_ROOT: "${DOCKPORT_DATA_PATH:-/opt/dockport/data}/gitops"
-      DOCKPORT_SECRET_KEY_FILE: "${DOCKPORT_DATA_PATH:-/opt/dockport/data}/secret.key"
+      SUMA_ADDRESS: ":8080"
+      SUMA_DATA_ROOT: "${SUMA_DATA_PATH:-/opt/suma/data}"
+      SUMA_DOCKER_HOST: "unix:///var/run/docker.sock"
+      SUMA_COMPOSE_ROOT: "${SUMA_DATA_PATH:-/opt/suma/data}/compose"
+      SUMA_BACKUP_ROOT: "${SUMA_DATA_PATH:-/opt/suma/data}/backups"
+      SUMA_COMPOSE_COMMAND: "docker compose"
+      SUMA_GIT_COMMAND: "git"
+      SUMA_GIT_ROOT: "${SUMA_DATA_PATH:-/opt/suma/data}/gitops"
+      SUMA_SECRET_KEY_FILE: "${SUMA_DATA_PATH:-/opt/suma/data}/secret.key"
     volumes:
       # Compose bind sources must be visible to the host daemon at the same path.
-      - ${DOCKPORT_DATA_PATH:-/opt/dockport/data}:${DOCKPORT_DATA_PATH:-/opt/dockport/data}
+      - ${SUMA_DATA_PATH:-/opt/suma/data}:${SUMA_DATA_PATH:-/opt/suma/data}
       - /var/run/docker.sock:/var/run/docker.sock

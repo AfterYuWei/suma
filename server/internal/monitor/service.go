@@ -1,16 +1,12 @@
 package monitor
 
 import (
-	"bufio"
 	"context"
+	"errors"
 	"os"
 	"runtime"
-	"strconv"
-	"strings"
-	"syscall"
-	"time"
 
-	"github.com/dockport/dockport/server/internal/docker"
+	"github.com/suma/suma/server/internal/docker"
 )
 
 type Host struct {
@@ -54,97 +50,34 @@ func (s *Service) Overview(ctx context.Context) (Overview, error) {
 	}
 	return Overview{Host: host, Docker: info}, nil
 }
+
+// SystemStats carries host-wide metrics. Pointer fields distinguish "not
+// measurable on this platform" (nil) from a genuine zero value.
+type SystemStats struct {
+	CPUs          int      `json:"cpus,omitempty"`
+	UptimeSeconds *uint64  `json:"uptime_seconds,omitempty"`
+	CPUPercent    *float64 `json:"cpu_percent,omitempty"`
+	MemoryUsed    *int64   `json:"memory_used,omitempty"`
+	MemoryTotal   *int64   `json:"memory_total,omitempty"`
+	DiskUsed      *uint64  `json:"disk_used,omitempty"`
+	DiskTotal     *uint64  `json:"disk_total,omitempty"`
+}
+
+// Snapshot reads host-wide metrics for the machine this process runs on.
+// Availability depends on the OS: Linux exposes CPU, memory, disk and uptime;
+// other Unix variants expose disk usage only; Windows currently exposes none.
+func (s *Service) Snapshot() (SystemStats, error) {
+	stats := s.systemStats()
+	if stats.CPUs == 0 && stats.DiskTotal == nil && stats.MemoryTotal == nil {
+		return stats, errors.New("host metrics unavailable on this platform")
+	}
+	return stats, nil
+}
+
 func readHost(dataPath string) (Host, error) {
 	hostname, _ := os.Hostname()
 	host := Host{Hostname: hostname, Architecture: runtime.GOARCH, CPUs: runtime.NumCPU()}
-	if value, err := os.ReadFile("/proc/sys/kernel/osrelease"); err == nil {
-		host.Kernel = strings.TrimSpace(string(value))
-	}
-	if value, err := os.ReadFile("/etc/os-release"); err == nil {
-		for _, line := range strings.Split(string(value), "\n") {
-			if strings.HasPrefix(line, "PRETTY_NAME=") {
-				host.OS = strings.Trim(strings.TrimPrefix(line, "PRETTY_NAME="), "\"")
-			}
-		}
-	}
-	var system syscall.Sysinfo_t
-	if syscall.Sysinfo(&system) == nil {
-		host.UptimeSeconds = uint64(system.Uptime)
-	}
-	memory, _ := os.ReadFile("/proc/meminfo")
-	values := map[string]int64{}
-	for _, line := range strings.Split(string(memory), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 2 {
-			value, _ := strconv.ParseInt(fields[1], 10, 64)
-			values[strings.TrimSuffix(fields[0], ":")] = value * 1024
-		}
-	}
-	host.MemoryTotal = values["MemTotal"]
-	host.MemoryUsed = host.MemoryTotal - values["MemAvailable"]
-	var stat syscall.Statfs_t
-	if syscall.Statfs(dataPath, &stat) == nil {
-		host.DiskTotal = stat.Blocks * uint64(stat.Bsize)
-		host.DiskUsed = (stat.Blocks - stat.Bavail) * uint64(stat.Bsize)
-	}
-	host.NetworkRX, host.NetworkTX = readNetwork()
-	host.CPUPercent = readCPU()
+	applyReleaseInfo(&host)
+	fillPlatformHost(dataPath, &host)
 	return host, nil
-}
-func readNetwork() (uint64, uint64) {
-	file, err := os.Open("/proc/net/dev")
-	if err != nil {
-		return 0, 0
-	}
-	defer file.Close()
-	var rx, tx uint64
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.Contains(line, ":") {
-			continue
-		}
-		parts := strings.Fields(strings.Replace(line, ":", " ", 1))
-		if len(parts) < 10 || parts[0] == "lo" {
-			continue
-		}
-		incoming, _ := strconv.ParseUint(parts[1], 10, 64)
-		outgoing, _ := strconv.ParseUint(parts[9], 10, 64)
-		rx += incoming
-		tx += outgoing
-	}
-	return rx, tx
-}
-func readCPU() float64 {
-	firstIdle, firstTotal := cpuSample()
-	time.Sleep(100 * time.Millisecond)
-	idle, total := cpuSample()
-	if total <= firstTotal {
-		return 0
-	}
-	return (1 - float64(idle-firstIdle)/float64(total-firstTotal)) * 100
-}
-func cpuSample() (uint64, uint64) {
-	value, err := os.ReadFile("/proc/stat")
-	if err != nil {
-		return 0, 0
-	}
-	fields := strings.Fields(strings.SplitN(string(value), "\n", 2)[0])
-	if len(fields) < 5 {
-		return 0, 0
-	}
-	var total uint64
-	for _, field := range fields[1:] {
-		number, _ := strconv.ParseUint(field, 10, 64)
-		total += number
-	}
-	idle, err := strconv.ParseUint(fields[4], 10, 64)
-	if err != nil {
-		return 0, 0
-	}
-	if len(fields) > 5 {
-		wait, _ := strconv.ParseUint(fields[5], 10, 64)
-		idle += wait
-	}
-	return idle, total
 }

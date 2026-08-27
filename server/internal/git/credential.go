@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dockport/dockport/server/internal/database"
-	"github.com/dockport/dockport/server/internal/secret"
+	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/secret"
 	"gorm.io/gorm"
 )
 

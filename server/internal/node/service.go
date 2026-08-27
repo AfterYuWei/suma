@@ -16,10 +16,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dockport/dockport/server/internal/compose"
-	"github.com/dockport/dockport/server/internal/database"
-	"github.com/dockport/dockport/server/internal/docker"
-	"github.com/dockport/dockport/server/internal/secret"
+	"github.com/suma/suma/server/internal/compose"
+	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/docker"
+	"github.com/suma/suma/server/internal/secret"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )

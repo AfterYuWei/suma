@@ -11,14 +11,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dockport/dockport/server/internal/audit"
-	"github.com/dockport/dockport/server/internal/auth"
-	credentialService "github.com/dockport/dockport/server/internal/credential"
-	"github.com/dockport/dockport/server/internal/database"
-	"github.com/dockport/dockport/server/internal/docker"
-	gitService "github.com/dockport/dockport/server/internal/git"
-	"github.com/dockport/dockport/server/internal/secret"
-	"github.com/dockport/dockport/server/internal/task"
+	"github.com/suma/suma/server/internal/audit"
+	"github.com/suma/suma/server/internal/auth"
+	credentialService "github.com/suma/suma/server/internal/credential"
+	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/docker"
+	gitService "github.com/suma/suma/server/internal/git"
+	"github.com/suma/suma/server/internal/secret"
+	"github.com/suma/suma/server/internal/task"
 	"github.com/gin-gonic/gin"
 )
 

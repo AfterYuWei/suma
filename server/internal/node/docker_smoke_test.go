@@ -9,19 +9,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dockport/dockport/server/internal/database"
-	"github.com/dockport/dockport/server/internal/secret"
+	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/secret"
 )
 
 // TestRealMTLSDockerNode is opt-in because it requires an independently
 // configured Docker Engine with client-certificate authentication.
 func TestRealMTLSDockerNode(t *testing.T) {
-	host := os.Getenv("DOCKPORT_SMOKE_TCP_HOST")
-	certDir := os.Getenv("DOCKPORT_SMOKE_TLS_DIR")
-	if host == "" || certDir == "" { t.Skip("set DOCKPORT_SMOKE_TCP_HOST and DOCKPORT_SMOKE_TLS_DIR for the mTLS Docker smoke test") }
+	host := os.Getenv("SUMA_SMOKE_TCP_HOST")
+	certDir := os.Getenv("SUMA_SMOKE_TLS_DIR")
+	if host == "" || certDir == "" { t.Skip("set SUMA_SMOKE_TCP_HOST and SUMA_SMOKE_TLS_DIR for the mTLS Docker smoke test") }
 	read := func(name string) string { value, err := os.ReadFile(filepath.Join(certDir, name)); if err != nil { t.Fatal(err) }; return string(value) }
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "dockport.db")); if err != nil { t.Fatal(err) }
+	db, err := database.Open(filepath.Join(root, "suma.db")); if err != nil { t.Fatal(err) }
 	secrets, err := secret.Open(filepath.Join(root, "secret.key")); if err != nil { t.Fatal(err) }
 	service, err := NewService(db, secrets, "unix:///var/run/docker.sock"); if err != nil { t.Fatal(err) }
 	credential, err := service.CreateTLSCredential(context.Background(), TLSCredentialInput{Name: "smoke-mtls", CA: read("ca.pem"), Certificate: read("cert.pem"), PrivateKey: read("key.pem")}); if err != nil { t.Fatal(err) }

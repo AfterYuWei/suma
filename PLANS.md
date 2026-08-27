@@ -1,6 +1,6 @@
-# DockPort MVP Plan
+# SUMA Plan
 
-This file records the completed MVP implementation. Every checked phase was verified by automated tests, production builds, or the real-Docker smoke test documented in `COMPLETION_REPORT.md`.
+This file records the completed MVP implementation. Every checked phase was verified by automated tests, production builds, or the real-Docker smoke tests recorded in the pre-launch verification log below.
 
 ## Completed phases
 
@@ -24,7 +24,7 @@ This file records the completed MVP implementation. Every checked phase was veri
 
 ### Universe Design realignment
 
-The completed items above cover the Semi component-layer migration. They are superseded for visual acceptance by the stricter requirement in `SEMI-MIGRATION.md`: DockPort must not maintain an independent visual language, and the Feishu Universe Design theme must own component appearance.
+The completed items above cover the Semi component-layer migration. Their visual-acceptance rules were superseded by the later shadcn/ui foundation section: the UI layer no longer keeps an independent Semi-based visual language.
 
 - [x] Universe theme gate: integrate official `@douyinfe/semi-vite-plugin` and `@semi-bot/semi-theme-universedesign`; prove the published theme package against React 19 Semi `2.102.x`, light/dark mode, lazy chunks, and production build. Verification: Universe `1.0.13` tokens resolved in Chrome and the production build passed with Semi `2.102.x`.
 - [x] Universe application frame: rebuild shell, authentication, command palette, navigation, theme controls, typography, spacing, and overlays from Semi compositions; remove project styling for those surfaces. Verification: desktop/mobile Nav, authentication, command palette, overlays, and theme controls passed isolated browser checks.
@@ -37,11 +37,11 @@ The completed items above cover the Semi component-layer migration. They are sup
 - [x] Expandable Compose operations: independent multi-row expansion, project start/stop/restart/update/down actions, live container status, and per-container start/stop/resume/restart/log/terminal shortcuts. Verification: `npm run lint`, `npm run typecheck`, and `npm run build`.
 - [x] Container-style Compose list and batch operations: rounded dense resource rows, right-aligned expand controls, multi-select, and batch start/stop/restart/update/down tasks with per-project results. Verification: `go test ./...`, `go build ./...`, `npm run lint`, `npm run typecheck`, and `npm run build`.
 - [x] Unified dense resource lists: Continuous Delivery, images, networks, and volumes now share the rounded high-density list language, responsive rows, semantic icons, compact metadata, empty/error states, and right-aligned actions used by containers and Compose. Verification: `npm run lint`, `npm run typecheck`, and `npm run build`.
-- [x] Reliable Compose runtime attribution: correlate containers by Compose working-directory labels rather than assuming the Docker Compose runtime name equals the DockPort project name. Verification: `go test ./...` and `go build ./...`.
+- [x] Reliable Compose runtime attribution: correlate containers by Compose working-directory labels rather than assuming the Docker Compose runtime name equals the SUMA project name. Verification: `go test ./...` and `go build ./...`.
 
 ### shadcn/ui foundation
 
-This section supersedes the Semi Design and Universe Design phases above (`SEMI-MIGRATION.md` is obsolete): the base UI layer is now shadcn/ui in the official `base-nova` style on `@base-ui/react` primitives with Tailwind v4 design tokens, dark-first defaults, light/dark/system themes, and the Lucide icon library.
+This section supersedes the Semi Design and Universe Design phases above (the former Universe styling boundary is retired): the base UI layer is now shadcn/ui in the official `base-nova` style on `@base-ui/react` primitives with Tailwind v4 design tokens, dark-first defaults, light/dark/system themes, and the Lucide icon library.
 
 - [x] Foundation: `components.json`, official `@theme inline` token layer in `src/styles.css` (oklch light/dark), `@/lib/utils` `cn()`, `@` path aliases, `shadcn/tailwind.css` utilities, and dependency swap from Semi to `@base-ui/react`. Verification: `npm run typecheck`.
 - [x] Registry components: all shared primitives (`button badge card input input-group textarea label select checkbox switch radio-group dialog alert-dialog alert dropdown-menu popover tooltip sheet command progress skeleton spinner separator collapsible tabs table scroll-area`) installed from the official base-nova registry source. Verification: `npm run typecheck`, `npm run lint`.
@@ -56,20 +56,30 @@ This section supersedes the Semi Design and Universe Design phases above (`SEMI-
 
 ## V2 multi-node Docker management
 
-- [ ] Agentless node registry: mounted `unix://` sockets and `tcp://` Docker APIs, default-node migration, runtime client replacement, duplicate Engine detection, background status probes, and safe reference-aware deletion. Verification: node service/security tests and real-Docker Unix/mTLS smoke test.
+- [x] Agentless node registry: mounted `unix://` sockets and `tcp://` Docker APIs, default-node migration, runtime client replacement, duplicate Engine detection, background status probes, and safe reference-aware deletion. Verification: node service/security tests pass and the real-Docker Unix engine (CD delivery/rollback smoke) plus a real TLSVerify-enabled Docker engine (`TestRealMTLSDockerNode`, Ping/Info/List) both passed on 2026-08-27.
 - [ ] Node-scoped operations: resource, overview, Compose, system, task, audit, and WebSocket APIs resolve an explicit node; legacy routes remain default-node aliases. Verification: HTTP/WebSocket isolation tests and backend gates.
-- [ ] Secure TCP and Compose: mTLS by default, loopback-only plaintext, encrypted TLS credentials, absolute allowlisted remote binds, and private temporary TLS/registry configuration with cleanup. Verification: security and runner cleanup tests.
+- [x] Secure TCP and Compose: mTLS by default, loopback-only plaintext, encrypted TLS credentials, absolute allowlisted remote binds, and private temporary TLS/registry configuration with cleanup. Verification: security tests and compose multinode runner cleanup tests pass (`go test ./...` green on 2026-08-27).
 - [ ] Multi-target CD: immutable target snapshots, parallel per-node deployments, per-node tasks/status/health/failure history, partial-failure status, and failed-node-only rollback. Verification: CD concurrency/recovery tests and multi-target real-Docker smoke test.
-- [ ] Credential authorization: Git, Registry, and Docker TLS credentials deny all nodes by default; projects require full-target authorization; in-use credentials and grants cannot be deleted. Verification: credential lifecycle tests.
+- [x] Credential authorization: Git, Registry, and Docker TLS credentials deny all nodes by default; projects require full-target authorization; in-use credentials and grants cannot be deleted. Verification: credential lifecycle tests pass (`go test ./...` green on 2026-08-27).
+- [x] Fleet overview and control-plane CD summary: `GET /api/v1/fleet/overview` aggregates every node in parallel (engine info, container/image counts, container CPU/memory totals, latency, live status with graceful degradation) and `GET /api/v1/cd/overview` aggregates delivery projects (release status, drift, runtime health, target nodes) for the global CD plane. The overview page is redesigned in two layers: a control-plane layer (fleet metric cards, node table with per-node resource columns and row-click node switching, CD project list with release/drift states, running-task counter) and a per-node detail layer (host resource cards, container table with CPU/memory columns, engine info with uptime and resource counts). Verification: `go test ./...`, `go build ./...`, `npm run lint`, `npm run typecheck`, and `npm run build`.
 - [ ] Multi-node web experience: persistent Header node selector, node-aware Query keys, system node management, global CD/Authentication Center, multi-target settings, and per-node Release progress. Verification: frontend gates and browser smoke test.
 - [ ] Documentation and final verification: V2 scope, deployment/security guidance, API documentation, all Go/web gates, and one Unix plus one mTLS TCP real-Docker smoke environment.
+
+## 上线前验证记录（2026-08-27）
+
+- 后端门禁：`go build ./...`、`go test ./...` 全部通过；此前无测试的 8 个包已补齐离线单元测试：image（拉取流解析/registry 分支）、network、volume、system、settings、config、docker adapter（httptest 假引擎）、monitor。
+- 前端门禁：`npm run lint`、`npm run typecheck`、`npm run build` 通过。
+- 真实 Docker 冒烟 1（Unix 本地引擎）：`SUMA_RUN_DOCKER_SMOKE=1 go test -tags dockersmoke ./internal/cd` — CD 双版本交付 + 回滚 + 运行时健康校验 PASS（14.1s）。
+- 真实 Docker 冒烟 2（TLSVerify 引擎）：本地 dind 容器（docker:27-dind，强制客户端证书认证），`SUMA_SMOKE_TCP_HOST=tcp://127.0.0.1:23760 SUMA_SMOKE_TLS_DIR=<certs> go test -tags dockersmoke ./internal/node` — `TestRealMTLSDockerNode` Ping/Info/List PASS（0.29s）；curl 无证书访问被 TLS 拒绝，确认 mTLS 生效。
+- 发现并修复上线阻断项：`docker-compose.yml` 仍使用 `DOCKPORT_*` 变量与 `dockport` 服务名（服务端实际读取 `SUMA_*`）、Makefile 遗留 `DOCKPORT_DEV_API` —— 已全部改为 `SUMA_*` / `suma`。
+- 文档同步完成：README/ARCHITECTURE/API/MVP-CHECKLIST/CD-DESIGN/SEMI-MIGRATION/AGENTS/CLAUDE/COMPLETION_REPORT 全部更名至 SUMA 并修正环境变量与路径事实错误。
 
 ## Future
 
 - Remote agents and SSH execution.
 - Docker Swarm and Kubernetes.
 - LDAP, OIDC, and SSO.
-- Git-driven continuous delivery through a Compose deployment adapter. Scope is CD only: DockPort consumes
+- Git-driven continuous delivery through a Compose deployment adapter. Scope is CD only: SUMA consumes
   deployable Compose configuration and images, and never acts as a CI runner or
   executes repository build/test pipelines.
   - [x] CD foundation: preserve Managed Compose projects; add immutable releases,

@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dockport/dockport/server/internal/compose"
-	"github.com/dockport/dockport/server/internal/database"
-	gitrepo "github.com/dockport/dockport/server/internal/git"
-	"github.com/dockport/dockport/server/internal/secret"
-	"github.com/dockport/dockport/server/internal/task"
+	"github.com/suma/suma/server/internal/compose"
+	"github.com/suma/suma/server/internal/database"
+	gitrepo "github.com/suma/suma/server/internal/git"
+	"github.com/suma/suma/server/internal/secret"
+	"github.com/suma/suma/server/internal/task"
 	"gorm.io/gorm"
 )
 
@@ -24,14 +24,14 @@ import (
 // real docker compose CLI against the local engine while keeping Git transport
 // deterministic (the real Git adapter has separate local-repository tests).
 func TestRealDockerCDDeliveryRollback(t *testing.T) {
-	if os.Getenv("DOCKPORT_RUN_DOCKER_SMOKE") != "1" {
-		t.Skip("set DOCKPORT_RUN_DOCKER_SMOKE=1 to use the local Docker engine")
+	if os.Getenv("SUMA_RUN_DOCKER_SMOKE") != "1" {
+		t.Skip("set SUMA_RUN_DOCKER_SMOKE=1 to use the local Docker engine")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "dockport.db"))
+	db, err := database.Open(filepath.Join(root, "suma.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestRealDockerCDDeliveryRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	projectName := fmt.Sprintf("dockport-cd-smoke-%d", time.Now().UnixNano())
+	projectName := fmt.Sprintf("suma-cd-smoke-%d", time.Now().UnixNano())
 	firstTree := smokeWorktree(t, "one")
 	firstCommit := strings.Repeat("a", 40)
 	gitClient := &fakeGitClient{revision: gitrepo.Revision{CommitSHA: firstCommit, CommitAuthor: "Smoke Test", CommitMessage: "first", WorktreePath: firstTree}}
@@ -149,7 +149,7 @@ func smokeWorktree(t *testing.T, release string) string {
   web:
     image: nginx:alpine
     labels:
-      io.dockport.smoke.release: "` + release + `"
+      io.suma.smoke.release: "` + release + `"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/ >/dev/null"]
       interval: 1s
