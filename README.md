@@ -66,6 +66,7 @@ SUMA 是一个面向多节点 Docker 管理的单体控制平面：通过一个 
 services:
   suma:
     image: ghcr.io/afteryuwei/suma:stable # 固定版本请改用具体 tag，如 :0.1.0
+    container_name: suma
     restart: unless-stopped
     ports:
       - "8080:8080"

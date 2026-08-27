@@ -66,6 +66,7 @@ Save this as `docker-compose.yml`:
 services:
   suma:
     image: ghcr.io/afteryuwei/suma:stable # pin a version tag like :0.1.0 for fixed releases
+    container_name: suma
     restart: unless-stopped
     ports:
       - "8080:8080"
