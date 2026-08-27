@@ -9,6 +9,7 @@ import { ListShell } from '../components/ui/list-shell'
 import { LoadingState } from '../components/ui/loading-state'
 import { Spinner } from '../components/ui/spinner'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
+import { TooltipHint } from '../components/ui/tooltip-hint'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { nodePath } from '../lib/nodes'
@@ -58,12 +59,12 @@ export function VolumesPage() {
           <TableBody>
             {(query.data ?? []).map((row) => (
               <TableRow key={row.name}>
-                <TableCell><div><span className="font-medium">{row.name}</span><span title={row.mountpoint} className="block max-w-72 truncate text-xs text-muted-foreground">{row.mountpoint}</span></div></TableCell>
+                <TableCell><div><span className="font-medium">{row.name}</span><TooltipHint content={row.mountpoint}><span className="block max-w-72 truncate text-xs text-muted-foreground">{row.mountpoint}</span></TooltipHint></div></TableCell>
                 <TableCell><Badge variant="outline">{row.driver}</Badge></TableCell>
                 <TableCell>{formatSize(row.size)}</TableCell>
                 <TableCell>{row.used_by.length ? <div className="flex max-w-64 flex-wrap gap-1">{row.used_by.map((used) => <Badge key={used} variant="secondary">{used}</Badge>)}</div> : <span className="text-sm text-muted-foreground">{zh ? '未使用' : 'Unused'}</span>}</TableCell>
                 <TableCell className="text-muted-foreground">{row.created_at ? new Date(row.created_at).toLocaleString(language) : '—'}</TableCell>
-                <TableCell><Button variant="ghost" size="icon-sm" className="text-red-600 hover:text-red-600 dark:text-red-400 dark:hover:text-red-400" disabled={row.used_by.length > 0} onClick={() => void removeVolume(row)} title={row.used_by.length ? (zh ? '存储卷正在使用中' : 'Volume is in use') : t('deleteVolume')} aria-label={t('deleteVolume')}><Trash2 /></Button></TableCell>
+                <TableCell><TooltipHint content={row.used_by.length ? (zh ? '存储卷正在使用中' : 'Volume is in use') : t('deleteVolume')}><Button variant="ghost" size="icon-sm" className="text-red-600 hover:text-red-600 dark:text-red-400 dark:hover:text-red-400" disabled={row.used_by.length > 0} onClick={() => void removeVolume(row)} aria-label={t('deleteVolume')}><Trash2 /></Button></TooltipHint></TableCell>
               </TableRow>
             ))}
           </TableBody>

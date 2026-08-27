@@ -15,6 +15,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '
 import { Spinner } from '../components/ui/spinner'
 import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
+import { TooltipHint } from '../components/ui/tooltip-hint'
 import { Textarea } from '../components/ui/textarea'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
@@ -68,7 +69,7 @@ export function NodesPage() {
                 <TableRow key={node.id}>
                   <TableCell className="max-w-80 whitespace-normal">
                     <div className="font-medium">{node.name}</div>
-                    <div className="truncate text-xs text-muted-foreground" title={node.endpoint}>{node.endpoint}</div>
+                    <TooltipHint content={node.endpoint}><span className="block truncate text-xs text-muted-foreground">{node.endpoint}</span></TooltipHint>
                     {node.last_error && <div className="mt-0.5 text-xs break-all text-destructive">{node.last_error}</div>}
                   </TableCell>
                   <TableCell>
@@ -80,23 +81,21 @@ export function NodesPage() {
                   <TableCell><StatusBadge tone={node.status === 'online' ? 'success' : 'neutral'}>{node.status}</StatusBadge></TableCell>
                   <TableCell>
                     <div className="flex items-center justify-end gap-0.5">
-                      <Button
+                      <TooltipHint content={zh ? '测试连接' : 'Test connection'}><Button
                         variant="ghost"
                         size="icon-sm"
                         aria-label={zh ? '测试连接' : 'Test connection'}
-                        title={zh ? '测试连接' : 'Test connection'}
                         disabled={test.isPending && test.variables === node.id}
                         onClick={() => test.mutate(node.id)}
-                      ><RefreshCw className={cn(test.isPending && test.variables === node.id && 'animate-spin')} /></Button>
-                      <Button variant="ghost" size="icon-sm" aria-label={zh ? '编辑' : 'Edit'} title={zh ? '编辑' : 'Edit'} onClick={() => edit(node)}><Pencil /></Button>
-                      <Button
+                      ><RefreshCw className={cn(test.isPending && test.variables === node.id && 'animate-spin')} /></Button></TooltipHint>
+                      <TooltipHint content={zh ? '编辑' : 'Edit'}><Button variant="ghost" size="icon-sm" aria-label={zh ? '编辑' : 'Edit'} onClick={() => edit(node)}><Pencil /></Button></TooltipHint>
+                      <TooltipHint content={zh ? '删除' : 'Delete'}><Button
                         variant="destructive"
                         size="icon-sm"
                         disabled={node.id === 'local'}
                         aria-label={zh ? '删除' : 'Delete'}
-                        title={zh ? '删除' : 'Delete'}
                         onClick={() => void remove(node)}
-                      ><Trash2 /></Button>
+                      ><Trash2 /></Button></TooltipHint>
                     </div>
                   </TableCell>
                 </TableRow>

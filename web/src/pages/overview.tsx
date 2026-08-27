@@ -8,6 +8,7 @@ import { Button } from '../components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
+import { TooltipHint } from '../components/ui/tooltip-hint'
 import type { ContainerSummary } from '../features/containers/types'
 import { api } from '../lib/api'
 import { displayDockerId } from '../lib/docker-id'
@@ -181,7 +182,7 @@ export function OverviewPage() {
   }
   const cdDrift = (project: CDProject) => {
     if (!project.configured) return null
-    if (project.drifted) return <span className="inline-flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400" title={project.drift_reason}><span className="size-2 rounded-full bg-amber-500" />{zh ? '偏移' : 'Drift'}</span>
+    if (project.drifted) return <TooltipHint content={project.drift_reason}><span className="inline-flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400"><span className="size-2 rounded-full bg-amber-500" />{zh ? '偏移' : 'Drift'}</span></TooltipHint>
     if (project.active_release && project.runtime_healthy) return <span className="inline-flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400"><span className="size-2 rounded-full bg-emerald-500" />{zh ? '已同步' : 'In sync'}</span>
     return null
   }
@@ -242,7 +243,7 @@ export function OverviewPage() {
                         <div key={project.name} className="flex flex-wrap items-center gap-x-4 gap-y-1.5 py-2.5 first:pt-0 last:pb-0">
                           <div className="min-w-40 flex-1 basis-48">
                             <Link to="/continuous-delivery/$projectName" params={{ projectName: project.name }} className="text-sm font-medium underline-offset-4 hover:underline">{project.name}</Link>
-                            <div className="truncate text-xs text-muted-foreground" title={project.repository_url}>{project.repository_url || (zh ? '尚未配置 Git 仓库' : 'Git repository not configured')}</div>
+                            <TooltipHint content={project.repository_url}><span className="block truncate text-xs text-muted-foreground">{project.repository_url || (zh ? '尚未配置 Git 仓库' : 'Git repository not configured')}</span></TooltipHint>
                           </div>
                           {project.configured && <span className="text-xs text-muted-foreground">{modeLabel(project.reconcile_mode)}</span>}
                           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -251,9 +252,9 @@ export function OverviewPage() {
                           {cdStatus(project)}
                           {cdDrift(project)}
                           {release && (
-                            <span className="ml-auto text-xs text-muted-foreground tabular-nums" title={release.commit_sha}>
+                            <TooltipHint content={release.commit_sha} className="ml-auto"><span className="text-xs text-muted-foreground tabular-nums">
                               #{release.id} · {release.commit_sha.slice(0, 8)} · {new Date(release.created_at).toLocaleString(language)}
-                            </span>
+                            </span></TooltipHint>
                           )}
                         </div>
                       )
@@ -306,14 +307,13 @@ export function OverviewPage() {
                                   ? '[&:hover>td]:bg-primary/[0.045] [&>td]:bg-primary/[0.06]'
                                   : 'hover:[&>td]:bg-muted/40 [&:focus-visible>td]:bg-muted/40',
                               )}
-                              title={node.last_error || `${node.hostname ?? ''} ${node.os ?? ''}`}
                               onClick={() => setDetailNodeID(node.id)}
                               onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setDetailNodeID(node.id) } }}
                             >
                             <TableCell>
                               <div className="flex items-center gap-2">
                                 <span className={cn('size-2 shrink-0 rounded-full', !node.enabled ? 'bg-zinc-400' : node.status === 'online' ? 'bg-emerald-500' : 'bg-red-500')} />
-                                <span className={cn('text-sm', selected && 'font-medium')}>{node.name}</span>
+                                <TooltipHint content={node.last_error || `${node.hostname ?? ''} ${node.os ?? ''}`}><span className={cn('text-sm', selected && 'font-medium')}>{node.name}</span></TooltipHint>
                               </div>
                             </TableCell>
                             <TableCell className="text-muted-foreground">{node.connection_type}</TableCell>
@@ -423,7 +423,7 @@ export function OverviewPage() {
                         {(containers.data ?? []).slice(0, 6).map((row) => (
                           <TableRow key={row.id}>
                             <TableCell><a href={`/containers/${row.id}`} className="font-medium underline-offset-4 hover:underline">{row.name}</a></TableCell>
-                            <TableCell className="max-w-56 truncate text-muted-foreground" title={row.image}>{row.image}</TableCell>
+                            <TableCell className="max-w-56 text-muted-foreground"><TooltipHint content={row.image}><span className="block truncate">{row.image}</span></TooltipHint></TableCell>
                             <TableCell>{stateBadge(row.state)}</TableCell>
                             <TableCell className="tabular-nums">{row.ports?.[0]?.public_port ? `${row.ports[0].public_port}:${row.ports[0].private_port}` : '—'}</TableCell>
                             <TableCell className="tabular-nums">{row.cpu_percent?.toFixed(1) ?? '—'}%</TableCell>

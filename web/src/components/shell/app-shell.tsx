@@ -19,6 +19,7 @@ import { Separator } from '../ui/separator'
 import { Sheet, SheetContent, SheetTitle } from '../ui/sheet'
 import { Button } from '../ui/button'
 import { ThemeToggle } from '../ui/theme-toggle'
+import { TooltipHint } from '../ui/tooltip-hint'
 import { cn } from '@/lib/utils'
 import { CommandPalette } from './command-palette'
 
@@ -208,20 +209,19 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
 
           <div className="ml-auto flex items-center gap-1.5">
-            <Button
+            <TooltipHint content={`${t('searchCommand')} (Ctrl+K)`}><Button
               variant="ghost"
               size="icon-sm"
               className="text-muted-foreground"
-              title={`${t('searchCommand')} (Ctrl+K)`}
               aria-label={t('searchCommand')}
               onClick={() => setCommandOpen(true)}
             >
               <Search />
-            </Button>
+            </Button></TooltipHint>
             <ThemeToggle />
-            <Button variant="ghost" size="sm" className="hidden text-xs font-semibold sm:inline-flex" title={t('signOut')} onClick={() => void logout()}>
+            <TooltipHint content={t('signOut')}><Button variant="ghost" size="sm" className="hidden text-xs font-semibold sm:inline-flex" onClick={() => void logout()}>
               DP
-            </Button>
+            </Button></TooltipHint>
           </div>
         </header>
 

@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../components/ui/sheet'
 import { Spinner } from '../components/ui/spinner'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
+import { TooltipHint } from '../components/ui/tooltip-hint'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { nodePath } from '../lib/nodes'
@@ -68,7 +69,7 @@ export function ImagesPage() {
                   <button type="button" onClick={() => setSelected(row.id)} className="-ml-2 flex items-center gap-2.5 rounded-md px-2 py-1 text-left outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50">
                     <Package className="size-5 shrink-0 text-muted-foreground" />
                     <span className="flex flex-col">
-                      <span className="max-w-[300px] truncate font-medium" title={row.tags?.[0] || '<none>:<none>'}>{row.tags?.[0] || '<none>:<none>'}</span>
+                      <TooltipHint content={row.tags?.[0] || '<none>:<none>'}><span className="max-w-[300px] truncate font-medium">{row.tags?.[0] || '<none>:<none>'}</span></TooltipHint>
                       <span className="font-mono text-xs text-muted-foreground">{row.id.replace('sha256:', '').slice(0, 12)}</span>
                     </span>
                   </button>
@@ -78,8 +79,8 @@ export function ImagesPage() {
                 <TableCell>{new Date(row.created).toLocaleString(language)}</TableCell>
                 <TableCell>
                   <div className="flex items-center gap-1">
-                    <Button variant="ghost" size="icon-sm" title={t('tag')} aria-label={t('tag')} onClick={() => void tag(row)}><TagIcon /></Button>
-                    <Button variant="destructive" size="icon-sm" title={t('removeImage')} aria-label={t('removeImage')} onClick={() => void removeImage(row)}><Trash2 /></Button>
+                    <TooltipHint content={t('tag')}><Button variant="ghost" size="icon-sm" aria-label={t('tag')} onClick={() => void tag(row)}><TagIcon /></Button></TooltipHint>
+                    <TooltipHint content={t('removeImage')}><Button variant="destructive" size="icon-sm" aria-label={t('removeImage')} onClick={() => void removeImage(row)}><Trash2 /></Button></TooltipHint>
                   </div>
                 </TableCell>
               </TableRow>

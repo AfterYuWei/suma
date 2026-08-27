@@ -13,6 +13,7 @@ import { LoadingState } from '../components/ui/loading-state'
 import { Spinner } from '../components/ui/spinner'
 import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
+import { TooltipHint } from '../components/ui/tooltip-hint'
 import type { ContainerMetrics, ContainerSummary } from '../features/containers/types'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
@@ -137,7 +138,7 @@ export function ContainersPage() {
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-col items-start gap-1">
-                      <span className="max-w-[240px] truncate" title={row.image}>{row.image}</span>
+                      <TooltipHint content={row.image}><span className="max-w-[240px] truncate">{row.image}</span></TooltipHint>
                       {row.labels['com.docker.compose.project']
                         ? <Badge variant="outline">Compose · {row.labels['com.docker.compose.service'] || row.labels['com.docker.compose.project']}</Badge>
                         : <Badge variant="outline" className="text-muted-foreground">{zh ? '独立容器' : 'Standalone'}</Badge>}
@@ -172,13 +173,13 @@ function ContainerActions({ row, zh, pending, run, rename, kill, remove }: { row
   const primary = row.state === 'running' ? 'stop' : row.state === 'paused' ? 'unpause' : 'start'
   const primaryLabel = row.state === 'running' ? (zh ? '停止' : 'Stop') : row.state === 'paused' ? (zh ? '恢复' : 'Unpause') : (zh ? '启动' : 'Start')
   return <div className="flex items-center justify-end gap-1">
-    <Button variant="ghost" size="icon-sm" title={zh ? '日志' : 'Logs'} aria-label={zh ? '日志' : 'Logs'} onClick={() => location.assign(`/containers/${row.id}#logs`)}><FileText /></Button>
-    <Button variant="ghost" size="icon-sm" disabled={row.state !== 'running'} title={zh ? '终端' : 'Terminal'} aria-label={zh ? '终端' : 'Terminal'} onClick={() => location.assign(`/containers/${row.id}#terminal`)}><SquareTerminal /></Button>
+    <TooltipHint content={zh ? '日志' : 'Logs'}><Button variant="ghost" size="icon-sm" aria-label={zh ? '日志' : 'Logs'} onClick={() => location.assign(`/containers/${row.id}#logs`)}><FileText /></Button></TooltipHint>
+    <TooltipHint content={zh ? '终端' : 'Terminal'}><Button variant="ghost" size="icon-sm" disabled={row.state !== 'running'} aria-label={zh ? '终端' : 'Terminal'} onClick={() => location.assign(`/containers/${row.id}#terminal`)}><SquareTerminal /></Button></TooltipHint>
     <Button variant={primary === 'stop' ? 'outline' : 'secondary'} size="sm" disabled={pending} onClick={() => run(primary)}>
       {pending ? <Spinner /> : primary === 'stop' ? <Square /> : <Play />}
       {primaryLabel}
     </Button>
-    <Button variant="ghost" size="icon-sm" disabled={pending} title={zh ? '重启' : 'Restart'} aria-label={zh ? '重启' : 'Restart'} onClick={() => run('restart')}><RefreshCw /></Button>
+    <TooltipHint content={zh ? '重启' : 'Restart'}><Button variant="ghost" size="icon-sm" disabled={pending} aria-label={zh ? '重启' : 'Restart'} onClick={() => run('restart')}><RefreshCw /></Button></TooltipHint>
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label={zh ? '更多操作' : 'More actions'}><MoreHorizontal /></Button>} />
       <DropdownMenuContent align="end" className="w-44">

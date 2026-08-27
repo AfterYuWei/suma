@@ -11,6 +11,7 @@ import { Spinner } from '../components/ui/spinner'
 import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
+import { TooltipHint } from '../components/ui/tooltip-hint'
 import type { ComposeProject } from '../features/compose/types'
 import type { ContainerSummary } from '../features/containers/types'
 import { api } from '../lib/api'
@@ -113,7 +114,7 @@ export function ComposeDetailPage() {
     <Button variant="ghost" size="sm" className="-ml-2 text-muted-foreground" onClick={() => void navigate({ to: '/compose' })}><ChevronLeft />Compose</Button>
     <ResourceFrame title={projectName} detail={project.can_manage ? (dirty ? (zh ? 'SUMA 托管 · 有未保存更改' : 'SUMA managed · Unsaved changes') : (zh ? 'SUMA 托管 · 已保存' : 'SUMA managed · Saved')) : (zh ? '从 Docker Compose 标签发现 · 只读' : 'Discovered from Docker Compose labels · Read-only')} action={headerActions}>
       <div className="flex w-full flex-col items-start gap-3">
-        {!project.can_manage && <Alert className="w-full pr-28"><AlertTitle>{zh ? '外部 Compose 项目' : 'External Compose project'}</AlertTitle><AlertDescription>{zh ? 'SUMA 从 Docker 容器标签发现了该项目。当前可以查看服务并操作单个容器；本地单文件项目可显式导入后管理。' : 'SUMA discovered this project from Docker container labels. You can inspect services and operate individual containers; local single-file projects can be explicitly imported for management.'}{project.config_files?.length ? <span className="mt-1 block font-mono text-xs">{project.config_files.join(', ')}</span> : null}</AlertDescription><AlertAction><Button size="sm" variant="outline" disabled={importProject.isPending || project.config_files?.length !== 1} onClick={() => importProject.mutate()} title={project.config_files?.length !== 1 ? (zh ? '仅支持导入单文件 Compose 项目' : 'Only single-file Compose projects can be imported') : undefined}>{importProject.isPending ? <Spinner className="size-3.5" /> : <Download />}{zh ? '导入' : 'Import'}</Button></AlertAction></Alert>}
+        {!project.can_manage && <Alert className="w-full pr-28"><AlertTitle>{zh ? '外部 Compose 项目' : 'External Compose project'}</AlertTitle><AlertDescription>{zh ? 'SUMA 从 Docker 容器标签发现了该项目。当前可以查看服务并操作单个容器；本地单文件项目可显式导入后管理。' : 'SUMA discovered this project from Docker container labels. You can inspect services and operate individual containers; local single-file projects can be explicitly imported for management.'}{project.config_files?.length ? <span className="mt-1 block font-mono text-xs">{project.config_files.join(', ')}</span> : null}</AlertDescription><AlertAction><TooltipHint content={project.config_files?.length !== 1 ? (zh ? '仅支持导入单文件 Compose 项目' : 'Only single-file Compose projects can be imported') : undefined}><Button size="sm" variant="outline" disabled={importProject.isPending || project.config_files?.length !== 1} onClick={() => importProject.mutate()}>{importProject.isPending ? <Spinner className="size-3.5" /> : <Download />}{zh ? '导入' : 'Import'}</Button></TooltipHint></AlertAction></Alert>}
         {notice && <p className={`text-sm ${action.isError ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'}`}>{notice}</p>}
         <Tabs value={view} onValueChange={(value) => setView(value as View)}>
           <TabsList variant="line">
@@ -159,7 +160,7 @@ function Services({ rows, loading, zh }: { rows?: ContainerSummary[]; loading: b
       {(rows ?? []).map((row) => (
         <TableRow key={row.id}>
           <TableCell className="font-medium">{row.labels['com.docker.compose.service'] || row.name}</TableCell>
-          <TableCell><span title={row.image} className="block max-w-72 truncate text-muted-foreground">{row.image}</span></TableCell>
+          <TableCell><TooltipHint content={row.image}><span className="block max-w-72 truncate text-muted-foreground">{row.image}</span></TooltipHint></TableCell>
           <TableCell><StatusBadge tone={stateTone(row.state)}>{row.state}</StatusBadge></TableCell>
           <TableCell className="text-muted-foreground">{row.status}</TableCell>
         </TableRow>

@@ -12,6 +12,7 @@ import { LoadingState } from '../components/ui/loading-state'
 import { Spinner } from '../components/ui/spinner'
 import { Switch } from '../components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
+import { TooltipHint } from '../components/ui/tooltip-hint'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { nodePath } from '../lib/nodes'
@@ -92,7 +93,7 @@ export function NetworksPage() {
                 <TableCell><div className="flex items-center gap-2"><Badge variant="outline">{row.driver}</Badge><span className="text-sm text-muted-foreground">{row.scope}</span></div></TableCell>
                 <TableCell className="text-muted-foreground">{row.ipam?.[0]?.subnet || '—'} · {row.ipam?.[0]?.gateway || '—'}</TableCell>
                 <TableCell><div className="flex items-center gap-2">{row.containers}{row.ipv6 && <Badge variant="secondary">IPv6</Badge>}{row.internal && <Badge variant="outline">{zh ? '内部' : 'Internal'}</Badge>}</div></TableCell>
-                <TableCell><Button variant="ghost" size="icon-sm" className="text-red-600 hover:text-red-600 dark:text-red-400 dark:hover:text-red-400" onClick={() => void removeNetwork(row)} title={t('deleteNetwork')} aria-label={t('deleteNetwork')}><Trash2 /></Button></TableCell>
+                <TableCell><TooltipHint content={t('deleteNetwork')}><Button variant="ghost" size="icon-sm" className="text-red-600 hover:text-red-600 dark:text-red-400 dark:hover:text-red-400" onClick={() => void removeNetwork(row)} aria-label={t('deleteNetwork')}><Trash2 /></Button></TooltipHint></TableCell>
               </TableRow>
             ))}
           </TableBody>

@@ -12,6 +12,7 @@ import { Spinner } from '../components/ui/spinner'
 import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../components/ui/tooltip'
+import { TooltipHint } from '../components/ui/tooltip-hint'
 import type { ComposeProject } from '../features/compose/types'
 import type { ContainerSummary } from '../features/containers/types'
 import { api } from '../lib/api'
@@ -79,7 +80,7 @@ export function ComposePage() {
         <Button variant="outline" size="sm" disabled={batch.isPending} onClick={() => void runBatch('start')}>{batch.isPending ? <Spinner className="size-3.5" /> : <Play size={16} />}{zh ? '启动' : 'Start'}</Button>
         <Button variant="outline" size="sm" disabled={batch.isPending} onClick={() => void runBatch('stop')}>{batch.isPending ? <Spinner className="size-3.5" /> : <Square size={16} />}{zh ? '停止' : 'Stop'}</Button>
         <Button variant="outline" size="sm" disabled={batch.isPending} onClick={() => void runBatch('restart')}>{batch.isPending ? <Spinner className="size-3.5" /> : <RefreshCw size={16} />}{zh ? '重启' : 'Restart'}</Button>
-        <Button variant="outline" size="sm" disabled={batch.isPending} onClick={() => void runBatch('update')} title={zh ? '为选中的项目拉取最新镜像并重新应用 Compose 配置' : 'Pull latest images and reapply Compose for selected projects'}>{batch.isPending ? <Spinner className="size-3.5" /> : <Download size={16} />}{zh ? '拉取并重建' : 'Pull & recreate'}</Button>
+        <TooltipHint content={zh ? '为选中的项目拉取最新镜像并重新应用 Compose 配置' : 'Pull latest images and reapply Compose for selected projects'}><Button variant="outline" size="sm" disabled={batch.isPending} onClick={() => void runBatch('update')}>{batch.isPending ? <Spinner className="size-3.5" /> : <Download size={16} />}{zh ? '拉取并重建' : 'Pull & recreate'}</Button></TooltipHint>
         <Button variant="destructive" size="sm" disabled={batch.isPending} onClick={() => void runBatch('down')}>{batch.isPending ? <Spinner className="size-3.5" /> : <Power size={16} />}Down</Button>
       </div>}
       {operationError && <Alert variant="destructive" className="w-full">
@@ -114,7 +115,7 @@ export function ComposePage() {
               <TableRow key={row.name} aria-expanded={isExpanded}>
                 <TableCell className="pr-0"><Checkbox disabled={!row.can_manage} checked={selected.has(row.name)} onCheckedChange={(checked) => toggleRow(row.name, checked === true)} aria-label={row.can_manage ? row.name : (zh ? `${row.name} 是只读外部项目` : `${row.name} is a read-only external project`)} /></TableCell>
                 <TableCell><Button variant="ghost" size="icon-xs" aria-expanded={isExpanded} aria-label={zh ? '展开项目容器' : 'Expand project containers'} onClick={() => toggleExpanded(row.name)}><ChevronRight className={isExpanded ? 'rotate-90 transition-transform' : 'transition-transform'} /></Button></TableCell>
-                <TableCell><div><div className="flex items-center gap-2"><Link to="/compose/$projectName" params={{ projectName: row.name }} className="font-medium hover:underline">{row.name}</Link><StatusBadge tone={row.can_manage ? 'outline' : 'neutral'}>{row.can_manage ? (zh ? '托管' : 'Managed') : (zh ? '外部' : 'External')}</StatusBadge></div><span title={row.path} className="block max-w-72 truncate text-xs text-muted-foreground">{row.path || (zh ? '工作目录未知' : 'Working directory unavailable')}</span></div></TableCell>
+                <TableCell><div><div className="flex items-center gap-2"><Link to="/compose/$projectName" params={{ projectName: row.name }} className="font-medium hover:underline">{row.name}</Link><StatusBadge tone={row.can_manage ? 'outline' : 'neutral'}>{row.can_manage ? (zh ? '托管' : 'Managed') : (zh ? '外部' : 'External')}</StatusBadge></div><TooltipHint content={row.path}><span className="block max-w-72 truncate text-xs text-muted-foreground">{row.path || (zh ? '工作目录未知' : 'Working directory unavailable')}</span></TooltipHint></div></TableCell>
                 <TableCell><StatusBadge tone={projectTone(row.status)}>{row.status}</StatusBadge></TableCell>
                 <TableCell><div className="flex items-baseline gap-2"><span>{row.services} {zh ? '服务' : 'services'}</span><span className="text-muted-foreground">{row.containers} {zh ? '容器' : 'containers'}</span></div></TableCell>
                 <TableCell className="text-muted-foreground">{new Date(row.updated_at).toLocaleString(language)}</TableCell>
@@ -179,7 +180,7 @@ function ProjectServices({ project, zh }: { project: ComposeProject; zh: boolean
         <TableRow key={row.id}>
           <TableCell><Link to="/containers/$containerId" params={{ containerId: row.id }} className="font-medium hover:underline">{row.labels['com.docker.compose.service'] || row.name}</Link></TableCell>
           <TableCell className="text-muted-foreground">{row.name}</TableCell>
-          <TableCell><span title={row.image} className="block max-w-56 truncate text-muted-foreground">{row.image}</span></TableCell>
+          <TableCell><TooltipHint content={row.image}><span className="block max-w-56 truncate text-muted-foreground">{row.image}</span></TooltipHint></TableCell>
           <TableCell><StatusBadge tone={containerTone(row.state)}>{row.state}</StatusBadge></TableCell>
           <TableCell><ServiceActions row={row} projectName={project.name} zh={zh} /></TableCell>
         </TableRow>
