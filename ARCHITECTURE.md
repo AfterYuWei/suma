@@ -64,7 +64,7 @@ Semantic tokens (`background`, `surface`, `surface-hover`, `border`, `muted`, `t
 
 ## Storage and paths
 
-- Container deployment data root: `/opt/suma/data` by default, configurable with `SUMA_DATA_PATH`
+- Container deployment data root: fixed to `/Data` via `ENV SUMA_DATA_ROOT=/Data` in the Dockerfile; bare-metal runs default to `./data` and any deployment can override with the env var
 - Default Compose root: `<data-root>/compose`
 - Default Git root: `<data-root>/gitops`
 - Default backup root: `<data-root>/backups`

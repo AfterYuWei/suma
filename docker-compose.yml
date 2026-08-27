@@ -8,15 +8,9 @@ services:
       - "8080:8080"
     environment:
       SUMA_ADDRESS: ":8080"
-      SUMA_DATA_ROOT: "${SUMA_DATA_PATH:-/opt/suma/data}"
       SUMA_DOCKER_HOST: "unix:///var/run/docker.sock"
-      SUMA_COMPOSE_ROOT: "${SUMA_DATA_PATH:-/opt/suma/data}/compose"
-      SUMA_BACKUP_ROOT: "${SUMA_DATA_PATH:-/opt/suma/data}/backups"
-      SUMA_COMPOSE_COMMAND: "docker compose"
-      SUMA_GIT_COMMAND: "git"
-      SUMA_GIT_ROOT: "${SUMA_DATA_PATH:-/opt/suma/data}/gitops"
-      SUMA_SECRET_KEY_FILE: "${SUMA_DATA_PATH:-/opt/suma/data}/secret.key"
     volumes:
-      # Compose bind sources must be visible to the host daemon at the same path.
-      - ${SUMA_DATA_PATH:-/opt/suma/data}:${SUMA_DATA_PATH:-/opt/suma/data}
+      # 生产镜像数据根目录固定为 /Data（镜像内 ENV SUMA_DATA_ROOT=/Data）。
+      # bind 源必须在宿主机 daemon 可见的同一路径下。
+      - /Data:/Data
       - /var/run/docker.sock:/var/run/docker.sock

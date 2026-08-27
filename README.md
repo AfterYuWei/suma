@@ -69,37 +69,30 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
-    environment:
-      SUMA_DATA_ROOT: "${SUMA_DATA_PATH:-/opt/suma/data}"
     volumes:
-      # 数据目录须与宿主同路径挂载，保证 Compose 相对 bind mount 在宿主机生效
-      - ${SUMA_DATA_PATH:-/opt/suma/data}:${SUMA_DATA_PATH:-/opt/suma/data}
+      # 容器内数据根目录固定为 /Data（镜像内置 SUMA_DATA_ROOT=/Data），无需显式设置环境变量。
+      # 挂载两侧保持同名路径，保证交付项目的相对 bind mount 在宿主机 daemon 可解析。
+      - /Data:/Data
       - /var/run/docker.sock:/var/run/docker.sock
 ```
 
 启动：
 
 ```bash
-mkdir -p /opt/suma/data && docker compose up -d
+mkdir -p /Data && docker compose up -d
 ```
 
-自定义数据位置：
-
-```bash
-SUMA_DATA_PATH=/srv/suma mkdir -p $SUMA_DATA_PATH
-SUMA_DATA_PATH=/srv/suma docker compose up -d
-```
+如需把数据放到其它磁盘：将 `/Data` 做成指向目标分区的符号链接，或直接把该分区挂载到 `/Data`；容器内外路径保持 `/Data` 不变。
 
 ### 方式二：docker run
 
 ```bash
-mkdir -p /opt/suma/data
+mkdir -p /Data
 
 docker run -d --name suma \
   --restart unless-stopped \
   -p 8080:8080 \
-  -e SUMA_DATA_ROOT=/opt/suma/data \
-  -v /opt/suma/data:/opt/suma/data \
+  -v /Data:/Data \
   -v /var/run/docker.sock:/var/run/docker.sock \
   ghcr.io/afteryuwei/suma:v0.1.0
 ```
@@ -112,7 +105,7 @@ docker run -d --name suma \
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `SUMA_DATA_ROOT` | `/opt/suma/data`（容器内约定） | 数据与凭据根目录，其余路径默认派生 |
+| `SUMA_DATA_ROOT` | `/Data`（生产镜像内置；裸机运行默认 `./data`） | 数据与凭据根目录，其余路径默认派生 |
 | `SUMA_ADDRESS` | `:8080` | 服务监听地址（改端口需同步映射宿主端口） |
 | `SUMA_COOKIE_SECURE` | `false` | HTTPS 部署时设为 `true` |
 | `SUMA_DOCKER_HOST` | `unix:///var/run/docker.sock` | 首次引导默认节点的引擎地址 |
@@ -150,7 +143,7 @@ make docker-up     # 构建并后台启动生产容器
 
 ## 数据与备份
 
-- `/opt/suma/data`（或你自定义的目录）包含 SQLite 数据库、本地 Compose 项目、Delivery Project 的 Git 工作区与凭据加密密钥 `secret.key`
+- `/Data` 目录包含 SQLite 数据库、本地 Compose 项目、Delivery Project 的 Git 工作区与凭据加密密钥 `secret.key`
 - 升级或迁移前先备份整个数据目录；`secret.key` 丢失将导致已存凭据无法解密
 
 ## 文档

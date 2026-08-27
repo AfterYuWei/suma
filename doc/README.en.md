@@ -69,38 +69,31 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
-    environment:
-      SUMA_DATA_ROOT: "${SUMA_DATA_PATH:-/opt/suma/data}"
     volumes:
-      # The data directory must be bind-mounted at the same absolute path so
-      # relative bind mounts inside managed Compose projects resolve on the host.
-      - ${SUMA_DATA_PATH:-/opt/suma/data}:${SUMA_DATA_PATH:-/opt/suma/data}
+      # The in-container data root is fixed to /Data (baked in as ENV SUMA_DATA_ROOT=/Data);
+      # no environment variable needed. Keep both sides of the mount at the same path so
+      # relative bind mounts inside delivered projects resolve on the host daemon.
+      - /Data:/Data
       - /var/run/docker.sock:/var/run/docker.sock
 ```
 
 Start it:
 
 ```bash
-mkdir -p /opt/suma/data && docker compose up -d
+mkdir -p /Data && docker compose up -d
 ```
 
-Custom data location:
-
-```bash
-SUMA_DATA_PATH=/srv/suma mkdir -p $SUMA_DATA_PATH
-SUMA_DATA_PATH=/srv/suma docker compose up -d
-```
+To store data on another disk: make `/Data` a symlink to a target partition, or mount that partition directly at `/Data`; keep the path `/Data` on both sides.
 
 ### Option 2: docker run
 
 ```bash
-mkdir -p /opt/suma/data
+mkdir -p /Data
 
 docker run -d --name suma \
   --restart unless-stopped \
   -p 8080:8080 \
-  -e SUMA_DATA_ROOT=/opt/suma/data \
-  -v /opt/suma/data:/opt/suma/data \
+  -v /Data:/Data \
   -v /var/run/docker.sock:/var/run/docker.sock \
   ghcr.io/afteryuwei/suma:v0.1.0
 ```
@@ -113,7 +106,7 @@ Open `http://<host-ip>:8080`, create the administrator account, and sign in.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SUMA_DATA_ROOT` | `/opt/suma/data` (container convention) | Root for data and credentials; all other paths derive from it by default |
+| `SUMA_DATA_ROOT` | `/Data` (baked into the production image; bare-metal runs default to `./data`) | Root for data and credentials; all other paths derive from it by default |
 | `SUMA_ADDRESS` | `:8080` | Listen address (map the host port accordingly) |
 | `SUMA_COOKIE_SECURE` | `false` | Set `true` when deployed behind HTTPS |
 | `SUMA_DOCKER_HOST` | `unix:///var/run/docker.sock` | Engine address used only for first-run node bootstrap |
@@ -151,7 +144,7 @@ Quality checks: `make check` (backend `go test ./...` + `go build ./...`; fronte
 
 ## Data and backups
 
-- `/opt/suma/data` (or your custom directory) holds the SQLite database, local Compose projects, Delivery Project Git worktrees, and the credential-encryption key `secret.key`
+- `/Data` holds the SQLite database, local Compose projects, Delivery Project Git worktrees, and the credential-encryption key `secret.key`
 - Back up the whole directory before upgrades or migrations; losing `secret.key` makes stored credentials undecryptable
 
 ## Documentation

@@ -205,7 +205,7 @@ If automatic rollback is enabled and a node deployment fails, SUMA restores that
 | `SUMA_SECRET_KEY_FILE` | `<data-root>/secret.key` | 32-byte AES-GCM key for credential and webhook secrets |
 | `SUMA_COMPOSE_COMMAND` | `docker compose` | Sole Compose process boundary |
 | `SUMA_COMPOSE_ROOT` | `<data-root>/compose` | Managed-mode Compose root |
-| `SUMA_DATA_ROOT` | `./data` | Base path for default persistent locations |
+| `SUMA_DATA_ROOT` | `./data` (the production image bakes it to `/Data`) | Base path for default persistent locations |
 
 The production image includes Git, OpenSSH client tools, CA certificates, Docker CLI, and the Compose plugin. The Compose/Git data root is mounted at the same absolute host/container path because bind sources are interpreted by the host Docker daemon.
 

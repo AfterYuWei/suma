@@ -16,7 +16,9 @@ RUN CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-s -w" -o /suma .
 FROM docker:29-cli
 RUN apk add --no-cache ca-certificates tzdata docker-cli-compose git openssh-client
 COPY --from=server-build /suma /usr/local/bin/suma
-RUN mkdir -p /opt/suma/data/compose /opt/suma/data/gitops /opt/suma/data/backups && addgroup -S suma && adduser -S -G suma suma && chown -R suma:suma /opt/suma
+RUN mkdir -p /Data/compose /Data/gitops /Data/backups && addgroup -S suma && adduser -S -G suma suma && chown -R suma:suma /Data
+# 生产镜像将数据根目录固定为 /Data；裸机运行仍默认 ./data，可用环境变量覆盖。
+ENV SUMA_DATA_ROOT=/Data
 EXPOSE 8080
-VOLUME ["/opt/suma/data"]
+VOLUME ["/Data"]
 ENTRYPOINT ["suma"]
