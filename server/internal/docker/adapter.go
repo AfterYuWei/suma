@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +23,8 @@ import (
 	dockervolume "github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/docker/go-connections/nat"
+	composedomain "github.com/suma/suma/server/internal/compose"
 	domain "github.com/suma/suma/server/internal/container"
 	imagedomain "github.com/suma/suma/server/internal/image"
 	networkdomain "github.com/suma/suma/server/internal/network"
@@ -155,6 +159,231 @@ func (a *Adapter) List(ctx context.Context) ([]domain.Summary, error) {
 		result = append(result, domain.Summary{ID: row.ID, Name: name, Image: row.Image, Command: row.Command, Created: time.Unix(row.Created, 0), State: string(row.State), Status: row.Status, Ports: ports, Labels: row.Labels})
 	}
 	return result, nil
+}
+
+func (a *Adapter) InspectComposeProject(ctx context.Context, projectName string) (composedomain.RuntimeProjectSnapshot, error) {
+	rows, err := a.client.ContainerList(ctx, dockercontainer.ListOptions{All: true, Filters: filters.NewArgs(filters.Arg("label", composedomain.ProjectLabel+"="+projectName))})
+	if err != nil {
+		return composedomain.RuntimeProjectSnapshot{}, fmt.Errorf("list Compose Project containers: %w", err)
+	}
+	snapshot := composedomain.RuntimeProjectSnapshot{ProjectName: projectName}
+	networkNames, volumeNames := map[string]bool{}, map[string]bool{}
+	for _, summary := range rows {
+		row, err := a.client.ContainerInspect(ctx, summary.ID)
+		if err != nil {
+			return composedomain.RuntimeProjectSnapshot{}, fmt.Errorf("inspect Compose Project container: %w", err)
+		}
+		container := composedomain.RuntimeContainer{ID: row.ID, Name: strings.TrimPrefix(row.Name, "/"), Labels: map[string]string{}}
+		container.CreatedAt, _ = time.Parse(time.RFC3339Nano, row.Created)
+		if row.State != nil {
+			container.State = string(row.State.Status)
+		}
+		if row.Config != nil {
+			container.Labels = cloneStringMap(row.Config.Labels)
+			container.Service = row.Config.Labels[composedomain.ServiceLabel]
+			container.ContainerNumber = composeLabelNumber(row.Config.Labels[composedomain.ContainerNumberLabel])
+			container.ConfigHash = row.Config.Labels[composedomain.ConfigHashLabel]
+			container.OneOff = composeLabelBool(row.Config.Labels[composedomain.OneOffLabel])
+			container.ImageReference = row.Config.Image
+			container.Config = mapComposeRuntimeConfig(row)
+		}
+		container.ImageID = row.Image
+		if image, _, err := a.client.ImageInspectWithRaw(ctx, row.Image); err == nil {
+			container.ImageInspectOK = true
+			if image.Config != nil {
+				container.ImageEnvironment = append([]string(nil), image.Config.Env...)
+			}
+		} else {
+			snapshot.Warnings = append(snapshot.Warnings, "Unable to inspect image defaults for container "+shortDockerID(row.ID))
+		}
+		if row.NetworkSettings != nil {
+			for name := range row.NetworkSettings.Networks {
+				networkNames[name] = true
+			}
+		}
+		for _, mount := range row.Mounts {
+			if string(mount.Type) == "volume" && mount.Name != "" {
+				volumeNames[mount.Name] = true
+			}
+		}
+		snapshot.Containers = append(snapshot.Containers, container)
+	}
+	for name := range networkNames {
+		row, err := a.client.NetworkInspect(ctx, name, dockernetwork.InspectOptions{})
+		if err != nil {
+			snapshot.Warnings = append(snapshot.Warnings, "Unable to inspect network "+name)
+			continue
+		}
+		snapshot.Networks = append(snapshot.Networks, composedomain.RuntimeNetwork{ID: row.ID, Name: row.Name, Driver: row.Driver, Internal: row.Internal, Labels: cloneStringMap(row.Labels)})
+	}
+	for name := range volumeNames {
+		row, err := a.client.VolumeInspect(ctx, name)
+		if err != nil {
+			snapshot.Warnings = append(snapshot.Warnings, "Unable to inspect volume "+name)
+			continue
+		}
+		snapshot.Volumes = append(snapshot.Volumes, composedomain.RuntimeVolume{Name: row.Name, Driver: row.Driver, Scope: row.Scope, Labels: cloneStringMap(row.Labels), Options: cloneStringMap(row.Options)})
+	}
+	sort.Slice(snapshot.Containers, func(i, j int) bool { return snapshot.Containers[i].ID < snapshot.Containers[j].ID })
+	sort.Slice(snapshot.Networks, func(i, j int) bool { return snapshot.Networks[i].Name < snapshot.Networks[j].Name })
+	sort.Slice(snapshot.Volumes, func(i, j int) bool { return snapshot.Volumes[i].Name < snapshot.Volumes[j].Name })
+	return snapshot, nil
+}
+
+func mapComposeRuntimeConfig(row dockertypes.ContainerJSON) composedomain.RuntimeConfig {
+	value := composedomain.RuntimeConfig{}
+	if row.Config != nil {
+		value.Image = row.Config.Image
+		value.Command = append([]string(nil), row.Config.Cmd...)
+		value.Entrypoint = append([]string(nil), row.Config.Entrypoint...)
+		value.User = row.Config.User
+		value.WorkingDirectory = row.Config.WorkingDir
+		value.Environment = append([]string(nil), row.Config.Env...)
+		value.Healthcheck = mapComposeHealth(row.Config.Healthcheck)
+		value.StopSignal = row.Config.StopSignal
+		if row.Config.StopTimeout != nil {
+			value.StopTimeout = *row.Config.StopTimeout
+		}
+		value.Hostname, value.DomainName = row.Config.Hostname, row.Config.Domainname
+		value.TTY, value.StdinOpen = row.Config.Tty, row.Config.OpenStdin
+		value.Labels = userComposeLabels(row.Config.Labels)
+		for port := range row.Config.ExposedPorts {
+			target, protocol := parseDockerPort(string(port))
+			value.Ports = append(value.Ports, composedomain.RuntimePort{Target: target, Protocol: protocol})
+		}
+	}
+	if row.HostConfig != nil {
+		host := row.HostConfig
+		value.Restart = composedomain.RuntimeRestart{Name: string(host.RestartPolicy.Name), MaximumRetryCount: host.RestartPolicy.MaximumRetryCount}
+		value.DNS = append([]string(nil), host.DNS...)
+		value.DNSSearch = append([]string(nil), host.DNSSearch...)
+		value.DNSOptions = append([]string(nil), host.DNSOptions...)
+		value.ExtraHosts = append([]string(nil), host.ExtraHosts...)
+		value.Sysctls = cloneStringMap(host.Sysctls)
+		value.CapAdd = append([]string(nil), host.CapAdd...)
+		value.CapDrop = append([]string(nil), host.CapDrop...)
+		value.SecurityOptions = append([]string(nil), host.SecurityOpt...)
+		value.Groups = append([]string(nil), host.GroupAdd...)
+		value.Privileged, value.ReadOnly = host.Privileged, host.ReadonlyRootfs
+		value.Init, value.ShmSize = host.Init, host.ShmSize
+		value.NetworkMode, value.PIDMode, value.IPCMode = string(host.NetworkMode), string(host.PidMode), string(host.IpcMode)
+		value.Runtime = host.Runtime
+		value.Resources = composedomain.RuntimeResources{CPUShares: host.CPUShares, NanoCPUs: host.NanoCPUs, CPUPeriod: host.CPUPeriod, CPUQuota: host.CPUQuota, CPUSet: host.CpusetCpus, Memory: host.Memory, MemoryReservation: host.MemoryReservation, MemorySwap: host.MemorySwap, PidsLimit: host.PidsLimit}
+		value.Logging = composedomain.RuntimeLogging{Driver: host.LogConfig.Type, Options: cloneStringMap(host.LogConfig.Config)}
+		for _, device := range host.Devices {
+			value.Devices = append(value.Devices, composedomain.RuntimeDevice{Source: device.PathOnHost, Destination: device.PathInContainer, Permissions: device.CgroupPermissions})
+		}
+		for _, limit := range host.Ulimits {
+			if limit != nil {
+				value.Ulimits = append(value.Ulimits, composedomain.RuntimeUlimit{Name: limit.Name, Soft: limit.Soft, Hard: limit.Hard})
+			}
+		}
+		value.Ports = mapComposePortBindings(value.Ports, host.PortBindings)
+	}
+	for _, mount := range row.Mounts {
+		value.Mounts = append(value.Mounts, composedomain.RuntimeMount{Type: string(mount.Type), Name: mount.Name, Source: mount.Source, Target: mount.Destination, ReadOnly: !mount.RW, Propagation: string(mount.Propagation)})
+	}
+	if row.NetworkSettings != nil {
+		for name, endpoint := range row.NetworkSettings.Networks {
+			aliases := []string(nil)
+			if endpoint != nil {
+				containerName := strings.TrimPrefix(row.Name, "/")
+				for _, alias := range endpoint.Aliases {
+					if alias != row.ID && alias != shortDockerID(row.ID) && alias != containerName {
+						aliases = append(aliases, alias)
+					}
+				}
+			}
+			sort.Strings(aliases)
+			value.Networks = append(value.Networks, composedomain.RuntimeEndpoint{Name: name, Aliases: aliases})
+		}
+	}
+	sort.Slice(value.Ports, func(i, j int) bool {
+		if value.Ports[i].Target != value.Ports[j].Target {
+			return value.Ports[i].Target < value.Ports[j].Target
+		}
+		if value.Ports[i].Published != value.Ports[j].Published {
+			return value.Ports[i].Published < value.Ports[j].Published
+		}
+		return value.Ports[i].Protocol < value.Ports[j].Protocol
+	})
+	sort.Slice(value.Mounts, func(i, j int) bool { return value.Mounts[i].Target < value.Mounts[j].Target })
+	sort.Slice(value.Networks, func(i, j int) bool { return value.Networks[i].Name < value.Networks[j].Name })
+	return value
+}
+
+func mapComposeHealth(value *dockercontainer.HealthConfig) *composedomain.RuntimeHealth {
+	if value == nil {
+		return nil
+	}
+	return &composedomain.RuntimeHealth{Test: append([]string(nil), value.Test...), Interval: int64(value.Interval), Timeout: int64(value.Timeout), StartPeriod: int64(value.StartPeriod), StartInterval: int64(value.StartInterval), Retries: value.Retries}
+}
+
+func mapComposePortBindings(exposed []composedomain.RuntimePort, bindings map[nat.Port][]nat.PortBinding) []composedomain.RuntimePort {
+	result := make([]composedomain.RuntimePort, 0, len(exposed)+len(bindings))
+	bound := map[string]bool{}
+	for port, values := range bindings {
+		target, protocol := parseDockerPort(string(port))
+		for _, binding := range values {
+			published, _ := strconv.ParseUint(binding.HostPort, 10, 16)
+			result = append(result, composedomain.RuntimePort{Target: target, Published: uint16(published), Protocol: protocol, HostIP: binding.HostIP})
+		}
+		bound[string(port)] = true
+	}
+	for _, port := range exposed {
+		key := strconv.Itoa(int(port.Target)) + "/" + port.Protocol
+		if !bound[key] {
+			result = append(result, port)
+		}
+	}
+	return result
+}
+
+func parseDockerPort(value string) (uint16, string) {
+	port, protocol, _ := strings.Cut(value, "/")
+	parsed, _ := strconv.ParseUint(port, 10, 16)
+	if protocol == "" {
+		protocol = "tcp"
+	}
+	return uint16(parsed), protocol
+}
+
+func userComposeLabels(values map[string]string) map[string]string {
+	result := map[string]string{}
+	for key, value := range values {
+		if !strings.HasPrefix(key, "com.docker.compose.") {
+			result[key] = value
+		}
+	}
+	return result
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(values))
+	for key, value := range values {
+		result[key] = value
+	}
+	return result
+}
+
+func composeLabelNumber(value string) int {
+	result, _ := strconv.Atoi(strings.TrimSpace(value))
+	return result
+}
+
+func composeLabelBool(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return value == "true" || value == "1" || value == "yes"
+}
+
+func shortDockerID(value string) string {
+	if len(value) > 12 {
+		return value[:12]
+	}
+	return value
 }
 
 func (a *Adapter) Metrics(ctx context.Context) ([]domain.Metrics, error) {

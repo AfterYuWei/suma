@@ -18,6 +18,7 @@ import (
 	dockercontainer "github.com/docker/docker/api/types/container"
 	dockernetwork "github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/system"
+	composedomain "github.com/suma/suma/server/internal/compose"
 	domain "github.com/suma/suma/server/internal/container"
 	networkdomain "github.com/suma/suma/server/internal/network"
 	volumedomain "github.com/suma/suma/server/internal/volume"
@@ -256,6 +257,58 @@ func TestAdapterListContainers(t *testing.T) {
 	}
 	if second.Ports != nil && len(second.Ports) != 0 {
 		t.Fatalf("unexpected ports on unnamed container: %#v", second.Ports)
+	}
+}
+
+func TestAdapterInspectsWholeComposeProject(t *testing.T) {
+	ctx := context.Background()
+	containerID := strings.Repeat("ab", 32)
+	imageID := "sha256:" + strings.Repeat("cd", 32)
+	labels := map[string]string{
+		composedomain.ProjectLabel: "shop", composedomain.ServiceLabel: "web",
+		composedomain.ContainerNumberLabel: "2", composedomain.ConfigHashLabel: "config-v1",
+	}
+	stub := newDockerStub(t, map[string]http.HandlerFunc{
+		"/containers/json": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, []dockercontainer.Summary{{ID: containerID, Labels: labels}})
+		},
+		"/containers/" + containerID + "/json": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"Id": containerID, "Name": "/shop-web-2", "Image": imageID, "Created": "2026-08-27T00:00:00Z",
+				"Config":          map[string]any{"Image": "example/web:v1", "Env": []string{"PATH=/usr/bin", "MODE=prod"}, "Labels": labels, "Cmd": []string{"serve"}},
+				"HostConfig":      map[string]any{"RestartPolicy": map[string]any{"Name": "unless-stopped"}, "PortBindings": map[string]any{"8080/tcp": []map[string]string{{"HostIp": "127.0.0.1", "HostPort": "18080"}}}},
+				"State":           map[string]any{"Status": "running", "Running": true},
+				"NetworkSettings": map[string]any{"Networks": map[string]any{"shop_default": map[string]any{"Aliases": []string{"web"}}}},
+				"Mounts":          []map[string]any{{"Type": "volume", "Name": "shop_data", "Source": "/var/lib/docker/volumes/shop_data/_data", "Destination": "/data", "RW": true}},
+			})
+		},
+		"/images/" + imageID + "/json": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, map[string]any{"Id": imageID, "Config": map[string]any{"Env": []string{"PATH=/usr/bin"}}})
+		},
+		"/networks/shop_default": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, map[string]any{"Name": "shop_default", "Id": "network-id", "Driver": "bridge", "Labels": map[string]string{composedomain.ProjectLabel: "shop"}})
+		},
+		"/volumes/shop_data": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, map[string]any{"Name": "shop_data", "Driver": "local", "Scope": "local", "Labels": map[string]string{composedomain.ProjectLabel: "shop"}})
+		},
+	})
+	adapter := newAdapter(t, stub)
+	value, err := adapter.InspectComposeProject(ctx, "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(value.Containers) != 1 || value.Containers[0].Service != "web" || value.Containers[0].ContainerNumber != 2 || !value.Containers[0].ImageInspectOK {
+		t.Fatalf("snapshot = %#v", value)
+	}
+	if len(value.Containers[0].Config.Ports) != 1 || value.Containers[0].Config.Ports[0].Published != 18080 {
+		t.Fatalf("ports = %#v", value.Containers[0].Config.Ports)
+	}
+	if len(value.Networks) != 1 || len(value.Volumes) != 1 {
+		t.Fatalf("resources = %#v / %#v", value.Networks, value.Volumes)
+	}
+	requests := stub.find(t, func(request stubRequest) bool { return request.Path == "/containers/json" })
+	if len(requests) != 1 || !strings.Contains(requests[0].Query.Get("filters"), composedomain.ProjectLabel) {
+		t.Fatalf("container filters = %#v", requests)
 	}
 }
 

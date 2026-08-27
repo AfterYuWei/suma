@@ -123,11 +123,26 @@ func (s *Service) Get(ctx context.Context, name string) (Project, error) {
 }
 
 const (
-	composeProjectLabel     = "com.docker.compose.project"
-	composeServiceLabel     = "com.docker.compose.service"
-	composeWorkingDirLabel  = "com.docker.compose.project.working_dir"
-	composeConfigFilesLabel = "com.docker.compose.project.config_files"
+	composeProjectLabel     = ProjectLabel
+	composeServiceLabel     = ServiceLabel
+	composeWorkingDirLabel  = WorkingDirLabel
+	composeConfigFilesLabel = ConfigFilesLabel
 )
+
+func (s *Service) Observe(ctx context.Context, name string) (ObservedComposeProject, error) {
+	if _, err := s.findProject(ctx, name); err != nil {
+		return ObservedComposeProject{}, err
+	}
+	inspector, ok := s.containers.(RuntimeInspector)
+	if !ok {
+		return ObservedComposeProject{}, errors.New("Docker runtime does not support Compose Project inspection")
+	}
+	snapshot, err := inspector.InspectComposeProject(ctx, name)
+	if err != nil {
+		return ObservedComposeProject{}, err
+	}
+	return ObserveRuntimeProject(snapshot), nil
+}
 
 func decorate(project Project, containers []containerdomain.Summary) Project {
 	services, running := map[string]struct{}{}, 0

@@ -87,6 +87,30 @@ func (service staticContainers) List(context.Context) ([]containerdomain.Summary
 	return service.rows, nil
 }
 
+type observableContainers struct {
+	staticContainers
+	snapshot RuntimeProjectSnapshot
+}
+
+func (service observableContainers) InspectComposeProject(context.Context, string) (RuntimeProjectSnapshot, error) {
+	return service.snapshot, nil
+}
+
+func TestObserveBuildsProjectAggregateThroughRuntimeInspector(t *testing.T) {
+	containers := observableContainers{
+		staticContainers: staticContainers{rows: []containerdomain.Summary{{ID: "one", Labels: map[string]string{composeProjectLabel: "shop"}}}},
+		snapshot:         RuntimeProjectSnapshot{ProjectName: "shop", Containers: []RuntimeContainer{{ID: "one", Service: "web", Config: RuntimeConfig{Image: "web:v1"}}}},
+	}
+	service := &Service{root: t.TempDir(), containers: containers}
+	value, err := service.Observe(context.Background(), "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Name != "shop" || len(value.Services) != 1 || value.Services[0].Name != "web" {
+		t.Fatalf("observation = %#v", value)
+	}
+}
+
 func TestReleaseEnvironmentDoesNotForwardSumaSecrets(t *testing.T) {
 	t.Setenv("SUMA_SECRET_KEY_FILE", "/sensitive/key")
 	t.Setenv("SUMA_GIT_PASSWORD", "sensitive-token")
