@@ -8,8 +8,10 @@ import { Checkbox } from '../components/ui/checkbox'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '../components/ui/dropdown-menu'
 import { ErrorState } from '../components/ui/error-state'
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '../components/ui/input-group'
+import { ListShell } from '../components/ui/list-shell'
 import { LoadingState } from '../components/ui/loading-state'
 import { Spinner } from '../components/ui/spinner'
+import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import type { ContainerMetrics, ContainerSummary } from '../features/containers/types'
 import { api } from '../lib/api'
@@ -23,7 +25,6 @@ const ports = (value: ContainerSummary) => value.ports.slice(0, 2).map((port) =>
 const memory = (bytes: number) => bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(2)} GB` : `${(bytes / 1024 ** 2).toFixed(0)} MB`
 const uptime = (seconds: number) => !seconds ? '—' : seconds >= 86400 ? `${Math.floor(seconds / 86400)}d` : seconds >= 3600 ? `${Math.floor(seconds / 3600)}h` : `${Math.floor(seconds / 60)}m`
 const stateLabel = (state: string, zh: boolean) => zh ? ({ running: '运行中', paused: '已暂停', restarting: '重启中', exited: '已停止', dead: '异常', created: '已创建' }[state] ?? state) : state
-const stateBadgeClass = (state: string) => state === 'running' ? 'border-transparent bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' : state === 'paused' || state === 'restarting' ? 'border-transparent bg-amber-500/15 text-amber-600 dark:text-amber-500' : state === 'dead' ? 'border-transparent bg-red-500/15 text-red-600 dark:text-red-400' : 'text-muted-foreground'
 
 export function ContainersPage() {
   const nodeID = useUIStore((state) => state.currentNodeID)
@@ -72,8 +73,8 @@ export function ContainersPage() {
   const killContainer = async (row: ContainerSummary) => { if (await confirmDialog({ title: zh ? `强制终止 ${row.name}？` : `Force kill ${row.name}?`, description: zh ? '容器主进程会被立即终止，不会等待正常退出。' : 'The main process will be killed immediately without a graceful shutdown.', confirmLabel: zh ? '强制终止' : 'Force kill', danger: true })) action.mutate({ id: row.id, name: 'kill' }) }
 
   const toolbar = <div className="flex flex-wrap items-center gap-2">
-    <Badge variant="outline" className="border-transparent bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">{running} {zh ? '运行中' : 'running'}</Badge>
-    <Badge variant="outline" className="border-transparent bg-amber-500/15 text-amber-600 dark:text-amber-500">{paused} {zh ? '已暂停' : 'paused'}</Badge>
+    <StatusBadge tone="success">{running} {zh ? '运行中' : 'running'}</StatusBadge>
+    <StatusBadge tone="warning">{paused} {zh ? '已暂停' : 'paused'}</StatusBadge>
     <Badge variant="outline" className="text-muted-foreground">{stopped} {zh ? '已停止' : 'stopped'}</Badge>
     <InputGroup className="w-[260px]">
       <InputGroupAddon align="inline-start"><Search /></InputGroupAddon>
@@ -105,10 +106,10 @@ export function ContainersPage() {
         </Alert>
       )}
       {!query.isPending && !query.isError && (rows.length === 0 ? <EmptyState icon={<Search className="size-5" />} title={zh ? '没有匹配的容器' : 'No matching containers'} detail={zh ? '调整筛选条件或在本节点创建新的容器后再试。' : 'Adjust the filter or create a container on this node.'} /> :
-        <div className="w-full overflow-hidden rounded-xl border border-border bg-card">
+        <ListShell>
           <Table>
             <TableHeader>
-              <TableRow className="bg-muted/40 hover:bg-muted/40">
+              <TableRow>
                 <TableHead className="w-10 pl-3">
                   <Checkbox checked={allSelected} indeterminate={someSelected} onCheckedChange={(checked) => toggleAll(checked)} aria-label={allSelected ? (zh ? '取消全选' : 'Deselect all') : (zh ? '全选本页' : 'Select all')} />
                 </TableHead>
@@ -142,7 +143,7 @@ export function ContainersPage() {
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-col items-start gap-1">
-                      <Badge variant="outline" className={stateBadgeClass(row.state)}>{stateLabel(row.state, zh)}</Badge>
+                      <StatusBadge tone={row.state === 'running' ? 'success' : row.state === 'paused' || row.state === 'restarting' ? 'warning' : row.state === 'dead' ? 'critical' : 'neutral'}>{stateLabel(row.state, zh)}</StatusBadge>
                       <span className="text-xs text-muted-foreground">{uptime(row.uptime_seconds)}</span>
                     </div>
                   </TableCell>
@@ -161,7 +162,7 @@ export function ContainersPage() {
               ))}
             </TableBody>
           </Table>
-        </div>)}
+        </ListShell>)}
     </div>
   </ResourceFrame>
 }

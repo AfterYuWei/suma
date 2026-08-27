@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { ErrorState } from '../components/ui/error-state'
 import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
+import { ListShell } from '../components/ui/list-shell'
 import { LoadingState } from '../components/ui/loading-state'
 import { Spinner } from '../components/ui/spinner'
 import { Switch } from '../components/ui/switch'
@@ -73,28 +74,30 @@ export function NetworksPage() {
         <NetworkIcon className="size-5 text-muted-foreground" />
         <p className="text-sm font-medium">{zh ? '暂无网络' : 'No networks'}</p>
         <p className="text-sm text-muted-foreground">{zh ? '创建网络后会显示在这里。' : 'Create a network to see it here.'}</p>
-      </div> : <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>{zh ? '网络' : 'Network'}</TableHead>
-            <TableHead>{zh ? '驱动 / 范围' : 'Driver / scope'}</TableHead>
-            <TableHead>{zh ? '子网 / 网关' : 'Subnet / gateway'}</TableHead>
-            <TableHead>{zh ? '连接' : 'Attached'}</TableHead>
-            <TableHead className="w-16"><span className="sr-only">{t('deleteNetwork')}</span></TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {(query.data ?? []).map((row) => (
-            <TableRow key={row.id}>
-              <TableCell><div><span className="font-medium">{row.name}</span><span className="block text-xs text-muted-foreground">{row.id.slice(0, 12)}</span></div></TableCell>
-              <TableCell><div className="flex items-center gap-2"><Badge variant="outline">{row.driver}</Badge><span className="text-sm text-muted-foreground">{row.scope}</span></div></TableCell>
-              <TableCell className="text-muted-foreground">{row.ipam?.[0]?.subnet || '—'} · {row.ipam?.[0]?.gateway || '—'}</TableCell>
-              <TableCell><div className="flex items-center gap-2">{row.containers}{row.ipv6 && <Badge variant="secondary">IPv6</Badge>}{row.internal && <Badge variant="outline">{zh ? '内部' : 'Internal'}</Badge>}</div></TableCell>
-              <TableCell><Button variant="ghost" size="icon-sm" className="text-red-600 hover:text-red-600 dark:text-red-400 dark:hover:text-red-400" onClick={() => void removeNetwork(row)} title={t('deleteNetwork')} aria-label={t('deleteNetwork')}><Trash2 /></Button></TableCell>
+      </div> : <ListShell>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>{zh ? '网络' : 'Network'}</TableHead>
+              <TableHead>{zh ? '驱动 / 范围' : 'Driver / scope'}</TableHead>
+              <TableHead>{zh ? '子网 / 网关' : 'Subnet / gateway'}</TableHead>
+              <TableHead>{zh ? '连接' : 'Attached'}</TableHead>
+              <TableHead className="w-16"><span className="sr-only">{t('deleteNetwork')}</span></TableHead>
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>}
+          </TableHeader>
+          <TableBody>
+            {(query.data ?? []).map((row) => (
+              <TableRow key={row.id}>
+                <TableCell><div><span className="font-medium">{row.name}</span><span className="block text-xs text-muted-foreground">{row.id.slice(0, 12)}</span></div></TableCell>
+                <TableCell><div className="flex items-center gap-2"><Badge variant="outline">{row.driver}</Badge><span className="text-sm text-muted-foreground">{row.scope}</span></div></TableCell>
+                <TableCell className="text-muted-foreground">{row.ipam?.[0]?.subnet || '—'} · {row.ipam?.[0]?.gateway || '—'}</TableCell>
+                <TableCell><div className="flex items-center gap-2">{row.containers}{row.ipv6 && <Badge variant="secondary">IPv6</Badge>}{row.internal && <Badge variant="outline">{zh ? '内部' : 'Internal'}</Badge>}</div></TableCell>
+                <TableCell><Button variant="ghost" size="icon-sm" className="text-red-600 hover:text-red-600 dark:text-red-400 dark:hover:text-red-400" onClick={() => void removeNetwork(row)} title={t('deleteNetwork')} aria-label={t('deleteNetwork')}><Trash2 /></Button></TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </ListShell>}
       {create.isError && <ErrorState description={create.error.message} />}
     </div>
   </ResourceFrame>

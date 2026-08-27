@@ -7,11 +7,13 @@ import { Alert, AlertDescription } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Checkbox } from '../components/ui/checkbox'
+import { ListShell } from '../components/ui/list-shell'
 import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../components/ui/sheet'
 import { Spinner } from '../components/ui/spinner'
+import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { Textarea } from '../components/ui/textarea'
 import { api } from '../lib/api'
@@ -27,12 +29,6 @@ interface NodeFormValues extends Omit<NodeInput, 'allowed_bind_roots'> { allowed
 const blank = (): NodeFormValues => ({ name: '', connection_type: 'unix', endpoint: 'unix:///var/run/docker.sock', tls_mode: 'disabled', allowed_bind_roots: '', enabled: true })
 
 const connectionLabels: Record<string, string> = { unix: 'Unix Socket', tcp: 'Docker TCP' }
-
-function StatusBadge({ status }: { status: string }) {
-  return status === 'online'
-    ? <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:bg-emerald-500/15 dark:text-emerald-400">{status}</Badge>
-    : <Badge variant="secondary">{status}</Badge>
-}
 
 export function NodesPage() {
   const { language } = useI18n()
@@ -55,7 +51,7 @@ export function NodesPage() {
     {query.isPending
       ? <LoadingState compact rows={4} label={zh ? '正在加载节点' : 'Loading nodes'} />
       : (
-          <Table>
+          <ListShell><Table>
             <TableHeader>
               <TableRow>
                 <TableHead>{zh ? '节点' : 'Node'}</TableHead>
@@ -81,7 +77,7 @@ export function NodesPage() {
                       <Badge variant="outline" className="text-xs">{node.tls_mode === 'required' ? 'mTLS' : 'PLAIN'}</Badge>
                     </div>
                   </TableCell>
-                  <TableCell><StatusBadge status={node.status} /></TableCell>
+                  <TableCell><StatusBadge tone={node.status === 'online' ? 'success' : 'neutral'}>{node.status}</StatusBadge></TableCell>
                   <TableCell>
                     <div className="flex items-center justify-end gap-0.5">
                       <Button
@@ -106,7 +102,7 @@ export function NodesPage() {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+          </Table></ListShell>
         )}
 
     <Sheet open={open} onOpenChange={(next) => setOpen(next)} disablePointerDismissal>

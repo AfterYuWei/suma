@@ -3,10 +3,10 @@ import { useNavigate } from '@tanstack/react-router'
 import { ArrowUpRight, Boxes, Cpu, HardDrive, Layers3, MemoryStick, Network } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { LoadingState } from '../components/ui/loading-state'
-import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Progress } from '../components/ui/progress'
+import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import type { ContainerSummary } from '../features/containers/types'
 import { api } from '../lib/api'
@@ -59,16 +59,14 @@ export function OverviewPage() {
     { key: zh ? '运行 / 停止' : 'Running / stopped', value: `${data?.docker.containers_running ?? 0} / ${data?.docker.containers_stopped ?? 0}` },
   ]
 
-  const stateBadge = (state: string) => state === 'running'
-    ? <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:bg-emerald-500/15 dark:text-emerald-400">{state}</Badge>
-    : <Badge variant="secondary">{state}</Badge>
+  const stateBadge = (state: string) => <StatusBadge tone={state === 'running' ? 'success' : 'neutral'}>{state}</StatusBadge>
 
   if (overview.isPending) return <LoadingState label={zh ? '正在加载概览' : 'Loading overview'} rows={8} />
 
   return <ResourceFrame
     title={data?.host.hostname ?? (zh ? '概览' : 'Overview')}
     detail={`${data?.host.os ?? '—'} · ${data?.host.kernel ?? '—'}`}
-    action={<Badge variant="secondary" className={cn(overview.isSuccess && 'bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:bg-emerald-500/15 dark:text-emerald-400')}>{overview.isSuccess ? (zh ? 'Docker Engine 在线' : 'Docker Engine online') : (zh ? '正在连接' : 'Connecting')}</Badge>}
+    action={<StatusBadge tone={overview.isSuccess ? 'success' : 'warning'}>{overview.isSuccess ? (zh ? 'Docker Engine 在线' : 'Docker Engine online') : (zh ? '正在连接' : 'Connecting')}</StatusBadge>}
   >
     <div className="flex w-full flex-col gap-6">
       <div className="grid w-full gap-4 sm:grid-cols-2 xl:grid-cols-4">

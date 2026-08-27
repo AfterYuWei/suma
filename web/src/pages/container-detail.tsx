@@ -2,13 +2,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from '@tanstack/react-router'
 import { ChevronLeft, MoreHorizontal, OctagonX, Pause, Pencil, Play, RefreshCw, Square, Trash2 } from 'lucide-react'
 import { lazy, useState } from 'react'
-import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '../components/ui/dropdown-menu'
 import { ErrorState } from '../components/ui/error-state'
 import { LoadingState } from '../components/ui/loading-state'
 import { Spinner } from '../components/ui/spinner'
+import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import type { ContainerDetail } from '../features/containers/types'
@@ -45,7 +45,7 @@ export function ContainerDetailPage() {
   const label = (name: (typeof tabs)[number]) => zh ? ({ Overview: '概览', Logs: '日志', Terminal: '终端', Stats: '统计', Inspect: '检查' } as const)[name] : name
 
   const actions = <div className="flex flex-wrap items-center gap-2">
-    <Badge variant="outline" className={row.state === 'running' ? 'border-transparent bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'}>{row.state}</Badge>
+    <StatusBadge tone={row.state === 'running' ? 'success' : row.state === 'paused' || row.state === 'restarting' ? 'warning' : row.state === 'dead' ? 'critical' : 'neutral'}>{row.state}</StatusBadge>
     {row.state === 'running'
       ? <Button variant="outline" disabled={action.isPending} onClick={() => action.mutate('stop')}>{action.isPending ? <Spinner /> : <Square />}{zh ? '停止' : 'Stop'}</Button>
       : <Button disabled={action.isPending} onClick={() => action.mutate('start')}>{action.isPending ? <Spinner /> : <Play />}{zh ? '启动' : 'Start'}</Button>}
@@ -93,7 +93,7 @@ export function ContainerDetailPage() {
             <div className="overflow-hidden rounded-lg border border-border">
               <Table>
                 <TableHeader>
-                  <TableRow className="bg-muted/40 hover:bg-muted/40">
+                  <TableRow>
                     <TableHead className="h-8">{zh ? '变量' : 'Variable'}</TableHead>
                     <TableHead className="h-8">{zh ? '值' : 'Value'}</TableHead>
                   </TableRow>

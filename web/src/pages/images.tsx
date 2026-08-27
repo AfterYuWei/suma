@@ -3,6 +3,7 @@ import { Download, Package, Tag as TagIcon, Trash2 } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
+import { ListShell } from '../components/ui/list-shell'
 import { LoadingState } from '../components/ui/loading-state'
 import { ErrorState } from '../components/ui/error-state'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
@@ -49,10 +50,10 @@ export function ImagesPage() {
 
   return <ResourceFrame title={t('images')} detail={zh ? `${query.data?.length ?? 0} 个本地镜像` : `${query.data?.length ?? 0} local images`} action={pullForm}>
     {query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载镜像' : 'Loading images'} /> : query.isError ? <ErrorState description={query.error.message} /> : (query.data ?? []).length === 0 ? <EmptyState icon={<Package size={20} />} title={zh ? '暂无本地镜像' : 'No local images'} detail={zh ? '输入镜像引用并拉取后会显示在这里。' : 'Pull an image reference to see it here.'} /> :
-      <div className="w-full overflow-hidden rounded-xl border border-border bg-card">
+      <ListShell>
         <Table>
           <TableHeader>
-            <TableRow className="bg-muted/40 hover:bg-muted/40">
+            <TableRow>
               <TableHead>{zh ? '镜像' : 'Image'}</TableHead>
               <TableHead className="min-w-[110px]">{zh ? '大小' : 'Size'}</TableHead>
               <TableHead className="min-w-[90px]">{zh ? '引用' : 'Usage'}</TableHead>
@@ -85,7 +86,7 @@ export function ImagesPage() {
             ))}
           </TableBody>
         </Table>
-      </div>}
+      </ListShell>}
 
     <Sheet open={!!selected} onOpenChange={(open) => { if (!open) setSelected('') }}>
       <SheetContent side="right" className="w-[448px] max-w-full gap-0 sm:max-w-[448px]">

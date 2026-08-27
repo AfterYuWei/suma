@@ -1,11 +1,12 @@
 import { Fragment, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
-import { LoadingState } from '../components/ui/loading-state'
-import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
+import { ListShell } from '../components/ui/list-shell'
+import { LoadingState } from '../components/ui/loading-state'
 import { Progress } from '../components/ui/progress'
 import { Spinner } from '../components/ui/spinner'
+import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
@@ -17,12 +18,7 @@ import { ResourceFrame } from './images'
 interface Task { id: string; type: string; name: string; status: string; progress: number; message: string; created_at: string }
 interface Log { id: number; level: string; message: string; created_at: string }
 
-function StatusBadge({ status }: { status: string }) {
-  if (status === 'success') return <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:bg-emerald-500/15 dark:text-emerald-400">{status}</Badge>
-  if (status === 'failed') return <Badge variant="destructive">{status}</Badge>
-  if (status === 'running') return <Badge>{status}</Badge>
-  return <Badge variant="secondary">{status}</Badge>
-}
+const taskTone = (status: string) => status === 'success' ? 'success' : status === 'failed' ? 'critical' : status === 'running' ? 'warning' : 'neutral'
 
 export function TasksPage() {
   const nodeID = useUIStore((state) => state.currentNodeID)
@@ -48,7 +44,7 @@ export function TasksPage() {
       {query.isPending
         ? <LoadingState label={zh ? '正在加载任务' : 'Loading tasks'} />
         : (
-            <Table>
+            <ListShell><Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>{zh ? '任务' : 'Task'}</TableHead>
@@ -75,7 +71,7 @@ export function TasksPage() {
                         <div className="text-xs text-muted-foreground">{row.message || row.type}</div>
                       </TableCell>
                       <TableCell><Progress value={Number(row.progress)} /></TableCell>
-                      <TableCell><StatusBadge status={row.status} /></TableCell>
+                      <TableCell><StatusBadge tone={taskTone(row.status)}>{row.status}</StatusBadge></TableCell>
                       <TableCell className="text-muted-foreground tabular-nums">{new Date(row.created_at).toLocaleString(language)}</TableCell>
                     </TableRow>
                     {expandedID === row.id && (
@@ -88,7 +84,7 @@ export function TasksPage() {
                   </Fragment>
                 ))}
               </TableBody>
-            </Table>
+            </Table></ListShell>
           )}
     </ResourceFrame>
   )

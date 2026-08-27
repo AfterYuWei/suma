@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Checkbox } from '../components/ui/checkbox'
 import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
+import { ListShell } from '../components/ui/list-shell'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '../components/ui/sheet'
 import { Spinner } from '../components/ui/spinner'
@@ -78,7 +79,7 @@ export function AuthenticationPage() {
   </ResourceFrame>
 }
 
-function CredentialList({ empty, zh, children }: { empty: boolean; zh: boolean; children: ReactNode }) { return empty ? <EmptyHint icon={<ShieldCheck className="size-6" />} title={zh ? '暂无匹配的凭据' : 'No matching credentials'} /> : <ul className="flex w-full flex-col divide-y rounded-xl border bg-card text-sm">{children}</ul> }
+function CredentialList({ empty, zh, children }: { empty: boolean; zh: boolean; children: ReactNode }) { return empty ? <EmptyHint icon={<ShieldCheck className="size-6" />} title={zh ? '暂无匹配的凭据' : 'No matching credentials'} /> : <ListShell><ul className="flex w-full flex-col divide-y text-sm">{children}</ul></ListShell> }
 function EmptyHint({ icon, title }: { icon: ReactNode; title: string }) { return <div className="flex w-full flex-col items-center gap-1.5 rounded-xl border border-dashed py-10 text-center"><span className="text-muted-foreground">{icon}</span><p className="text-sm font-medium">{title}</p></div> }
 function CredentialRow({ icon, title, detail, meta, onEdit, onRemove }: { icon: ReactNode; title: string; detail: string; meta: string; onEdit: () => void; onRemove: () => void }) {
   return <li className="flex items-center gap-3 px-3 py-2.5">

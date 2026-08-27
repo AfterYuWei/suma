@@ -2,12 +2,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from '@tanstack/react-router'
 import { ChevronLeft, FileCheck2, Play, Save, Trash2 } from 'lucide-react'
 import { lazy, Suspense, useEffect, useState } from 'react'
-import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Card, CardContent } from '../components/ui/card'
 import { ErrorState } from '../components/ui/error-state'
 import { LoadingState } from '../components/ui/loading-state'
 import { Spinner } from '../components/ui/spinner'
+import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import type { ComposeProject } from '../features/compose/types'
@@ -21,8 +21,8 @@ import { ResourceFrame } from './images'
 
 const Monaco = lazy(() => import('@monaco-editor/react'))
 type View = 'Files' | 'Services' | 'Logs'
-const activeClass = 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-const warnClass = 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400'
+const statusTone = (status: string) => status === 'running' ? 'success' : status === 'degraded' ? 'warning' : 'neutral'
+const stateTone = (state: string) => state === 'running' ? 'success' : 'neutral'
 
 export function ComposeDetailPage() {
   const { projectName } = useParams({ from: '/compose/$projectName' })
@@ -92,9 +92,8 @@ export function ComposeDetailPage() {
 
   const project = query.data
   const dirty = compose !== project.compose || environment !== project.environment
-  const statusClass = project.status === 'running' ? activeClass : project.status === 'degraded' ? warnClass : ''
   const headerActions = <div className="flex flex-wrap items-center gap-2">
-    <Badge variant="outline" className={statusClass}>{project.status}</Badge>
+    <StatusBadge tone={statusTone(project.status)}>{project.status}</StatusBadge>
     {['start', 'stop', 'restart', 'pull', 'build', 'down'].map((name) => <Button key={name} variant={name === 'down' ? 'destructive' : 'outline'} disabled={action.isPending} onClick={() => void run(name)}>{name}</Button>)}
     <Button disabled={action.isPending} onClick={() => void run('up')}>{action.isPending ? <Spinner className="size-4" /> : <Play size={16} />}Up</Button>
   </div>
@@ -148,7 +147,7 @@ function Services({ rows, loading, zh }: { rows?: ContainerSummary[]; loading: b
         <TableRow key={row.id}>
           <TableCell className="font-medium">{row.labels['com.docker.compose.service'] || row.name}</TableCell>
           <TableCell><span title={row.image} className="block max-w-72 truncate text-muted-foreground">{row.image}</span></TableCell>
-          <TableCell><Badge variant="outline" className={row.state === 'running' ? activeClass : ''}>{row.state}</Badge></TableCell>
+          <TableCell><StatusBadge tone={stateTone(row.state)}>{row.state}</StatusBadge></TableCell>
           <TableCell className="text-muted-foreground">{row.status}</TableCell>
         </TableRow>
       ))}

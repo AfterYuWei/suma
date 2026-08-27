@@ -3,12 +3,13 @@ import { Link } from '@tanstack/react-router'
 import { ChevronRight, CircleAlert, Download, FileText, Play, Plus, Power, RefreshCw, Square, SquareTerminal, X } from 'lucide-react'
 import { useState } from 'react'
 import { Alert, AlertAction, AlertDescription } from '../components/ui/alert'
-import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Checkbox } from '../components/ui/checkbox'
 import { ErrorState } from '../components/ui/error-state'
+import { ListShell } from '../components/ui/list-shell'
 import { LoadingState } from '../components/ui/loading-state'
 import { Spinner } from '../components/ui/spinner'
+import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import type { ComposeProject } from '../features/compose/types'
 import type { ContainerSummary } from '../features/containers/types'
@@ -20,10 +21,8 @@ import { useUIStore } from '../stores/ui'
 import { ResourceFrame } from './images'
 
 const starter = `services:\n  app:\n    image: nginx:alpine\n    ports:\n      - "8080:80"\n`
-const activeClass = 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-const warnClass = 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400'
-const projectStatusClass = (status: string) => status === 'running' ? activeClass : status === 'degraded' ? warnClass : ''
-const containerStatusClass = (state: string) => state === 'running' ? activeClass : state === 'paused' || state === 'restarting' ? warnClass : ''
+const projectTone = (status: string) => status === 'running' ? 'success' : status === 'degraded' ? 'warning' : 'neutral'
+const containerTone = (state: string) => state === 'running' ? 'success' : state === 'paused' || state === 'restarting' ? 'warning' : 'neutral'
 
 export function ComposePage() {
   const nodeID = useUIStore((state) => state.currentNodeID)
@@ -56,9 +55,9 @@ export function ComposePage() {
   const toggleExpanded = (name: string) => { const next = new Set(expanded); if (next.has(name)) next.delete(name); else next.add(name); setExpanded(next) }
 
   const toolbar = <div className="flex flex-wrap items-center gap-2">
-    <Badge variant="outline" className={activeClass}>{running} {zh ? '运行中' : 'running'}</Badge>
-    <Badge variant="outline" className={warnClass}>{degraded} {zh ? '异常' : 'degraded'}</Badge>
-    <Badge variant="outline">{stopped} {zh ? '已停止' : 'stopped'}</Badge>
+    <StatusBadge tone="success">{running} {zh ? '运行中' : 'running'}</StatusBadge>
+    <StatusBadge tone="warning">{degraded} {zh ? '异常' : 'degraded'}</StatusBadge>
+    <StatusBadge tone="neutral">{stopped} {zh ? '已停止' : 'stopped'}</StatusBadge>
     <Button onClick={() => void add()} disabled={create.isPending}>{create.isPending ? <Spinner className="size-4" /> : <Plus size={16} />}{t('newProject')}</Button>
   </div>
 
@@ -79,7 +78,7 @@ export function ComposePage() {
       {query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载 Compose 项目' : 'Loading Compose projects'} /> : query.isError ? <ErrorState description={query.error.message} /> : rows.length === 0 ? <div className="flex w-full flex-col items-center gap-1 rounded-xl bg-card px-4 py-10 text-center ring-1 ring-foreground/10">
         <p className="text-sm font-medium">{zh ? '暂无 Compose 项目' : 'No Compose projects'}</p>
         <p className="text-sm text-muted-foreground">{zh ? '点击“新建项目”后会显示在这里。' : 'Create a project to see it here.'}</p>
-      </div> : <Table>
+      </div> : <ListShell><Table>
         <TableHeader>
           <TableRow>
             <TableHead className="w-9 pr-0"><Checkbox checked={allSelected} indeterminate={!allSelected && selected.size > 0} onCheckedChange={(checked) => toggleAll(checked === true)} aria-label={zh ? '全选' : 'Select all'} /></TableHead>
@@ -99,7 +98,7 @@ export function ComposePage() {
                 <TableCell className="pr-0"><Checkbox checked={selected.has(row.name)} onCheckedChange={(checked) => toggleRow(row.name, checked === true)} aria-label={row.name} /></TableCell>
                 <TableCell><Button variant="ghost" size="icon-xs" aria-expanded={isExpanded} aria-label={zh ? '展开项目容器' : 'Expand project containers'} onClick={() => toggleExpanded(row.name)}><ChevronRight className={isExpanded ? 'rotate-90 transition-transform' : 'transition-transform'} /></Button></TableCell>
                 <TableCell><div><Link to="/compose/$projectName" params={{ projectName: row.name }} className="font-medium hover:underline">{row.name}</Link><span title={row.path} className="block max-w-72 truncate text-xs text-muted-foreground">{row.path}</span></div></TableCell>
-                <TableCell><Badge variant="outline" className={projectStatusClass(row.status)}>{row.status}</Badge></TableCell>
+                <TableCell><StatusBadge tone={projectTone(row.status)}>{row.status}</StatusBadge></TableCell>
                 <TableCell><div className="flex items-baseline gap-2"><span>{row.services} {zh ? '服务' : 'services'}</span><span className="text-muted-foreground">{row.containers} {zh ? '容器' : 'containers'}</span></div></TableCell>
                 <TableCell className="text-muted-foreground">{new Date(row.updated_at).toLocaleString(language)}</TableCell>
                 <TableCell><ProjectActions row={row} zh={zh} /></TableCell>
@@ -108,7 +107,7 @@ export function ComposePage() {
             ]
           })}
         </TableBody>
-      </Table>}
+      </Table></ListShell>}
       {create.isError && <ErrorState description={create.error.message} />}
     </div>
   </ResourceFrame>
@@ -152,7 +151,7 @@ function ProjectServices({ project, zh }: { project: ComposeProject; zh: boolean
           <TableCell><Link to="/containers/$containerId" params={{ containerId: row.id }} className="font-medium hover:underline">{row.labels['com.docker.compose.service'] || row.name}</Link></TableCell>
           <TableCell className="text-muted-foreground">{row.name}</TableCell>
           <TableCell><span title={row.image} className="block max-w-56 truncate text-muted-foreground">{row.image}</span></TableCell>
-          <TableCell><Badge variant="outline" className={containerStatusClass(row.state)}>{row.state}</Badge></TableCell>
+          <TableCell><StatusBadge tone={containerTone(row.state)}>{row.state}</StatusBadge></TableCell>
           <TableCell><ServiceActions row={row} projectName={project.name} zh={zh} /></TableCell>
         </TableRow>
       ))}

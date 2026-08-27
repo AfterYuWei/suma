@@ -143,13 +143,13 @@ export function AppShell({ children }: { children: ReactNode }) {
   const currentNode = nodes.data?.find((node) => node.id === currentNodeID)
 
   return (
-    <div className="flex min-h-screen">
-      <aside className="sticky top-0 hidden h-screen shrink-0 overflow-hidden border-r bg-sidebar text-sidebar-foreground transition-all lg:block" style={{ width: sidebarOpen ? 240 : 72 }}>
+    <div className="flex h-screen overflow-hidden bg-background">
+      <aside className="hidden shrink-0 overflow-hidden transition-all lg:block" style={{ width: sidebarOpen ? 240 : 72 }}>
         {navigation()}
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-40 flex h-14 shrink-0 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur md:px-6">
+        <header className="flex h-14 shrink-0 items-center gap-2 px-4 md:px-6">
           <Button
             variant="ghost"
             size="icon"
@@ -192,11 +192,13 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </header>
 
-        <main className="min-w-0 flex-1 px-4 py-5 md:px-6 xl:px-8">{children}</main>
+        <main className="min-h-0 min-w-0 flex-1 px-4 pb-4 md:px-6 md:pb-6">
+          <div className="h-full overflow-y-auto rounded-xl border border-border/60 bg-card px-4 py-5 md:px-6 xl:px-8">{children}</div>
+        </main>
       </div>
 
       <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
-        <SheetContent side="left" className="w-60 bg-sidebar p-0" showCloseButton={false}>
+        <SheetContent side="left" className="w-60 p-0" showCloseButton={false}>
           <SheetTitle className="sr-only">{zh ? '主导航' : 'Primary navigation'}</SheetTitle>
           {navigation(true)}
         </SheetContent>

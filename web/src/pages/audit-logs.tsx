@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronLeftIcon, ChevronRightIcon } from 'lucide-react'
-import { cn } from '@/lib/utils'
 import { LoadingState } from '../components/ui/loading-state'
-import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
+import { ListShell } from '../components/ui/list-shell'
+import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { api } from '../lib/api'
 import { displayDockerId } from '../lib/docker-id'
@@ -35,7 +35,7 @@ export function AuditLogsPage() {
           ? <p className="py-12 text-center text-sm text-muted-foreground">{zh ? '暂无审计记录' : 'No audit records'}</p>
           : (
               <>
-                <Table>
+                <ListShell><Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-44">{zh ? '时间' : 'Time'}</TableHead>
@@ -52,13 +52,13 @@ export function AuditLogsPage() {
                         <TableCell className="font-medium">{row.action}</TableCell>
                         <TableCell>{`${row.resource_type} · ${row.resource_type === 'container' ? displayDockerId(row.resource_name) : row.resource_name}`}</TableCell>
                         <TableCell>
-                          <Badge variant={row.result === 'success' ? 'secondary' : 'destructive'} className={cn(row.result === 'success' && 'bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:bg-emerald-500/15 dark:text-emerald-400')}>{row.result}</Badge>
+                          <StatusBadge tone={row.result === 'success' ? 'success' : 'critical'}>{row.result}</StatusBadge>
                         </TableCell>
                         <TableCell className="font-mono text-xs text-muted-foreground">{row.ip || '—'}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
-                </Table>
+                </Table></ListShell>
                 <nav aria-label="pagination" className="flex items-center justify-between pt-3 text-sm text-muted-foreground">
                   <span className="tabular-nums">{zh ? `共 ${rows.length} 条 · 第 ${current + 1}/${pageCount} 页` : `${rows.length} records · page ${current + 1}/${pageCount}`}</span>
                   <span className="flex items-center gap-1">

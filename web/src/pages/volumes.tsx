@@ -5,6 +5,7 @@ import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { ErrorState } from '../components/ui/error-state'
 import { Input } from '../components/ui/input'
+import { ListShell } from '../components/ui/list-shell'
 import { LoadingState } from '../components/ui/loading-state'
 import { Spinner } from '../components/ui/spinner'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
@@ -42,30 +43,32 @@ export function VolumesPage() {
         <Database className="size-5 text-muted-foreground" />
         <p className="text-sm font-medium">{zh ? '暂无存储卷' : 'No volumes'}</p>
         <p className="text-sm text-muted-foreground">{zh ? '创建持久存储卷后会显示在这里。' : 'Create a persistent volume to see it here.'}</p>
-      </div> : <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>{zh ? '存储卷' : 'Volume'}</TableHead>
-            <TableHead>{zh ? '驱动' : 'Driver'}</TableHead>
-            <TableHead>{zh ? '大小' : 'Size'}</TableHead>
-            <TableHead>{zh ? '使用者' : 'Used by'}</TableHead>
-            <TableHead>{zh ? '创建时间' : 'Created'}</TableHead>
-            <TableHead className="w-16"><span className="sr-only">{t('deleteVolume')}</span></TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {(query.data ?? []).map((row) => (
-            <TableRow key={row.name}>
-              <TableCell><div><span className="font-medium">{row.name}</span><span title={row.mountpoint} className="block max-w-72 truncate text-xs text-muted-foreground">{row.mountpoint}</span></div></TableCell>
-              <TableCell><Badge variant="outline">{row.driver}</Badge></TableCell>
-              <TableCell>{formatSize(row.size)}</TableCell>
-              <TableCell>{row.used_by.length ? <div className="flex max-w-64 flex-wrap gap-1">{row.used_by.map((used) => <Badge key={used} variant="secondary">{used}</Badge>)}</div> : <span className="text-sm text-muted-foreground">{zh ? '未使用' : 'Unused'}</span>}</TableCell>
-              <TableCell className="text-muted-foreground">{row.created_at ? new Date(row.created_at).toLocaleString(language) : '—'}</TableCell>
-              <TableCell><Button variant="ghost" size="icon-sm" className="text-red-600 hover:text-red-600 dark:text-red-400 dark:hover:text-red-400" disabled={row.used_by.length > 0} onClick={() => void removeVolume(row)} title={row.used_by.length ? (zh ? '存储卷正在使用中' : 'Volume is in use') : t('deleteVolume')} aria-label={t('deleteVolume')}><Trash2 /></Button></TableCell>
+      </div> : <ListShell>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>{zh ? '存储卷' : 'Volume'}</TableHead>
+              <TableHead>{zh ? '驱动' : 'Driver'}</TableHead>
+              <TableHead>{zh ? '大小' : 'Size'}</TableHead>
+              <TableHead>{zh ? '使用者' : 'Used by'}</TableHead>
+              <TableHead>{zh ? '创建时间' : 'Created'}</TableHead>
+              <TableHead className="w-16"><span className="sr-only">{t('deleteVolume')}</span></TableHead>
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>}
+          </TableHeader>
+          <TableBody>
+            {(query.data ?? []).map((row) => (
+              <TableRow key={row.name}>
+                <TableCell><div><span className="font-medium">{row.name}</span><span title={row.mountpoint} className="block max-w-72 truncate text-xs text-muted-foreground">{row.mountpoint}</span></div></TableCell>
+                <TableCell><Badge variant="outline">{row.driver}</Badge></TableCell>
+                <TableCell>{formatSize(row.size)}</TableCell>
+                <TableCell>{row.used_by.length ? <div className="flex max-w-64 flex-wrap gap-1">{row.used_by.map((used) => <Badge key={used} variant="secondary">{used}</Badge>)}</div> : <span className="text-sm text-muted-foreground">{zh ? '未使用' : 'Unused'}</span>}</TableCell>
+                <TableCell className="text-muted-foreground">{row.created_at ? new Date(row.created_at).toLocaleString(language) : '—'}</TableCell>
+                <TableCell><Button variant="ghost" size="icon-sm" className="text-red-600 hover:text-red-600 dark:text-red-400 dark:hover:text-red-400" disabled={row.used_by.length > 0} onClick={() => void removeVolume(row)} title={row.used_by.length ? (zh ? '存储卷正在使用中' : 'Volume is in use') : t('deleteVolume')} aria-label={t('deleteVolume')}><Trash2 /></Button></TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </ListShell>}
       {create.isError && <ErrorState description={create.error.message} />}
     </div>
   </ResourceFrame>

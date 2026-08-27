@@ -2,21 +2,21 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { GitPullRequest, Plus } from 'lucide-react'
 import { useState } from 'react'
-import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Checkbox } from '../components/ui/checkbox'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog'
 import { ErrorState } from '../components/ui/error-state'
 import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
+import { ListShell } from '../components/ui/list-shell'
 import { LoadingState } from '../components/ui/loading-state'
 import { Spinner } from '../components/ui/spinner'
+import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import type { DeliveryProject } from '../features/delivery/types'
 import { shortCommit } from '../features/delivery/types'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
-import { cn } from '../lib/utils'
 import type { DockerNode } from '../lib/nodes'
 import { useUIStore } from '../stores/ui'
 import { ResourceFrame } from './images'
@@ -55,9 +55,9 @@ export function ContinuousDeliveryPage() {
     create.mutate({ name: nameInput.trim(), node_ids: nodeIDsInput })
   }
 
-  return <ResourceFrame title={zh ? '持续交付' : 'Continuous Delivery'} detail={zh ? `${rows.length} 个交付项目` : `${rows.length} delivery projects`} action={<div className="flex flex-wrap items-center gap-2"><Badge className="border-transparent bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">{synchronized} {zh ? '已同步' : 'synced'}</Badge><Badge className="border-transparent bg-amber-500/15 text-amber-600 dark:text-amber-400">{pending} {zh ? '待对账' : 'pending'}</Badge><Badge variant="outline" className="text-muted-foreground">{setup} {zh ? '待配置' : 'setup'}</Badge><Button onClick={openCreate}><Plus data-icon="inline-start" />{zh ? '新建项目' : 'New project'}</Button></div>}>
+  return <ResourceFrame title={zh ? '持续交付' : 'Continuous Delivery'} detail={zh ? `${rows.length} 个交付项目` : `${rows.length} delivery projects`} action={<div className="flex flex-wrap items-center gap-2"><StatusBadge tone="success">{synchronized} {zh ? '已同步' : 'synced'}</StatusBadge><StatusBadge tone="warning">{pending} {zh ? '待对账' : 'pending'}</StatusBadge><StatusBadge tone="outline">{setup} {zh ? '待配置' : 'setup'}</StatusBadge><Button onClick={openCreate}><Plus data-icon="inline-start" />{zh ? '新建项目' : 'New project'}</Button></div>}>
     {query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载持续交付项目' : 'Loading delivery projects'} /> : query.isError ? <ErrorState description={query.error.message} /> : rows.length === 0 ? <div className="flex w-full flex-col items-center gap-1.5 rounded-xl border border-dashed py-12 text-center"><GitPullRequest className="size-6 text-muted-foreground" /><p className="text-sm font-medium">{zh ? '还没有持续交付项目' : 'No delivery projects yet'}</p><p className="max-w-md text-xs text-muted-foreground">{zh ? '直接在这里创建项目并连接 Git 仓库。' : 'Create a project here and connect its Git repository.'}</p></div> : (
-      <Table>
+      <ListShell><Table>
         <TableHeader>
           <TableRow>
             <TableHead className="min-w-[240px]">{zh ? '项目' : 'Project'}</TableHead>
@@ -84,7 +84,7 @@ export function ContinuousDeliveryPage() {
             </TableRow>
           })}
         </TableBody>
-      </Table>
+      </Table></ListShell>
     )}
     {create.isError && <ErrorState description={create.error.message} />}
     <Dialog open={createOpen} onOpenChange={(open) => setCreateOpen(open)}>
@@ -123,9 +123,9 @@ export function ContinuousDeliveryPage() {
 }
 
 function StateBadge({ state, zh }: { state: string; zh: boolean }) {
-  if (state === 'synchronized') return <Badge className="border-transparent bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">{zh ? '已同步' : 'Synchronized'}</Badge>
-  if (state === 'pending') return <Badge className="border-transparent bg-amber-500/15 text-amber-600 dark:text-amber-400">{zh ? '待对账' : 'Pending'}</Badge>
-  return <Badge variant="outline" className={cn('text-muted-foreground')}>{zh ? '待配置' : 'Setup'}</Badge>
+  if (state === 'synchronized') return <StatusBadge tone="success">{zh ? '已同步' : 'Synchronized'}</StatusBadge>
+  if (state === 'pending') return <StatusBadge tone="warning">{zh ? '待对账' : 'Pending'}</StatusBadge>
+  return <StatusBadge tone="outline">{zh ? '待配置' : 'Setup'}</StatusBadge>
 }
 
 function deliveryState(project: DeliveryProject) { return !project.configured ? 'setup' : project.desired_commit && project.desired_commit === project.observed_commit ? 'synchronized' : 'pending' }
