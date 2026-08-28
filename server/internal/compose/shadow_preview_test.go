@@ -67,6 +67,21 @@ func TestAssessShadowPreviewWarnsWithoutHealthcheck(t *testing.T) {
 	}
 }
 
+func TestPrepareShadowComposeReplacesOwnedNetworkName(t *testing.T) {
+	content := "name: production\nservices:\n  web:\n    image: nginx:alpine\n    networks: [default]\nnetworks:\n  default:\n    name: production_default\n"
+	assessment, err := AssessShadowPreview(content)
+	if err != nil || !assessment.Eligible || len(assessment.Warnings) == 0 {
+		t.Fatalf("assessment = %#v, err = %v", assessment, err)
+	}
+	isolated, err := prepareShadowCompose(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(isolated, "production_default") || strings.Contains(isolated, "name: production") {
+		t.Fatalf("production identity remains in preview:\n%s", isolated)
+	}
+}
+
 func TestShadowProjectNameIsIsolatedAndBounded(t *testing.T) {
 	name := shadowProjectName("Shop / Production with a very long native project name", 12345)
 	if !strings.HasPrefix(name, "suma-preview-") || len(name) > 64 || strings.ContainsAny(name, " /") || name != strings.ToLower(name) {

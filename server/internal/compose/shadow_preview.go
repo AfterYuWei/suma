@@ -74,8 +74,10 @@ func AssessShadowPreview(content string) (ShadowAssessment, error) {
 	if networks, _ := document["networks"].(map[string]any); len(networks) > 0 {
 		for name, raw := range networks {
 			value, _ := raw.(map[string]any)
-			if truthy(value["external"]) || strings.TrimSpace(stringValue(value["name"])) != "" {
-				reasons = append(reasons, fmt.Sprintf("network %q is external or has an explicit production name", name))
+			if truthy(value["external"]) {
+				reasons = append(reasons, fmt.Sprintf("network %q is external", name))
+			} else if strings.TrimSpace(stringValue(value["name"])) != "" {
+				warnings = append(warnings, fmt.Sprintf("network %q has an explicit name that will be replaced by an isolated preview name", name))
 			}
 		}
 	}
@@ -141,6 +143,10 @@ func (s *Service) StartShadowPreview(ctx context.Context, name, fingerprint, con
 	if !assessment.Eligible {
 		return ShadowPreviewSession{}, fmt.Errorf("Project is not eligible for shadow preview: %s", strings.Join(assessment.Reasons, "; "))
 	}
+	isolatedContent, err := prepareShadowCompose(content)
+	if err != nil {
+		return ShadowPreviewSession{}, err
+	}
 	_ = s.cleanupExpiredShadowPreviews(ctx)
 	createdAt := time.Now().UTC()
 	expiresAt := createdAt.Add(shadowPreviewTTL)
@@ -157,7 +163,7 @@ func (s *Service) StartShadowPreview(ctx context.Context, name, fingerprint, con
 				_ = s.removeShadowResources(context.Background(), metadata)
 			}
 		}()
-		if err := writeAtomic(filepath.Join(directory, "compose.yml"), content); err != nil {
+		if err := writeAtomic(filepath.Join(directory, "compose.yml"), isolatedContent); err != nil {
 			return err
 		}
 		if err := writeAtomic(filepath.Join(directory, ".env"), environment); err != nil {
@@ -335,4 +341,24 @@ func hasComposeValue(value any) bool {
 	default:
 		return true
 	}
+}
+
+func prepareShadowCompose(content string) (string, error) {
+	var document map[string]any
+	if err := yaml.Unmarshal([]byte(content), &document); err != nil {
+		return "", fmt.Errorf("parse Compose Project for isolation: %w", err)
+	}
+	delete(document, "name")
+	if networks, _ := document["networks"].(map[string]any); len(networks) > 0 {
+		for _, raw := range networks {
+			if value, ok := raw.(map[string]any); ok && !truthy(value["external"]) {
+				delete(value, "name")
+			}
+		}
+	}
+	encoded, err := yaml.Marshal(document)
+	if err != nil {
+		return "", fmt.Errorf("encode isolated Compose Project: %w", err)
+	}
+	return string(encoded), nil
 }
