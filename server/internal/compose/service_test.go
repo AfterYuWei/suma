@@ -14,6 +14,7 @@ import (
 	"github.com/suma/suma/server/internal/database"
 	projectdomain "github.com/suma/suma/server/internal/project"
 	"github.com/suma/suma/server/internal/task"
+	"gorm.io/gorm"
 )
 
 func TestCreateComposeDoesNotCreateDeliveryProject(t *testing.T) {
@@ -202,6 +203,30 @@ func TestBatchActionReturnsPerProjectTasks(t *testing.T) {
 	results := service.BatchAction(context.Background(), []string{"api", "worker", "missing"}, "start")
 	if len(results) != 3 || !results[0].Success || results[0].TaskID == "" || !results[1].Success || results[1].TaskID == "" || results[2].Success {
 		t.Fatalf("batch results = %#v", results)
+	}
+	for _, result := range results[:2] {
+		waitForTaskCompletion(t, db, result.TaskID)
+	}
+}
+
+func waitForTaskCompletion(t *testing.T, db *gorm.DB, id string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		var row database.Task
+		if err := db.First(&row, "id = ?", id).Error; err != nil {
+			t.Fatal(err)
+		}
+		if row.Status == task.StatusSuccess {
+			return
+		}
+		if row.Status == task.StatusFailed || row.Status == task.StatusCanceled {
+			t.Fatalf("task %s ended with %s: %s", id, row.Status, row.Message)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("task %s did not finish: %#v", id, row)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
