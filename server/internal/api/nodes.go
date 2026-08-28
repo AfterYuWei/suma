@@ -823,6 +823,80 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 		}
 		success(c, gin.H{"valid": true})
 	})
+	compose.POST("/:name/takeover/shadow/assess", func(c *gin.Context) {
+		_, view, ok := service(c)
+		if !ok {
+			return
+		}
+		var input struct {
+			Compose string `json:"compose"`
+		}
+		if c.ShouldBindJSON(&input) != nil || input.Compose == "" {
+			failure(c, 400, 20425, "Compose YAML is required")
+			return
+		}
+		if err := validatePolicy(view, input.Compose); err != nil {
+			failure(c, 422, 20426, err.Error())
+			return
+		}
+		assessment, err := composeService.AssessShadowPreview(input.Compose)
+		if err != nil {
+			failure(c, 422, 20427, err.Error())
+			return
+		}
+		success(c, assessment)
+	})
+	compose.POST("/:name/takeover/shadow", func(c *gin.Context) {
+		current, view, ok := service(c)
+		if !ok {
+			return
+		}
+		var input struct {
+			Fingerprint string `json:"fingerprint"`
+			Compose     string `json:"compose"`
+			Environment string `json:"environment"`
+		}
+		if c.ShouldBindJSON(&input) != nil || input.Fingerprint == "" || input.Compose == "" {
+			failure(c, 400, 20428, "Fingerprint and Compose YAML are required")
+			return
+		}
+		if err := validatePolicy(view, input.Compose); err != nil {
+			failure(c, 422, 20429, err.Error())
+			return
+		}
+		session, err := current.StartShadowPreview(c.Request.Context(), c.Param("name"), input.Fingerprint, input.Compose, input.Environment)
+		if err != nil {
+			failure(c, 409, 20430, err.Error())
+			return
+		}
+		recordNodeAudit(c, deps, view.ID, view.Name, "project.shadow_preview", "project", c.Param("name"), "success")
+		c.JSON(202, envelope{Code: 0, Message: "success", Data: session})
+	})
+	compose.GET("/:name/takeover/shadow/:session", func(c *gin.Context) {
+		current, _, ok := service(c)
+		if !ok {
+			return
+		}
+		status, err := current.ShadowPreviewStatus(c.Request.Context(), c.Param("session"))
+		if err != nil {
+			failure(c, 409, 20431, err.Error())
+			return
+		}
+		success(c, status)
+	})
+	compose.DELETE("/:name/takeover/shadow/:session", func(c *gin.Context) {
+		current, view, ok := service(c)
+		if !ok {
+			return
+		}
+		row, err := current.StopShadowPreview(c.Param("session"))
+		if err != nil {
+			failure(c, 409, 20432, err.Error())
+			return
+		}
+		recordNodeAudit(c, deps, view.ID, view.Name, "project.shadow_cleanup", "project", c.Param("name"), "success")
+		c.JSON(202, envelope{Code: 0, Message: "success", Data: row})
+	})
 	compose.POST("/:name/takeover", func(c *gin.Context) {
 		current, view, ok := service(c)
 		if !ok {

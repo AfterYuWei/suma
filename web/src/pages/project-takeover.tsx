@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from '@tanstack/react-router'
-import { AlertTriangle, Check, ChevronLeft, ChevronRight, Eye, EyeOff, FileCheck2, ShieldAlert } from 'lucide-react'
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { AlertTriangle, Check, ChevronLeft, ChevronRight, Eye, EyeOff, FileCheck2, FlaskConical, ShieldAlert, Trash2 } from 'lucide-react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -15,7 +15,7 @@ import { Spinner } from '../components/ui/spinner'
 import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
-import type { EnvironmentCandidate, Project, ProjectTakeoverDraft } from '../features/compose/types'
+import type { EnvironmentCandidate, Project, ProjectTakeoverDraft, ShadowAssessment, ShadowPreviewSession, ShadowPreviewStatus } from '../features/compose/types'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { nodePath } from '../lib/nodes'
@@ -26,6 +26,7 @@ import { ResourceFrame } from './images'
 const Monaco = lazy(() => import('@monaco-editor/react'))
 const steps = ['analysis', 'environment', 'editor', 'confirm'] as const
 type Destination = EnvironmentCandidate['destination']
+interface TaskRow { id: string; status: string; progress: number; message: string }
 
 export function ProjectTakeoverPage() {
   const { backend, projectName } = useParams({ from: '/projects/$backend/$projectName/takeover' })
@@ -44,9 +45,14 @@ export function ProjectTakeoverPage() {
   const [revealed, setRevealed] = useState<Set<string>>(() => new Set())
   const [validated, setValidated] = useState('')
   const [confirmation, setConfirmation] = useState('')
+  const [shadowSession, setShadowSession] = useState<ShadowPreviewSession | null>(null)
+  const shadowSessionRef = useRef<ShadowPreviewSession | null>(null)
   const dark = theme === 'dark' || (theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
   const preview = useQuery({ queryKey: ['project-takeover', nodeID, projectName], queryFn: () => api<ProjectTakeoverDraft>(nodePath(nodeID, `/projects/compose/${encoded}/takeover/preview`), { method: 'POST' }), enabled: backend === 'compose', retry: false })
   const contentSignature = useMemo(() => `${compose}\u0000${environment}`, [compose, environment])
+  const tasks = useQuery({ queryKey: ['tasks', nodeID], queryFn: () => api<TaskRow[]>(`/tasks?node_id=${encodeURIComponent(nodeID)}`), enabled: shadowSession !== null, refetchInterval: 1_000 })
+  const shadowTask = tasks.data?.find((task) => task.id === shadowSession?.task.id)
+  const shadowStatus = useQuery({ queryKey: ['project-shadow-status', nodeID, shadowSession?.session_id], queryFn: () => api<ShadowPreviewStatus>(nodePath(nodeID, `/projects/compose/${encoded}/takeover/shadow/${shadowSession?.session_id}`)), enabled: shadowSession !== null && shadowTask?.status === 'success', refetchInterval: 5_000, retry: false })
 
   useEffect(() => {
     if (!preview.data) return
@@ -58,6 +64,11 @@ export function ProjectTakeoverPage() {
     window.addEventListener('beforeunload', listener)
     return () => window.removeEventListener('beforeunload', listener)
   }, [step])
+  useEffect(() => { shadowSessionRef.current = shadowSession }, [shadowSession])
+  useEffect(() => () => {
+    const current = shadowSessionRef.current
+    if (current) void fetch(`/api/v1${nodePath(nodeID, `/projects/compose/${encoded}/takeover/shadow/${current.session_id}`)}`, { method: 'DELETE', credentials: 'include', keepalive: true })
+  }, [encoded, nodeID])
 
   const render = useMutation({
     mutationFn: () => api<ProjectTakeoverDraft>(nodePath(nodeID, `/projects/compose/${encoded}/takeover/render`), { method: 'POST', body: JSON.stringify({ fingerprint: preview.data?.fingerprint, choices: Object.entries(choices).map(([id, destination]) => ({ id, destination })) }) }),
@@ -67,12 +78,22 @@ export function ProjectTakeoverPage() {
     mutationFn: () => api(nodePath(nodeID, `/projects/compose/${encoded}/takeover/validate`), { method: 'POST', body: JSON.stringify({ compose, environment }) }),
     onSuccess: () => setValidated(contentSignature),
   })
+  const assessShadow = useMutation({ mutationFn: () => api<ShadowAssessment>(nodePath(nodeID, `/projects/compose/${encoded}/takeover/shadow/assess`), { method: 'POST', body: JSON.stringify({ compose }) }) })
+  const startShadow = useMutation({
+    mutationFn: () => api<ShadowPreviewSession>(nodePath(nodeID, `/projects/compose/${encoded}/takeover/shadow`), { method: 'POST', body: JSON.stringify({ fingerprint: preview.data?.fingerprint, compose, environment }) }),
+    onSuccess: (session) => { setShadowSession(session); void client.invalidateQueries({ queryKey: ['tasks', nodeID] }) },
+  })
+  const cleanupShadow = useMutation({
+    mutationFn: (session: ShadowPreviewSession) => api(nodePath(nodeID, `/projects/compose/${encoded}/takeover/shadow/${session.session_id}`), { method: 'DELETE' }),
+    onSuccess: () => { shadowSessionRef.current = null; setShadowSession(null); void client.invalidateQueries({ queryKey: ['tasks', nodeID] }) },
+  })
   const takeover = useMutation({
     mutationFn: () => api<Project>(nodePath(nodeID, `/projects/compose/${encoded}/takeover`), { method: 'POST', body: JSON.stringify({ fingerprint: preview.data?.fingerprint, confirmation_name: confirmation, compose, environment }) }),
-    onSuccess: async () => { await client.invalidateQueries({ queryKey: ['projects', nodeID] }); void navigate({ to: '/projects/$backend/$projectName', params: { backend: 'compose', projectName } }) },
+    onSuccess: async () => { if (shadowSession) await cleanupShadow.mutateAsync(shadowSession); await client.invalidateQueries({ queryKey: ['projects', nodeID] }); void navigate({ to: '/projects/$backend/$projectName', params: { backend: 'compose', projectName } }) },
   })
   const leave = async () => {
     if (step > 0 && !await confirmDialog({ title: zh ? '放弃接管草稿？' : 'Discard takeover draft?', description: zh ? '未保存的变量选择和配置编辑将丢失。' : 'Unsaved variable choices and configuration edits will be lost.', confirmLabel: zh ? '放弃' : 'Discard', danger: true })) return
+    if (shadowSession) await cleanupShadow.mutateAsync(shadowSession)
     void navigate({ to: '/projects/$backend/$projectName', params: { backend: 'compose', projectName } })
   }
 
@@ -92,12 +113,29 @@ export function ProjectTakeoverPage() {
 
         {step === 0 && <AnalysisStep draft={draft} zh={zh} />}
         {step === 1 && <EnvironmentStep variables={draft.variables} choices={choices} revealed={revealed} zh={zh} onChoice={(id, destination) => setChoices((current) => ({ ...current, [id]: destination }))} onReveal={(id) => setRevealed((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })} />}
-        {step === 2 && <Card><CardContent className="flex flex-col gap-3"><Tabs value={file} onValueChange={(value) => setFile(value as 'compose' | 'environment')}><TabsList><TabsTrigger value="compose">compose.yml</TabsTrigger><TabsTrigger value="environment">.env</TabsTrigger></TabsList></Tabs><div className="h-[52vh] overflow-hidden rounded-lg ring-1 ring-foreground/10"><Suspense fallback={<div className="grid h-full place-items-center"><Spinner /></div>}><Monaco key={selected.label} language={selected.language} theme={dark ? 'vs-dark' : 'light'} value={selected.value} onChange={(value) => { setValidated(''); if (file === 'compose') setCompose(value ?? ''); else setEnvironment(value ?? '') }} options={{ minimap: { enabled: false }, automaticLayout: true, wordWrap: 'on', scrollBeyondLastLine: false }} /></Suspense></div>{validate.isError && <Alert variant="destructive"><ShieldAlert /><AlertDescription>{validate.error.message}</AlertDescription></Alert>}{validated === contentSignature && <Alert><Check /><AlertDescription>{zh ? 'Compose 与安全策略校验通过。' : 'Compose and security policy validation passed.'}</AlertDescription></Alert>}<div className="flex justify-end"><Button variant="outline" disabled={validate.isPending} onClick={() => validate.mutate()}>{validate.isPending ? <Spinner /> : <FileCheck2 />}{zh ? '校验草稿' : 'Validate draft'}</Button></div></CardContent></Card>}
+        {step === 2 && <Card><CardContent className="flex flex-col gap-3">
+          <Tabs value={file} onValueChange={(value) => setFile(value as 'compose' | 'environment')}><TabsList><TabsTrigger value="compose">compose.yml</TabsTrigger><TabsTrigger value="environment">.env</TabsTrigger></TabsList></Tabs>
+          <div className="h-[52vh] overflow-hidden rounded-lg ring-1 ring-foreground/10"><Suspense fallback={<div className="grid h-full place-items-center"><Spinner /></div>}><Monaco key={selected.label} language={selected.language} theme={dark ? 'vs-dark' : 'light'} value={selected.value} onChange={(value) => { setValidated(''); assessShadow.reset(); if (file === 'compose') setCompose(value ?? ''); else setEnvironment(value ?? '') }} options={{ minimap: { enabled: false }, automaticLayout: true, wordWrap: 'on', scrollBeyondLastLine: false, readOnly: shadowSession !== null }} /></Suspense></div>
+          {validate.isError && <Alert variant="destructive"><ShieldAlert /><AlertDescription>{validate.error.message}</AlertDescription></Alert>}
+          {validated === contentSignature && <Alert><Check /><AlertDescription>{zh ? 'Compose 与安全策略校验通过。可直接进入确认，也可以先进行隔离预演。' : 'Compose and security policy validation passed. Continue directly or run an isolated preview first.'}</AlertDescription></Alert>}
+          <div className="flex justify-end"><Button variant="outline" disabled={validate.isPending || shadowSession !== null} onClick={() => validate.mutate()}>{validate.isPending ? <Spinner /> : <FileCheck2 />}{zh ? '校验草稿' : 'Validate draft'}</Button></div>
+          {validated === contentSignature && <ShadowPreviewPanel zh={zh} assessment={assessShadow.data} assessError={assessShadow.error?.message} operationError={startShadow.error?.message || cleanupShadow.error?.message} assessing={assessShadow.isPending} starting={startShadow.isPending} session={shadowSession} task={shadowTask} status={shadowStatus.data} statusError={shadowStatus.error?.message} cleaning={cleanupShadow.isPending} onAssess={() => assessShadow.mutate()} onStart={() => startShadow.mutate()} onReject={() => { if (!shadowSession) return; if (shadowTask?.status === 'failed' || shadowTask?.status === 'canceled') { shadowSessionRef.current = null; setShadowSession(null) } else cleanupShadow.mutate(shadowSession) }} onAccept={async () => { if (shadowSession) await cleanupShadow.mutateAsync(shadowSession); setStep(3) }} />}
+        </CardContent></Card>}
         {step === 3 && <Card><CardHeader><CardTitle>{zh ? '确认 Project 接管' : 'Confirm Project takeover'}</CardTitle></CardHeader><CardContent className="flex flex-col gap-4"><Alert><AlertTriangle /><AlertTitle>{zh ? '接管不会部署' : 'Takeover will not deploy'}</AlertTitle><AlertDescription>{zh ? 'SUMA 将原子保存 compose.yml、.env 和 .suma/project.json。现有容器、网络和运行状态不会改变。' : 'SUMA atomically saves compose.yml, .env, and .suma/project.json. Existing containers, networks, and runtime state remain unchanged.'}</AlertDescription></Alert><div className="space-y-2"><Label htmlFor="project-confirm">{zh ? `输入 ${projectName} 确认` : `Type ${projectName} to confirm`}</Label><Input id="project-confirm" autoComplete="off" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></div>{takeover.isError && <ErrorState description={takeover.error.message} />}</CardContent></Card>}
 
-        <div className="flex items-center justify-between"><Button variant="outline" disabled={step === 0 || render.isPending || takeover.isPending} onClick={() => setStep((current) => Math.max(0, current - 1))}><ChevronLeft />{zh ? '上一步' : 'Back'}</Button>{step === 0 ? <Button disabled={hasBlockers} onClick={() => setStep(1)}>{zh ? '处理环境变量' : 'Review environment'}<ChevronRight /></Button> : step === 1 ? <Button disabled={render.isPending} onClick={() => render.mutate()}>{render.isPending ? <Spinner /> : null}{zh ? '生成配置草稿' : 'Render draft'}<ChevronRight /></Button> : step === 2 ? <Button disabled={validated !== contentSignature} onClick={() => setStep(3)}>{zh ? '进入确认' : 'Continue'}<ChevronRight /></Button> : <Button disabled={confirmation !== projectName || takeover.isPending} onClick={() => takeover.mutate()}>{takeover.isPending ? <Spinner /> : <Check />}{zh ? '完成接管' : 'Complete takeover'}</Button>}</div>
+        <div className="flex items-center justify-between"><Button variant="outline" disabled={step === 0 || render.isPending || takeover.isPending || shadowSession !== null} onClick={() => setStep((current) => Math.max(0, current - 1))}><ChevronLeft />{zh ? '上一步' : 'Back'}</Button>{step === 0 ? <Button disabled={hasBlockers} onClick={() => setStep(1)}>{zh ? '处理环境变量' : 'Review environment'}<ChevronRight /></Button> : step === 1 ? <Button disabled={render.isPending} onClick={() => render.mutate()}>{render.isPending ? <Spinner /> : null}{zh ? '生成配置草稿' : 'Render draft'}<ChevronRight /></Button> : step === 2 ? <Button disabled={validated !== contentSignature || shadowSession !== null} onClick={() => setStep(3)}>{zh ? '跳过预演并确认' : 'Skip preview and continue'}<ChevronRight /></Button> : <Button disabled={confirmation !== projectName || takeover.isPending} onClick={() => takeover.mutate()}>{takeover.isPending ? <Spinner /> : <Check />}{zh ? '完成接管' : 'Complete takeover'}</Button>}</div>
       </div>
     </ResourceFrame>
+  </div>
+}
+
+function ShadowPreviewPanel({ zh, assessment, assessError, operationError, assessing, starting, session, task, status, statusError, cleaning, onAssess, onStart, onReject, onAccept }: { zh: boolean; assessment?: ShadowAssessment; assessError?: string; operationError?: string; assessing: boolean; starting: boolean; session: ShadowPreviewSession | null; task?: TaskRow; status?: ShadowPreviewStatus; statusError?: string; cleaning: boolean; onAssess: () => void; onStart: () => void; onReject: () => void; onAccept: () => Promise<void> }) {
+  return <div className="rounded-lg border border-border p-4">
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="flex items-center gap-2 text-sm font-medium"><FlaskConical className="size-4" />{zh ? '可选：隔离预演' : 'Optional: isolated preview'}</h3><p className="mt-1 text-xs text-muted-foreground">{zh ? '仅对可安全隔离的无状态草稿启用。预演使用临时 Compose Project，不切换生产流量。' : 'Available only for safely isolated stateless drafts. It uses a temporary Compose Project and never switches production traffic.'}</p></div>{!assessment && <Button variant="outline" size="sm" disabled={assessing} onClick={onAssess}>{assessing ? <Spinner /> : <ShieldAlert />}{zh ? '检查预演资格' : 'Check eligibility'}</Button>}</div>
+    {(assessError || operationError) && <Alert variant="destructive" className="mt-3"><ShieldAlert /><AlertDescription>{assessError || operationError}</AlertDescription></Alert>}
+    {assessment && !assessment.eligible && <div className="mt-3 space-y-2"><Alert variant="destructive"><ShieldAlert /><AlertTitle>{zh ? '不满足隔离条件' : 'Not eligible'}</AlertTitle><AlertDescription>{zh ? '该草稿仍可直接接管，但不能创建临时预演环境。' : 'The draft can still be taken over directly, but a temporary preview cannot be created.'}</AlertDescription></Alert><ul className="list-disc space-y-1 pl-5 text-xs text-muted-foreground">{assessment.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul></div>}
+    {assessment?.eligible && !session && <div className="mt-3 flex flex-col gap-2"><Alert><Check /><AlertTitle>{zh ? '满足严格隔离条件' : 'Strict isolation checks passed'}</AlertTitle><AlertDescription>{zh ? 'SUMA 将创建无固定端口、无生产数据挂载的临时 Project，并等待 healthcheck。' : 'SUMA will create a temporary Project without fixed ports or production data mounts and wait for healthchecks.'}</AlertDescription></Alert>{assessment.warnings.map((warning) => <p key={warning} className="text-xs text-amber-600 dark:text-amber-400">{warning}</p>)}<Button className="self-end" disabled={starting} onClick={onStart}>{starting ? <Spinner /> : <FlaskConical />}{zh ? '启动隔离预演' : 'Start isolated preview'}</Button></div>}
+    {session && <div className="mt-3 flex flex-col gap-3"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{session.preview_project}</Badge><StatusBadge tone={task?.status === 'success' ? 'success' : task?.status === 'failed' || task?.status === 'canceled' ? 'critical' : 'warning'}>{task?.status ?? session.task.status}</StatusBadge><span className="text-xs text-muted-foreground">{task?.message}</span></div>{task?.status === 'failed' || task?.status === 'canceled' ? <Alert variant="destructive"><AlertTriangle /><AlertDescription>{task.message}</AlertDescription></Alert> : null}{statusError && <Alert variant="destructive"><AlertDescription>{statusError}</AlertDescription></Alert>}{status && <><div className="grid gap-3 lg:grid-cols-2"><div><p className="mb-1 text-xs font-medium">{zh ? '容器状态' : 'Container status'}</p><pre className="max-h-56 overflow-auto rounded-lg bg-muted p-3 font-mono text-xs whitespace-pre-wrap">{status.containers}</pre></div><div><p className="mb-1 text-xs font-medium">{zh ? '预演日志' : 'Preview logs'}</p><pre className="max-h-56 overflow-auto rounded-lg bg-muted p-3 font-mono text-xs whitespace-pre-wrap">{status.logs}</pre></div></div><div className="flex flex-wrap justify-end gap-2"><Button variant="outline" disabled={cleaning} onClick={onReject}>{cleaning ? <Spinner /> : <Trash2 />}{zh ? '拒绝并清理' : 'Reject and clean up'}</Button><Button disabled={cleaning} onClick={() => void onAccept()}>{cleaning ? <Spinner /> : <Check />}{zh ? '接受草稿并继续接管' : 'Accept draft and continue'}</Button></div></>}</div>}
   </div>
 }
 

@@ -77,3 +77,24 @@ export interface ProjectTakeoverDraft {
     fingerprint: string
   }
 }
+
+export interface ShadowAssessment {
+  eligible: boolean
+  reasons: string[]
+  warnings: string[]
+}
+
+export interface ShadowPreviewSession {
+  session_id: string
+  preview_project: string
+  expires_at: string
+  task: { id: string; status: string; progress: number; message: string }
+}
+
+export interface ShadowPreviewStatus {
+  session_id: string
+  preview_project: string
+  expires_at: string
+  containers: string
+  logs: string
+}
