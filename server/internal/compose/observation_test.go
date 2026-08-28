@@ -36,6 +36,30 @@ func TestObserveRuntimeServiceUsesMajorityAndReportsDrift(t *testing.T) {
 	if service.ConfigVariants[0].Config.Image != "app:v1" {
 		t.Fatalf("canonical variant = %#v", service.ConfigVariants[0])
 	}
+	if len(service.DriftFields) != 1 || service.DriftFields[0] != "image" || len(service.ConfigVariants[1].DifferenceFields) != 1 || service.ConfigVariants[1].DifferenceFields[0] != "image" {
+		t.Fatalf("drift fields = %#v / %#v", service.DriftFields, service.ConfigVariants)
+	}
+	if len(service.DriftReasons) != 1 || service.DriftReasons[0] != "runtime_drift" {
+		t.Fatalf("drift reasons = %#v", service.DriftReasons)
+	}
+}
+
+func TestObserveRuntimeServiceExplainsEvidenceBasedDrift(t *testing.T) {
+	manual := ObserveRuntimeProject(RuntimeProjectSnapshot{ProjectName: "shop", Containers: []RuntimeContainer{
+		{ID: "one", Service: "web", ConfigHash: "same", Config: RuntimeConfig{Image: "app:v1", Resources: RuntimeResources{Memory: 128}}},
+		{ID: "two", Service: "web", ConfigHash: "same", Config: RuntimeConfig{Image: "app:v1", Resources: RuntimeResources{Memory: 256}}},
+	}}).Services[0]
+	if len(manual.DriftReasons) != 1 || manual.DriftReasons[0] != "manual_modification" || len(manual.DriftFields) != 1 || manual.DriftFields[0] != "resources" {
+		t.Fatalf("manual drift = %#v", manual)
+	}
+
+	partial := ObserveRuntimeProject(RuntimeProjectSnapshot{ProjectName: "shop", Containers: []RuntimeContainer{
+		{ID: "one", Service: "web", ConfigHash: "old", Config: RuntimeConfig{Image: "app:v1"}},
+		{ID: "two", Service: "web", ConfigHash: "new", Config: RuntimeConfig{Image: "app:v2"}},
+	}}).Services[0]
+	if len(partial.DriftReasons) != 1 || partial.DriftReasons[0] != "partial_recreate" {
+		t.Fatalf("partial recreate = %#v", partial)
+	}
 }
 
 func TestObserveRuntimeServiceTieUsesNewestVariant(t *testing.T) {

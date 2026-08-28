@@ -92,17 +92,19 @@ func (s *Service) BuildTakeoverDraft(ctx context.Context, name string) (ProjectT
 				draft.Source, draft.Confidence = "mapped", "high"
 				draft.Variables = extractMappedEnvironment(model)
 				removeUnsupportedSourceFeatures(model, &draft)
+				var hashes map[string]string
 				if hashRunner, ok := s.runner.(interface {
 					Hashes(context.Context, ExecutionSpec, io.Writer) (map[string]string, error)
 				}); ok {
-					if hashes, hashErr := hashRunner.Hashes(ctx, spec, io.Discard); hashErr == nil {
-						applyExpectedHashes(&draft.Observation, hashes, model)
+					if renderedHashes, hashErr := hashRunner.Hashes(ctx, spec, io.Discard); hashErr == nil {
+						hashes = renderedHashes
 					} else {
 						draft.Warnings = append(draft.Warnings, "Unable to compare rendered service hashes with running containers")
 					}
 				} else {
 					draft.Warnings = append(draft.Warnings, "Unable to compare rendered service hashes with running containers")
 				}
+				applyExpectedProject(&draft.Observation, hashes, model)
 			} else {
 				draft.Warnings = append(draft.Warnings, "Mapped Compose source could not be rendered; the whole Project was rebuilt from runtime metadata")
 			}
@@ -110,6 +112,7 @@ func (s *Service) BuildTakeoverDraft(ctx context.Context, name string) (ProjectT
 			draft.Warnings = append(draft.Warnings, "Mapped Compose source was not safe or complete; the whole Project was rebuilt from runtime metadata: "+safeError(sourceErr))
 		}
 	}
+	draft.Warnings = appendUniqueStrings(draft.Warnings, draft.Observation.Warnings...)
 	if model == nil {
 		model, draft.Variables = runtimeComposeModel(name, snapshot, observation)
 		if hasRuntimeDrift(observation) {
@@ -525,28 +528,108 @@ func removeUnsupportedSourceFeatures(model map[string]any, draft *ProjectTakeove
 	}
 }
 
-func applyExpectedHashes(observation *ObservedComposeProject, hashes map[string]string, model map[string]any) {
+func applyExpectedProject(observation *ObservedComposeProject, hashes map[string]string, model map[string]any) {
 	services, _ := model["services"].(map[string]any)
-	known := map[string]bool{}
-	for name := range services {
-		known[name] = true
-	}
+	observedNames := map[string]bool{}
 	for serviceIndex := range observation.Services {
 		service := &observation.Services[serviceIndex]
-		if !known[service.Name] {
+		observedNames[service.Name] = true
+		rawExpected, known := services[service.Name]
+		expectedConfig, _ := rawExpected.(map[string]any)
+		if !known {
 			observation.OrphanContainers = append(observation.OrphanContainers, service.Instances...)
 			service.DriftStatus = "orphan"
+			service.DriftReasons = appendUniqueStrings(service.DriftReasons, "stale_container")
 			continue
+		}
+		service.Declared = true
+		service.ExpectedConfig = expectedConfig
+		service.DesiredReplicas = expectedServiceReplicas(expectedConfig)
+		if len(service.Instances) > service.DesiredReplicas {
+			observation.Warnings = append(observation.Warnings, "Service "+service.Name+" has more running instances than the normalized Compose configuration; a CLI scale override may be active")
 		}
 		expected := hashes[service.Name]
 		if expected == "" {
 			continue
 		}
+		matches, mismatches := []ContainerInstance{}, []ContainerInstance{}
 		for _, instance := range service.Instances {
 			if instance.ConfigHash != "" && instance.ConfigHash != expected {
-				service.DriftStatus = "runtime_drift"
+				mismatches = append(mismatches, instance)
+			} else if instance.ConfigHash == expected {
+				matches = append(matches, instance)
 			}
 		}
+		if len(mismatches) == 0 {
+			continue
+		}
+		service.DriftStatus = "runtime_drift"
+		reason := "runtime_drift"
+		if len(matches) > 0 {
+			newestMatch := matches[0].CreatedAt
+			allMismatchesOlder := true
+			for _, instance := range matches[1:] {
+				if instance.CreatedAt.After(newestMatch) {
+					newestMatch = instance.CreatedAt
+				}
+			}
+			for _, instance := range mismatches {
+				if !instance.CreatedAt.Before(newestMatch) {
+					allMismatchesOlder = false
+					break
+				}
+			}
+			if allMismatchesOlder {
+				reason = "stale_container"
+			} else {
+				reason = "partial_recreate"
+			}
+		}
+		service.DriftReasons = appendUniqueStrings(service.DriftReasons, reason)
+	}
+	for _, name := range sortedMapKeys(services) {
+		if observedNames[name] {
+			continue
+		}
+		expectedConfig, _ := services[name].(map[string]any)
+		observation.Services = append(observation.Services, ObservedComposeService{
+			Name:            name,
+			Declared:        true,
+			DesiredReplicas: expectedServiceReplicas(expectedConfig),
+			DriftStatus:     "not_created",
+			ExpectedConfig:  expectedConfig,
+		})
+	}
+	sort.Slice(observation.Services, func(i, j int) bool { return observation.Services[i].Name < observation.Services[j].Name })
+	sortInstances(observation.OrphanContainers)
+}
+
+func expectedServiceReplicas(service map[string]any) int {
+	if replicas, ok := composeInteger(service["scale"]); ok {
+		return replicas
+	}
+	if deploy, ok := service["deploy"].(map[string]any); ok {
+		if replicas, ok := composeInteger(deploy["replicas"]); ok {
+			return replicas
+		}
+	}
+	return 1
+}
+
+func composeInteger(value any) (int, bool) {
+	switch typed := value.(type) {
+	case json.Number:
+		parsed, err := strconv.Atoi(typed.String())
+		return parsed, err == nil && parsed >= 0
+	case float64:
+		return int(typed), typed >= 0 && typed == float64(int(typed))
+	case int:
+		return typed, typed >= 0
+	case string:
+		parsed, err := strconv.Atoi(typed)
+		return parsed, err == nil && parsed >= 0
+	default:
+		return 0, false
 	}
 }
 

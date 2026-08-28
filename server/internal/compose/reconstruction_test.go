@@ -65,6 +65,78 @@ func TestBuildTakeoverDraftPrefersCompleteMappedProject(t *testing.T) {
 	}
 }
 
+func TestMappedProjectKeepsDeclaredStoppedServiceAndMarksOrphan(t *testing.T) {
+	sourceRoot := t.TempDir()
+	file := filepath.Join(sourceRoot, "compose.yml")
+	if err := os.WriteFile(file, []byte("services:\n  web:\n    image: app:v1\n  worker:\n    image: worker:v1\n    scale: 2\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	runner := &reconstructionRunner{
+		rendered: `{"name":"shop","services":{"web":{"image":"app:v1"},"worker":{"image":"worker:v1","scale":2}}}`,
+		hashes:   map[string]string{"web": "web-hash", "worker": "worker-hash"},
+	}
+	containers := observableContainers{
+		staticContainers: staticContainers{rows: []containerdomain.Summary{{ID: "web", Labels: map[string]string{ProjectLabel: "shop", WorkingDirLabel: sourceRoot, ConfigFilesLabel: file}}}},
+		snapshot: RuntimeProjectSnapshot{ProjectName: "shop", Containers: []RuntimeContainer{
+			{ID: "old", Name: "shop-old-1", Service: "old", ConfigHash: "old-hash", Config: RuntimeConfig{Image: "old:v1"}},
+			{ID: "web", Name: "shop-web-1", Service: "web", ConfigHash: "web-hash", Config: RuntimeConfig{Image: "app:v1"}},
+		}},
+	}
+	service := &Service{root: t.TempDir(), runner: runner, containers: containers, localSources: true}
+	draft, err := service.BuildTakeoverDraft(context.Background(), "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(draft.Observation.Services) != 3 {
+		t.Fatalf("services = %#v", draft.Observation.Services)
+	}
+	byName := map[string]ObservedComposeService{}
+	for _, observed := range draft.Observation.Services {
+		byName[observed.Name] = observed
+	}
+	if !byName["web"].Declared || byName["web"].DriftStatus != "in_sync" {
+		t.Fatalf("web = %#v", byName["web"])
+	}
+	if !byName["worker"].Declared || byName["worker"].DriftStatus != "not_created" || byName["worker"].DesiredReplicas != 2 || len(byName["worker"].Instances) != 0 {
+		t.Fatalf("worker = %#v", byName["worker"])
+	}
+	if byName["old"].Declared || byName["old"].DriftStatus != "orphan" || len(byName["old"].DriftReasons) != 1 || byName["old"].DriftReasons[0] != "stale_container" {
+		t.Fatalf("old = %#v", byName["old"])
+	}
+	if len(draft.Observation.OrphanContainers) != 1 || draft.Observation.OrphanContainers[0].ContainerID != "old" {
+		t.Fatalf("orphans = %#v", draft.Observation.OrphanContainers)
+	}
+}
+
+func TestMappedProjectExplainsStaleAndPartialRecreate(t *testing.T) {
+	observation := ObserveRuntimeProject(RuntimeProjectSnapshot{ProjectName: "shop", Containers: []RuntimeContainer{
+		{ID: "old", Service: "web", ConfigHash: "old-hash", CreatedAt: time.Unix(1, 0), Config: RuntimeConfig{Image: "app:old"}},
+		{ID: "current", Service: "web", ConfigHash: "expected", CreatedAt: time.Unix(2, 0), Config: RuntimeConfig{Image: "app:new"}},
+	}})
+	applyExpectedProject(&observation, map[string]string{"web": "expected"}, map[string]any{"services": map[string]any{"web": map[string]any{"image": "app:new"}}})
+	if !containsString(observation.Services[0].DriftReasons, "stale_container") {
+		t.Fatalf("stale reasons = %#v", observation.Services[0].DriftReasons)
+	}
+
+	partial := ObserveRuntimeProject(RuntimeProjectSnapshot{ProjectName: "shop", Containers: []RuntimeContainer{
+		{ID: "current", Service: "web", ConfigHash: "expected", CreatedAt: time.Unix(1, 0), Config: RuntimeConfig{Image: "app:new"}},
+		{ID: "other", Service: "web", ConfigHash: "other", CreatedAt: time.Unix(2, 0), Config: RuntimeConfig{Image: "app:other"}},
+	}})
+	applyExpectedProject(&partial, map[string]string{"web": "expected"}, map[string]any{"services": map[string]any{"web": map[string]any{"image": "app:new"}}})
+	if !containsString(partial.Services[0].DriftReasons, "partial_recreate") {
+		t.Fatalf("partial reasons = %#v", partial.Services[0].DriftReasons)
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 func TestBuildTakeoverDraftFallsBackToWholeRuntimeProject(t *testing.T) {
 	config := RuntimeConfig{
 		Image: "app:v1", Environment: []string{"PATH=/usr/bin", "MODE=prod", "DATABASE_PASSWORD=secret"},

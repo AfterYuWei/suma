@@ -185,11 +185,15 @@ type ObservedComposeProject struct {
 
 type ObservedComposeService struct {
 	Name             string              `json:"name"`
+	Declared         bool                `json:"declared"`
 	DesiredReplicas  int                 `json:"desired_replicas"`
 	Instances        []ContainerInstance `json:"instances"`
 	ConfigVariants   []ConfigVariant     `json:"config_variants"`
 	CanonicalVariant string              `json:"canonical_variant"`
 	DriftStatus      string              `json:"drift_status"`
+	DriftReasons     []string            `json:"drift_reasons,omitempty"`
+	DriftFields      []string            `json:"drift_fields,omitempty"`
+	ExpectedConfig   map[string]any      `json:"expected_config,omitempty"`
 }
 
 type ContainerInstance struct {
@@ -205,9 +209,16 @@ type ContainerInstance struct {
 }
 
 type ConfigVariant struct {
-	Fingerprint string        `json:"fingerprint"`
-	Instances   []string      `json:"instances"`
-	Config      RuntimeConfig `json:"config"`
+	Fingerprint      string        `json:"fingerprint"`
+	Instances        []string      `json:"instances"`
+	DifferenceFields []string      `json:"difference_fields,omitempty"`
+	Config           RuntimeConfig `json:"config"`
+}
+
+type runtimeVariantGroup struct {
+	config    RuntimeConfig
+	instances []ContainerInstance
+	newest    time.Time
 }
 
 func ObserveRuntimeProject(snapshot RuntimeProjectSnapshot) ObservedComposeProject {
@@ -239,18 +250,13 @@ func ObserveRuntimeProject(snapshot RuntimeProjectSnapshot) ObservedComposeProje
 }
 
 func observeRuntimeService(name string, containers []RuntimeContainer) ObservedComposeService {
-	type group struct {
-		config    RuntimeConfig
-		instances []ContainerInstance
-		newest    time.Time
-	}
-	groups := map[string]*group{}
+	groups := map[string]*runtimeVariantGroup{}
 	for _, container := range containers {
 		fingerprint := runtimeConfigFingerprint(container.Config)
 		instance := instanceFromRuntime(container, fingerprint)
 		entry := groups[fingerprint]
 		if entry == nil {
-			entry = &group{config: container.Config}
+			entry = &runtimeVariantGroup{config: container.Config}
 			groups[fingerprint] = entry
 		}
 		entry.instances = append(entry.instances, instance)
@@ -279,6 +285,11 @@ func observeRuntimeService(name string, containers []RuntimeContainer) ObservedC
 	}
 	if len(keys) > 1 {
 		service.DriftStatus = "runtime_drift"
+		service.DriftReasons = []string{runtimeDriftReason(groups)}
+	}
+	var canonical RuntimeConfig
+	if len(keys) > 0 {
+		canonical = groups[keys[0]].config
 	}
 	for _, key := range keys {
 		entry := groups[key]
@@ -288,10 +299,69 @@ func observeRuntimeService(name string, containers []RuntimeContainer) ObservedC
 			ids[index] = instance.ContainerID
 		}
 		service.Instances = append(service.Instances, entry.instances...)
-		service.ConfigVariants = append(service.ConfigVariants, ConfigVariant{Fingerprint: key, Instances: ids, Config: entry.config})
+		differenceFields := runtimeConfigDifferenceFields(canonical, entry.config)
+		service.DriftFields = appendUniqueStrings(service.DriftFields, differenceFields...)
+		service.ConfigVariants = append(service.ConfigVariants, ConfigVariant{Fingerprint: key, Instances: ids, DifferenceFields: differenceFields, Config: entry.config})
 	}
 	sortInstances(service.Instances)
 	return service
+}
+
+func runtimeDriftReason(groups map[string]*runtimeVariantGroup) string {
+	configHashes := map[string]bool{}
+	for _, entry := range groups {
+		for _, instance := range entry.instances {
+			if instance.ConfigHash != "" {
+				configHashes[instance.ConfigHash] = true
+			}
+		}
+	}
+	if len(configHashes) > 1 {
+		return "partial_recreate"
+	}
+	if len(configHashes) == 1 {
+		return "manual_modification"
+	}
+	return "runtime_drift"
+}
+
+func runtimeConfigDifferenceFields(left, right RuntimeConfig) []string {
+	left.Hostname, right.Hostname = "", ""
+	leftContent, _ := json.Marshal(left)
+	rightContent, _ := json.Marshal(right)
+	leftMap, rightMap := map[string]json.RawMessage{}, map[string]json.RawMessage{}
+	_ = json.Unmarshal(leftContent, &leftMap)
+	_ = json.Unmarshal(rightContent, &rightMap)
+	keys := map[string]bool{}
+	for key := range leftMap {
+		keys[key] = true
+	}
+	for key := range rightMap {
+		keys[key] = true
+	}
+	result := make([]string, 0, len(keys))
+	for key := range keys {
+		if string(leftMap[key]) != string(rightMap[key]) {
+			result = append(result, key)
+		}
+	}
+	sort.Strings(result)
+	return result
+}
+
+func appendUniqueStrings(values []string, additions ...string) []string {
+	known := make(map[string]bool, len(values)+len(additions))
+	for _, value := range values {
+		known[value] = true
+	}
+	for _, value := range additions {
+		if value != "" && !known[value] {
+			values = append(values, value)
+			known[value] = true
+		}
+	}
+	sort.Strings(values)
+	return values
 }
 
 func instanceFromRuntime(container RuntimeContainer, variant string) ContainerInstance {

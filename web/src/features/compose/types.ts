@@ -42,11 +42,14 @@ export interface ProjectContainerInstance {
 
 export interface ObservedProjectService {
   name: string
+  declared: boolean
   desired_replicas: number
   instances: ProjectContainerInstance[]
-  config_variants: { fingerprint: string; instances: string[] }[]
+  config_variants: { fingerprint: string; instances: string[]; difference_fields?: string[] }[]
   canonical_variant: string
-  drift_status: string
+  drift_status: 'in_sync' | 'runtime_drift' | 'orphan' | 'not_created'
+  drift_reasons?: ('runtime_drift' | 'stale_container' | 'manual_modification' | 'partial_recreate' | 'abnormal_state')[]
+  drift_fields?: string[]
 }
 
 export interface EnvironmentCandidate {
