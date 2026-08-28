@@ -2,6 +2,7 @@ package compose
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -100,11 +101,36 @@ func TestMappedProjectKeepsDeclaredStoppedServiceAndMarksOrphan(t *testing.T) {
 	if !byName["worker"].Declared || byName["worker"].DriftStatus != "not_created" || byName["worker"].DesiredReplicas != 2 || len(byName["worker"].Instances) != 0 {
 		t.Fatalf("worker = %#v", byName["worker"])
 	}
+	if byName["worker"].Instances == nil || byName["worker"].ConfigVariants == nil {
+		t.Fatalf("stopped Service collections must encode as arrays: %#v", byName["worker"])
+	}
 	if byName["old"].Declared || byName["old"].DriftStatus != "orphan" || len(byName["old"].DriftReasons) != 1 || byName["old"].DriftReasons[0] != "stale_container" {
 		t.Fatalf("old = %#v", byName["old"])
 	}
 	if len(draft.Observation.OrphanContainers) != 1 || draft.Observation.OrphanContainers[0].ContainerID != "old" {
 		t.Fatalf("orphans = %#v", draft.Observation.OrphanContainers)
+	}
+}
+
+func TestTakeoverDraftJSONUsesArraysForEmptyCollections(t *testing.T) {
+	containers := observableContainers{
+		staticContainers: staticContainers{rows: []containerdomain.Summary{{ID: "web", Labels: map[string]string{ProjectLabel: "shop"}}}},
+		snapshot:         RuntimeProjectSnapshot{ProjectName: "shop", Containers: []RuntimeContainer{{ID: "web", Service: "web", ImageInspectOK: true, Config: RuntimeConfig{Image: "app:v1"}}}},
+	}
+	service := &Service{root: t.TempDir(), containers: containers, nodeID: "tcp-node"}
+	draft, err := service.BuildTakeoverDraft(context.Background(), "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(payload)
+	for _, field := range []string{"variables", "blockers", "services", "networks", "volumes", "one_off_containers", "orphan_containers"} {
+		if strings.Contains(text, `"`+field+`":null`) {
+			t.Fatalf("takeover JSON contains null %s: %s", field, text)
+		}
 	}
 }
 

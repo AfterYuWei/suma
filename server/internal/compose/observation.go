@@ -222,7 +222,11 @@ type runtimeVariantGroup struct {
 }
 
 func ObserveRuntimeProject(snapshot RuntimeProjectSnapshot) ObservedComposeProject {
-	observed := ObservedComposeProject{Name: snapshot.ProjectName, Networks: snapshot.Networks, Volumes: snapshot.Volumes, Warnings: snapshot.Warnings}
+	observed := ObservedComposeProject{
+		Name: snapshot.ProjectName, Services: []ObservedComposeService{},
+		Networks: nonNilRuntimeNetworks(snapshot.Networks), Volumes: nonNilRuntimeVolumes(snapshot.Volumes),
+		OneOffContainers: []ContainerInstance{}, OrphanContainers: []ContainerInstance{}, Warnings: nonNilStrings(snapshot.Warnings),
+	}
 	byService := map[string][]RuntimeContainer{}
 	for _, container := range snapshot.Containers {
 		if container.OneOff {
@@ -278,7 +282,7 @@ func observeRuntimeService(name string, containers []RuntimeContainer) ObservedC
 		}
 		return keys[i] < keys[j]
 	})
-	service := ObservedComposeService{Name: name, DriftStatus: "in_sync"}
+	service := ObservedComposeService{Name: name, Instances: []ContainerInstance{}, ConfigVariants: []ConfigVariant{}, DriftStatus: "in_sync"}
 	if len(keys) > 0 {
 		service.CanonicalVariant = keys[0]
 		service.DesiredReplicas = len(groups[keys[0]].instances)
@@ -361,6 +365,27 @@ func appendUniqueStrings(values []string, additions ...string) []string {
 		}
 	}
 	sort.Strings(values)
+	return values
+}
+
+func nonNilStrings(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
+}
+
+func nonNilRuntimeNetworks(values []RuntimeNetwork) []RuntimeNetwork {
+	if values == nil {
+		return []RuntimeNetwork{}
+	}
+	return values
+}
+
+func nonNilRuntimeVolumes(values []RuntimeVolume) []RuntimeVolume {
+	if values == nil {
+		return []RuntimeVolume{}
+	}
 	return values
 }
 

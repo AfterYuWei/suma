@@ -28,6 +28,23 @@ const steps = ['analysis', 'environment', 'editor', 'confirm'] as const
 type Destination = EnvironmentCandidate['destination']
 interface TaskRow { id: string; status: string; progress: number; message: string }
 
+function normalizeTakeoverDraft(draft: ProjectTakeoverDraft): ProjectTakeoverDraft {
+  const observation = draft.observation ?? { name: draft.project_name, services: [], one_off_containers: [], orphan_containers: [], fingerprint: draft.fingerprint }
+  return {
+    ...draft,
+    variables: draft.variables ?? [],
+    warnings: draft.warnings ?? [],
+    blockers: draft.blockers ?? [],
+    capabilities: draft.capabilities ?? ['takeover'],
+    observation: {
+      ...observation,
+      services: (observation.services ?? []).map((service) => ({ ...service, instances: service.instances ?? [], config_variants: service.config_variants ?? [] })),
+      one_off_containers: observation.one_off_containers ?? [],
+      orphan_containers: observation.orphan_containers ?? [],
+    },
+  }
+}
+
 export function ProjectTakeoverPage() {
   const { backend, projectName } = useParams({ from: '/projects/$backend/$projectName/takeover' })
   const nodeID = useUIStore((state) => state.currentNodeID)
@@ -48,7 +65,7 @@ export function ProjectTakeoverPage() {
   const [shadowSession, setShadowSession] = useState<ShadowPreviewSession | null>(null)
   const shadowSessionRef = useRef<ShadowPreviewSession | null>(null)
   const dark = theme === 'dark' || (theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
-  const preview = useQuery({ queryKey: ['project-takeover', nodeID, projectName], queryFn: () => api<ProjectTakeoverDraft>(nodePath(nodeID, `/projects/compose/${encoded}/takeover/preview`), { method: 'POST' }), enabled: backend === 'compose', retry: false })
+  const preview = useQuery({ queryKey: ['project-takeover', nodeID, projectName], queryFn: () => api<ProjectTakeoverDraft>(nodePath(nodeID, `/projects/compose/${encoded}/takeover/preview`), { method: 'POST' }), select: normalizeTakeoverDraft, enabled: backend === 'compose', retry: false })
   const contentSignature = useMemo(() => `${compose}\u0000${environment}`, [compose, environment])
   const tasks = useQuery({ queryKey: ['tasks', nodeID], queryFn: () => api<TaskRow[]>(`/tasks?node_id=${encodeURIComponent(nodeID)}`), enabled: shadowSession !== null, refetchInterval: 1_000 })
   const shadowTask = tasks.data?.find((task) => task.id === shadowSession?.task.id)

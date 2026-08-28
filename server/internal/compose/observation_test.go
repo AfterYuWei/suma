@@ -21,6 +21,13 @@ func TestObserveRuntimeProjectKeepsScaleInstancesInOneService(t *testing.T) {
 	}
 }
 
+func TestObserveRuntimeProjectUsesEmptyCollectionsInsteadOfNil(t *testing.T) {
+	value := ObserveRuntimeProject(RuntimeProjectSnapshot{ProjectName: "shop", Containers: []RuntimeContainer{{ID: "run", Service: "job", OneOff: true, Config: RuntimeConfig{Image: "job:v1"}}}})
+	if value.Services == nil || value.Networks == nil || value.Volumes == nil || value.OneOffContainers == nil || value.OrphanContainers == nil || value.Warnings == nil {
+		t.Fatalf("observation contains nil collections: %#v", value)
+	}
+}
+
 func TestObserveRuntimeServiceUsesMajorityAndReportsDrift(t *testing.T) {
 	stable := RuntimeConfig{Image: "app:v1", Command: []string{"serve"}}
 	drifted := RuntimeConfig{Image: "app:v2", Command: []string{"serve"}}

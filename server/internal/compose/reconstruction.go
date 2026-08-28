@@ -78,7 +78,10 @@ func (s *Service) BuildTakeoverDraft(ctx context.Context, name string) (ProjectT
 		return ProjectTakeoverDraft{}, fmt.Errorf("Compose Project has no observable containers")
 	}
 	observation := ObserveRuntimeProject(snapshot)
-	draft := ProjectTakeoverDraft{ProjectName: name, Backend: "compose", Source: "runtime", Confidence: "medium", Observation: observation, Warnings: append([]string(nil), observation.Warnings...)}
+	draft := ProjectTakeoverDraft{
+		ProjectName: name, Backend: "compose", Source: "runtime", Confidence: "medium", Observation: observation,
+		Variables: []EnvironmentCandidate{}, Warnings: append([]string{}, observation.Warnings...), Blockers: []string{}, Capabilities: []projectdomain.Capability{},
+	}
 	var model map[string]any
 	if s.localSources && s.runner != nil && project.Path != "" && len(project.ConfigFiles) > 0 {
 		manifest, sourceErr := ValidateLocalProjectSource(project.Path, project.ConfigFiles)
@@ -596,6 +599,8 @@ func applyExpectedProject(observation *ObservedComposeProject, hashes map[string
 			Name:            name,
 			Declared:        true,
 			DesiredReplicas: expectedServiceReplicas(expectedConfig),
+			Instances:       []ContainerInstance{},
+			ConfigVariants:  []ConfigVariant{},
 			DriftStatus:     "not_created",
 			ExpectedConfig:  expectedConfig,
 		})
