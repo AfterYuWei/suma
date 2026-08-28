@@ -66,6 +66,38 @@ func TestBuildTakeoverDraftPrefersCompleteMappedProject(t *testing.T) {
 	}
 }
 
+func TestMappedBuildOnlyServiceUsesCanonicalRuntimeImage(t *testing.T) {
+	sourceRoot := t.TempDir()
+	file := filepath.Join(sourceRoot, "compose.yml")
+	if err := os.WriteFile(file, []byte("services:\n  web:\n    build: .\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	runner := &reconstructionRunner{rendered: `{"name":"shop","services":{"web":{"build":{"context":"."}}}}`}
+	containers := observableContainers{
+		staticContainers: staticContainers{rows: []containerdomain.Summary{{ID: "web", Labels: map[string]string{ProjectLabel: "shop", WorkingDirLabel: sourceRoot, ConfigFilesLabel: file}}}},
+		snapshot: RuntimeProjectSnapshot{ProjectName: "shop", Containers: []RuntimeContainer{{
+			ID: "web", Service: "web", ImageReference: "shop-web:dev", ImageID: "sha256:resolved", Config: RuntimeConfig{Image: "shop-web:dev"},
+		}}},
+	}
+	service := &Service{root: t.TempDir(), runner: runner, containers: containers, localSources: true}
+	draft, err := service.BuildTakeoverDraft(context.Background(), "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(draft.Blockers) != 0 || strings.Contains(draft.Compose, "build:") || !strings.Contains(draft.Compose, "image: shop-web:dev") {
+		t.Fatalf("build-only Service did not use its runtime image: %#v\n%s", draft.Blockers, draft.Compose)
+	}
+}
+
+func TestMappedBuildOnlyServiceWithoutRuntimeImageIsBlocked(t *testing.T) {
+	model := map[string]any{"services": map[string]any{"web": map[string]any{"build": map[string]any{"context": "."}}}}
+	draft := ProjectTakeoverDraft{Observation: ObservedComposeProject{Services: []ObservedComposeService{}}}
+	removeUnsupportedSourceFeatures(model, &draft, RuntimeProjectSnapshot{})
+	if len(draft.Blockers) != 1 {
+		t.Fatalf("missing runtime image blockers = %#v", draft.Blockers)
+	}
+}
+
 func TestMappedProjectKeepsDeclaredStoppedServiceAndMarksOrphan(t *testing.T) {
 	sourceRoot := t.TempDir()
 	file := filepath.Join(sourceRoot, "compose.yml")

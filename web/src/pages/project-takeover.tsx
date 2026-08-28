@@ -133,6 +133,8 @@ function takeoverMessage(message: string | undefined, zh: boolean): string {
   if (match) return `该 Project 不满足隔离预演条件：${match[1].split('; ').map((reason) => takeoverMessage(reason, zh)).join('；')}`
   match = message.match(/^Service (.+) build configuration was removed; takeover uses its resolved image$/)
   if (match) return `Service ${match[1]} 的 build 配置无法恢复，接管草稿将使用当前解析后的镜像`
+  match = message.match(/^Service (.+) build configuration could not be replaced because no running image was found$/)
+  if (match) return `Service ${match[1]} 的 build 配置无法迁移，且没有找到可用的运行镜像`
   match = message.match(/^(configs|secrets) "([^"]+)" is file-backed and must be converted to an external resource or supplied inside the managed Project$/)
   if (match) return `${match[1]} “${match[2]}” 依赖本地文件；请改为 external 资源，或在托管 Project 内安全提供该文件`
   match = message.match(/^Service (.+) has more running instances than the normalized Compose configuration; a CLI scale override may be active$/)

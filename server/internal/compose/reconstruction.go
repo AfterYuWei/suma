@@ -94,7 +94,7 @@ func (s *Service) BuildTakeoverDraft(ctx context.Context, name string) (ProjectT
 			if renderErr == nil {
 				draft.Source, draft.Confidence = "mapped", "high"
 				draft.Variables = extractMappedEnvironment(model)
-				removeUnsupportedSourceFeatures(model, &draft)
+				removeUnsupportedSourceFeatures(model, &draft, snapshot)
 				var hashes map[string]string
 				if hashRunner, ok := s.runner.(interface {
 					Hashes(context.Context, ExecutionSpec, io.Writer) (map[string]string, error)
@@ -519,12 +519,20 @@ func environmentAliases(values []EnvironmentCandidate) map[string]string {
 	return result
 }
 
-func removeUnsupportedSourceFeatures(model map[string]any, draft *ProjectTakeoverDraft) {
+func removeUnsupportedSourceFeatures(model map[string]any, draft *ProjectTakeoverDraft, snapshot RuntimeProjectSnapshot) {
 	services, _ := model["services"].(map[string]any)
 	for _, name := range sortedMapKeys(services) {
 		service, _ := services[name].(map[string]any)
 		if _, ok := service["build"]; ok {
 			delete(service, "build")
+			if strings.TrimSpace(stringValue(service["image"])) == "" {
+				if image := resolvedRuntimeImage(name, draft.Observation, snapshot); image != "" {
+					service["image"] = image
+				} else {
+					draft.Blockers = append(draft.Blockers, "Service "+name+" build configuration could not be replaced because no running image was found")
+					continue
+				}
+			}
 			draft.Warnings = append(draft.Warnings, "Service "+name+" build configuration was removed; takeover uses its resolved image")
 		}
 	}
@@ -537,6 +545,31 @@ func removeUnsupportedSourceFeatures(model map[string]any, draft *ProjectTakeove
 			}
 		}
 	}
+}
+
+func resolvedRuntimeImage(serviceName string, observation ObservedComposeProject, snapshot RuntimeProjectSnapshot) string {
+	containers := map[string]RuntimeContainer{}
+	for _, container := range snapshot.Containers {
+		containers[container.ID] = container
+	}
+	for _, service := range observation.Services {
+		if service.Name != serviceName || len(service.ConfigVariants) == 0 {
+			continue
+		}
+		canonical := service.ConfigVariants[0]
+		if image := strings.TrimSpace(canonical.Config.Image); image != "" {
+			return image
+		}
+		for _, containerID := range canonical.Instances {
+			container := containers[containerID]
+			for _, image := range []string{container.ImageReference, container.ImageID} {
+				if image = strings.TrimSpace(image); image != "" {
+					return image
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func applyExpectedProject(observation *ObservedComposeProject, hashes map[string]string, model map[string]any) {
