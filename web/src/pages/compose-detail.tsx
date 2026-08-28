@@ -12,7 +12,8 @@ import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { TooltipHint } from '../components/ui/tooltip-hint'
-import type { ComposeProject } from '../features/compose/types'
+import { TakeoverWarningDialog } from '../features/compose/takeover-warning-dialog'
+import type { Project } from '../features/compose/types'
 import type { ContainerSummary } from '../features/containers/types'
 import { api } from '../lib/api'
 import { nodePath } from '../lib/nodes'
@@ -27,7 +28,7 @@ const statusTone = (status: string) => status === 'running' ? 'success' : status
 const stateTone = (state: string) => state === 'running' ? 'success' : 'neutral'
 
 export function ComposeDetailPage() {
-  const { projectName } = useParams({ from: '/compose/$projectName' })
+  const { backend, projectName } = useParams({ from: '/projects/$backend/$projectName' })
   const encodedName = encodeURIComponent(projectName)
   const navigate = useNavigate()
   const client = useQueryClient()
@@ -36,96 +37,91 @@ export function ComposeDetailPage() {
   const theme = useUIStore((state) => state.theme)
   const nodeID = useUIStore((state) => state.currentNodeID)
   const dark = theme === 'dark' || (theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
-  const query = useQuery({ queryKey: ['compose', nodeID, projectName], queryFn: () => api<ComposeProject>(nodePath(nodeID, `/compose/${encodedName}`)) })
+  const query = useQuery({ queryKey: ['project', nodeID, backend, projectName], queryFn: () => api<Project>(nodePath(nodeID, `/projects/${encodeURIComponent(backend)}/${encodedName}`)), enabled: backend === 'compose' })
   const [view, setView] = useState<View>('Files')
   const [file, setFile] = useState('compose')
   const [compose, setCompose] = useState('')
   const [environment, setEnvironment] = useState('')
   const [notice, setNotice] = useState('')
+  const [takeoverOpen, setTakeoverOpen] = useState(false)
 
   useEffect(() => {
     if (!query.data) return
     setCompose(query.data.compose)
     setEnvironment(query.data.environment)
-    if (!query.data.can_manage) setView('Services')
+    if (!query.data.managed) setView('Services')
   }, [query.data])
 
-  const services = useQuery({ queryKey: ['compose-services', nodeID, projectName], queryFn: () => api<ContainerSummary[]>(nodePath(nodeID, `/compose/${encodedName}/services`)), enabled: view === 'Services', refetchInterval: 5_000 })
-  const logs = useQuery({ queryKey: ['compose-logs', nodeID, projectName], queryFn: () => api<{ logs: string }>(nodePath(nodeID, `/compose/${encodedName}/logs`)), enabled: view === 'Logs', refetchInterval: 3_000, retry: false })
+  const services = useQuery({ queryKey: ['project-services', nodeID, projectName], queryFn: () => api<ContainerSummary[]>(nodePath(nodeID, `/projects/compose/${encodedName}/services`)), enabled: view === 'Services', refetchInterval: 5_000 })
+  const logs = useQuery({ queryKey: ['project-logs', nodeID, projectName], queryFn: () => api<{ logs: string }>(nodePath(nodeID, `/projects/compose/${encodedName}/logs`)), enabled: view === 'Logs', refetchInterval: 3_000, retry: false })
   const save = useMutation({
-    mutationFn: () => api<ComposeProject>(nodePath(nodeID, `/compose/${encodedName}`), { method: 'PUT', body: JSON.stringify({ compose, environment }) }),
+    mutationFn: () => api<Project>(nodePath(nodeID, `/projects/compose/${encodedName}`), { method: 'PUT', body: JSON.stringify({ compose, environment }) }),
     onSuccess: (row) => {
-      client.setQueryData(['compose', nodeID, projectName], row)
+      client.setQueryData(['project', nodeID, backend, projectName], row)
       setNotice(zh ? '已保存。' : 'Saved.')
     },
     onError: (error) => setNotice(error.message),
   })
   const validate = useMutation({
-    mutationFn: () => api(nodePath(nodeID, `/compose/${encodedName}/validate`), { method: 'POST', body: JSON.stringify({ compose, environment }) }),
+    mutationFn: () => api(nodePath(nodeID, `/projects/compose/${encodedName}/validate`), { method: 'POST', body: JSON.stringify({ compose, environment }) }),
     onSuccess: () => setNotice(zh ? 'Compose 配置有效。' : 'Compose configuration is valid.'),
     onError: (error) => setNotice(error.message),
   })
   const action = useMutation({
-    mutationFn: (name: string) => api(nodePath(nodeID, `/compose/${encodedName}/${name}`), { method: 'POST' }),
+    mutationFn: (name: string) => api(nodePath(nodeID, `/projects/compose/${encodedName}/actions/${name}`), { method: 'POST' }),
     onSuccess: () => {
       setNotice(zh ? '任务已启动。' : 'Task started.')
       void client.invalidateQueries({ queryKey: ['tasks', nodeID] })
     },
     onError: (error) => setNotice(error.message),
   })
-  const importProject = useMutation({
-    mutationFn: () => api<ComposeProject>(nodePath(nodeID, `/compose/${encodedName}/import`), { method: 'POST' }),
-    onSuccess: (row) => {
-      client.setQueryData(['compose', nodeID, projectName], row)
-      void client.invalidateQueries({ queryKey: ['compose', nodeID] })
-      setNotice(zh ? '项目已复制到 SUMA Compose 目录，现在可以编辑和管理。' : 'Project copied into the SUMA Compose directory and is now manageable.')
-      setView('Files')
-    },
-    onError: (error) => setNotice(error.message),
-  })
-
   const deploy = async () => {
     const changes = [compose !== query.data?.compose && 'compose.yml', environment !== query.data?.environment && '.env'].filter(Boolean)
-    if (changes.length && !await confirmDialog({ title: t('deployChanges'), description: t('deployChangesDescription', { files: changes.join(' / ') }), confirmLabel: zh ? '保存并部署' : 'Save & deploy' })) return
+    const firstTakeoverDeploy = query.data?.metadata?.origin === 'takeover' && !query.data.metadata.last_deployed_at
+    if ((changes.length || firstTakeoverDeploy) && !await confirmDialog({ title: firstTakeoverDeploy ? (zh ? '首次由 SUMA 部署？' : 'First SUMA deployment?') : t('deployChanges'), description: firstTakeoverDeploy ? (zh ? '现有运行态可能与接管草稿不同，Compose 可能重建容器、改变网络或处理 orphan。' : 'Runtime state may differ from the takeover draft; Compose may recreate containers, change networks, or handle orphans.') : t('deployChangesDescription', { files: changes.join(' / ') }), confirmLabel: zh ? '确认部署' : 'Deploy' })) return
     if (changes.length) await save.mutateAsync()
     await action.mutateAsync('update')
   }
   const remove = async () => {
     if (await promptDialog({ title: t('removeProject'), description: t('removeProjectDescription'), confirmLabel: t('remove'), danger: true, input: { label: t('typeToConfirm', { value: projectName }), requiredValue: projectName } }) !== projectName) return
-    await api(nodePath(nodeID, `/compose/${encodedName}?confirm=${encodedName}`), { method: 'DELETE' })
-    void navigate({ to: '/compose' })
+    await api(nodePath(nodeID, `/projects/compose/${encodedName}?confirm=${encodedName}`), { method: 'DELETE' })
+    void navigate({ to: '/projects' })
   }
   const run = async (name: string) => {
     if (name === 'down' && !await confirmDialog({ title: t('composeDown'), description: t('composeDownDescription', { name: projectName }), confirmLabel: 'Down', danger: true })) return
     action.mutate(name)
   }
 
-  if (query.isPending) return <LoadingState label={zh ? '正在加载 Compose 项目' : 'Loading Compose project'} rows={6} />
+  if (backend !== 'compose') return <ErrorState title={zh ? '后端尚不可用' : 'Backend unavailable'} description={zh ? '当前版本只实现 Docker Compose Project；Swarm Stack 仅预留领域模型。' : 'This version implements Docker Compose Projects only; Swarm Stack remains a model extension point.'} />
+  if (query.isPending) return <LoadingState label={zh ? '正在加载 Project' : 'Loading Project'} rows={6} />
   if (query.isError || !query.data) return <ErrorState title={zh ? '无法加载 Compose 项目' : 'Unable to load Compose project'} description={query.error?.message || (zh ? '服务端没有返回项目数据。' : 'The server did not return project data.')} />
 
   const project = query.data
   const dirty = compose !== project.compose || environment !== project.environment
   const headerActions = <div className="flex flex-wrap items-center gap-2">
     <StatusBadge tone={statusTone(project.status)}>{project.status}</StatusBadge>
-    {project.can_manage && ['start', 'stop', 'restart', 'pull', 'build', 'down'].map((name) => <Button key={name} variant={name === 'down' ? 'destructive' : 'outline'} disabled={action.isPending} onClick={() => void run(name)}>{name}</Button>)}
-    {project.can_manage && <Button disabled={action.isPending} onClick={() => void run('up')}>{action.isPending ? <Spinner className="size-4" /> : <Play size={16} />}Up</Button>}
+    {project.managed && ['start', 'stop', 'restart', 'pull', 'build', 'down'].map((name) => <Button key={name} variant={name === 'down' ? 'destructive' : 'outline'} disabled={action.isPending} onClick={() => void run(name)}>{name}</Button>)}
+    {project.managed && <Button disabled={action.isPending} onClick={() => void run('up')}>{action.isPending ? <Spinner className="size-4" /> : <Play size={16} />}Up</Button>}
+    {!project.managed && <Button onClick={() => setTakeoverOpen(true)}><Download />{zh ? '接管' : 'Take over'}</Button>}
   </div>
   return <div className="flex w-full flex-col items-start gap-4">
-    <Button variant="ghost" size="sm" className="-ml-2 text-muted-foreground" onClick={() => void navigate({ to: '/compose' })}><ChevronLeft />Compose</Button>
-    <ResourceFrame title={projectName} detail={project.can_manage ? (dirty ? (zh ? 'SUMA 托管 · 有未保存更改' : 'SUMA managed · Unsaved changes') : (zh ? 'SUMA 托管 · 已保存' : 'SUMA managed · Saved')) : (zh ? '从 Docker Compose 标签发现 · 只读' : 'Discovered from Docker Compose labels · Read-only')} action={headerActions}>
+    <Button variant="ghost" size="sm" className="-ml-2 text-muted-foreground" onClick={() => void navigate({ to: '/projects' })}><ChevronLeft />{zh ? '项目' : 'Projects'}</Button>
+    <ResourceFrame title={projectName} detail={project.managed ? (dirty ? (zh ? 'SUMA 托管 · 有未保存更改' : 'SUMA managed · Unsaved changes') : (zh ? 'SUMA 托管 · 已保存' : 'SUMA managed · Saved')) : (zh ? '从 Docker Compose 标签发现 · 外部' : 'Discovered from Docker Compose labels · External')} action={headerActions}>
       <div className="flex w-full flex-col items-start gap-3">
-        {!project.can_manage && <Alert className="w-full pr-28"><AlertTitle>{zh ? '外部 Compose 项目' : 'External Compose project'}</AlertTitle><AlertDescription>{zh ? 'SUMA 从 Docker 容器标签发现了该项目。当前可以查看服务并操作单个容器；本地单文件项目可显式导入后管理。' : 'SUMA discovered this project from Docker container labels. You can inspect services and operate individual containers; local single-file projects can be explicitly imported for management.'}{project.config_files?.length ? <span className="mt-1 block font-mono text-xs">{project.config_files.join(', ')}</span> : null}</AlertDescription><AlertAction><TooltipHint content={project.config_files?.length !== 1 ? (zh ? '仅支持导入单文件 Compose 项目' : 'Only single-file Compose projects can be imported') : undefined}><Button size="sm" variant="outline" disabled={importProject.isPending || project.config_files?.length !== 1} onClick={() => importProject.mutate()}>{importProject.isPending ? <Spinner className="size-3.5" /> : <Download />}{zh ? '导入' : 'Import'}</Button></TooltipHint></AlertAction></Alert>}
+        {!project.managed && <Alert className="w-full pr-28"><AlertTitle>{zh ? '外部 Compose Project' : 'External Compose Project'}</AlertTitle><AlertDescription>{zh ? 'SUMA 已按 Compose Project 聚合全部 Service 和 Container Instance。接管会分析完整项目并生成可复核草稿，不会立即部署。' : 'SUMA aggregated every Service and Container Instance. Takeover analyzes the complete Project and creates a reviewable draft without deploying it.'}</AlertDescription><AlertAction><Button size="sm" variant="outline" onClick={() => setTakeoverOpen(true)}><Download />{zh ? '接管' : 'Take over'}</Button></AlertAction></Alert>}
+        {project.managed && project.metadata?.origin === 'takeover' && !project.metadata.last_deployed_at && <Alert className="w-full"><AlertTitle>{zh ? '尚未由 SUMA 部署' : 'Not deployed by SUMA yet'}</AlertTitle><AlertDescription>{zh ? '接管没有改变现有容器。首次部署可能重建容器、改变资源或处理 orphan，请在执行前复核。' : 'Takeover did not change existing containers. The first deployment may recreate containers, change resources, or handle orphans; review before continuing.'}</AlertDescription></Alert>}
         {notice && <p className={`text-sm ${action.isError ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'}`}>{notice}</p>}
         <Tabs value={view} onValueChange={(value) => setView(value as View)}>
           <TabsList variant="line">
-            {(project.can_manage ? ['Files', 'Services', 'Logs'] : ['Services']).map((name) => <TabsTrigger key={name} value={name}>{name === 'Files' ? (zh ? 'Compose 文件' : 'Compose files') : name === 'Services' ? (zh ? '服务' : 'Services') : (zh ? '日志' : 'Logs')}</TabsTrigger>)}
+            {(project.managed ? ['Files', 'Services', 'Logs'] : ['Services']).map((name) => <TabsTrigger key={name} value={name}>{name === 'Files' ? (zh ? 'Compose 文件' : 'Compose files') : name === 'Services' ? (zh ? '服务' : 'Services') : (zh ? '日志' : 'Logs')}</TabsTrigger>)}
           </TabsList>
         </Tabs>
-        {view === 'Files' && project.can_manage && <ComposeFiles dark={dark} file={file} compose={compose} environment={environment} dirty={dirty} notice={notice} zh={zh} setFile={setFile} setCompose={setCompose} setEnvironment={setEnvironment} onRemove={() => void remove()} onValidate={() => validate.mutate()} onSave={() => save.mutate()} onDeploy={() => void deploy()} validating={validate.isPending} saving={save.isPending} />}
+        {view === 'Files' && project.managed && <ComposeFiles dark={dark} file={file} compose={compose} environment={environment} dirty={dirty} notice={notice} zh={zh} setFile={setFile} setCompose={setCompose} setEnvironment={setEnvironment} onRemove={() => void remove()} onValidate={() => validate.mutate()} onSave={() => save.mutate()} onDeploy={() => void deploy()} validating={validate.isPending} saving={save.isPending} />}
         {view === 'Services' && <Services rows={services.data} loading={services.isPending} zh={zh} />}
-        {view === 'Logs' && project.can_manage && <Logs value={logs.data?.logs} loading={logs.isPending} error={logs.isError} zh={zh} />}
+        {view === 'Logs' && project.managed && <Logs value={logs.data?.logs} loading={logs.isPending} error={logs.isError} zh={zh} />}
       </div>
     </ResourceFrame>
+    <TakeoverWarningDialog open={takeoverOpen} projectName={projectName} zh={zh} onOpenChange={setTakeoverOpen} onContinue={() => { setTakeoverOpen(false); void navigate({ to: '/projects/$backend/$projectName/takeover', params: { backend: 'compose', projectName } }) }} />
   </div>
 }
 

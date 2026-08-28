@@ -78,7 +78,7 @@ func (s *Service) BuildTakeoverDraft(ctx context.Context, name string) (ProjectT
 	observation := ObserveRuntimeProject(snapshot)
 	draft := ProjectTakeoverDraft{ProjectName: name, Backend: "compose", Source: "runtime", Confidence: "medium", Observation: observation, Warnings: append([]string(nil), observation.Warnings...)}
 	var model map[string]any
-	if s.effectiveNodeID() == "local" && s.runner != nil && project.Path != "" && len(project.ConfigFiles) > 0 {
+	if s.localSources && s.runner != nil && project.Path != "" && len(project.ConfigFiles) > 0 {
 		manifest, sourceErr := ValidateLocalProjectSource(project.Path, project.ConfigFiles)
 		if sourceErr == nil {
 			spec := ExecutionSpec{ProjectName: name, ProjectDir: manifest.WorkingDirectory, Files: manifest.ConfigFiles, Profiles: []string{"*"}}

@@ -46,7 +46,7 @@ func TestBuildTakeoverDraftPrefersCompleteMappedProject(t *testing.T) {
 		staticContainers: staticContainers{rows: []containerdomain.Summary{{ID: "web", Labels: map[string]string{ProjectLabel: "shop", WorkingDirLabel: sourceRoot, ConfigFilesLabel: first + "," + second}}}},
 		snapshot:         RuntimeProjectSnapshot{ProjectName: "shop", Containers: []RuntimeContainer{{ID: "web", Service: "web", ConfigHash: "old-hash", Config: RuntimeConfig{Image: "app:v1"}}}},
 	}
-	service := &Service{root: t.TempDir(), runner: runner, containers: containers}
+	service := &Service{root: t.TempDir(), runner: runner, containers: containers, localSources: true}
 	draft, err := service.BuildTakeoverDraft(context.Background(), "shop")
 	if err != nil {
 		t.Fatal(err)

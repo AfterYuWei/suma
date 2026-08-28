@@ -17,7 +17,7 @@ import {
   CommandSeparator,
 } from '../ui/command'
 
-interface Project { name: string }
+interface Project { name: string; backend: string }
 interface Image { id: string; tags: string[] }
 interface Result { id: string; label: string; detail: string; type: string; run: () => void }
 
@@ -27,7 +27,7 @@ export function CommandPalette({ open, close }: { open: boolean; close: () => vo
   const zh = language === 'zh-CN'
   const nodeID = useUIStore((state) => state.currentNodeID)
   const containers = useQuery({ queryKey: ['containers', nodeID], queryFn: () => api<ContainerSummary[]>(nodePath(nodeID, '/containers')), enabled: open && !!nodeID })
-  const projects = useQuery({ queryKey: ['compose', nodeID], queryFn: () => api<Project[]>(nodePath(nodeID, '/compose')), enabled: open && !!nodeID })
+  const projects = useQuery({ queryKey: ['projects', nodeID], queryFn: () => api<Project[]>(nodePath(nodeID, '/projects')), enabled: open && !!nodeID })
   const deliveries = useQuery({ queryKey: ['delivery-projects'], queryFn: () => api<Project[]>('/delivery-projects'), enabled: open })
   const images = useQuery({ queryKey: ['images', nodeID], queryFn: () => api<Image[]>(nodePath(nodeID, '/images')), enabled: open && !!nodeID })
 
@@ -41,7 +41,7 @@ export function CommandPalette({ open, close }: { open: boolean; close: () => vo
 
     ;[
       { id: 'containers', label: zh ? '打开容器' : 'Open containers', detail: zh ? '导航' : 'Navigation', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/containers' }) } },
-      { id: 'compose', label: zh ? '创建 Compose 项目' : 'Create Compose project', detail: zh ? '新部署' : 'New deployment', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/compose' }) } },
+      { id: 'projects', label: zh ? '创建项目' : 'Create project', detail: zh ? '当前使用 Compose 后端' : 'Compose backend', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/projects' }) } },
       { id: 'continuous-delivery', label: zh ? '打开持续交付' : 'Open continuous delivery', detail: zh ? 'Git 发布与回滚' : 'Git releases and rollback', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/continuous-delivery' }) } },
       { id: 'pull', label: zh ? '拉取镜像' : 'Pull an image', detail: zh ? 'Docker 镜像' : 'Docker image', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/images' }) } },
       { id: 'authentication', label: zh ? '打开认证中心' : 'Open Authentication Center', detail: zh ? 'Git 与镜像仓库凭据' : 'Git and registry credentials', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/authentication' }) } },
@@ -66,7 +66,7 @@ export function CommandPalette({ open, close }: { open: boolean; close: () => vo
         })
       }
     })
-    projects.data?.forEach((row) => push({ id: `project-${row.name}`, label: row.name, detail: zh ? 'Compose 项目' : 'Compose project', type: 'Compose', run: () => { close(); void navigate({ to: '/compose/$projectName', params: { projectName: row.name } }) } }))
+    projects.data?.forEach((row) => push({ id: `project-${row.backend}-${row.name}`, label: row.name, detail: row.backend === 'compose' ? 'Compose Project' : 'Swarm Stack', type: zh ? '项目' : 'Projects', run: () => { close(); void navigate({ to: '/projects/$backend/$projectName', params: { backend: row.backend, projectName: row.name } }) } }))
     deliveries.data?.forEach((row) => push({ id: `delivery-${row.name}`, label: row.name, detail: zh ? '持续交付项目' : 'Continuous delivery project', type: zh ? '持续交付' : 'Continuous Delivery', run: () => { close(); void navigate({ to: '/continuous-delivery/$projectName', params: { projectName: row.name } }) } }))
     images.data?.forEach((row) => push({ id: `image-${row.id}`, label: row.tags?.[0] || row.id.slice(0, 19), detail: zh ? '本地镜像' : 'Local image', type: zh ? '镜像' : 'Images', run: () => { close(); void navigate({ to: '/images' }) } }))
     return [...byType.entries()]

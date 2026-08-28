@@ -76,6 +76,20 @@ func TestTakeoverRequiresExactProjectNameAndCurrentFingerprint(t *testing.T) {
 	}
 }
 
+func TestValidateDraftDoesNotRequireManagedProject(t *testing.T) {
+	runner := &takeoverRunner{}
+	service := &Service{root: t.TempDir(), runner: runner}
+	if err := service.ValidateDraft(context.Background(), "services:\n  web:\n    image: nginx:alpine\n", ""); err != nil {
+		t.Fatal(err)
+	}
+	if !runner.validated {
+		t.Fatal("Compose runner was not called")
+	}
+	if _, err := os.Stat(filepath.Join(service.root, "web")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("draft validation created a managed Project: %v", err)
+	}
+}
+
 func TestTakeoverValidationFailureLeavesNoManagedDirectory(t *testing.T) {
 	runner := &takeoverRunner{validateError: errors.New("invalid")}
 	service, draft := takeoverHarness(t, runner)

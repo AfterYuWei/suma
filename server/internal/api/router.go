@@ -718,6 +718,21 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		success(c, draft)
 	})
+	compose.POST("/:name/takeover/validate", func(c *gin.Context) {
+		var input struct {
+			Compose     string `json:"compose"`
+			Environment string `json:"environment"`
+		}
+		if c.ShouldBindJSON(&input) != nil || input.Compose == "" {
+			failure(c, http.StatusBadRequest, 18020, "Compose YAML is required")
+			return
+		}
+		if err := deps.Compose.ValidateDraft(c.Request.Context(), input.Compose, input.Environment); err != nil {
+			failure(c, http.StatusUnprocessableEntity, 18021, err.Error())
+			return
+		}
+		success(c, gin.H{"valid": true})
+	})
 	compose.POST("/:name/takeover", func(c *gin.Context) {
 		var input composeService.TakeoverInput
 		if c.ShouldBindJSON(&input) != nil {

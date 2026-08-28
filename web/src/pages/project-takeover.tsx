@@ -1,0 +1,111 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNavigate, useParams } from '@tanstack/react-router'
+import { AlertTriangle, Check, ChevronLeft, ChevronRight, Eye, EyeOff, FileCheck2, ShieldAlert } from 'lucide-react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
+import { ErrorState } from '../components/ui/error-state'
+import { Input } from '../components/ui/input'
+import { Label } from '../components/ui/label'
+import { LoadingState } from '../components/ui/loading-state'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
+import { Spinner } from '../components/ui/spinner'
+import { StatusBadge } from '../components/ui/status-badge'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
+import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
+import type { EnvironmentCandidate, Project, ProjectTakeoverDraft } from '../features/compose/types'
+import { api } from '../lib/api'
+import { useI18n } from '../lib/i18n'
+import { nodePath } from '../lib/nodes'
+import { confirmDialog } from '../stores/dialog'
+import { useUIStore } from '../stores/ui'
+import { ResourceFrame } from './images'
+
+const Monaco = lazy(() => import('@monaco-editor/react'))
+const steps = ['analysis', 'environment', 'editor', 'confirm'] as const
+type Destination = EnvironmentCandidate['destination']
+
+export function ProjectTakeoverPage() {
+  const { backend, projectName } = useParams({ from: '/projects/$backend/$projectName/takeover' })
+  const nodeID = useUIStore((state) => state.currentNodeID)
+  const theme = useUIStore((state) => state.theme)
+  const { language } = useI18n()
+  const zh = language === 'zh-CN'
+  const navigate = useNavigate()
+  const client = useQueryClient()
+  const encoded = encodeURIComponent(projectName)
+  const [step, setStep] = useState(0)
+  const [choices, setChoices] = useState<Record<string, Destination>>({})
+  const [compose, setCompose] = useState('')
+  const [environment, setEnvironment] = useState('')
+  const [file, setFile] = useState<'compose' | 'environment'>('compose')
+  const [revealed, setRevealed] = useState<Set<string>>(() => new Set())
+  const [validated, setValidated] = useState('')
+  const [confirmation, setConfirmation] = useState('')
+  const dark = theme === 'dark' || (theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
+  const preview = useQuery({ queryKey: ['project-takeover', nodeID, projectName], queryFn: () => api<ProjectTakeoverDraft>(nodePath(nodeID, `/projects/compose/${encoded}/takeover/preview`), { method: 'POST' }), enabled: backend === 'compose', retry: false })
+  const contentSignature = useMemo(() => `${compose}\u0000${environment}`, [compose, environment])
+
+  useEffect(() => {
+    if (!preview.data) return
+    setChoices(Object.fromEntries(preview.data.variables.map((variable) => [variable.id, variable.destination])))
+  }, [preview.data])
+  useEffect(() => {
+    if (step === 0) return
+    const listener = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
+    window.addEventListener('beforeunload', listener)
+    return () => window.removeEventListener('beforeunload', listener)
+  }, [step])
+
+  const render = useMutation({
+    mutationFn: () => api<ProjectTakeoverDraft>(nodePath(nodeID, `/projects/compose/${encoded}/takeover/render`), { method: 'POST', body: JSON.stringify({ fingerprint: preview.data?.fingerprint, choices: Object.entries(choices).map(([id, destination]) => ({ id, destination })) }) }),
+    onSuccess: (draft) => { setCompose(draft.compose); setEnvironment(draft.environment); setValidated(''); setStep(2) },
+  })
+  const validate = useMutation({
+    mutationFn: () => api(nodePath(nodeID, `/projects/compose/${encoded}/takeover/validate`), { method: 'POST', body: JSON.stringify({ compose, environment }) }),
+    onSuccess: () => setValidated(contentSignature),
+  })
+  const takeover = useMutation({
+    mutationFn: () => api<Project>(nodePath(nodeID, `/projects/compose/${encoded}/takeover`), { method: 'POST', body: JSON.stringify({ fingerprint: preview.data?.fingerprint, confirmation_name: confirmation, compose, environment }) }),
+    onSuccess: async () => { await client.invalidateQueries({ queryKey: ['projects', nodeID] }); void navigate({ to: '/projects/$backend/$projectName', params: { backend: 'compose', projectName } }) },
+  })
+  const leave = async () => {
+    if (step > 0 && !await confirmDialog({ title: zh ? '放弃接管草稿？' : 'Discard takeover draft?', description: zh ? '未保存的变量选择和配置编辑将丢失。' : 'Unsaved variable choices and configuration edits will be lost.', confirmLabel: zh ? '放弃' : 'Discard', danger: true })) return
+    void navigate({ to: '/projects/$backend/$projectName', params: { backend: 'compose', projectName } })
+  }
+
+  if (backend !== 'compose') return <ErrorState title={zh ? '后端尚不可用' : 'Backend unavailable'} description={zh ? '当前只支持 Compose Project 接管。' : 'Only Compose Project takeover is currently supported.'} />
+  if (preview.isPending) return <LoadingState rows={8} label={zh ? '正在聚合并分析整个 Compose Project' : 'Aggregating and analyzing the complete Compose Project'} />
+  if (preview.isError || !preview.data) return <ErrorState title={zh ? '无法分析 Project' : 'Unable to analyze Project'} description={preview.error?.message || ''} />
+  const draft = preview.data
+  const hasBlockers = draft.blockers.length > 0
+  const selected = file === 'compose' ? { label: 'compose.yml', value: compose, language: 'yaml' } : { label: '.env', value: environment, language: 'plaintext' }
+  const stepLabels = zh ? ['Project 分析', '环境变量', '配置编辑', '接管确认'] : ['Project analysis', 'Environment', 'Configuration', 'Confirmation']
+
+  return <div className="flex w-full flex-col gap-4">
+    <Button variant="ghost" size="sm" className="self-start text-muted-foreground" onClick={() => void leave()}><ChevronLeft />{zh ? '返回 Project' : 'Back to Project'}</Button>
+    <ResourceFrame title={zh ? `接管 ${projectName}` : `Take over ${projectName}`} detail={zh ? '整个 Compose Project 将作为一个 SUMA Project 接管' : 'The complete Compose Project will become one SUMA Project'} action={<Badge variant="outline">Compose</Badge>}>
+      <div className="flex w-full flex-col gap-5">
+        <ol className="grid grid-cols-4 gap-2">{steps.map((name, index) => <li key={name} className={`flex items-center gap-2 border-b-2 px-1 pb-2 text-sm ${index === step ? 'border-primary font-medium' : index < step ? 'border-emerald-500 text-emerald-600 dark:text-emerald-400' : 'border-border text-muted-foreground'}`}><span className="grid size-5 shrink-0 place-items-center rounded-full bg-muted text-xs">{index < step ? <Check className="size-3" /> : index + 1}</span><span className="hidden sm:inline">{stepLabels[index]}</span></li>)}</ol>
+
+        {step === 0 && <AnalysisStep draft={draft} zh={zh} />}
+        {step === 1 && <EnvironmentStep variables={draft.variables} choices={choices} revealed={revealed} zh={zh} onChoice={(id, destination) => setChoices((current) => ({ ...current, [id]: destination }))} onReveal={(id) => setRevealed((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })} />}
+        {step === 2 && <Card><CardContent className="flex flex-col gap-3"><Tabs value={file} onValueChange={(value) => setFile(value as 'compose' | 'environment')}><TabsList><TabsTrigger value="compose">compose.yml</TabsTrigger><TabsTrigger value="environment">.env</TabsTrigger></TabsList></Tabs><div className="h-[52vh] overflow-hidden rounded-lg ring-1 ring-foreground/10"><Suspense fallback={<div className="grid h-full place-items-center"><Spinner /></div>}><Monaco key={selected.label} language={selected.language} theme={dark ? 'vs-dark' : 'light'} value={selected.value} onChange={(value) => { setValidated(''); if (file === 'compose') setCompose(value ?? ''); else setEnvironment(value ?? '') }} options={{ minimap: { enabled: false }, automaticLayout: true, wordWrap: 'on', scrollBeyondLastLine: false }} /></Suspense></div>{validate.isError && <Alert variant="destructive"><ShieldAlert /><AlertDescription>{validate.error.message}</AlertDescription></Alert>}{validated === contentSignature && <Alert><Check /><AlertDescription>{zh ? 'Compose 与安全策略校验通过。' : 'Compose and security policy validation passed.'}</AlertDescription></Alert>}<div className="flex justify-end"><Button variant="outline" disabled={validate.isPending} onClick={() => validate.mutate()}>{validate.isPending ? <Spinner /> : <FileCheck2 />}{zh ? '校验草稿' : 'Validate draft'}</Button></div></CardContent></Card>}
+        {step === 3 && <Card><CardHeader><CardTitle>{zh ? '确认 Project 接管' : 'Confirm Project takeover'}</CardTitle></CardHeader><CardContent className="flex flex-col gap-4"><Alert><AlertTriangle /><AlertTitle>{zh ? '接管不会部署' : 'Takeover will not deploy'}</AlertTitle><AlertDescription>{zh ? 'SUMA 将原子保存 compose.yml、.env 和 .suma/project.json。现有容器、网络和运行状态不会改变。' : 'SUMA atomically saves compose.yml, .env, and .suma/project.json. Existing containers, networks, and runtime state remain unchanged.'}</AlertDescription></Alert><div className="space-y-2"><Label htmlFor="project-confirm">{zh ? `输入 ${projectName} 确认` : `Type ${projectName} to confirm`}</Label><Input id="project-confirm" autoComplete="off" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></div>{takeover.isError && <ErrorState description={takeover.error.message} />}</CardContent></Card>}
+
+        <div className="flex items-center justify-between"><Button variant="outline" disabled={step === 0 || render.isPending || takeover.isPending} onClick={() => setStep((current) => Math.max(0, current - 1))}><ChevronLeft />{zh ? '上一步' : 'Back'}</Button>{step === 0 ? <Button disabled={hasBlockers} onClick={() => setStep(1)}>{zh ? '处理环境变量' : 'Review environment'}<ChevronRight /></Button> : step === 1 ? <Button disabled={render.isPending} onClick={() => render.mutate()}>{render.isPending ? <Spinner /> : null}{zh ? '生成配置草稿' : 'Render draft'}<ChevronRight /></Button> : step === 2 ? <Button disabled={validated !== contentSignature} onClick={() => setStep(3)}>{zh ? '进入确认' : 'Continue'}<ChevronRight /></Button> : <Button disabled={confirmation !== projectName || takeover.isPending} onClick={() => takeover.mutate()}>{takeover.isPending ? <Spinner /> : <Check />}{zh ? '完成接管' : 'Complete takeover'}</Button>}</div>
+      </div>
+    </ResourceFrame>
+  </div>
+}
+
+function AnalysisStep({ draft, zh }: { draft: ProjectTakeoverDraft; zh: boolean }) {
+  return <div className="flex flex-col gap-4"><div className="flex flex-wrap gap-2"><StatusBadge tone={draft.source === 'mapped' ? 'success' : 'warning'}>{draft.source === 'mapped' ? (zh ? '安全源配置' : 'Mapped source') : (zh ? '运行态重建' : 'Runtime reconstruction')}</StatusBadge><StatusBadge tone={draft.confidence === 'high' ? 'success' : draft.confidence === 'medium' ? 'warning' : 'critical'}>{zh ? '置信度' : 'Confidence'} · {draft.confidence}</StatusBadge><Badge variant="outline">{draft.observation.services.length} Services</Badge><Badge variant="outline">{draft.observation.services.reduce((total, service) => total + service.instances.length, 0)} Instances</Badge></div>{draft.blockers.map((message) => <Alert key={message} variant="destructive"><ShieldAlert /><AlertTitle>{zh ? '阻断项' : 'Blocker'}</AlertTitle><AlertDescription>{message}</AlertDescription></Alert>)}{draft.warnings.map((message) => <Alert key={message}><AlertTriangle /><AlertDescription>{message}</AlertDescription></Alert>)}<Card><CardContent><Table><TableHeader><TableRow><TableHead>Service</TableHead><TableHead>{zh ? '副本' : 'Replicas'}</TableHead><TableHead>{zh ? '变体' : 'Variants'}</TableHead><TableHead>Drift</TableHead><TableHead>{zh ? '容器实例' : 'Container instances'}</TableHead></TableRow></TableHeader><TableBody>{draft.observation.services.map((service) => <TableRow key={service.name}><TableCell className="font-medium">{service.name}</TableCell><TableCell>{service.desired_replicas}</TableCell><TableCell>{service.config_variants.length}</TableCell><TableCell><StatusBadge tone={service.drift_status === 'consistent' ? 'success' : 'warning'}>{service.drift_status}</StatusBadge></TableCell><TableCell className="text-muted-foreground">{service.instances.map((instance) => instance.container_name).join(', ')}</TableCell></TableRow>)}</TableBody></Table></CardContent></Card>{(draft.observation.one_off_containers.length > 0 || draft.observation.orphan_containers.length > 0) && <Alert><AlertTriangle /><AlertTitle>{zh ? '不会写入 Service 的运行实例' : 'Runtime instances excluded from Services'}</AlertTitle><AlertDescription>{zh ? `one-off ${draft.observation.one_off_containers.length} 个，orphan ${draft.observation.orphan_containers.length} 个；接管不会删除它们。` : `${draft.observation.one_off_containers.length} one-off and ${draft.observation.orphan_containers.length} orphan instances; takeover will not delete them.`}</AlertDescription></Alert>}</div>
+}
+
+function EnvironmentStep({ variables, choices, revealed, zh, onChoice, onReveal }: { variables: EnvironmentCandidate[]; choices: Record<string, Destination>; revealed: Set<string>; zh: boolean; onChoice: (id: string, value: Destination) => void; onReveal: (id: string) => void }) {
+  if (!variables.length) return <Alert><Check /><AlertTitle>{zh ? '没有需要处理的显式变量' : 'No explicit variables to review'}</AlertTitle><AlertDescription>{zh ? '镜像默认 ENV 已排除；草稿中没有推断出的显式环境变量。' : 'Image-default ENV values were excluded and no explicit variables were inferred.'}</AlertDescription></Alert>
+  return <Card><CardContent><Table><TableHeader><TableRow><TableHead>Service</TableHead><TableHead>Key</TableHead><TableHead>{zh ? '值' : 'Value'}</TableHead><TableHead>{zh ? '来源' : 'Source'}</TableHead><TableHead className="w-44">{zh ? '写入位置' : 'Destination'}</TableHead></TableRow></TableHeader><TableBody>{variables.map((variable) => <TableRow key={variable.id}><TableCell>{variable.service}</TableCell><TableCell className="font-mono text-xs">{variable.key}</TableCell><TableCell><div className="flex max-w-72 items-center gap-1"><span className="truncate font-mono text-xs">{variable.sensitive && !revealed.has(variable.id) ? '••••••••' : variable.value}</span>{variable.sensitive && <Button variant="ghost" size="icon-xs" aria-label={revealed.has(variable.id) ? (zh ? '隐藏' : 'Hide') : (zh ? '揭示' : 'Reveal')} onClick={() => onReveal(variable.id)}>{revealed.has(variable.id) ? <EyeOff /> : <Eye />}</Button>}</div></TableCell><TableCell><Badge variant="outline">{variable.source}</Badge><p className="mt-1 max-w-72 text-xs text-muted-foreground">{variable.reason}</p></TableCell><TableCell><Select value={choices[variable.id] ?? variable.destination} onValueChange={(value) => onChoice(variable.id, value as Destination)}><SelectTrigger className="w-40"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="compose">compose.yml</SelectItem><SelectItem value="env">.env</SelectItem><SelectItem value="exclude">{zh ? '排除' : 'Exclude'}</SelectItem></SelectContent></Select></TableCell></TableRow>)}</TableBody></Table><p className="mt-3 text-xs text-muted-foreground">{zh ? '.env 仍是明文文件，只是将值与 Compose YAML 分离；不会提供加密。敏感值不会写入浏览器存储、日志、Task 或 Audit。' : '.env remains plaintext and only separates values from Compose YAML; it is not encrypted. Sensitive values are not written to browser storage, logs, Tasks, or Audit.'}</p></CardContent></Card>
+}

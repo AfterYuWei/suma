@@ -46,6 +46,7 @@ type Service struct {
 	containers   containerdomain.Service
 	nodeID       string
 	nodeName     string
+	localSources bool
 	projectLocks *sync.Map
 }
 
@@ -57,10 +58,10 @@ func NewService(_ *gorm.DB, root string, runner Runner, tasks *task.Service, con
 	if err := os.MkdirAll(absolute, 0o750); err != nil {
 		return nil, err
 	}
-	return &Service{root: absolute, runner: runner, tasks: tasks, containers: containers, nodeID: "local", nodeName: "Local", projectLocks: &sync.Map{}}, nil
+	return &Service{root: absolute, runner: runner, tasks: tasks, containers: containers, nodeID: "local", nodeName: "Local", localSources: true, projectLocks: &sync.Map{}}, nil
 }
-func (s *Service) ForNode(nodeID, nodeName string, runner Runner, containers containerdomain.Service) *Service {
-	return &Service{root: s.root, runner: runner, tasks: s.tasks, containers: containers, nodeID: nodeID, nodeName: nodeName, projectLocks: s.projectLocks}
+func (s *Service) ForNode(nodeID, nodeName string, runner Runner, containers containerdomain.Service, localSources bool) *Service {
+	return &Service{root: s.root, runner: runner, tasks: s.tasks, containers: containers, nodeID: nodeID, nodeName: nodeName, localSources: localSources, projectLocks: s.projectLocks}
 }
 func (s *Service) List(ctx context.Context) ([]Project, error) {
 	containers, err := s.containers.List(ctx)
@@ -274,6 +275,15 @@ func (s *Service) Logs(ctx context.Context, name string) (string, error) {
 }
 func (s *Service) Validate(ctx context.Context, name, content, environment string) error {
 	if _, err := s.managedProject(name); err != nil {
+		return err
+	}
+	return s.ValidateDraft(ctx, content, environment)
+}
+
+// ValidateDraft validates an unsaved Compose Project without requiring a
+// managed Project directory and without mutating runtime state.
+func (s *Service) ValidateDraft(ctx context.Context, content, environment string) error {
+	if err := validateManagedTakeoverContent(content); err != nil {
 		return err
 	}
 	temp, err := os.MkdirTemp(s.root, ".validate-")

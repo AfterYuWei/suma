@@ -61,7 +61,7 @@ export function OverviewPage() {
   const audits = useQuery({ queryKey: ['audit-logs', effectiveNodeID], queryFn: () => api<Audit[]>(`/audit-logs?node_id=${encodeURIComponent(effectiveNodeID)}`) })
   const networks = useQuery({ queryKey: ['networks', effectiveNodeID], queryFn: () => api<unknown[]>(nodePath(effectiveNodeID, '/networks')) })
   const volumes = useQuery({ queryKey: ['volumes', effectiveNodeID], queryFn: () => api<unknown[]>(nodePath(effectiveNodeID, '/volumes')) })
-  const projects = useQuery({ queryKey: ['compose', effectiveNodeID], queryFn: () => api<unknown[]>(nodePath(effectiveNodeID, '/compose')) })
+  const projects = useQuery({ queryKey: ['projects', effectiveNodeID], queryFn: () => api<unknown[]>(nodePath(effectiveNodeID, '/projects')) })
 
   const data = overview.data
   const host = data?.host

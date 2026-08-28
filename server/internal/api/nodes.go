@@ -266,7 +266,7 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 503, 20301, err.Error())
 			return nil, view, false
 		}
-		return deps.Compose.ForNode(view.ID, view.Name, deps.ComposeRunner.ForTarget(target), adapter), view, true
+		return deps.Compose.ForNode(view.ID, view.Name, deps.ComposeRunner.ForTarget(target), adapter, view.ConnectionType == node.ConnectionUnix), view, true
 	}
 	validatePolicy := func(view node.View, content string) error {
 		if view.ConnectionType == node.ConnectionTCP {
@@ -380,6 +380,29 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 			return
 		}
 		success(c, draft)
+	})
+	routes.POST("/:name/takeover/validate", func(c *gin.Context) {
+		current, view, ok := service(c)
+		if !ok {
+			return
+		}
+		var input struct {
+			Compose     string `json:"compose"`
+			Environment string `json:"environment"`
+		}
+		if c.ShouldBindJSON(&input) != nil || input.Compose == "" {
+			failure(c, 400, 20322, "Compose YAML is required")
+			return
+		}
+		if err := validatePolicy(view, input.Compose); err != nil {
+			failure(c, 422, 20323, err.Error())
+			return
+		}
+		if err := current.ValidateDraft(c.Request.Context(), input.Compose, input.Environment); err != nil {
+			failure(c, 422, 20324, err.Error())
+			return
+		}
+		success(c, gin.H{"valid": true})
 	})
 	routes.POST("/:name/takeover", func(c *gin.Context) {
 		current, view, ok := service(c)
@@ -542,7 +565,7 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 503, 20401, err.Error())
 			return nil, view, false
 		}
-		return deps.Compose.ForNode(view.ID, view.Name, deps.ComposeRunner.ForTarget(target), adapter), view, true
+		return deps.Compose.ForNode(view.ID, view.Name, deps.ComposeRunner.ForTarget(target), adapter, view.ConnectionType == node.ConnectionUnix), view, true
 	}
 	validatePolicy := func(view node.View, content string) error {
 		if view.ConnectionType == node.ConnectionTCP {
@@ -776,6 +799,29 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 			return
 		}
 		success(c, draft)
+	})
+	compose.POST("/:name/takeover/validate", func(c *gin.Context) {
+		current, view, ok := service(c)
+		if !ok {
+			return
+		}
+		var input struct {
+			Compose     string `json:"compose"`
+			Environment string `json:"environment"`
+		}
+		if c.ShouldBindJSON(&input) != nil || input.Compose == "" {
+			failure(c, 400, 20422, "Compose YAML is required")
+			return
+		}
+		if err := validatePolicy(view, input.Compose); err != nil {
+			failure(c, 422, 20423, err.Error())
+			return
+		}
+		if err := current.ValidateDraft(c.Request.Context(), input.Compose, input.Environment); err != nil {
+			failure(c, 422, 20424, err.Error())
+			return
+		}
+		success(c, gin.H{"valid": true})
 	})
 	compose.POST("/:name/takeover", func(c *gin.Context) {
 		current, view, ok := service(c)
