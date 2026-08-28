@@ -578,7 +578,7 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 		if !ok {
 			return
 		}
-		rows, err := current.List(c.Request.Context())
+		rows, err := current.ListSummaries(c.Request.Context())
 		if err != nil {
 			failure(c, 500, 20402, "Unable to list Projects")
 			return

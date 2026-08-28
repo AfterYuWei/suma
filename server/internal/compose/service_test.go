@@ -2,6 +2,7 @@ package compose
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -34,6 +35,39 @@ func TestCreateComposeDoesNotCreateDeliveryProject(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("Compose creation also created %d delivery projects", count)
+	}
+}
+
+func TestListSummariesOmitsComposeContentAndSourcePaths(t *testing.T) {
+	root := t.TempDir()
+	db, err := database.Open(filepath.Join(root, "suma.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(db, filepath.Join(root, "compose"), nil, nil, emptyContainers{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Create(context.Background(), "production", "services:\n  web:\n    image: example:v1\n    environment:\n      PASSWORD: secret-value\n", "PASSWORD=secret-value\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := service.ListSummaries(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Name != "production" {
+		t.Fatalf("summaries = %#v", rows)
+	}
+	payload, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(payload)
+	for _, forbidden := range []string{"secret-value", "example:v1", `"compose":`, `"environment":`, `"path":`, `"config_files":`} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("summary payload contains %q: %s", forbidden, text)
+		}
 	}
 }
 

@@ -1,7 +1,7 @@
 export type ProjectBackend = 'compose' | 'swarm'
 export type ProjectCapability = 'view' | 'edit' | 'deploy' | 'start' | 'stop' | 'restart' | 'update' | 'delete' | 'services' | 'logs' | 'networks' | 'volumes' | 'takeover' | 'shadow_preview'
 
-export interface Project {
+export interface ProjectSummary {
   ref: { backend: ProjectBackend; scope: { kind: 'engine' | 'swarm'; id: string }; native_name: string }
   backend: ProjectBackend
   scope: { kind: 'engine' | 'swarm'; id: string }
@@ -13,17 +13,20 @@ export interface Project {
   capabilities: ProjectCapability[]
   service_count: number
   instance_count: number
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export interface Project extends ProjectSummary {
   path: string
   can_manage: boolean
   config_files: string[]
-  status: string
   services: number
   containers: number
   compose: string
   environment: string
   metadata?: { origin: 'created' | 'takeover' | 'legacy'; takeover_source?: 'mapped' | 'runtime'; claimed_at: string; last_deployed_at?: string }
-  created_at: string
-  updated_at: string
 }
 
 export interface ProjectContainerInstance {
@@ -68,6 +71,7 @@ export interface ProjectTakeoverDraft {
   variables: EnvironmentCandidate[]
   warnings: string[]
   blockers: string[]
+  capabilities: ProjectCapability[]
   observation: {
     name: string
     services: ObservedProjectService[]

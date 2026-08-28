@@ -12,6 +12,7 @@ import (
 
 	containerdomain "github.com/suma/suma/server/internal/container"
 	"github.com/suma/suma/server/internal/database"
+	projectdomain "github.com/suma/suma/server/internal/project"
 	"github.com/suma/suma/server/internal/task"
 )
 
@@ -64,6 +65,20 @@ func TestAssessShadowPreviewWarnsWithoutHealthcheck(t *testing.T) {
 	}
 	if !assessment.Eligible || len(assessment.Warnings) != 1 || !strings.Contains(assessment.Warnings[0], "no healthcheck") {
 		t.Fatalf("assessment = %#v", assessment)
+	}
+}
+
+func TestTakeoverDraftCapabilitiesReflectShadowEligibility(t *testing.T) {
+	eligible := ProjectTakeoverDraft{Compose: "services:\n  web:\n    image: nginx:alpine\n"}
+	setTakeoverDraftCapabilities(&eligible)
+	if !projectdomain.HasCapability(eligible.Capabilities, projectdomain.CapabilityTakeover) || !projectdomain.HasCapability(eligible.Capabilities, projectdomain.CapabilityShadowPreview) {
+		t.Fatalf("eligible capabilities = %#v", eligible.Capabilities)
+	}
+
+	ineligible := ProjectTakeoverDraft{Compose: "services:\n  web:\n    image: nginx:alpine\n    ports: [\"8080:80\"]\n"}
+	setTakeoverDraftCapabilities(&ineligible)
+	if !projectdomain.HasCapability(ineligible.Capabilities, projectdomain.CapabilityTakeover) || projectdomain.HasCapability(ineligible.Capabilities, projectdomain.CapabilityShadowPreview) {
+		t.Fatalf("ineligible capabilities = %#v", ineligible.Capabilities)
 	}
 }
 

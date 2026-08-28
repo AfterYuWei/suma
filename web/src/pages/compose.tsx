@@ -13,7 +13,7 @@ import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { TooltipHint } from '../components/ui/tooltip-hint'
 import { TakeoverWarningDialog } from '../features/compose/takeover-warning-dialog'
-import type { Project } from '../features/compose/types'
+import type { Project, ProjectSummary } from '../features/compose/types'
 import type { ContainerSummary } from '../features/containers/types'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
@@ -36,7 +36,7 @@ export function ComposePage() {
   const [takeoverName, setTakeoverName] = useState('')
   const { t, language } = useI18n()
   const zh = language === 'zh-CN'
-  const query = useQuery({ queryKey: ['projects', nodeID], queryFn: () => api<Project[]>(nodePath(nodeID, '/projects')), refetchInterval: 5_000 })
+  const query = useQuery({ queryKey: ['projects', nodeID], queryFn: () => api<ProjectSummary[]>(nodePath(nodeID, '/projects')), refetchInterval: 5_000 })
   const create = useMutation({
     mutationFn: (name: string) => api<Project>(nodePath(nodeID, '/projects'), { method: 'POST', body: JSON.stringify({ backend: 'compose', name, compose: starter, environment: '' }) }),
     onSuccess: async () => { await client.invalidateQueries({ queryKey: ['projects', nodeID] }) },
@@ -73,7 +73,7 @@ export function ComposePage() {
         <TableHeader><TableRow><TableHead className="w-9 pr-0"><Checkbox checked={allSelected} indeterminate={!allSelected && selected.size > 0} onCheckedChange={(value) => toggleAll(value === true)} aria-label={zh ? '全选托管项目' : 'Select managed Projects'} /></TableHead><TableHead className="w-9" /><TableHead>{zh ? '项目' : 'Project'}</TableHead><TableHead className="w-24">Backend</TableHead><TableHead className="w-28">{zh ? '状态' : 'Status'}</TableHead><TableHead className="w-40">{zh ? '运行资源' : 'Runtime'}</TableHead><TableHead className="w-56">{zh ? '操作' : 'Actions'}</TableHead></TableRow></TableHeader>
         <TableBody>{rows.flatMap((row) => {
           const open = expanded.has(row.name)
-          return [<TableRow key={row.name}><TableCell className="pr-0"><Checkbox disabled={!row.managed} checked={selected.has(row.name)} onCheckedChange={(value) => toggleRow(row.name, value === true)} aria-label={row.managed ? row.name : (zh ? '外部项目不可批量操作' : 'External Project cannot be batch operated')} /></TableCell><TableCell><Button variant="ghost" size="icon-xs" onClick={() => toggleExpanded(row.name)} aria-label={zh ? '展开服务' : 'Expand services'}><ChevronRight className={open ? 'rotate-90 transition-transform' : 'transition-transform'} /></Button></TableCell><TableCell><div className="flex flex-col gap-1"><div className="flex items-center gap-2"><Link to="/projects/$backend/$projectName" params={{ backend: row.backend, projectName: row.name }} className="font-medium hover:underline">{row.name}</Link><StatusBadge tone={row.managed ? 'outline' : 'neutral'}>{row.managed ? (zh ? '托管' : 'Managed') : (zh ? '外部' : 'External')}</StatusBadge></div><span className="max-w-72 truncate text-xs text-muted-foreground">{row.path || (zh ? '运行态发现' : 'Runtime discovery')}</span></div></TableCell><TableCell><Badge variant="outline">{row.backend === 'compose' ? 'Compose' : 'Swarm'}</Badge></TableCell><TableCell><StatusBadge tone={projectTone(row.status)}>{row.status}</StatusBadge></TableCell><TableCell>{row.service_count} {zh ? '服务' : 'services'} · <span className="text-muted-foreground">{row.instance_count} {zh ? '实例' : 'instances'}</span></TableCell><TableCell><ProjectActions row={row} zh={zh} onTakeover={() => setTakeoverName(row.name)} /></TableCell></TableRow>, ...(open ? [<TableRow key={`${row.name}-services`}><TableCell colSpan={7} className="bg-muted/30 p-4"><ProjectServices project={row} zh={zh} /></TableCell></TableRow>] : [])]
+          return [<TableRow key={row.name}><TableCell className="pr-0"><Checkbox disabled={!row.managed} checked={selected.has(row.name)} onCheckedChange={(value) => toggleRow(row.name, value === true)} aria-label={row.managed ? row.name : (zh ? '外部项目不可批量操作' : 'External Project cannot be batch operated')} /></TableCell><TableCell><Button variant="ghost" size="icon-xs" onClick={() => toggleExpanded(row.name)} aria-label={zh ? '展开服务' : 'Expand services'}><ChevronRight className={open ? 'rotate-90 transition-transform' : 'transition-transform'} /></Button></TableCell><TableCell><div className="flex flex-col gap-1"><div className="flex items-center gap-2"><Link to="/projects/$backend/$projectName" params={{ backend: row.backend, projectName: row.name }} className="font-medium hover:underline">{row.name}</Link><StatusBadge tone={row.managed ? 'outline' : 'neutral'}>{row.managed ? (zh ? '托管' : 'Managed') : (zh ? '外部' : 'External')}</StatusBadge></div><span className="max-w-72 truncate text-xs text-muted-foreground">{row.source === 'managed' ? (zh ? 'SUMA 托管配置' : 'SUMA managed configuration') : (zh ? 'Docker 运行态发现' : 'Discovered from Docker runtime')} · {row.scope.id}</span></div></TableCell><TableCell><Badge variant="outline">{row.backend === 'compose' ? 'Compose' : 'Swarm'}</Badge></TableCell><TableCell><StatusBadge tone={projectTone(row.status)}>{row.status}</StatusBadge></TableCell><TableCell>{row.service_count} {zh ? '服务' : 'services'} · <span className="text-muted-foreground">{row.instance_count} {zh ? '实例' : 'instances'}</span></TableCell><TableCell><ProjectActions row={row} zh={zh} onTakeover={() => setTakeoverName(row.name)} /></TableCell></TableRow>, ...(open ? [<TableRow key={`${row.name}-services`}><TableCell colSpan={7} className="bg-muted/30 p-4"><ProjectServices project={row} zh={zh} /></TableCell></TableRow>] : [])]
         })}</TableBody>
       </Table></ListShell>}
     </div>
@@ -86,7 +86,7 @@ function actionLabel(action: string, zh: boolean) {
   return values[action]?.[zh ? 0 : 1] ?? action
 }
 
-function ProjectActions({ row, zh, onTakeover }: { row: Project; zh: boolean; onTakeover: () => void }) {
+function ProjectActions({ row, zh, onTakeover }: { row: ProjectSummary; zh: boolean; onTakeover: () => void }) {
   const nodeID = useUIStore((state) => state.currentNodeID)
   const client = useQueryClient()
   const action = useMutation({ mutationFn: (name: string) => api<ProjectTask>(nodePath(nodeID, `/projects/compose/${encodeURIComponent(row.name)}/actions/${name}`), { method: 'POST' }), onSuccess: () => { void client.invalidateQueries({ queryKey: ['projects', nodeID] }); void client.invalidateQueries({ queryKey: ['tasks', nodeID] }) } })
@@ -103,7 +103,7 @@ function ActionIcon({ label, destructive, disabled, onClick, children }: { label
   return <TooltipHint content={label}><Button variant="ghost" size="icon-sm" className={destructive ? 'text-destructive' : undefined} disabled={disabled} onClick={onClick} aria-label={label} render={!onClick && typeof children === 'object' ? children as ReactElement : undefined}>{onClick ? children : null}</Button></TooltipHint>
 }
 
-function ProjectServices({ project, zh }: { project: Project; zh: boolean }) {
+function ProjectServices({ project, zh }: { project: ProjectSummary; zh: boolean }) {
   const nodeID = useUIStore((state) => state.currentNodeID)
   const query = useQuery({ queryKey: ['project-services', nodeID, project.name], queryFn: () => api<ContainerSummary[]>(nodePath(nodeID, `/projects/compose/${encodeURIComponent(project.name)}/services`)), refetchInterval: 5_000 })
   if (query.isPending) return <LoadingState embedded compact rows={2} label={zh ? '正在加载实例' : 'Loading instances'} />

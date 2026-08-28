@@ -107,6 +107,21 @@ func (s *Service) List(ctx context.Context) ([]Project, error) {
 	})
 	return result, nil
 }
+
+// ListSummaries returns the backend-neutral Projects list contract. Compose
+// content, environment values, source paths, and backend detail stay out of
+// list responses and are loaded only from the backend-specific detail API.
+func (s *Service) ListSummaries(ctx context.Context) ([]projectdomain.Summary, error) {
+	projects, err := s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	summaries := make([]projectdomain.Summary, 0, len(projects))
+	for _, project := range projects {
+		summaries = append(summaries, project.Summary)
+	}
+	return summaries, nil
+}
 func (s *Service) Get(ctx context.Context, name string) (Project, error) {
 	project, err := s.findProject(ctx, name)
 	if err != nil {

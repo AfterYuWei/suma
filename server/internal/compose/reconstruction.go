@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	"github.com/goccy/go-yaml"
+	projectdomain "github.com/suma/suma/server/internal/project"
 )
 
 type EnvironmentDestination string
@@ -42,18 +43,19 @@ type EnvironmentChoice struct {
 }
 
 type ProjectTakeoverDraft struct {
-	ProjectName string                 `json:"project_name"`
-	Backend     string                 `json:"backend"`
-	Source      string                 `json:"source"`
-	Confidence  string                 `json:"confidence"`
-	Fingerprint string                 `json:"fingerprint"`
-	Compose     string                 `json:"compose"`
-	Environment string                 `json:"environment"`
-	Variables   []EnvironmentCandidate `json:"variables"`
-	Warnings    []string               `json:"warnings"`
-	Blockers    []string               `json:"blockers"`
-	Observation ObservedComposeProject `json:"observation"`
-	model       map[string]any
+	ProjectName  string                     `json:"project_name"`
+	Backend      string                     `json:"backend"`
+	Source       string                     `json:"source"`
+	Confidence   string                     `json:"confidence"`
+	Fingerprint  string                     `json:"fingerprint"`
+	Compose      string                     `json:"compose"`
+	Environment  string                     `json:"environment"`
+	Variables    []EnvironmentCandidate     `json:"variables"`
+	Warnings     []string                   `json:"warnings"`
+	Blockers     []string                   `json:"blockers"`
+	Capabilities []projectdomain.Capability `json:"capabilities"`
+	Observation  ObservedComposeProject     `json:"observation"`
+	model        map[string]any
 }
 
 func (s *Service) BuildTakeoverDraft(ctx context.Context, name string) (ProjectTakeoverDraft, error) {
@@ -123,6 +125,7 @@ func (s *Service) BuildTakeoverDraft(ctx context.Context, name string) (ProjectT
 	if err != nil {
 		return ProjectTakeoverDraft{}, err
 	}
+	setTakeoverDraftCapabilities(&draft)
 	return draft, nil
 }
 
@@ -147,7 +150,21 @@ func (s *Service) RenderTakeoverDraft(ctx context.Context, name, fingerprint str
 		}
 	}
 	draft.Compose, draft.Environment, err = renderTakeoverModel(draft.model, draft.Variables)
+	if err == nil {
+		setTakeoverDraftCapabilities(&draft)
+	}
 	return draft, err
+}
+
+func setTakeoverDraftCapabilities(draft *ProjectTakeoverDraft) {
+	draft.Capabilities = []projectdomain.Capability{projectdomain.CapabilityTakeover}
+	if len(draft.Blockers) != 0 {
+		return
+	}
+	assessment, err := AssessShadowPreview(draft.Compose)
+	if err == nil && assessment.Eligible {
+		draft.Capabilities = append(draft.Capabilities, projectdomain.CapabilityShadowPreview)
+	}
 }
 
 func decodeComposeModel(content string) (map[string]any, error) {

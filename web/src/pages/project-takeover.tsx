@@ -102,8 +102,9 @@ export function ProjectTakeoverPage() {
   if (preview.isError || !preview.data) return <ErrorState title={zh ? '无法分析 Project' : 'Unable to analyze Project'} description={preview.error?.message || ''} />
   const draft = preview.data
   const hasBlockers = draft.blockers.length > 0
+  const canShadowPreview = draft.capabilities.includes('shadow_preview')
   const selected = file === 'compose' ? { label: 'compose.yml', value: compose, language: 'yaml' } : { label: '.env', value: environment, language: 'plaintext' }
-  const stepLabels = zh ? ['Project 分析', '环境变量', '配置编辑', '接管确认'] : ['Project analysis', 'Environment', 'Configuration', 'Confirmation']
+  const stepLabels = zh ? ['Project 分析', '环境变量', canShadowPreview ? '配置编辑 · 可预演' : '配置编辑', '接管确认'] : ['Project analysis', 'Environment', canShadowPreview ? 'Configuration · preview' : 'Configuration', 'Confirmation']
 
   return <div className="flex w-full flex-col gap-4">
     <Button variant="ghost" size="sm" className="self-start text-muted-foreground" onClick={() => void leave()}><ChevronLeft />{zh ? '返回 Project' : 'Back to Project'}</Button>
