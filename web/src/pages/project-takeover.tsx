@@ -123,6 +123,7 @@ function takeoverMessage(message: string | undefined, zh: boolean): string {
     'Shadow preview is ready': '隔离预演已就绪',
     'Stopping isolated Compose Project': '正在停止隔离的 Compose Project',
     'Shadow preview removed': '隔离预演已清理',
+    'Compose diagnostic omitted because it may contain a short sensitive environment value': 'Compose 返回的信息可能包含较短的敏感环境变量值，详细内容已隐藏',
   }
   if (exact[message]) return exact[message]
 
@@ -174,6 +175,10 @@ function takeoverMessage(message: string | undefined, zh: boolean): string {
   if (match) return `无法证明插值文件路径“${match[1]}”是安全的`
   match = message.match(/^parse Compose Project: (.+)$/)
   if (match) return `无法解析 Compose Project：${match[1]}`
+  match = message.match(/^docker compose config --quiet: exit status \d+(?:: ([\s\S]+))?$/)
+  if (match) return match[1] ? `Compose 配置校验失败：${takeoverMessage(match[1], zh)}` : 'Compose 配置校验失败，但命令没有返回详细原因'
+  match = message.match(/^validate takeover Compose Project: docker compose config --quiet: exit status \d+(?:: ([\s\S]+))?$/)
+  if (match) return match[1] ? `接管前的 Compose 配置校验失败：${takeoverMessage(match[1], zh)}` : '接管前的 Compose 配置校验失败，但命令没有返回详细原因'
   return message
 }
 

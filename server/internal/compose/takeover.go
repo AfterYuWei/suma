@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -72,7 +71,7 @@ func (s *Service) Takeover(ctx context.Context, name string, input TakeoverInput
 	if err := writeManagedProjectMetadata(temporary, metadata); err != nil {
 		return Project{}, err
 	}
-	if err := s.runner.Validate(ctx, temporary, io.Discard); err != nil {
+	if err := s.validateComposeProject(ctx, temporary, input.Environment); err != nil {
 		return Project{}, fmt.Errorf("validate takeover Compose Project: %w", err)
 	}
 	if err := os.Rename(temporary, target); err != nil {

@@ -313,7 +313,49 @@ func (s *Service) ValidateDraft(ctx context.Context, content, environment string
 	if err := writeAtomic(filepath.Join(temp, ".env"), environment); err != nil {
 		return err
 	}
-	return s.runner.Validate(ctx, temp, io.Discard)
+	return s.validateComposeProject(ctx, temp, environment)
+}
+
+func (s *Service) validateComposeProject(ctx context.Context, directory, environment string) error {
+	var output strings.Builder
+	if err := s.runner.Validate(ctx, directory, &output); err != nil {
+		detail := composeValidationDetail(output.String(), environment)
+		if detail != "" {
+			return fmt.Errorf("%w: %s", err, detail)
+		}
+		return err
+	}
+	return nil
+}
+
+func composeValidationDetail(output, environment string) string {
+	for _, line := range strings.Split(environment, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || !sensitiveEnvironmentKey(strings.TrimSpace(strings.TrimPrefix(key, "export "))) {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if len(value) >= 2 && ((value[0] == '\'' && value[len(value)-1] == '\'') || (value[0] == '"' && value[len(value)-1] == '"')) {
+			value = value[1 : len(value)-1]
+		}
+		if value != "" {
+			if len([]rune(value)) < 4 && strings.Contains(output, value) {
+				return "Compose diagnostic omitted because it may contain a short sensitive environment value"
+			}
+			output = strings.ReplaceAll(output, value, "***")
+			output = strings.ReplaceAll(output, strings.ReplaceAll(value, "\\'", "'"), "***")
+		}
+	}
+	output = strings.TrimSpace(output)
+	const maximumDetail = 4096
+	if characters := []rune(output); len(characters) > maximumDetail {
+		output = string(characters[:maximumDetail]) + "…"
+	}
+	return output
 }
 func (s *Service) Action(ctx context.Context, name, action string) (database.Task, error) {
 	project, err := s.managedProject(name)

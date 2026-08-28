@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -14,13 +15,15 @@ import (
 
 type takeoverRunner struct {
 	Runner
-	validateError error
-	validated     bool
-	deployed      bool
+	validateError  error
+	validateOutput string
+	validated      bool
+	deployed       bool
 }
 
-func (runner *takeoverRunner) Validate(context.Context, string, io.Writer) error {
+func (runner *takeoverRunner) Validate(_ context.Context, _ string, output io.Writer) error {
 	runner.validated = true
+	_, _ = io.WriteString(output, runner.validateOutput)
 	return runner.validateError
 }
 
@@ -87,6 +90,21 @@ func TestValidateDraftDoesNotRequireManagedProject(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(service.root, "web")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("draft validation created a managed Project: %v", err)
+	}
+}
+
+func TestValidateDraftReturnsRedactedComposeDiagnostic(t *testing.T) {
+	runner := &takeoverRunner{
+		validateError:  errors.New("docker compose config --quiet: exit status 1"),
+		validateOutput: "service web has invalid configuration near secret-value",
+	}
+	service := &Service{root: t.TempDir(), runner: runner}
+	err := service.ValidateDraft(context.Background(), "services:\n  web:\n    image: nginx:alpine\n", "PASSWORD='secret-value'\n")
+	if err == nil || !strings.Contains(err.Error(), "service web has invalid configuration") {
+		t.Fatalf("validation diagnostic missing: %v", err)
+	}
+	if strings.Contains(err.Error(), "secret-value") || !strings.Contains(err.Error(), "***") {
+		t.Fatalf("validation diagnostic leaked environment value: %v", err)
 	}
 }
 
