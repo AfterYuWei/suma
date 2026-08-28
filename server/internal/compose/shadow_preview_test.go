@@ -183,3 +183,42 @@ func TestShadowPreviewUsesTemporaryProjectAndCleanupTask(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestRecoverShadowPreviewsRemovesPreviousProcessSession(t *testing.T) {
+	root := t.TempDir()
+	runner := &shadowRunner{started: make(chan struct{}), cleaned: make(chan struct{})}
+	service := &Service{root: root, runner: runner, nodeID: "tcp-node", instanceID: "new-process", projectLocks: &sync.Map{}}
+	metadata := shadowMetadata{
+		SessionID:      "11111111-1111-1111-1111-111111111111",
+		NativeName:     "shop",
+		PreviewProject: "suma-preview-shop-old",
+		CreatedAt:      time.Now().UTC().Add(-time.Minute),
+		ExpiresAt:      time.Now().UTC().Add(time.Hour),
+		InstanceID:     "old-process",
+	}
+	directory := service.shadowSessionPath(metadata.SessionID)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "compose.yml"), []byte("services:\n  web:\n    image: nginx:alpine\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, ".env"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeShadowMetadata(directory, metadata); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := service.RecoverShadowPreviews(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-runner.cleaned:
+	default:
+		t.Fatal("previous process preview was not stopped during recovery")
+	}
+	if _, err := os.Stat(directory); !os.IsNotExist(err) {
+		t.Fatalf("preview directory remains after startup recovery: %v", err)
+	}
+}

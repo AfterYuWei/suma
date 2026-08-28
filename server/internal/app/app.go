@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/suma/suma/server/internal/api"
 	"github.com/suma/suma/server/internal/audit"
@@ -28,11 +30,13 @@ import (
 )
 
 type App struct {
-	logger *slog.Logger
-	server *http.Server
-	engine docker.Engine
-	nodes  *nodeService.Service
-	cd     *cdService.Service
+	logger         *slog.Logger
+	server         *http.Server
+	engine         docker.Engine
+	nodes          *nodeService.Service
+	cd             *cdService.Service
+	recoveryCancel context.CancelFunc
+	recoveryWG     sync.WaitGroup
 }
 
 func New(logger *slog.Logger) (*App, error) {
@@ -79,10 +83,39 @@ func New(logger *slog.Logger) (*App, error) {
 	}
 	nodes.Start()
 	continuousDelivery.Start()
-	settings := settingsService.NewService(db, cfg)
-	monitor := monitorService.NewService(engine, cfg.DatabasePath)
-	system := systemService.NewService(engine, taskService)
-	return &App{logger: logger, engine: engine, nodes: nodes, cd: continuousDelivery, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{Engine: engine, Containers: engine, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: settings, Monitor: monitor, System: system, Nodes: nodes, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}, nil
+	recoveryContext, recoveryCancel := context.WithCancel(context.Background())
+	application := &App{logger: logger, engine: engine, nodes: nodes, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{Engine: engine, Containers: engine, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: settingsService.NewService(db, cfg), Monitor: monitorService.NewService(engine, cfg.DatabasePath), System: systemService.NewService(engine, taskService), Nodes: nodes, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
+	application.recoveryWG.Add(1)
+	go func() {
+		defer application.recoveryWG.Done()
+		recoverShadowPreviews(recoveryContext, logger, nodes, compose, runner)
+	}()
+	return application, nil
+}
+
+func recoverShadowPreviews(ctx context.Context, logger *slog.Logger, nodes *nodeService.Service, service *composeService.Service, runner *composeService.CLIRunner) {
+	views, err := nodes.List(ctx)
+	if err != nil {
+		logger.Warn("list nodes for shadow preview recovery", "error", err)
+		return
+	}
+	for _, view := range views {
+		if !view.Enabled {
+			continue
+		}
+		target, _, err := nodes.ComposeTarget(ctx, view.ID)
+		if err != nil {
+			logger.Warn("resolve node for shadow preview recovery", "node_id", view.ID, "error", err)
+			continue
+		}
+		recoveryContext, cancel := context.WithTimeout(ctx, 30*time.Second)
+		current := service.ForNode(view.ID, view.Name, runner.ForTarget(target), nil, view.ConnectionType == nodeService.ConnectionUnix)
+		err = current.RecoverShadowPreviews(recoveryContext)
+		cancel()
+		if err != nil {
+			logger.Warn("recover shadow previews", "node_id", view.ID, "error", err)
+		}
+	}
 }
 
 func (a *App) Run() error {
@@ -94,6 +127,10 @@ func (a *App) Run() error {
 }
 
 func (a *App) Shutdown(ctx context.Context) error {
+	if a.recoveryCancel != nil {
+		a.recoveryCancel()
+		a.recoveryWG.Wait()
+	}
 	if a.cd != nil {
 		a.cd.Stop()
 	}

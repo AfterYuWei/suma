@@ -267,6 +267,17 @@ func (s *Service) cleanupExpiredShadowPreviews(ctx context.Context) error {
 	return nil
 }
 
+// RecoverShadowPreviews removes previews left by an earlier SUMA process and
+// previews whose TTL elapsed while SUMA was stopped. The application invokes
+// this once for every enabled node during startup; ordinary API construction
+// does not hide recovery work behind a first request.
+func (s *Service) RecoverShadowPreviews(ctx context.Context) error {
+	if s.runner == nil {
+		return errors.New("shadow preview runtime is unavailable")
+	}
+	return s.cleanupExpiredShadowPreviews(ctx)
+}
+
 func (s *Service) readShadowSession(sessionID string) (shadowMetadata, string, error) {
 	if !shadowSessionID.MatchString(sessionID) {
 		return shadowMetadata{}, "", errors.New("invalid shadow preview session")
