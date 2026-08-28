@@ -20,7 +20,7 @@ import type { EnvironmentCandidate, Project, ProjectTakeoverDraft, ShadowAssessm
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { nodePath } from '../lib/nodes'
-import { confirmDialog } from '../stores/dialog'
+import { confirmDialog, promptWithCheckboxDialog } from '../stores/dialog'
 import { useUIStore } from '../stores/ui'
 import { ResourceFrame } from './images'
 
@@ -243,6 +243,16 @@ export function ProjectTakeoverPage() {
     mutationFn: (session: ShadowPreviewSession) => api(nodePath(nodeID, `/projects/compose/${encoded}/takeover/shadow/${session.session_id}`), { method: 'DELETE' }),
     onSuccess: () => { shadowSessionRef.current = null; setShadowSession(null); void client.invalidateQueries({ queryKey: ['tasks', nodeID] }) },
   })
+  const cleanupExternal = useMutation({
+    mutationFn: (input: { confirmation_name: string; remove_volumes: boolean }) => api<TaskRow>(nodePath(nodeID, `/projects/compose/${encoded}/cleanup`), { method: 'POST', body: JSON.stringify(input) }),
+    onSuccess: async () => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ['projects', nodeID] }),
+        client.invalidateQueries({ queryKey: ['tasks', nodeID] }),
+      ])
+      void navigate({ to: '/tasks' })
+    },
+  })
   const takeover = useMutation({
     mutationFn: () => api<Project>(nodePath(nodeID, `/projects/compose/${encoded}/takeover`), { method: 'POST', body: JSON.stringify({ fingerprint: preview.data?.fingerprint, confirmation_name: confirmation, compose, environment }) }),
     onSuccess: async () => { if (shadowSession) await cleanupShadow.mutateAsync(shadowSession); await client.invalidateQueries({ queryKey: ['projects', nodeID] }); void navigate({ to: '/projects/$backend/$projectName', params: { backend: 'compose', projectName } }) },
@@ -258,10 +268,27 @@ export function ProjectTakeoverPage() {
     setShadowSession(null)
     void navigate({ to: '/projects/$backend/$projectName', params: { backend: 'compose', projectName } })
   }
+  const confirmCleanup = async () => {
+    const result = await promptWithCheckboxDialog({
+      title: zh ? '删除并清理外部 Project？' : 'Delete and clean external Project?',
+      description: zh
+        ? '将强制删除该 Compose Project 的全部容器和带有 Project 归属标签的网络。操作不可回滚，也可能因部分资源被占用而只完成一部分。不会读取或删除 bind mount 对应的宿主机目录。'
+        : 'This force-removes all containers and Project-labeled networks in the Compose Project. It cannot be rolled back and may partially complete when resources are in use. Bind mount host directories are never read or deleted.',
+      confirmLabel: zh ? '开始清理' : 'Start cleanup',
+      danger: true,
+      input: { label: zh ? `输入完整 Project Name：${projectName}` : `Type the complete Project Name: ${projectName}`, requiredValue: projectName },
+      checkbox: {
+        label: zh ? '高风险：同时永久删除 Project-owned 命名卷' : 'High risk: permanently delete Project-owned named volumes',
+        description: zh ? '卷内数据不可恢复；被其他容器占用的卷不会被强制删除。' : 'Volume data cannot be recovered. Volumes used by other containers are not force-removed.',
+      },
+    })
+    if (!result) return
+    cleanupExternal.mutate({ confirmation_name: result.value, remove_volumes: result.checked })
+  }
 
   if (backend !== 'compose') return <ErrorState title={zh ? '后端尚不可用' : 'Backend unavailable'} description={zh ? '当前只支持 Compose Project 接管。' : 'Only Compose Project takeover is currently supported.'} />
   if (preview.isPending) return <LoadingState rows={8} label={zh ? '正在聚合并分析整个 Compose Project' : 'Aggregating and analyzing the complete Compose Project'} />
-  if (preview.isError || !preview.data) return <ErrorState title={zh ? '无法分析 Project' : 'Unable to analyze Project'} description={takeoverMessage(preview.error?.message, zh)} />
+  if (preview.isError || !preview.data) return <div className="flex flex-col gap-4"><ErrorState title={zh ? '无法分析 Project' : 'Unable to analyze Project'} description={takeoverMessage(preview.error?.message, zh)} /><CleanupProjectCard zh={zh} cleaning={cleanupExternal.isPending} error={cleanupExternal.error?.message} onCleanup={() => void confirmCleanup()} /></div>
   const draft = preview.data
   const hasBlockers = draft.blockers.length > 0
   const canShadowPreview = draft.capabilities.includes('shadow_preview')
@@ -274,7 +301,7 @@ export function ProjectTakeoverPage() {
       <div className="flex w-full flex-col gap-5">
         <ol className="grid grid-cols-4 gap-2">{steps.map((name, index) => <li key={name} className={`flex items-center gap-2 border-b-2 px-1 pb-2 text-sm ${index === step ? 'border-primary font-medium' : index < step ? 'border-emerald-500 text-emerald-600 dark:text-emerald-400' : 'border-border text-muted-foreground'}`}><span className="grid size-5 shrink-0 place-items-center rounded-full bg-muted text-xs">{index < step ? <Check className="size-3" /> : index + 1}</span><span className="hidden sm:inline">{stepLabels[index]}</span></li>)}</ol>
 
-        {step === 0 && <AnalysisStep draft={draft} zh={zh} />}
+        {step === 0 && <AnalysisStep draft={draft} zh={zh} cleaning={cleanupExternal.isPending} cleanupError={cleanupExternal.error?.message} onCleanup={() => void confirmCleanup()} />}
         {step === 0 && <DriftReport services={draft.observation.services} zh={zh} />}
         {step === 1 && <EnvironmentStep variables={draft.variables} choices={choices} revealed={revealed} zh={zh} onChoice={(id, destination) => setChoices((current) => ({ ...current, [id]: destination }))} onReveal={(id) => setRevealed((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })} />}
         {step === 1 && render.isError && <Alert variant="destructive"><ShieldAlert /><AlertTitle>{zh ? '无法生成配置草稿' : 'Unable to render draft'}</AlertTitle><AlertDescription>{takeoverMessage(render.error.message, zh)}</AlertDescription></Alert>}
@@ -338,7 +365,7 @@ function ShadowPreviewPanel({ zh, assessment, assessError, operationError, asses
   </div>
 }
 
-function AnalysisStep({ draft, zh }: { draft: ProjectTakeoverDraft; zh: boolean }) {
+function AnalysisStep({ draft, zh, cleaning, cleanupError, onCleanup }: { draft: ProjectTakeoverDraft; zh: boolean; cleaning: boolean; cleanupError?: string; onCleanup: () => void }) {
   const instanceCount = draft.observation.services.reduce((total, service) => total + service.instances.length, 0)
   return <div className="flex flex-col gap-4">
     <div className="flex flex-wrap gap-2">
@@ -348,6 +375,7 @@ function AnalysisStep({ draft, zh }: { draft: ProjectTakeoverDraft; zh: boolean 
       <Badge variant="outline">{zh ? `${instanceCount} 个容器实例` : `${instanceCount} Instances`}</Badge>
     </div>
     {draft.blockers.map((message) => <Alert key={message} variant="destructive"><ShieldAlert /><AlertTitle>{zh ? '阻断项' : 'Blocker'}</AlertTitle><AlertDescription>{takeoverMessage(message, zh)}</AlertDescription></Alert>)}
+    {draft.blockers.length > 0 && draft.capabilities.includes('cleanup') && <CleanupProjectCard zh={zh} cleaning={cleaning} error={cleanupError} onCleanup={onCleanup} />}
     {draft.warnings.map((message) => <Alert key={message}><AlertTriangle /><AlertDescription>{takeoverMessage(message, zh)}</AlertDescription></Alert>)}
     <Card><CardContent><Table>
       <TableHeader><TableRow><TableHead>Service</TableHead><TableHead>{zh ? '副本' : 'Replicas'}</TableHead><TableHead>{zh ? '配置变体' : 'Variants'}</TableHead><TableHead>{zh ? '运行态偏移' : 'Drift'}</TableHead><TableHead>{zh ? '容器实例' : 'Container instances'}</TableHead></TableRow></TableHeader>
@@ -361,6 +389,17 @@ function AnalysisStep({ draft, zh }: { draft: ProjectTakeoverDraft; zh: boolean 
     </Table></CardContent></Card>
     {(draft.observation.one_off_containers.length > 0 || draft.observation.orphan_containers.length > 0) && <Alert><AlertTriangle /><AlertTitle>{zh ? '不会写入 Service 的运行实例' : 'Runtime instances excluded from Services'}</AlertTitle><AlertDescription>{zh ? `一次性容器（one-off）${draft.observation.one_off_containers.length} 个，孤立容器 ${draft.observation.orphan_containers.length} 个；接管不会删除这些容器。` : `${draft.observation.one_off_containers.length} one-off and ${draft.observation.orphan_containers.length} orphan instances; takeover will not delete them.`}</AlertDescription></Alert>}
   </div>
+}
+
+function CleanupProjectCard({ zh, cleaning, error, onCleanup }: { zh: boolean; cleaning: boolean; error?: string; onCleanup: () => void }) {
+  return <Card className="border-destructive/50">
+    <CardHeader><CardTitle className="flex items-center gap-2 text-base text-destructive"><Trash2 className="size-4" />{zh ? '无法接管时清理运行资源' : 'Clean runtime resources when takeover is blocked'}</CardTitle></CardHeader>
+    <CardContent className="flex flex-col gap-3">
+      <p className="text-sm text-muted-foreground">{zh ? '清理范围固定为整个 Compose Project。容器和 Project-owned 网络将被删除；命名卷必须在确认窗口中单独启用。bind mount 的宿主机目录始终保留。' : 'Cleanup always targets the complete Compose Project. Containers and Project-owned networks are removed; named volumes require a separate option in the confirmation dialog. Bind mount host directories are always preserved.'}</p>
+      {error && <Alert variant="destructive"><AlertTriangle /><AlertDescription>{takeoverMessage(error, zh)}</AlertDescription></Alert>}
+      <Button variant="destructive" className="self-end" disabled={cleaning} onClick={onCleanup}>{cleaning ? <Spinner /> : <Trash2 />}{zh ? '删除并清理 Project' : 'Delete and clean Project'}</Button>
+    </CardContent>
+  </Card>
 }
 
 function DriftReport({ services, zh }: { services: ProjectTakeoverDraft['observation']['services']; zh: boolean }) {

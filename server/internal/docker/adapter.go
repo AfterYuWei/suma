@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -521,6 +522,123 @@ func (a *Adapter) Rename(ctx context.Context, id, name string) error {
 }
 func (a *Adapter) Remove(ctx context.Context, id string, volumes bool) error {
 	return a.client.ContainerRemove(ctx, id, dockercontainer.RemoveOptions{RemoveVolumes: volumes})
+}
+
+// CleanupComposeProject removes runtime resources carrying the exact official
+// Compose Project label. Bind mount source paths are metadata only and are
+// never opened or removed. Container removal also keeps anonymous volumes;
+// Project-owned named volumes require the explicit removeVolumes option.
+func (a *Adapter) CleanupComposeProject(ctx context.Context, projectName string, removeVolumes bool, report task.Reporter) error {
+	projectFilter := filters.NewArgs(filters.Arg("label", composedomain.ProjectLabel+"="+projectName))
+	containers, err := a.client.ContainerList(ctx, dockercontainer.ListOptions{All: true, Filters: projectFilter})
+	if err != nil {
+		return fmt.Errorf("list Compose Project containers: %w", err)
+	}
+	networks, err := a.client.NetworkList(ctx, dockernetwork.ListOptions{Filters: projectFilter})
+	if err != nil {
+		return fmt.Errorf("list Compose Project networks: %w", err)
+	}
+	var volumes []*dockervolume.Volume
+	if removeVolumes {
+		response, err := a.client.VolumeList(ctx, dockervolume.ListOptions{Filters: projectFilter})
+		if err != nil {
+			return fmt.Errorf("list Compose Project volumes: %w", err)
+		}
+		volumes = response.Volumes
+	}
+
+	sort.Slice(containers, func(i, j int) bool { return containers[i].ID < containers[j].ID })
+	sort.Slice(networks, func(i, j int) bool { return networks[i].Name < networks[j].Name })
+	sort.Slice(volumes, func(i, j int) bool {
+		if volumes[i] == nil {
+			return false
+		}
+		if volumes[j] == nil {
+			return true
+		}
+		return volumes[i].Name < volumes[j].Name
+	})
+	total := len(containers) + len(networks) + len(volumes)
+	if total == 0 {
+		report(100, "Compose Project resources are already clean")
+		return nil
+	}
+	report(5, "Cleaning Compose Project runtime resources")
+	completed := 0
+	var cleanupErrors []error
+	advance := func(message string) {
+		completed++
+		report(5+completed*90/total, message)
+	}
+
+	for _, row := range containers {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		name := shortContainerName(row.ID, row.Names)
+		if row.Labels[composedomain.ProjectLabel] != projectName {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("skip container %s with mismatched Project label", name))
+			advance("Skipped a container outside the Project boundary")
+			continue
+		}
+		if err := a.client.ContainerRemove(ctx, row.ID, dockercontainer.RemoveOptions{Force: true, RemoveVolumes: false}); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove container %s: %w", name, err))
+			advance("Failed to remove container " + name)
+			continue
+		}
+		advance("Removed container " + name)
+	}
+	for _, row := range networks {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if row.Labels[composedomain.ProjectLabel] != projectName {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("skip network %s with mismatched Project label", row.Name))
+			advance("Skipped a network outside the Project boundary")
+			continue
+		}
+		if err := a.client.NetworkRemove(ctx, row.ID); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove network %s: %w", row.Name, err))
+			advance("Failed to remove network " + row.Name)
+			continue
+		}
+		advance("Removed network " + row.Name)
+	}
+	for _, row := range volumes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if row == nil {
+			cleanupErrors = append(cleanupErrors, errors.New("skip invalid Project volume response"))
+			advance("Skipped an invalid named volume")
+			continue
+		}
+		if row.Labels[composedomain.ProjectLabel] != projectName {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("skip volume %s with mismatched Project label", row.Name))
+			advance("Skipped a volume outside the Project boundary")
+			continue
+		}
+		// force=false protects volumes still referenced by containers outside
+		// this Project and makes the high-risk option explicit but bounded.
+		if err := a.client.VolumeRemove(ctx, row.Name, false); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("remove named volume %s: %w", row.Name, err))
+			advance("Failed to remove named volume " + row.Name)
+			continue
+		}
+		advance("Removed named volume " + row.Name)
+	}
+	if len(cleanupErrors) > 0 {
+		return fmt.Errorf("Compose Project cleanup completed with errors: %w", errors.Join(cleanupErrors...))
+	}
+	report(100, "Compose Project cleanup complete")
+	return nil
+}
+
+func shortContainerName(id string, names []string) string {
+	if len(names) > 0 && strings.TrimSpace(names[0]) != "" {
+		return strings.TrimPrefix(names[0], "/")
+	}
+	return id[:min(12, len(id))]
 }
 
 func (a *Adapter) Logs(ctx context.Context, id, since, tail string) (io.ReadCloser, error) {

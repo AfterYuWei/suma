@@ -18,6 +18,7 @@ import (
 	dockercontainer "github.com/docker/docker/api/types/container"
 	dockernetwork "github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/system"
+	dockervolume "github.com/docker/docker/api/types/volume"
 	composedomain "github.com/suma/suma/server/internal/compose"
 	domain "github.com/suma/suma/server/internal/container"
 	networkdomain "github.com/suma/suma/server/internal/network"
@@ -435,4 +436,74 @@ func TestAdapterRemoveVolumeUsageGuard(t *testing.T) {
 			t.Fatalf("expected exactly one DELETE for the unused volume, got %#v", deletes)
 		}
 	})
+}
+
+func TestCleanupComposeProjectUsesProjectLabelsAndExplicitVolumeOption(t *testing.T) {
+	const projectName = "blocked"
+	labels := map[string]string{composedomain.ProjectLabel: projectName}
+	stub := newDockerStub(t, map[string]http.HandlerFunc{
+		"/containers/json": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, []dockercontainer.Summary{{ID: "container-id", Names: []string{"/blocked-web-1"}, Labels: labels}})
+		},
+		"/networks": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, []dockernetwork.Summary{{ID: "network-id", Name: "blocked_default", Labels: labels}})
+		},
+		"/volumes": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, dockervolume.ListResponse{Volumes: []*dockervolume.Volume{{Name: "blocked_data", Labels: labels}}})
+		},
+		"/containers/container-id": func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) },
+		"/networks/network-id":     func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) },
+		"/volumes/blocked_data":    func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) },
+	})
+	adapter := newAdapter(t, stub)
+	if err := adapter.CleanupComposeProject(context.Background(), projectName, true, func(int, string) {}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{"/containers/json", "/networks", "/volumes"} {
+		requests := stub.find(t, func(request stubRequest) bool { return request.Method == http.MethodGet && request.Path == path })
+		if len(requests) != 1 {
+			t.Fatalf("expected one filtered GET %s, got %#v", path, requests)
+		}
+		decoded := make(map[string]map[string]bool)
+		if err := json.Unmarshal([]byte(requests[0].Query.Get("filters")), &decoded); err != nil || !decoded["label"][composedomain.ProjectLabel+"="+projectName] {
+			t.Fatalf("GET %s did not use exact Project label: %#v (%v)", path, requests[0].Query, err)
+		}
+	}
+	containerDeletes := stub.find(t, func(request stubRequest) bool {
+		return request.Method == http.MethodDelete && request.Path == "/containers/container-id"
+	})
+	if len(containerDeletes) != 1 || containerDeletes[0].Query.Get("force") != "1" || containerDeletes[0].Query.Has("v") {
+		t.Fatalf("container removal must be forced without removing attached volumes: %#v", containerDeletes)
+	}
+	for _, path := range []string{"/networks/network-id", "/volumes/blocked_data"} {
+		deletes := stub.find(t, func(request stubRequest) bool { return request.Method == http.MethodDelete && request.Path == path })
+		if len(deletes) != 1 {
+			t.Fatalf("expected DELETE %s, got %#v", path, deletes)
+		}
+		if path == "/volumes/blocked_data" && deletes[0].Query.Has("force") {
+			t.Fatalf("Project-owned named volume must not be force-removed: %#v", deletes)
+		}
+	}
+}
+
+func TestCleanupComposeProjectPreservesNamedVolumesByDefault(t *testing.T) {
+	const projectName = "blocked"
+	labels := map[string]string{composedomain.ProjectLabel: projectName}
+	stub := newDockerStub(t, map[string]http.HandlerFunc{
+		"/containers/json": func(w http.ResponseWriter, r *http.Request) { writeJSON(w, http.StatusOK, []dockercontainer.Summary{}) },
+		"/networks":        func(w http.ResponseWriter, r *http.Request) { writeJSON(w, http.StatusOK, []dockernetwork.Summary{}) },
+		"/volumes": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, dockervolume.ListResponse{Volumes: []*dockervolume.Volume{{Name: "blocked_data", Labels: labels}}})
+		},
+	})
+	adapter := newAdapter(t, stub)
+	if err := adapter.CleanupComposeProject(context.Background(), projectName, false, func(int, string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if requests := stub.find(t, func(request stubRequest) bool {
+		return request.Path == "/volumes" || request.Path == "/volumes/blocked_data"
+	}); len(requests) != 0 {
+		t.Fatalf("named volumes must not be listed or deleted without explicit opt-in: %#v", requests)
+	}
 }

@@ -32,6 +32,7 @@ const (
 	CapabilityNetworks      Capability = "networks"
 	CapabilityVolumes       Capability = "volumes"
 	CapabilityTakeover      Capability = "takeover"
+	CapabilityCleanup       Capability = "cleanup"
 	CapabilityShadowPreview Capability = "shadow_preview"
 )
 
@@ -80,7 +81,7 @@ func ComposeSummary(nodeID, name, source, status string, managed bool) Summary {
 
 func ComposeCapabilities(managed bool) []Capability {
 	if !managed {
-		return []Capability{CapabilityView, CapabilityServices, CapabilityTakeover}
+		return []Capability{CapabilityView, CapabilityServices, CapabilityTakeover, CapabilityCleanup}
 	}
 	return []Capability{
 		CapabilityView, CapabilityEdit, CapabilityDeploy, CapabilityStart,

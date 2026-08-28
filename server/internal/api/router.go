@@ -733,6 +733,27 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		success(c, gin.H{"valid": true})
 	})
+	compose.POST("/:name/cleanup", func(c *gin.Context) {
+		var input struct {
+			ConfirmationName string `json:"confirmation_name"`
+			RemoveVolumes    bool   `json:"remove_volumes"`
+		}
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, http.StatusBadRequest, 18022, "A cleanup confirmation is required")
+			return
+		}
+		row, err := deps.Compose.CleanupExternalProject(c.Request.Context(), c.Param("name"), input.ConfirmationName, input.RemoveVolumes)
+		if err != nil {
+			failure(c, http.StatusConflict, 18023, err.Error())
+			return
+		}
+		action := "project.cleanup"
+		if input.RemoveVolumes {
+			action = "project.cleanup_with_volumes"
+		}
+		recordAudit(c, deps.Audit, action, "project", c.Param("name"), "success")
+		c.JSON(http.StatusAccepted, envelope{Code: 0, Message: "success", Data: row})
+	})
 	compose.POST("/:name/takeover", func(c *gin.Context) {
 		var input composeService.TakeoverInput
 		if c.ShouldBindJSON(&input) != nil {

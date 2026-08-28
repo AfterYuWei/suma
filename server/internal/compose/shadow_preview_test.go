@@ -71,13 +71,13 @@ func TestAssessShadowPreviewWarnsWithoutHealthcheck(t *testing.T) {
 func TestTakeoverDraftCapabilitiesReflectShadowEligibility(t *testing.T) {
 	eligible := ProjectTakeoverDraft{Compose: "services:\n  web:\n    image: nginx:alpine\n"}
 	setTakeoverDraftCapabilities(&eligible)
-	if !projectdomain.HasCapability(eligible.Capabilities, projectdomain.CapabilityTakeover) || !projectdomain.HasCapability(eligible.Capabilities, projectdomain.CapabilityShadowPreview) {
+	if !projectdomain.HasCapability(eligible.Capabilities, projectdomain.CapabilityTakeover) || !projectdomain.HasCapability(eligible.Capabilities, projectdomain.CapabilityCleanup) || !projectdomain.HasCapability(eligible.Capabilities, projectdomain.CapabilityShadowPreview) {
 		t.Fatalf("eligible capabilities = %#v", eligible.Capabilities)
 	}
 
 	ineligible := ProjectTakeoverDraft{Compose: "services:\n  web:\n    image: nginx:alpine\n    ports: [\"8080:80\"]\n"}
 	setTakeoverDraftCapabilities(&ineligible)
-	if !projectdomain.HasCapability(ineligible.Capabilities, projectdomain.CapabilityTakeover) || projectdomain.HasCapability(ineligible.Capabilities, projectdomain.CapabilityShadowPreview) {
+	if !projectdomain.HasCapability(ineligible.Capabilities, projectdomain.CapabilityTakeover) || !projectdomain.HasCapability(ineligible.Capabilities, projectdomain.CapabilityCleanup) || projectdomain.HasCapability(ineligible.Capabilities, projectdomain.CapabilityShadowPreview) {
 		t.Fatalf("ineligible capabilities = %#v", ineligible.Capabilities)
 	}
 }

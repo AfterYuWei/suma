@@ -122,6 +122,59 @@ func (service staticContainers) List(context.Context) ([]containerdomain.Summary
 	return service.rows, nil
 }
 
+type cleanupCall struct {
+	projectName  string
+	removeVolume bool
+}
+
+type cleanupContainers struct {
+	staticContainers
+	calls chan cleanupCall
+}
+
+func (service *cleanupContainers) CleanupComposeProject(_ context.Context, name string, removeVolumes bool, report task.Reporter) error {
+	service.calls <- cleanupCall{projectName: name, removeVolume: removeVolumes}
+	report(100, "clean")
+	return nil
+}
+
+func TestCleanupExternalProjectRequiresExactNameAndRunsAsTask(t *testing.T) {
+	db, err := database.Open(filepath.Join(t.TempDir(), "suma.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleaner := &cleanupContainers{
+		staticContainers: staticContainers{rows: []containerdomain.Summary{{ID: "web", Labels: map[string]string{composeProjectLabel: "blocked", composeServiceLabel: "web"}}}},
+		calls:            make(chan cleanupCall, 1),
+	}
+	service, err := NewService(db, filepath.Join(t.TempDir(), "compose"), nil, task.NewService(db), cleaner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CleanupExternalProject(context.Background(), "blocked", "wrong", true); err == nil {
+		t.Fatal("cleanup accepted an incorrect Project confirmation")
+	}
+	row, err := service.CleanupExternalProject(context.Background(), "blocked", "blocked", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForTaskCompletion(t, db, row.ID)
+	select {
+	case call := <-cleaner.calls:
+		if call.projectName != "blocked" || !call.removeVolume {
+			t.Fatalf("cleanup call = %#v", call)
+		}
+	default:
+		t.Fatal("runtime cleanup was not called")
+	}
+	if _, err := service.Create(context.Background(), "managed", "services: {}\n", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CleanupExternalProject(context.Background(), "managed", "managed", false); err == nil {
+		t.Fatal("external cleanup accepted a managed Project")
+	}
+}
+
 type observableContainers struct {
 	staticContainers
 	snapshot RuntimeProjectSnapshot

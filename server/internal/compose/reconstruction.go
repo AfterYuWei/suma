@@ -167,7 +167,7 @@ func (s *Service) RenderTakeoverDraft(ctx context.Context, name, fingerprint str
 }
 
 func setTakeoverDraftCapabilities(draft *ProjectTakeoverDraft) {
-	draft.Capabilities = []projectdomain.Capability{projectdomain.CapabilityTakeover}
+	draft.Capabilities = []projectdomain.Capability{projectdomain.CapabilityTakeover, projectdomain.CapabilityCleanup}
 	if len(draft.Blockers) != 0 {
 		return
 	}

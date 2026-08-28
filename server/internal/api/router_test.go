@@ -15,6 +15,7 @@ import (
 	"time"
 
 	dockercontainer "github.com/docker/docker/api/types/container"
+	dockernetwork "github.com/docker/docker/api/types/network"
 	"github.com/gin-gonic/gin"
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/auth"
@@ -275,6 +276,14 @@ func newProjectHTTPHarness(t *testing.T) projectHTTPHarness {
 			})
 		case "/images/" + imageID + "/json":
 			writeProjectDockerJSON(w, map[string]any{"Id": imageID, "Config": map[string]any{"Env": []string{"BASE=image"}}})
+		case "/networks":
+			writeProjectDockerJSON(w, []dockernetwork.Summary{})
+		case "/containers/" + containerID:
+			if request.Method != http.MethodDelete {
+				http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			http.Error(w, "unexpected Docker API path "+path, http.StatusNotFound)
 		}
@@ -400,4 +409,51 @@ func TestConcurrentProjectTakeoverHTTPAllowsOneWinnerWithoutAuditSecrets(t *test
 	if len(audits) != 1 || strings.Contains(string(content), "http-secret") {
 		t.Fatalf("takeover audits = %s", content)
 	}
+}
+
+func TestExternalProjectCleanupHTTPRequiresExactNameAndAuditsTask(t *testing.T) {
+	harness := newProjectHTTPHarness(t)
+	wrong := harness.request(http.MethodPost, "/api/v1/nodes/local/projects/compose/shop/cleanup", []byte(`{"confirmation_name":"wrong","remove_volumes":false}`))
+	if wrong.Code != http.StatusConflict {
+		t.Fatalf("wrong cleanup confirmation: %d %s", wrong.Code, wrong.Body.String())
+	}
+
+	accepted := harness.request(http.MethodPost, "/api/v1/nodes/local/projects/compose/shop/cleanup", []byte(`{"confirmation_name":"shop","remove_volumes":false}`))
+	if accepted.Code != http.StatusAccepted {
+		t.Fatalf("cleanup: %d %s", accepted.Code, accepted.Body.String())
+	}
+	var payload struct {
+		Data database.Task `json:"data"`
+	}
+	if err := json.Unmarshal(accepted.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	waitForProjectTask(t, harness.db, payload.Data.ID)
+
+	var audits []database.AuditLog
+	if err := harness.db.Where("action = ?", "project.cleanup").Find(&audits).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(audits) != 1 || audits[0].ResourceName != "shop" {
+		t.Fatalf("cleanup audits = %#v", audits)
+	}
+}
+
+func waitForProjectTask(t *testing.T, db *gorm.DB, id string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		var row database.Task
+		if err := db.First(&row, "id = ?", id).Error; err != nil {
+			t.Fatal(err)
+		}
+		if row.Status == task.StatusSuccess {
+			return
+		}
+		if row.Status == task.StatusFailed || row.Status == task.StatusCanceled {
+			t.Fatalf("cleanup task ended with %s: %s", row.Status, row.Message)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("cleanup task %s did not finish", id)
 }

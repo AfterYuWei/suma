@@ -1,5 +1,5 @@
 export type ProjectBackend = 'compose' | 'swarm'
-export type ProjectCapability = 'view' | 'edit' | 'deploy' | 'start' | 'stop' | 'restart' | 'update' | 'delete' | 'services' | 'logs' | 'networks' | 'volumes' | 'takeover' | 'shadow_preview'
+export type ProjectCapability = 'view' | 'edit' | 'deploy' | 'start' | 'stop' | 'restart' | 'update' | 'delete' | 'services' | 'logs' | 'networks' | 'volumes' | 'takeover' | 'cleanup' | 'shadow_preview'
 
 export interface ProjectSummary {
   ref: { backend: ProjectBackend; scope: { kind: 'engine' | 'swarm'; id: string }; native_name: string }

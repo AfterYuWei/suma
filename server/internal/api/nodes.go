@@ -529,6 +529,31 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 		recordNodeAudit(c, deps, view.ID, view.Name, action, "compose", c.Param("name"), "success")
 		success(c, gin.H{"name": c.Param("name")})
 	})
+	routes.POST("/:name/cleanup", func(c *gin.Context) {
+		current, view, ok := service(c)
+		if !ok {
+			return
+		}
+		var input struct {
+			ConfirmationName string `json:"confirmation_name"`
+			RemoveVolumes    bool   `json:"remove_volumes"`
+		}
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, 400, 20317, "A cleanup confirmation is required")
+			return
+		}
+		row, err := current.CleanupExternalProject(c.Request.Context(), c.Param("name"), input.ConfirmationName, input.RemoveVolumes)
+		if err != nil {
+			failure(c, 409, 20318, err.Error())
+			return
+		}
+		action := "project.cleanup"
+		if input.RemoveVolumes {
+			action = "project.cleanup_with_volumes"
+		}
+		recordNodeAudit(c, deps, view.ID, view.Name, action, "project", c.Param("name"), "success")
+		c.JSON(202, envelope{Code: 0, Message: "success", Data: row})
+	})
 	routes.POST("/:name/:action", func(c *gin.Context) {
 		current, view, ok := service(c)
 		if !ok {
@@ -766,6 +791,31 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 			return
 		}
 		recordNodeAudit(c, deps, view.ID, view.Name, "project."+action, "project", c.Param("name"), "success")
+		c.JSON(202, envelope{Code: 0, Message: "success", Data: row})
+	})
+	compose.POST("/:name/cleanup", func(c *gin.Context) {
+		current, view, ok := service(c)
+		if !ok {
+			return
+		}
+		var input struct {
+			ConfirmationName string `json:"confirmation_name"`
+			RemoveVolumes    bool   `json:"remove_volumes"`
+		}
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, 400, 20433, "A cleanup confirmation is required")
+			return
+		}
+		row, err := current.CleanupExternalProject(c.Request.Context(), c.Param("name"), input.ConfirmationName, input.RemoveVolumes)
+		if err != nil {
+			failure(c, 409, 20434, err.Error())
+			return
+		}
+		action := "project.cleanup"
+		if input.RemoveVolumes {
+			action = "project.cleanup_with_volumes"
+		}
+		recordNodeAudit(c, deps, view.ID, view.Name, action, "project", c.Param("name"), "success")
 		c.JSON(202, envelope{Code: 0, Message: "success", Data: row})
 	})
 	compose.POST("/:name/takeover/preview", func(c *gin.Context) {
