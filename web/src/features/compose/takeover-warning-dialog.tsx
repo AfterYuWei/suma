@@ -7,7 +7,7 @@ export function TakeoverWarningDialog({ open, projectName, zh, onOpenChange, onC
     <DialogContent className="sm:max-w-lg">
       <DialogHeader>
         <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400"><AlertTriangle /></div>
-        <DialogTitle>{zh ? `接管 Project：${projectName}` : `Take over Project: ${projectName}`}</DialogTitle>
+        <DialogTitle>{zh ? `接管 Compose Project：${projectName}` : `Take over Project: ${projectName}`}</DialogTitle>
         <DialogDescription>{zh ? 'SUMA 将根据安全可访问的 Compose 配置或 Docker 运行态生成新的托管配置。' : 'SUMA will generate a managed configuration from safely accessible Compose files or Docker runtime metadata.'}</DialogDescription>
       </DialogHeader>
       <ul className="list-disc space-y-2 pl-5 text-sm text-muted-foreground">
@@ -18,7 +18,7 @@ export function TakeoverWarningDialog({ open, projectName, zh, onOpenChange, onC
       </ul>
       <DialogFooter>
         <Button variant="outline" onClick={() => onOpenChange(false)}>{zh ? '取消' : 'Cancel'}</Button>
-        <Button onClick={onContinue}>{zh ? '了解并开始分析' : 'Understand and analyze'}</Button>
+        <Button onClick={onContinue}>{zh ? '确认，开始分析' : 'Understand and analyze'}</Button>
       </DialogFooter>
     </DialogContent>
   </Dialog>
