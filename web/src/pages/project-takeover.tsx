@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from '@tanstack/react-router'
-import { AlertTriangle, Check, ChevronLeft, ChevronRight, CirclePause, Eye, EyeOff, FileCheck2, FlaskConical, ShieldAlert, Trash2 } from 'lucide-react'
+import { AlertTriangle, Check, ChevronDown, ChevronLeft, ChevronRight, CirclePause, Eye, EyeOff, FileCheck2, FlaskConical, ShieldAlert, Trash2 } from 'lucide-react'
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../components/ui/collapsible'
 import { ErrorState } from '../components/ui/error-state'
 import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
@@ -204,7 +205,7 @@ export function ProjectTakeoverPage() {
 
   useEffect(() => {
     if (!preview.data) return
-    setChoices(Object.fromEntries(preview.data.variables.map((variable) => [variable.id, variable.destination])))
+    setChoices(Object.fromEntries(preview.data.variables.map((variable) => [variable.id, variable.source === 'image_default' ? 'exclude' : variable.destination])))
   }, [preview.data])
   useEffect(() => {
     if (step === 0) return
@@ -373,15 +374,58 @@ function DriftReport({ services, zh }: { services: ProjectTakeoverDraft['observa
 }
 
 function EnvironmentStep({ variables, choices, revealed, zh, onChoice, onReveal }: { variables: EnvironmentCandidate[]; choices: Record<string, Destination>; revealed: Set<string>; zh: boolean; onChoice: (id: string, value: Destination) => void; onReveal: (id: string) => void }) {
-  if (!variables.length) return <Alert><Check /><AlertTitle>{zh ? '没有需要处理的显式变量' : 'No explicit variables to review'}</AlertTitle><AlertDescription>{zh ? '镜像默认 ENV 已排除；草稿中没有推断出的显式环境变量。' : 'Image-default ENV values were excluded and no explicit variables were inferred.'}</AlertDescription></Alert>
-  return <Card><CardContent><Table>
+  const [showImageDefaults, setShowImageDefaults] = useState(false)
+  const reviewVariables = variables.filter((variable) => variable.source === 'compose_explicit' || variable.source === 'explicit_inferred')
+  const unknownVariables = variables.filter((variable) => variable.source === 'unknown')
+  const imageDefaults = variables.filter((variable) => variable.source === 'image_default')
+
+  return <div className="flex flex-col gap-4">
+    <div className="flex flex-wrap items-center gap-2">
+      <Badge variant={reviewVariables.length ? 'default' : 'outline'}>{zh ? `需要确认 ${reviewVariables.length}` : `Review ${reviewVariables.length}`}</Badge>
+      <Badge variant={unknownVariables.length ? 'destructive' : 'outline'}>{zh ? `来源未知 ${unknownVariables.length}` : `Unknown ${unknownVariables.length}`}</Badge>
+      <Badge variant="outline">{zh ? `镜像默认值 ${imageDefaults.length}` : `Image defaults ${imageDefaults.length}`}</Badge>
+    </div>
+
+    {reviewVariables.length ? <Card>
+      <CardHeader><CardTitle>{zh ? '需要确认的环境变量' : 'Environment variables to review'}</CardTitle></CardHeader>
+      <CardContent><EnvironmentVariableTable variables={reviewVariables} choices={choices} revealed={revealed} zh={zh} onChoice={onChoice} onReveal={onReveal} /></CardContent>
+    </Card> : <Alert><Check /><AlertTitle>{zh ? '没有需要确认的环境变量' : 'No environment variables require review'}</AlertTitle><AlertDescription>{zh ? '未发现 Compose 显式配置或运行态推断变量。' : 'No explicit Compose or runtime-inferred values were found.'}</AlertDescription></Alert>}
+
+    {unknownVariables.length > 0 && <Card className="border-destructive/40">
+      <CardHeader><CardTitle className="text-destructive">{zh ? '来源未知，需要谨慎处理' : 'Unknown source — review carefully'}</CardTitle></CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <Alert variant="destructive"><ShieldAlert /><AlertDescription>{zh ? 'SUMA 无法读取镜像默认 ENV，因此不能判断这些变量来自镜像还是原 Compose 配置。默认不会写入；如需保留，请逐项选择写入位置。' : 'SUMA could not inspect image defaults, so it cannot determine whether these values came from the image or Compose. They are excluded by default; choose a destination only when needed.'}</AlertDescription></Alert>
+        <EnvironmentVariableTable variables={unknownVariables} choices={choices} revealed={revealed} zh={zh} onChoice={onChoice} onReveal={onReveal} />
+      </CardContent>
+    </Card>}
+
+    {imageDefaults.length > 0 && <Collapsible open={showImageDefaults} onOpenChange={setShowImageDefaults} className="group/image-defaults overflow-hidden rounded-xl border bg-card">
+      <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 px-4 py-3 text-left hover:bg-muted/50">
+        <ChevronDown className="size-4 text-muted-foreground transition-transform group-data-open/image-defaults:rotate-180" />
+        <span className="font-medium">{zh ? `镜像默认 ENV（${imageDefaults.length}）` : `Image-default ENV (${imageDefaults.length})`}</span>
+        <Badge variant="outline" className="ml-auto">{zh ? '已自动排除' : 'Automatically excluded'}</Badge>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="border-t">
+        <div className="px-4 py-3">
+          <p className="mb-3 text-xs text-muted-foreground">{zh ? '这些变量与 Image Inspect 返回的默认 ENV 完全一致，不会写入 compose.yml 或 .env。' : 'These values exactly match Image Inspect defaults and will not be written to compose.yml or .env.'}</p>
+          <EnvironmentVariableTable variables={imageDefaults} choices={choices} revealed={revealed} zh={zh} onChoice={onChoice} onReveal={onReveal} autoExcluded />
+        </div>
+      </CollapsibleContent>
+    </Collapsible>}
+
+    <p className="text-xs text-muted-foreground">{zh ? '.env 仍是明文文件，只是将变量值与 Compose YAML 分离，并不提供加密。敏感值不会写入浏览器存储、日志、任务记录或审计记录。' : '.env remains plaintext and only separates values from Compose YAML; it is not encrypted. Sensitive values are not written to browser storage, logs, Tasks, or Audit.'}</p>
+  </div>
+}
+
+function EnvironmentVariableTable({ variables, choices, revealed, zh, onChoice, onReveal, autoExcluded = false }: { variables: EnvironmentCandidate[]; choices: Record<string, Destination>; revealed: Set<string>; zh: boolean; onChoice: (id: string, value: Destination) => void; onReveal: (id: string) => void; autoExcluded?: boolean }) {
+  return <Table>
     <TableHeader><TableRow><TableHead>Service</TableHead><TableHead>{zh ? '变量名' : 'Key'}</TableHead><TableHead>{zh ? '值' : 'Value'}</TableHead><TableHead>{zh ? '识别来源' : 'Source'}</TableHead><TableHead className="w-44">{zh ? '写入位置' : 'Destination'}</TableHead></TableRow></TableHeader>
     <TableBody>{variables.map((variable) => <TableRow key={variable.id}>
       <TableCell>{variable.service}</TableCell>
       <TableCell className="font-mono text-xs">{variable.key}</TableCell>
       <TableCell><div className="flex max-w-72 items-center gap-1"><span className="truncate font-mono text-xs">{variable.sensitive && !revealed.has(variable.id) ? '••••••••' : variable.value}</span>{variable.sensitive && <Button variant="ghost" size="icon-xs" aria-label={revealed.has(variable.id) ? (zh ? '隐藏敏感值' : 'Hide') : (zh ? '显示敏感值' : 'Reveal')} onClick={() => onReveal(variable.id)}>{revealed.has(variable.id) ? <EyeOff /> : <Eye />}</Button>}</div></TableCell>
-      <TableCell><Badge variant="outline">{localizedLabel(environmentSourceLabels, variable.source, zh)}</Badge><p className="mt-1 max-w-72 text-xs text-muted-foreground">{localizedLabel(environmentReasonLabels, variable.source, zh)}</p></TableCell>
-      <TableCell><Select value={choices[variable.id] ?? variable.destination} onValueChange={(value) => onChoice(variable.id, value as Destination)}><SelectTrigger className="w-40"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="compose">compose.yml</SelectItem><SelectItem value="env">.env</SelectItem><SelectItem value="exclude">{zh ? '不写入' : 'Exclude'}</SelectItem></SelectContent></Select></TableCell>
+      <TableCell><Badge variant={variable.source === 'unknown' ? 'destructive' : 'outline'}>{localizedLabel(environmentSourceLabels, variable.source, zh)}</Badge><p className="mt-1 max-w-72 text-xs text-muted-foreground">{localizedLabel(environmentReasonLabels, variable.source, zh)}</p></TableCell>
+      <TableCell>{autoExcluded ? <StatusBadge tone="neutral">{zh ? '自动排除' : 'Excluded'}</StatusBadge> : <Select value={choices[variable.id] ?? variable.destination} onValueChange={(value) => onChoice(variable.id, value as Destination)}><SelectTrigger className="w-40"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="compose">compose.yml</SelectItem><SelectItem value="env">.env</SelectItem><SelectItem value="exclude">{zh ? '不写入' : 'Exclude'}</SelectItem></SelectContent></Select>}</TableCell>
     </TableRow>)}</TableBody>
-  </Table><p className="mt-3 text-xs text-muted-foreground">{zh ? '.env 仍是明文文件，只是将变量值与 Compose YAML 分离，并不提供加密。敏感值不会写入浏览器存储、日志、任务记录或审计记录。' : '.env remains plaintext and only separates values from Compose YAML; it is not encrypted. Sensitive values are not written to browser storage, logs, Tasks, or Audit.'}</p></CardContent></Card>
+  </Table>
 }

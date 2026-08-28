@@ -151,6 +151,10 @@ func (s *Service) RenderTakeoverDraft(ctx context.Context, name, fingerprint str
 		byID[choice.ID] = choice.Destination
 	}
 	for index := range draft.Variables {
+		if draft.Variables[index].Source == "image_default" {
+			draft.Variables[index].Destination = EnvironmentExclude
+			continue
+		}
 		if destination, ok := byID[draft.Variables[index].ID]; ok {
 			draft.Variables[index].Destination = destination
 		}

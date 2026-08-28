@@ -221,6 +221,32 @@ func TestRenderTakeoverDraftAppliesPerVariableChoices(t *testing.T) {
 	}
 }
 
+func TestRenderTakeoverDraftAlwaysExcludesImageDefaults(t *testing.T) {
+	containers := observableContainers{
+		staticContainers: staticContainers{rows: []containerdomain.Summary{{ID: "web", Labels: map[string]string{ProjectLabel: "shop"}}}},
+		snapshot: RuntimeProjectSnapshot{ProjectName: "shop", Containers: []RuntimeContainer{{
+			ID: "web", Service: "web", ImageInspectOK: true,
+			ImageEnvironment: []string{"PATH=/usr/bin"},
+			Config:           RuntimeConfig{Image: "app:v1", Environment: []string{"PATH=/usr/bin"}},
+		}}},
+	}
+	service := &Service{root: t.TempDir(), containers: containers, nodeID: "tcp-node"}
+	draft, err := service.BuildTakeoverDraft(context.Background(), "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(draft.Variables) != 1 || draft.Variables[0].Source != "image_default" {
+		t.Fatalf("variables = %#v", draft.Variables)
+	}
+	rendered, err := service.RenderTakeoverDraft(context.Background(), "shop", draft.Fingerprint, []EnvironmentChoice{{ID: draft.Variables[0].ID, Destination: EnvironmentCompose}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(rendered.Compose, "PATH") || rendered.Variables[0].Destination != EnvironmentExclude {
+		t.Fatalf("image default was not excluded: %#v\n%s", rendered.Variables, rendered.Compose)
+	}
+}
+
 func TestRuntimeServiceDoesNotMixProjectNetworkModeAndNetworks(t *testing.T) {
 	service := runtimeServiceModel(RuntimeConfig{Image: "nginx:alpine", NetworkMode: "shop_default", Networks: []RuntimeEndpoint{{Name: "shop_default"}}}, 1)
 	if _, exists := service["network_mode"]; exists {
