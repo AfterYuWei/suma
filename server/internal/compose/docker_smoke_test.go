@@ -135,6 +135,101 @@ func TestRealDockerProjectTakeover(t *testing.T) {
 	}
 }
 
+// TestRealDockerExternalProjectCleanup verifies the destructive boundary with
+// uniquely named disposable Compose Projects. The default path preserves the
+// named volume; the explicit high-risk path removes it. Both preserve the bind
+// source directory and remove only Project-labelled runtime resources.
+func TestRealDockerExternalProjectCleanup(t *testing.T) {
+	if os.Getenv("SUMA_RUN_DOCKER_SMOKE") != "1" {
+		t.Skip("set SUMA_RUN_DOCKER_SMOKE=1 to use the local Docker engine")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	root := t.TempDir()
+	db, err := database.Open(filepath.Join(root, "cleanup.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := compose.NewRunner("docker compose")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := dockerruntime.New("unix:///var/run/docker.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.Close()
+	service, err := compose.NewService(db, filepath.Join(root, "managed"), runner, task.NewService(db), adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(removeVolumes bool) {
+		t.Helper()
+		name := fmt.Sprintf("suma-cleanup-smoke-%t-%d", removeVolumes, time.Now().UnixNano())
+		projectDir := filepath.Join(root, name)
+		bindDir := filepath.Join(projectDir, "bind-source")
+		if err := os.MkdirAll(bindDir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		marker := filepath.Join(bindDir, "keep")
+		if err := os.WriteFile(marker, []byte("keep"), 0o640); err != nil {
+			t.Fatal(err)
+		}
+		file := filepath.Join(projectDir, "compose.yml")
+		content := fmt.Sprintf("services:\n  web:\n    image: nginx:alpine\n    volumes:\n      - %s:/suma-bind:ro\n      - data:/suma-data\nvolumes:\n  data: {}\n", bindDir)
+		if err := os.WriteFile(file, []byte(content), 0o640); err != nil {
+			t.Fatal(err)
+		}
+		spec := compose.ExecutionSpec{ProjectName: name, ProjectDir: projectDir, Files: []string{file}}
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cleanupCancel()
+			_ = runner.ForceDownRelease(cleanupCtx, spec, false, io.Discard)
+			_ = adapter.RemoveVolume(cleanupCtx, name+"_data")
+		}()
+		if err := runner.UpRelease(ctx, spec, 60, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		row, err := service.CleanupExternalProject(ctx, name, name, removeVolumes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitTask(t, ctx, db, row.ID, task.StatusSuccess)
+		if _, err := os.Stat(marker); err != nil {
+			t.Fatalf("cleanup changed bind source: %v", err)
+		}
+		containers, err := adapter.List(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, container := range containers {
+			if container.Labels[compose.ProjectLabel] == name {
+				t.Fatalf("Project container remains after cleanup: %s", container.ID)
+			}
+		}
+		networks, err := adapter.ListNetworks(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, network := range networks {
+			if network.Labels[compose.ProjectLabel] == name {
+				t.Fatalf("Project network remains after cleanup: %s", network.Name)
+			}
+		}
+		_, volumeErr := adapter.InspectVolume(ctx, name+"_data")
+		if removeVolumes && volumeErr == nil {
+			t.Fatal("high-risk cleanup preserved the Project-owned named volume")
+		}
+		if !removeVolumes && volumeErr != nil {
+			t.Fatalf("default cleanup removed the named volume: %v", volumeErr)
+		}
+	}
+
+	run(false)
+	run(true)
+}
+
 // TestRealDockerTCPProjectTakeover verifies that an mTLS Docker TCP node never
 // treats Compose label paths as locally readable source, even when the control
 // process happens to have a same-named local path.
