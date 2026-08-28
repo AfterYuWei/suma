@@ -221,6 +221,21 @@ func TestRenderTakeoverDraftAppliesPerVariableChoices(t *testing.T) {
 	}
 }
 
+func TestRenderTakeoverModelPreservesExplicitEmptyEnvironment(t *testing.T) {
+	variable := newEnvironmentCandidate("agent", "SORAIN_REG_TOKEN", "", "explicit_inferred")
+	model := map[string]any{"services": map[string]any{"agent": map[string]any{"image": "agent:v1"}}}
+	composeContent, environment, err := renderTakeoverModel(model, []EnvironmentCandidate{variable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(composeContent, "${SORAIN_REG_TOKEN?required}") || strings.Contains(composeContent, "${SORAIN_REG_TOKEN:?required}") {
+		t.Fatalf("empty environment must allow an explicitly empty value:\n%s", composeContent)
+	}
+	if !strings.Contains(environment, "SORAIN_REG_TOKEN=''\n") {
+		t.Fatalf("empty environment value was not preserved:\n%s", environment)
+	}
+}
+
 func TestRenderTakeoverDraftAlwaysExcludesImageDefaults(t *testing.T) {
 	containers := observableContainers{
 		staticContainers: staticContainers{rows: []containerdomain.Summary{{ID: "web", Labels: map[string]string{ProjectLabel: "shop"}}}},

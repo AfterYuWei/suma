@@ -33,7 +33,7 @@ function normalizeTakeoverDraft(draft: ProjectTakeoverDraft): ProjectTakeoverDra
   const observation = draft.observation ?? { name: draft.project_name, services: [], one_off_containers: [], orphan_containers: [], fingerprint: draft.fingerprint }
   return {
     ...draft,
-    variables: draft.variables ?? [],
+    variables: (draft.variables ?? []).map((variable) => ({ ...variable, value: variable.value ?? '' })),
     warnings: draft.warnings ?? [],
     blockers: draft.blockers ?? [],
     capabilities: draft.capabilities ?? ['takeover'],
@@ -428,9 +428,17 @@ function EnvironmentVariableTable({ variables, choices, revealed, zh, onChoice, 
     <TableBody>{variables.map((variable) => <TableRow key={variable.id}>
       <TableCell>{variable.service}</TableCell>
       <TableCell className="font-mono text-xs">{variable.key}</TableCell>
-      <TableCell><div className="flex max-w-72 items-center gap-1"><span className="truncate font-mono text-xs">{variable.sensitive && !revealed.has(variable.id) ? '••••••••' : variable.value}</span>{variable.sensitive && <Button variant="ghost" size="icon-xs" aria-label={revealed.has(variable.id) ? (zh ? '隐藏敏感值' : 'Hide') : (zh ? '显示敏感值' : 'Reveal')} onClick={() => onReveal(variable.id)}>{revealed.has(variable.id) ? <EyeOff /> : <Eye />}</Button>}</div></TableCell>
+      <TableCell><EnvironmentValue variable={variable} revealed={revealed.has(variable.id)} zh={zh} onReveal={() => onReveal(variable.id)} /></TableCell>
       <TableCell><Badge variant={variable.source === 'unknown' ? 'destructive' : 'outline'}>{localizedLabel(environmentSourceLabels, variable.source, zh)}</Badge><p className="mt-1 max-w-72 text-xs text-muted-foreground">{localizedLabel(environmentReasonLabels, variable.source, zh)}</p></TableCell>
       <TableCell>{autoExcluded ? <StatusBadge tone="neutral">{zh ? '自动排除' : 'Excluded'}</StatusBadge> : <Select value={choices[variable.id] ?? variable.destination} onValueChange={(value) => onChoice(variable.id, value as Destination)}><SelectTrigger className="w-40"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="compose">compose.yml</SelectItem><SelectItem value="env">.env</SelectItem><SelectItem value="exclude">{zh ? '不写入' : 'Exclude'}</SelectItem></SelectContent></Select>}</TableCell>
     </TableRow>)}</TableBody>
   </Table>
+}
+
+function EnvironmentValue({ variable, revealed, zh, onReveal }: { variable: EnvironmentCandidate; revealed: boolean; zh: boolean; onReveal: () => void }) {
+  if (variable.value === '') return <Badge variant="outline">{zh ? '空值' : 'Empty value'}</Badge>
+  return <div className="flex max-w-72 items-center gap-1">
+    <span className="truncate font-mono text-xs">{variable.sensitive && !revealed ? '••••••••' : variable.value}</span>
+    {variable.sensitive && <Button variant="ghost" size="icon-xs" aria-label={revealed ? (zh ? '隐藏敏感值' : 'Hide') : (zh ? '显示敏感值' : 'Reveal')} onClick={onReveal}>{revealed ? <EyeOff /> : <Eye />}</Button>}
+  </div>
 }

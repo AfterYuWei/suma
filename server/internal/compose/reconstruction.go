@@ -469,7 +469,11 @@ func renderTakeoverModel(base map[string]any, variables []EnvironmentCandidate) 
 	for _, variable := range fileVariables {
 		service, _ := services[variable.Service].(map[string]any)
 		environment, _ := service["environment"].(map[string]any)
-		environment[variable.Key] = "${" + aliases[variable.ID] + ":?required}"
+		requiredOperator := ":?"
+		if variable.Value == "" {
+			requiredOperator = "?"
+		}
+		environment[variable.Key] = "${" + aliases[variable.ID] + requiredOperator + "required}"
 	}
 	content, err := yaml.Marshal(model)
 	if err != nil {
