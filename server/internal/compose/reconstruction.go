@@ -208,6 +208,7 @@ func runtimeComposeModel(name string, snapshot RuntimeProjectSnapshot, observati
 
 func runtimeServiceModel(config RuntimeConfig, replicas int) map[string]any {
 	service := map[string]any{"image": config.Image}
+	explicitNetworkMode := isExplicitNetworkMode(config.NetworkMode)
 	setIf(service, "command", config.Command, len(config.Command) > 0)
 	setIf(service, "entrypoint", config.Entrypoint, len(config.Entrypoint) > 0)
 	setIf(service, "user", config.User, config.User != "")
@@ -229,7 +230,7 @@ func runtimeServiceModel(config RuntimeConfig, replicas int) map[string]any {
 	setIf(service, "stdin_open", true, config.StdinOpen)
 	setIf(service, "init", config.Init, config.Init != nil)
 	setIf(service, "shm_size", config.ShmSize, config.ShmSize > 0)
-	setIf(service, "network_mode", config.NetworkMode, config.NetworkMode != "" && config.NetworkMode != "default")
+	setIf(service, "network_mode", config.NetworkMode, explicitNetworkMode)
 	setIf(service, "pid", config.PIDMode, config.PIDMode != "")
 	setIf(service, "ipc", config.IPCMode, config.IPCMode != "")
 	setIf(service, "runtime", config.Runtime, config.Runtime != "" && config.Runtime != "runc")
@@ -276,10 +277,12 @@ func runtimeServiceModel(config RuntimeConfig, replicas int) map[string]any {
 	}
 	setIf(service, "volumes", volumes, len(volumes) > 0)
 	networks := map[string]any{}
-	for _, network := range config.Networks {
-		entry := map[string]any{}
-		setIf(entry, "aliases", network.Aliases, len(network.Aliases) > 0)
-		networks[network.Name] = entry
+	if !explicitNetworkMode {
+		for _, network := range config.Networks {
+			entry := map[string]any{}
+			setIf(entry, "aliases", network.Aliases, len(network.Aliases) > 0)
+			networks[network.Name] = entry
+		}
 	}
 	setIf(service, "networks", networks, len(networks) > 0)
 	devices := []string{}
@@ -306,6 +309,10 @@ func runtimeServiceModel(config RuntimeConfig, replicas int) map[string]any {
 		service["logging"] = map[string]any{"driver": config.Logging.Driver, "options": config.Logging.Options}
 	}
 	return service
+}
+
+func isExplicitNetworkMode(value string) bool {
+	return value == "host" || value == "none" || value == "bridge" || strings.HasPrefix(value, "container:") || strings.HasPrefix(value, "service:")
 }
 
 func addRuntimeResources(model map[string]any, projectName string, observation ObservedComposeProject) {

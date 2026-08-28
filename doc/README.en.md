@@ -26,9 +26,14 @@ SUMA is a single monolithic control plane for multi-node Docker management: mana
 - Images: pull progress streaming, tagging, removal, private registry credential support
 - Networks / volumes: full lifecycle management; volume removal checks usage and refuses to delete in-use volumes
 
-### Compose projects
+### Projects and Compose takeover
 
-- Local projects: edit compose.yml and .env in Monaco with validation before saving
+- One Projects entry: a current SUMA Project maps to one Docker Compose Project and exposes backend/capability-aware actions
+- Project-level discovery groups every Service and Container Instance, including scale, drift, one-off, and orphan observations
+- Takeover safely normalizes complete Local multi-file source or falls back for the whole Project to runtime reconstruction; TCP nodes use Inspect metadata only
+- Review each environment value for compose.yml, plaintext `.env`, or exclusion; image-default values are excluded and sensitive values are masked
+- Monaco editing and validation happen before atomic takeover; takeover itself never pulls, stops, or recreates existing containers
+- Optional isolated preview is restricted to safely isolatable stateless drafts, uses a temporary `suma-preview-*` Project, and always cleans up without switching production traffic
 - Git-sourced files are read-only: delivered Compose content cannot be tampered with and stays isolated from the CD domain
 - Batch operations: multi-select then start/stop/restart/up/down once, with per-project results
 - Expandable rows expose the runtime state: services, container status, per-container logs and terminal entry points

@@ -8,7 +8,7 @@ Node-aware clients use these routes:
 
 - `GET|POST /nodes`, `GET|PUT|DELETE /nodes/:nodeID`, `POST /nodes/:nodeID/test`
 - `GET /nodes/:nodeID/{overview,docker/info}`
-- `GET|POST|PUT|PATCH|DELETE /nodes/:nodeID/{containers,images,networks,volumes,compose}/...`
+- `GET|POST|PUT|PATCH|DELETE /nodes/:nodeID/{containers,images,networks,volumes,projects}/...`
 - `POST /nodes/:nodeID/system/prune`
 
 The resource routes listed below remain deprecated aliases for the migrated default node. `GET /health` reports only control-plane/database health; a disconnected Docker node does not make it fail. `GET /tasks` and `GET /audit-logs` accept `node_id` filters.
@@ -19,19 +19,35 @@ The resource routes listed below remain deprecated aliases for the migrated defa
 - `GET /images`, `GET /images/:id`, `POST /images/pull`, `POST /images/:id/tag`, `DELETE /images/:id`
 - `GET|POST /networks`, `GET|DELETE /networks/:id`
 - `GET|POST /volumes`, `GET|DELETE /volumes/:id`
-- `GET|POST /compose`, `POST /compose/batch`, `GET|PUT|DELETE /compose/:name`, `GET /compose/:name/services`, `GET /compose/:name/logs`, `POST /compose/:name/import`, `POST /compose/:name/validate`, `POST /compose/:name/{up|down|start|stop|restart|pull|build|update}`
+- Deprecated default-node aliases remain under `/compose`; there is no legacy single-file copy operation.
 - `GET /overview` for live host CPU, memory, disk, network, uptime, platform, and Docker summary data
 - `GET /tasks`, `GET /tasks/:id/logs`, `POST /tasks/:id/cancel`
 - `GET /audit-logs`, `GET|PUT /settings`
 - `POST /system/prune` starts a confirmed task for unused containers, networks, dangling images, and anonymous volumes
 
-`DELETE /compose/:name` requires `confirm=<project-name>`. Adding `force=true` first runs `docker compose down --remove-orphans --timeout 0 --volumes`, then removes only the local Compose project. Named volumes and their data are deleted by default; add `preserve_volumes=true` to omit `--volumes` and keep them. This operation never changes a Delivery Project.
+### Projects
 
-`GET /compose` derives runtime projects from Docker `com.docker.compose.*` container labels instead of Compose rows in SQLite. Each response includes `source` (`managed` or `external`), `can_manage`, `config_files`, working-directory metadata, and aggregated service/container status. SUMA-owned project directories below the node Compose root are also included so a managed project remains visible after `docker compose down` removes all labeled containers. External projects are read-only at project level; their individual containers remain available through the container APIs.
+SUMA uses `Project` as the first-level application/orchestration object. Current APIs implement `backend=compose`; the future `backend=swarm` model extension does not expose Swarm APIs.
 
-`POST /compose/:name/import` explicitly imports a discovered local project. Import is restricted to a single Compose config file, requires the label-reported working directory and file to be available inside the SUMA container, rejects symlink/path escape and files over 2 MiB, validates the copied Compose configuration, and writes the managed copy below the configured Compose root. Remote-node and multi-file imports are rejected.
+- `GET|POST /nodes/:nodeID/projects`, `POST /nodes/:nodeID/projects/batch`
+- `GET|PUT|DELETE /nodes/:nodeID/projects/compose/:name`
+- `GET /nodes/:nodeID/projects/compose/:name/{services|logs}`
+- `POST /nodes/:nodeID/projects/compose/:name/actions/:action`
+- `POST /nodes/:nodeID/projects/compose/:name/takeover/{preview|render|validate}`
+- `POST /nodes/:nodeID/projects/compose/:name/takeover`
+- `POST /nodes/:nodeID/projects/compose/:name/takeover/shadow/assess`
+- `POST /nodes/:nodeID/projects/compose/:name/takeover/shadow`
+- `GET|DELETE /nodes/:nodeID/projects/compose/:name/takeover/shadow/:session`
 
-`POST /compose/batch` accepts `{ "names": ["api", "worker"], "action": "restart" }` for 1–100 projects. Supported actions are `start`, `stop`, `restart`, `update`, and `down`. Each valid project starts an independent asynchronous task; the response reports `name`, `task_id`, and `success` per project so one failure does not block the remaining projects.
+`DELETE /nodes/:nodeID/projects/compose/:name` requires `confirm=<project-name>`. Adding `force=true` first runs `docker compose down --remove-orphans --timeout 0 --volumes`, then removes only the managed Project. Named volumes and their data are deleted by default; add `preserve_volumes=true` to omit `--volumes` and keep them. This operation never changes a Delivery Project.
+
+`GET /nodes/:nodeID/projects` derives Compose Projects from Docker `com.docker.compose.*` labels instead of runtime rows in SQLite. Each response includes backend/scope identity, `source`, `managed`, capabilities, working-directory hints, and aggregated Service/Container Instance counts. SUMA-owned directories below the node Compose root keep a managed Project visible after `docker compose down` removes all labeled containers.
+
+Project Takeover always operates on the entire Docker Compose Project. Preview aggregates every Service and Container Instance, detects scale/drift/one-off/orphan state, then either normalizes every safely accessible Local source file in label order or falls back for the whole Project to Inspect-based runtime reconstruction. TCP nodes never read remote label paths. Render applies per-variable `compose`/`.env`/exclude choices; validate checks the unsaved draft. Final takeover requires the exact native Project Name and current fingerprint, atomically writes managed files, and never calls pull/up/down.
+
+`POST /nodes/:nodeID/projects/batch` accepts `{ "backend": "compose", "names": ["api", "worker"], "action": "restart" }` for 1–100 Projects. Supported actions are `start`, `stop`, `restart`, `update`, and `down`. Each valid Project starts an independent asynchronous task; one failure does not block the remaining Projects.
+
+Shadow preview is optional and default-deny. Qualification rejects production-coupled ports, mounts, external networks, shared namespaces, privileged devices, build contexts, file dependencies, configs, and secrets. Eligible drafts run under a temporary `suma-preview-*` Compose Project. Accept/reject, TTL, page leave, and restart recovery clean it up; accepting still only saves the formal Project and does not switch traffic.
 
 ## Authentication center
 

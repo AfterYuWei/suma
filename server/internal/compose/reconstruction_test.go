@@ -122,3 +122,20 @@ func TestRenderTakeoverDraftAppliesPerVariableChoices(t *testing.T) {
 		t.Fatalf("rendered files:\n%s\n%s", rendered.Compose, rendered.Environment)
 	}
 }
+
+func TestRuntimeServiceDoesNotMixProjectNetworkModeAndNetworks(t *testing.T) {
+	service := runtimeServiceModel(RuntimeConfig{Image: "nginx:alpine", NetworkMode: "shop_default", Networks: []RuntimeEndpoint{{Name: "shop_default"}}}, 1)
+	if _, exists := service["network_mode"]; exists {
+		t.Fatalf("Project network was incorrectly emitted as network_mode: %#v", service)
+	}
+	if networks, ok := service["networks"].(map[string]any); !ok || len(networks) != 1 {
+		t.Fatalf("Project network was not restored through networks: %#v", service)
+	}
+	host := runtimeServiceModel(RuntimeConfig{Image: "nginx:alpine", NetworkMode: "host", Networks: []RuntimeEndpoint{{Name: "host"}}}, 1)
+	if host["network_mode"] != "host" {
+		t.Fatalf("explicit host mode was lost: %#v", host)
+	}
+	if _, exists := host["networks"]; exists {
+		t.Fatalf("host mode must not also declare networks: %#v", host)
+	}
+}

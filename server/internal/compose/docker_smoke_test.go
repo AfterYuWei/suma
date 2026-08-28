@@ -135,6 +135,114 @@ func TestRealDockerProjectTakeover(t *testing.T) {
 	}
 }
 
+// TestRealDockerTCPProjectTakeover verifies that an mTLS Docker TCP node never
+// treats Compose label paths as locally readable source, even when the control
+// process happens to have a same-named local path.
+func TestRealDockerTCPProjectTakeover(t *testing.T) {
+	host := os.Getenv("SUMA_SMOKE_TCP_HOST")
+	certDir := os.Getenv("SUMA_SMOKE_TLS_DIR")
+	if host == "" || certDir == "" {
+		t.Skip("set SUMA_SMOKE_TCP_HOST and SUMA_SMOKE_TLS_DIR for the mTLS Docker smoke test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	read := func(paths ...string) string {
+		for _, name := range paths {
+			value, err := os.ReadFile(filepath.Join(certDir, name))
+			if err == nil {
+				return string(value)
+			}
+		}
+		t.Fatalf("missing TLS material in %s: %v", certDir, paths)
+		return ""
+	}
+	ca := read("ca.pem", filepath.Join("client", "ca.pem"))
+	certificate := read("cert.pem", filepath.Join("client", "cert.pem"))
+	privateKey := read("key.pem", filepath.Join("client", "key.pem"))
+	adapter, err := dockerruntime.NewTLS(host, ca, certificate, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.Close()
+	if err := adapter.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
+	baseRunner, err := compose.NewRunner("docker compose")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := baseRunner.ForTarget(compose.Target{NodeID: "tcp-smoke", NodeName: "TCP Smoke", Host: host, TLSRequired: true, CA: ca, Certificate: certificate, PrivateKey: privateKey})
+	root := t.TempDir()
+	db, err := database.Open(filepath.Join(root, "suma.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(source, "compose.yml")
+	if err := os.WriteFile(file, []byte("services:\n  web:\n    image: nginx:alpine\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	name := fmt.Sprintf("suma-tcp-takeover-%d", time.Now().UnixNano())
+	spec := compose.ExecutionSpec{ProjectName: name, ProjectDir: source, Files: []string{file}}
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cleanupCancel()
+		_ = runner.ForceDownRelease(cleanupCtx, spec, false, io.Discard)
+	}()
+	if err := runner.UpRelease(ctx, spec, 60, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	baseService, err := compose.NewService(db, filepath.Join(root, "managed"), runner, task.NewService(db), adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := baseService.ForNode("tcp-smoke", "TCP Smoke", runner, adapter, false)
+	draft, err := service.BuildTakeoverDraft(ctx, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.Source != "runtime" {
+		t.Fatalf("TCP node unexpectedly read label source: %#v", draft)
+	}
+	validation := filepath.Join(root, "validation")
+	if err := os.MkdirAll(validation, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(validation, "compose.yml"), []byte(draft.Compose), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(validation, ".env"), []byte(draft.Environment), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var validationOutput strings.Builder
+	if err := runner.Validate(ctx, validation, &validationOutput); err != nil {
+		t.Fatalf("runtime draft validation: %v: %s", err, validationOutput.String())
+	}
+	before := instanceIDs(draft)
+	managed, err := service.Takeover(ctx, name, compose.TakeoverInput{Fingerprint: draft.Fingerprint, ConfirmationName: name, Compose: draft.Compose, Environment: draft.Environment})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !managed.Managed || managed.Metadata == nil || managed.Metadata.TakeoverSource != "runtime" {
+		t.Fatalf("managed Project = %#v", managed)
+	}
+	after, err := service.Services(ctx, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterIDs := make([]string, 0, len(after))
+	for _, container := range after {
+		afterIDs = append(afterIDs, container.ID)
+	}
+	sort.Strings(afterIDs)
+	if strings.Join(before, ",") != strings.Join(afterIDs, ",") {
+		t.Fatalf("TCP takeover changed containers: before=%v after=%v", before, afterIDs)
+	}
+}
+
 func instanceIDs(draft compose.ProjectTakeoverDraft) []string {
 	values := []string{}
 	for _, service := range draft.Observation.Services {

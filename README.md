@@ -10,7 +10,7 @@ SUMA 是一个面向多节点 Docker 管理的单体控制平面：通过一个 
 
 - 无 Agent 接入：挂载 Unix socket 直连本机/宿主机引擎，或添加远程 Docker TCP 端点
 - TCP 默认强制双向 TLS（mTLS），明文 TCP 仅允许回环地址；TLS 凭据加密存储并按节点授权
-- 全局节点选择器：Header 一键切换当前操作节点，资源、Compose、任务全部跟随
+- 全局节点选择器：Header 一键切换当前操作节点，资源、Projects、任务全部跟随
 - 自动状态探测：每 30 秒探测所有节点在线状态与延迟，异常自动降级显示
 - 远端 bind 目录白名单：TCP 节点上的 Compose 挂载源必须在节点允许列表内
 
@@ -26,11 +26,14 @@ SUMA 是一个面向多节点 Docker 管理的单体控制平面：通过一个 
 - 镜像：拉取进度流、标签、删除；支持私有 Registry 凭据认证
 - 网络 / 存储卷：完整生命周期；卷删除前检查占用并在用时不允许删除
 
-### Compose 项目
+### Projects 与 Compose 接管
 
-- 自动发现现有项目：通过 Docker 的 `com.docker.compose.*` 容器标签聚合当前节点上的 Compose 项目、服务和运行状态，不依赖 SUMA 数据库登记
-- 本地 Compose 项目：compose.yml 与 .env 在 Monaco 编辑器中编辑，保存前校验
-- 外部项目默认只读：可以查看和操作容器；本地单文件项目在源目录以相同绝对路径挂载进 SUMA 后可显式导入到 `/Data/compose`
+- 统一 Projects 入口：当前一个 SUMA Project 对应一个 Docker Compose Project；通过 backend badge 与 capability 控制操作
+- Project 级发现：按 `com.docker.compose.project` 聚合全部 Service 与 Container Instance，正确识别 scale、drift、one-off 和 orphan，不依赖运行态数据库登记
+- Project 接管：Local 节点优先安全规范化完整的多文件源配置；任一文件失败则整个 Project 回退到运行态重建；TCP 节点始终只使用 Inspect 元数据
+- 环境变量复核：逐项选择写入 compose.yml、明文 `.env` 或排除；镜像默认 ENV 自动排除，敏感值默认遮罩
+- 接管前可在 Monaco 编辑并校验；完成接管只原子保存配置，不会立即拉取、停止或重建现有容器
+- 可选隔离预演：仅对严格可隔离的无状态草稿创建临时 `suma-preview-*` Project，展示健康、状态和日志，接受或拒绝后清理，不切换生产流量
 - Git 来源只读展示：交付过来的 Compose 文件不可篡改，与 CD 域隔离
 - 批量操作：多选后一次性 start/stop/restart/up/down，逐项目汇报结果
 - 展开即看运行态：服务列表、容器状态、单容器日志与终端入口
