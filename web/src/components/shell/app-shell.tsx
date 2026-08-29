@@ -6,7 +6,7 @@ import {
   LogOut, PanelLeftOpen, Search, Server, Settings, UserRound,
 } from 'lucide-react'
 import { type ReactNode, useEffect, useState } from 'react'
-import { api } from '../../lib/api'
+import { api, demoMode } from '../../lib/api'
 import type { User } from '../../features/auth/types'
 import { useI18n, type TranslationKey } from '../../lib/i18n'
 import type { DockerNode } from '../../lib/nodes'
@@ -19,6 +19,7 @@ import {
 import { Separator } from '../ui/separator'
 import { Sheet, SheetContent, SheetTitle } from '../ui/sheet'
 import { Button } from '../ui/button'
+import { Badge } from '../ui/badge'
 import { ThemeToggle } from '../ui/theme-toggle'
 import { TooltipHint } from '../ui/tooltip-hint'
 import { UserAvatar } from '../ui/user-avatar'
@@ -214,6 +215,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
 
           <div className="ml-auto flex items-center gap-1.5">
+            {demoMode && <Badge variant="secondary" className="hidden sm:inline-flex">{zh ? '演示模式' : 'Demo mode'}</Badge>}
             <TooltipHint content={`${t('searchCommand')} (Ctrl+K)`}><Button
               variant="ghost"
               size="icon-sm"

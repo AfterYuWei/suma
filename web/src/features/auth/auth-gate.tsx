@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight } from 'lucide-react'
-import { type FormEvent, type ReactNode, useState } from 'react'
+import { type FormEvent, type ReactNode, useEffect, useState } from 'react'
 import { Alert, AlertDescription } from '../../components/ui/alert'
 import { Button } from '../../components/ui/button'
 import { Card, CardContent } from '../../components/ui/card'
@@ -9,7 +9,7 @@ import { Label } from '../../components/ui/label'
 import { LogoMark } from '../../components/ui/logo-mark'
 import { Spinner } from '../../components/ui/spinner'
 import { ThemeToggle } from '../../components/ui/theme-toggle'
-import { api, ApiError } from '../../lib/api'
+import { api, ApiError, demoMode, getDemoCredentials, type DemoCredentials } from '../../lib/api'
 import { useI18n } from '../../lib/i18n'
 import type { User } from './types'
 
@@ -35,7 +35,7 @@ function AuthFrame({ title, description, children }: { title: string; descriptio
   </main>
 }
 
-function AuthForm({ setup, pending, error, onSubmit }: { setup: boolean; pending: boolean; error: string; onSubmit: (values: AuthValues) => void }) {
+function AuthForm({ setup, pending, error, initialValues, onSubmit }: { setup: boolean; pending: boolean; error: string; initialValues?: DemoCredentials | null; onSubmit: (values: AuthValues) => void }) {
   const { language } = useI18n()
   const zh = language === 'zh-CN'
   const [username, setUsername] = useState('')
@@ -43,12 +43,22 @@ function AuthForm({ setup, pending, error, onSubmit }: { setup: boolean; pending
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  useEffect(() => {
+    if (!setup && initialValues) {
+      setUsername(initialValues.username)
+      setPassword(initialValues.password)
+    }
+  }, [initialValues, setup])
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (pending) return
     onSubmit({ username, password, ...(setup ? { nickname, email, confirm_password: confirmPassword } : {}) })
   }
   return <form onSubmit={submit} autoComplete="on" className="flex w-full flex-col gap-4">
+    {!setup && initialValues && <div className="flex items-center justify-between gap-4 rounded-lg border bg-muted/40 px-3 py-2 text-xs">
+      <span className="text-muted-foreground">{zh ? '演示账号已填入' : 'Demo credentials filled'}</span>
+      <code className="font-mono">{initialValues.username} / {initialValues.password}</code>
+    </div>}
     <div className="flex flex-col gap-1.5">
       <Label htmlFor="auth-username">{setup ? (zh ? '用户名' : 'Username') : (zh ? '用户名或邮箱' : 'Username or email')}</Label>
       <Input id="auth-username" name="username" required autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} />
@@ -81,6 +91,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [error, setError] = useState('')
   const { language, t } = useI18n()
   const zh = language === 'zh-CN'
+  const credentials = useQuery({ queryKey: ['demo-credentials'], queryFn: getDemoCredentials, enabled: demoMode, staleTime: Infinity })
   const status = useQuery({ queryKey: ['auth-status'], queryFn: () => api<Status>('/auth/status') })
   const session = useQuery({ queryKey: ['session'], queryFn: () => api<User>('/auth/session'), enabled: status.isSuccess && !status.data.needs_setup, retry: false })
   const initialize = useMutation({ mutationFn: (body: AuthValues) => api<User>('/auth/initialize', { method: 'POST', body: JSON.stringify(body) }), onSuccess: async () => { setError(''); await client.invalidateQueries({ queryKey: ['auth-status'] }) }, onError: (value) => setError(value instanceof ApiError ? value.message : 'Unable to create administrator') })
@@ -101,7 +112,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }
   if (!session.data) {
     return <AuthFrame title={zh ? '登录 SUMA' : 'Sign in to SUMA'} description={zh ? '使用本地管理员账户管理此 Docker 主机。' : 'Manage this Docker host with your local administrator account.'}>
-      <AuthForm setup={false} pending={login.isPending} error={error} onSubmit={(values) => login.mutate(values)} />
+      <AuthForm setup={false} pending={login.isPending} error={error} initialValues={credentials.data} onSubmit={(values) => login.mutate(values)} />
     </AuthFrame>
   }
   return children

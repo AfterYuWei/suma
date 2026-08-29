@@ -13,6 +13,7 @@ This file records the completed MVP implementation. Every checked phase was veri
 - [x] Compose: project lifecycle, Monaco Compose/`.env` editor, validation, changed-file summary, service/log views, and one centralized `ComposeRunner`.
 - [x] Operations: persistent tasks and logs, realtime task progress, audit log, confirmed system prune, and settings.
 - [x] UX: global command palette, Chinese/English localization, accessible dialogs, loading/error/empty states, responsive layout, design-system primitives, and dark/light/system themes.
+- [x] Opt-in Web demo build: `npm run build:demo` compiles the real React interface with browser-local Mock authentication, Docker resources, Compose, CD, task/audit APIs, and realtime log/stat/terminal streams; `npm run build` tree-shakes the complete demo module and fixed credentials. Verification: frontend lint/typecheck, production build, demo build, demo-chunk credential scan, and production artifact absence scan.
 - [x] Deployment: multi-stage Dockerfile, Compose deployment, persistent database/project storage, same-path bind mounts, and complete README.
 - [x] Verification: backend tests/build, frontend lint/typecheck/build, production image, persistence restart, and complete live-engine smoke suite.
 

@@ -138,6 +138,19 @@ make docker-up     # 构建并后台启动生产容器
 
 质量检查：`make check`（= 后端 `go test ./...` + `go build ./...`，前端 lint/typecheck/build）。
 
+### Web 演示构建
+
+演示站直接复用正式 React Web，通过独立构建命令注入浏览器内 Mock API，不需要 Go 服务或 Docker Engine：
+
+```bash
+cd web
+npm run build:demo
+```
+
+演示账号为 `admin`，密码为 `admin123`。构建产物位于 `web/dist`；部署到 Cloudflare Pages 时使用构建命令 `npm run build:demo`、输出目录 `dist`。Pages 在没有顶层 `404.html` 时会自动按单页应用处理前端路由。
+
+普通 `npm run build` 始终生成真实生产 Web，不包含 Mock 数据、固定演示账号或密码。演示构建只能用于公开体验，不得连接真实 Docker API 或承载生产数据。
+
 ## 接入更多节点
 
 1. 进入「节点」页面，点击添加节点：

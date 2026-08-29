@@ -4,6 +4,7 @@ import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { cn } from '../../lib/utils'
 import { useI18n } from '../../lib/i18n'
+import { demoMode, subscribeDemoStream } from '../../lib/api'
 
 export function LogViewer({ nodeID, containerId }: { nodeID: string; containerId: string }) {
   const { language } = useI18n(); const zh = language === 'zh-CN'
@@ -14,15 +15,23 @@ export function LogViewer({ nodeID, containerId }: { nodeID: string; containerId
   const backlog = useRef<string[]>([])
   const end = useRef<HTMLDivElement>(null)
   useEffect(() => {
+    const consume = (payload: string) => {
+      const next = payload.split('\n').filter(Boolean)
+      if (paused) backlog.current.push(...next)
+      else setLines((current) => [...current, ...next].slice(-5000))
+    }
+    if (demoMode) {
+      let disposed = false
+      let cleanup: () => void = () => undefined
+      setConnected(true)
+      void subscribeDemoStream('logs', consume).then((next) => { if (disposed) next(); else cleanup = next })
+      return () => { disposed = true; cleanup(); setConnected(false) }
+    }
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
     const socket = new WebSocket(`${protocol}//${location.host}/ws/nodes/${encodeURIComponent(nodeID)}/containers/${containerId}/logs?tail=500`)
     socket.onopen = () => setConnected(true)
     socket.onclose = () => setConnected(false)
-    socket.onmessage = (event) => {
-      const next = String(event.data).split('\n').filter(Boolean)
-      if (paused) backlog.current.push(...next)
-      else setLines((current) => [...current, ...next].slice(-5000))
-    }
+    socket.onmessage = (event) => consume(String(event.data))
     return () => socket.close()
   }, [nodeID, containerId, paused])
   useEffect(() => { if (!paused) end.current?.scrollIntoView({ behavior: 'smooth' }) }, [lines, paused])

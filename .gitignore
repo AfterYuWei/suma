@@ -6,6 +6,9 @@
 web/node_modules/
 web/dist/
 
+# Local Cloudflare landing page workspace
+/Page/
+
 # Backend runtime data and binaries
 server/data/
 server/bin/

@@ -10,7 +10,32 @@ export class ApiError extends Error {
   }
 }
 
+export const demoMode = import.meta.env.VITE_SUMA_DEMO_MODE === 'true'
+
+export interface DemoCredentials {
+  username: string
+  password: string
+}
+
+export async function getDemoCredentials(): Promise<DemoCredentials | null> {
+  if (!demoMode) return null
+  const { demoCredentials } = await import('./mock-api')
+  return demoCredentials
+}
+
+export type DemoStream = 'logs' | 'stats' | 'terminal'
+
+export async function subscribeDemoStream(stream: DemoStream, onMessage: (value: string) => void): Promise<() => void> {
+  if (!demoMode) return () => undefined
+  const mock = await import('./mock-api')
+  return mock.subscribeDemoStream(stream, onMessage)
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  if (demoMode) {
+    const { demoApi } = await import('./mock-api')
+    return demoApi<T>(path, init)
+  }
   const headers = new Headers(init?.headers)
   if (init?.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   const response = await fetch(`/api/v1${path}`, {

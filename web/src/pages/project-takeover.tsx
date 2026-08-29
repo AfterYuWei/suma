@@ -223,7 +223,7 @@ export function ProjectTakeoverPage() {
   useEffect(() => { shadowSessionRef.current = shadowSession }, [shadowSession])
   useEffect(() => () => {
     const current = shadowSessionRef.current
-    if (current) void fetch(`/api/v1${nodePath(nodeID, `/projects/compose/${encoded}/takeover/shadow/${current.session_id}`)}`, { method: 'DELETE', credentials: 'include', keepalive: true })
+    if (current) void api(nodePath(nodeID, `/projects/compose/${encoded}/takeover/shadow/${current.session_id}`), { method: 'DELETE', keepalive: true }).catch(() => undefined)
   }, [encoded, nodeID])
 
   const render = useMutation({
