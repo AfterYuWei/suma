@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -125,7 +127,7 @@ func TestAuthenticationCenterCredentialHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	authService := auth.NewService(db, time.Hour)
-	if _, err := authService.Initialize(context.Background(), "admin", "long-password"); err != nil {
+	if _, err := authService.Initialize(context.Background(), "admin", "admin@example.test", "", "long-password"); err != nil {
 		t.Fatal(err)
 	}
 	token, _, err := authService.Login(context.Background(), "admin", "long-password", "127.0.0.1")
@@ -188,7 +190,7 @@ func TestUnknownAPIEndpointReturnsJSONInsteadOfSPA(t *testing.T) {
 func TestAuthenticationLifecycle(t *testing.T) {
 	router := testRouter(t, &fakeEngine{})
 	initialize := httptest.NewRecorder()
-	router.ServeHTTP(initialize, httptest.NewRequest(http.MethodPost, "/api/v1/auth/initialize", bytes.NewBufferString(`{"username":"admin","password":"long-password","confirm_password":"long-password"}`)))
+	router.ServeHTTP(initialize, httptest.NewRequest(http.MethodPost, "/api/v1/auth/initialize", bytes.NewBufferString(`{"username":"admin","email":"admin@example.test","password":"long-password","confirm_password":"long-password"}`)))
 	if initialize.Code != http.StatusCreated {
 		t.Fatalf("initialize: %d %s", initialize.Code, initialize.Body.String())
 	}
@@ -225,6 +227,106 @@ func TestAuthenticationLifecycle(t *testing.T) {
 	router.ServeHTTP(invalid, invalidRequest)
 	if invalid.Code != http.StatusUnauthorized {
 		t.Fatalf("expected invalidated session, got %d", invalid.Code)
+	}
+}
+
+func TestAccountProfilePasswordAndAvatarHTTP(t *testing.T) {
+	root := t.TempDir()
+	db, err := database.Open(filepath.Join(root, "account.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	authService := auth.NewService(db, time.Hour)
+	user, err := authService.Initialize(context.Background(), "admin", "admin@example.test", "Operator", "long-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentToken, _, err := authService.Login(context.Background(), "admin", "long-password", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherToken, _, err := authService.Login(context.Background(), "admin@example.test", "long-password", "127.0.0.2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouter(Dependencies{Engine: &fakeEngine{}, Auth: authService, Audit: audit.NewService(db), Tasks: task.NewService(db)})
+	request := func(method, path, body, contentType, token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+		if token != "" {
+			req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+		}
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		return response
+	}
+	unauthorized := request(http.MethodPut, "/api/v1/account/profile", `{}`, "application/json", "")
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized profile = %d", unauthorized.Code)
+	}
+	wrong := request(http.MethodPut, "/api/v1/account/profile", `{"username":"operator","nickname":"Operator","email":"ops@example.test","current_password":"wrong-password"}`, "application/json", currentToken)
+	if wrong.Code != http.StatusForbidden {
+		t.Fatalf("wrong current password = %d %s", wrong.Code, wrong.Body.String())
+	}
+	updated := request(http.MethodPut, "/api/v1/account/profile", `{"username":"operator","nickname":"New name","email":"OPS@example.test","current_password":"long-password"}`, "application/json", currentToken)
+	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"email":"ops@example.test"`) || strings.Contains(updated.Body.String(), "long-password") {
+		t.Fatalf("profile update = %d %s", updated.Code, updated.Body.String())
+	}
+	changed := request(http.MethodPut, "/api/v1/account/password", `{"current_password":"long-password","new_password":"new-password","confirm_password":"new-password"}`, "application/json", currentToken)
+	if changed.Code != http.StatusOK {
+		t.Fatalf("password change = %d %s", changed.Code, changed.Body.String())
+	}
+	if _, err := authService.Authenticate(context.Background(), currentToken); err != nil {
+		t.Fatalf("current token revoked: %v", err)
+	}
+	if _, err := authService.Authenticate(context.Background(), otherToken); !errors.Is(err, auth.ErrUnauthorized) {
+		t.Fatalf("other token survived: %v", err)
+	}
+	if _, _, err := authService.Login(context.Background(), "ops@example.test", "new-password", "127.0.0.3"); err != nil {
+		t.Fatalf("updated login: %v", err)
+	}
+
+	var multipartBody bytes.Buffer
+	writer := multipart.NewWriter(&multipartBody)
+	part, err := writer.CreateFormFile("avatar", "avatar.webp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part.Write([]byte("<svg></svg>"))
+	_ = writer.Close()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/account/avatar", &multipartBody)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: currentToken})
+	avatarResponse := httptest.NewRecorder()
+	router.ServeHTTP(avatarResponse, req)
+	if avatarResponse.Code != http.StatusBadRequest || strings.Contains(avatarResponse.Body.String(), "<svg") {
+		t.Fatalf("invalid avatar = %d %s", avatarResponse.Code, avatarResponse.Body.String())
+	}
+	missing := request(http.MethodGet, "/api/v1/account/avatar", "", "", currentToken)
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing avatar = %d %s", missing.Code, missing.Body.String())
+	}
+	now := time.Now().UTC()
+	if err := db.Model(&database.User{}).Where("id = ?", user.ID).Updates(map[string]any{"avatar_data": []byte("stored-avatar"), "avatar_mime": "image/webp", "avatar_updated_at": now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	avatarGet := request(http.MethodGet, "/api/v1/account/avatar", "", "", currentToken)
+	if avatarGet.Code != http.StatusOK || avatarGet.Header().Get("ETag") == "" || avatarGet.Header().Get("X-Content-Type-Options") != "nosniff" || avatarGet.Header().Get("Content-Type") != "image/webp" {
+		t.Fatalf("avatar get = %d headers=%v", avatarGet.Code, avatarGet.Header())
+	}
+	etagRequest := httptest.NewRequest(http.MethodGet, "/api/v1/account/avatar", nil)
+	etagRequest.Header.Set("If-None-Match", avatarGet.Header().Get("ETag"))
+	etagRequest.AddCookie(&http.Cookie{Name: sessionCookie, Value: currentToken})
+	etagResponse := httptest.NewRecorder()
+	router.ServeHTTP(etagResponse, etagRequest)
+	if etagResponse.Code != http.StatusNotModified {
+		t.Fatalf("avatar ETag = %d", etagResponse.Code)
+	}
+	var auditCount int64
+	if err := db.Model(&database.AuditLog{}).Where("user_id = ? AND action LIKE ?", user.ID, "account.%").Count(&auditCount).Error; err != nil || auditCount < 4 {
+		t.Fatalf("account audit count = %d, %v", auditCount, err)
 	}
 }
 
@@ -314,7 +416,7 @@ func newProjectHTTPHarness(t *testing.T) projectHTTPHarness {
 		t.Fatal(err)
 	}
 	authService := auth.NewService(db, time.Hour)
-	if _, err := authService.Initialize(context.Background(), "admin", "long-password"); err != nil {
+	if _, err := authService.Initialize(context.Background(), "admin", "admin@example.test", "", "long-password"); err != nil {
 		t.Fatal(err)
 	}
 	token, _, err := authService.Login(context.Background(), "admin", "long-password", "127.0.0.1")

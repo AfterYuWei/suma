@@ -15,6 +15,7 @@ The resource routes listed below remain deprecated aliases for the migrated defa
 
 - `GET /health`, `GET /docker/info`
 - `GET /auth/status`, `POST /auth/initialize`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/session`
+- `PUT /account/profile`, `PUT /account/password`, `GET|PUT|DELETE /account/avatar`
 - `GET /containers`, `GET /containers/:id`, `POST /containers/:id/{start|stop|restart|pause|unpause|kill}`, `PATCH /containers/:id`, `DELETE /containers/:id`
 - `GET /images`, `GET /images/:id`, `POST /images/pull`, `POST /images/:id/tag`, `DELETE /images/:id`
 - `GET|POST /networks`, `GET|DELETE /networks/:id`
@@ -24,6 +25,14 @@ The resource routes listed below remain deprecated aliases for the migrated defa
 - `GET /tasks`, `GET /tasks/:id/logs`, `POST /tasks/:id/cancel`
 - `GET /audit-logs`, `GET|PUT /settings`
 - `POST /system/prune` starts a confirmed task for unused containers, networks, dangling images, and anonymous volumes
+
+### Local account
+
+SUMA currently has one local administrator and no role or permission model. First-run initialization requires `username`, `email`, `password`, and `confirm_password`; `nickname` is optional. Login keeps the compatible `{ "username": "...", "password": "..." }` shape, but `username` may contain either the username or email address.
+
+`PUT /account/profile` accepts `username`, `nickname`, `email`, and `current_password`. The current password is required only when the username or email changes. `PUT /account/password` accepts `current_password`, `new_password`, and `confirm_password`; it preserves the requesting session and revokes the user's other sessions.
+
+Avatar upload uses a multipart field named `avatar`. The web client accepts JPEG, PNG, or WebP sources up to 2 MB, crops them locally, and uploads a 512×512 WebP. The server validates the actual encoding and dimensions. `GET /account/avatar` is authenticated and returns the image body directly with an ETag rather than the JSON envelope.
 
 ### Projects
 

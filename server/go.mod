@@ -4,11 +4,13 @@ go 1.26
 
 require (
 	github.com/docker/docker v28.5.1+incompatible
+	github.com/docker/go-connections v0.8.1
 	github.com/gin-gonic/gin v1.12.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/goccy/go-yaml v1.19.2
 	github.com/gorilla/websocket v1.5.3
 	golang.org/x/crypto v0.54.0
+	golang.org/x/image v0.33.0
 	gorm.io/gorm v1.31.2
 )
 
@@ -23,7 +25,6 @@ require (
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
-	github.com/docker/go-connections v0.8.1 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect

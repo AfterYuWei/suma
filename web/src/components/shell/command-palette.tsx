@@ -45,6 +45,7 @@ export function CommandPalette({ open, close }: { open: boolean; close: () => vo
       { id: 'continuous-delivery', label: zh ? '打开持续交付' : 'Open continuous delivery', detail: zh ? 'Git 发布与回滚' : 'Git releases and rollback', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/continuous-delivery' }) } },
       { id: 'pull', label: zh ? '拉取镜像' : 'Pull an image', detail: zh ? 'Docker 镜像' : 'Docker image', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/images' }) } },
       { id: 'authentication', label: zh ? '打开认证中心' : 'Open Authentication Center', detail: zh ? 'Git 与镜像仓库凭据' : 'Git and registry credentials', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/authentication' }) } },
+      { id: 'account', label: zh ? '打开账户设置' : 'Open account settings', detail: zh ? '头像、资料与密码' : 'Avatar, profile, and password', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/account' }) } },
     ].forEach(push)
 
     containers.data?.forEach((row) => {

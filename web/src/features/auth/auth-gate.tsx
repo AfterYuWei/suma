@@ -11,10 +11,10 @@ import { Spinner } from '../../components/ui/spinner'
 import { ThemeToggle } from '../../components/ui/theme-toggle'
 import { api, ApiError } from '../../lib/api'
 import { useI18n } from '../../lib/i18n'
+import type { User } from './types'
 
 interface Status { needs_setup: boolean }
-interface User { id: number; username: string }
-interface AuthValues { username: string; password: string; confirm_password?: string }
+interface AuthValues { username: string; password: string; email?: string; nickname?: string; confirm_password?: string }
 
 function AuthFrame({ title, description, children }: { title: string; description: string; children: ReactNode }) {
   return <main className="grid min-h-screen place-items-center p-6">
@@ -39,18 +39,30 @@ function AuthForm({ setup, pending, error, onSubmit }: { setup: boolean; pending
   const { language } = useI18n()
   const zh = language === 'zh-CN'
   const [username, setUsername] = useState('')
+  const [nickname, setNickname] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (pending) return
-    onSubmit({ username, password, ...(setup ? { confirm_password: confirmPassword } : {}) })
+    onSubmit({ username, password, ...(setup ? { nickname, email, confirm_password: confirmPassword } : {}) })
   }
   return <form onSubmit={submit} autoComplete="on" className="flex w-full flex-col gap-4">
     <div className="flex flex-col gap-1.5">
-      <Label htmlFor="auth-username">{zh ? '用户名' : 'Username'}</Label>
+      <Label htmlFor="auth-username">{setup ? (zh ? '用户名' : 'Username') : (zh ? '用户名或邮箱' : 'Username or email')}</Label>
       <Input id="auth-username" name="username" required autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} />
     </div>
+    {setup && <>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="auth-nickname">{zh ? '昵称（可选）' : 'Nickname (optional)'}</Label>
+        <Input id="auth-nickname" name="nickname" maxLength={64} autoComplete="name" value={nickname} onChange={(event) => setNickname(event.target.value)} />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="auth-email">{zh ? '邮箱' : 'Email'}</Label>
+        <Input id="auth-email" name="email" type="email" required maxLength={254} autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+      </div>
+    </>}
     <div className="flex flex-col gap-1.5">
       <Label htmlFor="auth-password">{zh ? '密码' : 'Password'}</Label>
       <Input id="auth-password" name="password" type="password" required autoComplete={setup ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} />

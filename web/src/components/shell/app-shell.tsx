@@ -1,12 +1,13 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useRouterState } from '@tanstack/react-router'
+import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import {
   Activity, Boxes, CircleGauge, Container, FileClock, GitPullRequest,
   HardDrive, KeyRound, Layers3, Network, PanelLeftClose,
-  PanelLeftOpen, Search, Server, Settings,
+  LogOut, PanelLeftOpen, Search, Server, Settings, UserRound,
 } from 'lucide-react'
 import { type ReactNode, useEffect, useState } from 'react'
 import { api } from '../../lib/api'
+import type { User } from '../../features/auth/types'
 import { useI18n, type TranslationKey } from '../../lib/i18n'
 import type { DockerNode } from '../../lib/nodes'
 import { confirmDialog } from '../../stores/dialog'
@@ -20,6 +21,8 @@ import { Sheet, SheetContent, SheetTitle } from '../ui/sheet'
 import { Button } from '../ui/button'
 import { ThemeToggle } from '../ui/theme-toggle'
 import { TooltipHint } from '../ui/tooltip-hint'
+import { UserAvatar } from '../ui/user-avatar'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { CommandPalette } from './command-palette'
 
@@ -44,12 +47,14 @@ function latencyTone(node: DockerNode) {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const { commandOpen, setCommandOpen, sidebarOpen, toggleSidebar, language, currentNodeID, setCurrentNodeID } = useUIStore()
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const { t } = useI18n()
   const zh = language === 'zh-CN'
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   const nodes = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes'), refetchInterval: 30_000 })
+  const session = useQuery({ queryKey: ['session'], queryFn: () => api<User>('/auth/session') })
 
   useEffect(() => {
     if (!nodes.data?.length) return
@@ -219,9 +224,21 @@ export function AppShell({ children }: { children: ReactNode }) {
               <Search />
             </Button></TooltipHint>
             <ThemeToggle />
-            <TooltipHint content={t('signOut')}><Button variant="ghost" size="sm" className="hidden text-xs font-semibold sm:inline-flex" onClick={() => void logout()}>
-              DP
-            </Button></TooltipHint>
+            {session.data && <DropdownMenu>
+              <DropdownMenuTrigger render={<Button variant="ghost" size="sm" className="h-9 gap-2 px-1.5 sm:px-2" aria-label={zh ? '用户菜单' : 'User menu'} />}>
+                <UserAvatar user={session.data} className="size-7" />
+                <span className="hidden max-w-32 truncate text-sm font-medium sm:inline">{session.data.nickname || session.data.username}</span>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel className="flex flex-col gap-0.5">
+                  <span className="truncate text-sm text-foreground">{session.data.nickname || session.data.username}</span>
+                  <span className="truncate font-normal">{session.data.email || session.data.username}</span>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => void navigate({ to: '/account' })}><UserRound />{zh ? '账户设置' : 'Account settings'}</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => void logout()}><LogOut />{t('signOut')}</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>}
           </div>
         </header>
 

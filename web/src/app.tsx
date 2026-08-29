@@ -15,6 +15,7 @@ import { ContinuousDeliveryPage } from './pages/continuous-delivery'
 import { SettingsPage } from './pages/settings'
 import { AuthenticationPage } from './pages/authentication'
 import { NodesPage } from './pages/nodes'
+import { AccountPage } from './pages/account'
 import { AppDialog } from './components/ui/app-dialog'
 import { Spinner } from './components/ui/spinner'
 import { TooltipProvider } from './components/ui/tooltip'
@@ -44,7 +45,8 @@ const continuousDeliveryDetailRoute = createRoute({ getParentRoute: () => rootRo
 const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/settings', component: SettingsPage })
 const authenticationRoute = createRoute({ getParentRoute: () => rootRoute, path: '/authentication', component: AuthenticationPage })
 const nodesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/nodes', component: NodesPage })
-const router = createRouter({ routeTree: rootRoute.addChildren([overviewRoute, containersRoute, containerDetailRoute, imagesRoute, networksRoute, volumesRoute, tasksRoute, auditRoute, projectsRoute, projectDetailRoute, projectTakeoverRoute, composeRoute, composeDetailRoute, continuousDeliveryRoute, continuousDeliveryDetailRoute, authenticationRoute, nodesRoute, settingsRoute]) })
+const accountRoute = createRoute({ getParentRoute: () => rootRoute, path: '/account', component: AccountPage })
+const router = createRouter({ routeTree: rootRoute.addChildren([overviewRoute, containersRoute, containerDetailRoute, imagesRoute, networksRoute, volumesRoute, tasksRoute, auditRoute, projectsRoute, projectDetailRoute, projectTakeoverRoute, composeRoute, composeDetailRoute, continuousDeliveryRoute, continuousDeliveryDetailRoute, authenticationRoute, nodesRoute, settingsRoute, accountRoute]) })
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 5_000, retry: 1 } } })
 
 declare module '@tanstack/react-router' { interface Register { router: typeof router } }

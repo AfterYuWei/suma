@@ -3,11 +3,16 @@ package database
 import "time"
 
 type User struct {
-	ID           uint   `gorm:"primaryKey"`
-	Username     string `gorm:"uniqueIndex;size:64;not null"`
-	PasswordHash string `gorm:"not null"`
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID              uint   `gorm:"primaryKey"`
+	Username        string `gorm:"uniqueIndex;size:64;not null"`
+	Nickname        string `gorm:"size:64;not null;default:''"`
+	Email           string `gorm:"uniqueIndex;collate:nocase;size:254;not null;default:''"`
+	PasswordHash    string `gorm:"not null"`
+	AvatarData      []byte
+	AvatarMIME      string `gorm:"size:32;not null;default:''"`
+	AvatarUpdatedAt *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type Session struct {

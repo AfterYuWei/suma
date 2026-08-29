@@ -6,6 +6,7 @@ This file records the completed MVP implementation. Every checked phase was veri
 
 - [x] Foundation: React 19 TypeScript frontend, layered Go/Gin backend, GORM/SQLite, Docker adapter, health APIs, compact application shell, and themes.
 - [x] Authentication: first-run administrator initialization, bcrypt login, hashed opaque sessions, HttpOnly cookie, protected APIs, and logout invalidation.
+- [ ] Single-user account center: optional nickname, required email with username/email login, verified profile and password changes, other-session revocation, SQLite-backed cropped WebP avatar lifecycle, account menu/page, bilingual UI, audit coverage, and compatibility for legacy users without email. Automated account/migration/HTTP tests, backend/web gates, and an isolated authenticated real-Docker access smoke passed on 2026-08-29; browser interaction checks remain before completion.
 - [x] Containers: dense searchable list, detail and inspect, lifecycle actions, confirmations, and audit records.
 - [x] Realtime containers: cancellable WebSocket logs, xterm.js exec terminal with resize and shell fallback, and ECharts statistics.
 - [x] Docker resources: image, network, and volume lifecycle operations with usage checks and confirmations.

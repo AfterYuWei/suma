@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -59,7 +60,20 @@ type credentials struct {
 }
 type initializeRequest struct {
 	Username        string `json:"username" binding:"required"`
+	Nickname        string `json:"nickname"`
+	Email           string `json:"email" binding:"required"`
 	Password        string `json:"password" binding:"required"`
+	ConfirmPassword string `json:"confirm_password" binding:"required"`
+}
+type profileRequest struct {
+	Username        string `json:"username" binding:"required"`
+	Nickname        string `json:"nickname"`
+	Email           string `json:"email" binding:"required"`
+	CurrentPassword string `json:"current_password"`
+}
+type passwordRequest struct {
+	CurrentPassword string `json:"current_password" binding:"required"`
+	NewPassword     string `json:"new_password" binding:"required"`
 	ConfirmPassword string `json:"confirm_password" binding:"required"`
 }
 
@@ -86,9 +100,13 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			failure(c, http.StatusBadRequest, 11002, "Passwords do not match")
 			return
 		}
-		user, err := deps.Auth.Initialize(c.Request.Context(), input.Username, input.Password)
+		user, err := deps.Auth.Initialize(c.Request.Context(), input.Username, input.Email, input.Nickname, input.Password)
 		if err != nil {
-			failure(c, http.StatusConflict, 11003, err.Error())
+			status := http.StatusBadRequest
+			if errors.Is(err, auth.ErrAlreadyInitialized) {
+				status = http.StatusConflict
+			}
+			failure(c, status, 11003, err.Error())
 			return
 		}
 		c.JSON(http.StatusCreated, envelope{Code: 0, Message: "success", Data: user})
@@ -118,6 +136,118 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		success(c, gin.H{})
 	})
 	v1.GET("/auth/session", requireAuth(deps.Auth), func(c *gin.Context) { user, _ := c.Get("user"); success(c, user) })
+
+	account := v1.Group("/account", requireAuth(deps.Auth))
+	account.PUT("/profile", func(c *gin.Context) {
+		user := currentUser(c)
+		var input profileRequest
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, http.StatusBadRequest, 11101, "Username and email are required")
+			recordAccountAudit(deps.Audit, c, user, "account.profile.update", "failed")
+			return
+		}
+		updated, err := deps.Auth.UpdateProfile(c.Request.Context(), user.ID, auth.ProfileInput{Username: input.Username, Nickname: input.Nickname, Email: input.Email, CurrentPassword: input.CurrentPassword})
+		if err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, auth.ErrCurrentPassword) {
+				status = http.StatusForbidden
+			}
+			if errors.Is(err, auth.ErrIdentityConflict) {
+				status = http.StatusConflict
+			}
+			failure(c, status, 11102, err.Error())
+			recordAccountAudit(deps.Audit, c, user, "account.profile.update", "failed")
+			return
+		}
+		recordAccountAudit(deps.Audit, c, updated, "account.profile.update", "success")
+		success(c, updated)
+	})
+	account.PUT("/password", func(c *gin.Context) {
+		user := currentUser(c)
+		var input passwordRequest
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, http.StatusBadRequest, 11103, "Current and new passwords are required")
+			recordAccountAudit(deps.Audit, c, user, "account.password.change", "failed")
+			return
+		}
+		if input.NewPassword != input.ConfirmPassword {
+			failure(c, http.StatusBadRequest, 11104, "Passwords do not match")
+			recordAccountAudit(deps.Audit, c, user, "account.password.change", "failed")
+			return
+		}
+		token, _ := c.Cookie(sessionCookie)
+		if err := deps.Auth.ChangePassword(c.Request.Context(), user.ID, token, auth.PasswordInput{CurrentPassword: input.CurrentPassword, NewPassword: input.NewPassword}); err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, auth.ErrCurrentPassword) {
+				status = http.StatusForbidden
+			}
+			failure(c, status, 11105, err.Error())
+			recordAccountAudit(deps.Audit, c, user, "account.password.change", "failed")
+			return
+		}
+		recordAccountAudit(deps.Audit, c, user, "account.password.change", "success")
+		success(c, gin.H{})
+	})
+	account.PUT("/avatar", func(c *gin.Context) {
+		user := currentUser(c)
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, auth.MaxAvatarBytes+(64<<10))
+		file, err := c.FormFile("avatar")
+		if err != nil || file.Size <= 0 || file.Size > auth.MaxAvatarBytes {
+			failure(c, http.StatusBadRequest, 11106, "Avatar must be a WebP image no larger than 2 MB")
+			recordAccountAudit(deps.Audit, c, user, "account.avatar.update", "failed")
+			return
+		}
+		opened, err := file.Open()
+		if err != nil {
+			failure(c, http.StatusBadRequest, 11106, "Unable to read avatar")
+			return
+		}
+		data, readErr := io.ReadAll(io.LimitReader(opened, auth.MaxAvatarBytes+1))
+		_ = opened.Close()
+		if readErr != nil || len(data) > auth.MaxAvatarBytes {
+			failure(c, http.StatusBadRequest, 11106, "Avatar must be no larger than 2 MB")
+			recordAccountAudit(deps.Audit, c, user, "account.avatar.update", "failed")
+			return
+		}
+		updated, err := deps.Auth.UpdateAvatar(c.Request.Context(), user.ID, data)
+		if err != nil {
+			failure(c, http.StatusBadRequest, 11107, err.Error())
+			recordAccountAudit(deps.Audit, c, user, "account.avatar.update", "failed")
+			return
+		}
+		recordAccountAudit(deps.Audit, c, updated, "account.avatar.update", "success")
+		success(c, updated)
+	})
+	account.GET("/avatar", func(c *gin.Context) {
+		avatar, err := deps.Auth.Avatar(c.Request.Context(), currentUser(c).ID)
+		if err != nil {
+			if errors.Is(err, auth.ErrAvatarNotFound) {
+				failure(c, http.StatusNotFound, 11108, "Avatar not found")
+				return
+			}
+			failure(c, http.StatusInternalServerError, 11109, "Unable to read avatar")
+			return
+		}
+		c.Header("ETag", avatar.ETag)
+		c.Header("Cache-Control", "private, max-age=31536000, immutable")
+		c.Header("X-Content-Type-Options", "nosniff")
+		if c.GetHeader("If-None-Match") == avatar.ETag {
+			c.Status(http.StatusNotModified)
+			return
+		}
+		c.Data(http.StatusOK, avatar.MIME, avatar.Data)
+	})
+	account.DELETE("/avatar", func(c *gin.Context) {
+		user := currentUser(c)
+		updated, err := deps.Auth.DeleteAvatar(c.Request.Context(), user.ID)
+		if err != nil {
+			failure(c, http.StatusInternalServerError, 11110, "Unable to delete avatar")
+			recordAccountAudit(deps.Audit, c, user, "account.avatar.delete", "failed")
+			return
+		}
+		recordAccountAudit(deps.Audit, c, updated, "account.avatar.delete", "success")
+		success(c, updated)
+	})
 
 	v1.GET("/health", func(c *gin.Context) { success(c, gin.H{"status": "ok", "control_plane": "available"}) })
 	if deps.Nodes != nil {
@@ -1250,12 +1380,27 @@ func watchDisconnect(connection *websocket.Conn, cancel context.CancelFunc) {
 }
 
 func recordAudit(c *gin.Context, service *audit.Service, action, resourceType, resourceName, result string) {
+	if service == nil {
+		return
+	}
 	var userID *uint
 	if value, exists := c.Get("user"); exists {
 		user := value.(auth.User)
 		userID = &user.ID
 	}
 	_ = service.Record(c.Request.Context(), userID, action, resourceType, resourceName, c.ClientIP(), result)
+}
+
+func currentUser(c *gin.Context) auth.User {
+	value, _ := c.Get("user")
+	return value.(auth.User)
+}
+
+func recordAccountAudit(service *audit.Service, c *gin.Context, user auth.User, action, result string) {
+	if service == nil {
+		return
+	}
+	_ = service.Record(c.Request.Context(), &user.ID, action, "account", fmt.Sprint(user.ID), c.ClientIP(), result)
 }
 
 func requestActor(c *gin.Context) cdService.Actor {
