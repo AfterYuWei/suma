@@ -253,7 +253,7 @@ func TestBatchActionReturnsPerProjectTasks(t *testing.T) {
 		}
 	}
 	service := &Service{root: root, runner: batchRunner{}, tasks: task.NewService(db)}
-	results := service.BatchAction(context.Background(), []string{"api", "worker", "missing"}, "start")
+	results := service.BatchAction(context.Background(), []string{"api", "worker", "missing"}, "up")
 	if len(results) != 3 || !results[0].Success || results[0].TaskID == "" || !results[1].Success || results[1].TaskID == "" || results[2].Success {
 		t.Fatalf("batch results = %#v", results)
 	}
@@ -349,7 +349,7 @@ func TestCreateWritesManagedProjectIdentityMetadata(t *testing.T) {
 
 type batchRunner struct{ Runner }
 
-func (batchRunner) Start(context.Context, string, io.Writer) error { return nil }
+func (batchRunner) Up(context.Context, string, io.Writer) error { return nil }
 
 type validateRunner struct{ Runner }
 

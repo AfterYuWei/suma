@@ -33,3 +33,20 @@ func TestTaskLifecycle(t *testing.T) {
 	}
 	t.Fatal("task did not complete")
 }
+
+func TestTaskStepsAreUpserted(t *testing.T) {
+	db, err := database.Open(filepath.Join(t.TempDir(), "task-steps.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(db)
+	service.ReportStep(context.Background(), "task-1", "layer-a", "Downloading", 5, 10, 40)
+	service.ReportStep(context.Background(), "task-1", "layer-a", "Pull complete", 10, 10, 100)
+	steps, err := service.Steps(context.Background(), "task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(steps) != 1 || steps[0].Status != "Pull complete" || steps[0].Progress != 100 || steps[0].Current != 10 {
+		t.Fatalf("unexpected task steps: %+v", steps)
+	}
+}

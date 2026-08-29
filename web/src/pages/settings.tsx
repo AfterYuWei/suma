@@ -60,13 +60,15 @@ export function SettingsPage() {
             <span className="text-sm font-medium">{t('chooseTheme')}</span>
             <RadioGroup value={theme} onValueChange={(next) => setTheme(next as Theme)} className="inline-grid w-fit grid-flow-col gap-0.5 rounded-lg bg-muted p-0.5">
               {([['dark', t('dark')], ['light', t('light')], ['system', t('systemTheme')]] as [Theme, string][]).map(([value, label]) => (
-                <label key={value} className="cursor-pointer">
-                  <RadioGroupItem value={value} className="peer sr-only" />
+                <div key={value} className="relative">
+                  <RadioGroupItem value={value} className="peer absolute inset-0 z-10 size-auto cursor-pointer rounded-md border-0 opacity-0" aria-label={label} />
                   <span className={cn(
-                    'block cursor-pointer rounded-md px-3 py-1 text-sm transition-colors peer-focus-visible:ring-3 peer-focus-visible:ring-ring/50',
-                    theme === value ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                    'pointer-events-none block rounded-md border border-transparent px-3 py-1 text-sm font-medium transition-all peer-focus-visible:border-ring peer-focus-visible:ring-3 peer-focus-visible:ring-ring/50',
+                    theme === value
+                      ? 'bg-background text-foreground shadow-sm dark:border-input dark:bg-input/30'
+                      : 'text-muted-foreground peer-hover:text-foreground',
                   )}>{label}</span>
-                </label>
+                </div>
               ))}
             </RadioGroup>
           </div>

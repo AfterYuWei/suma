@@ -755,6 +755,17 @@ func mapNetwork(row dockernetwork.Inspect) networkdomain.Resource {
 	for _, config := range row.IPAM.Config {
 		value.IPAM = append(value.IPAM, networkdomain.IPAM{Subnet: config.Subnet, Gateway: config.Gateway})
 	}
+	for id, container := range row.Containers {
+		value.AttachedContainers = append(value.AttachedContainers, networkdomain.AttachedContainer{
+			ID: id, Name: container.Name, IPv4Address: container.IPv4Address, IPv6Address: container.IPv6Address,
+		})
+	}
+	sort.Slice(value.AttachedContainers, func(i, j int) bool {
+		if value.AttachedContainers[i].Name == value.AttachedContainers[j].Name {
+			return value.AttachedContainers[i].ID < value.AttachedContainers[j].ID
+		}
+		return value.AttachedContainers[i].Name < value.AttachedContainers[j].Name
+	})
 	return value
 }
 func (a *Adapter) ListNetworks(ctx context.Context) ([]networkdomain.Resource, error) {

@@ -254,6 +254,17 @@ type TaskLog struct {
 	CreatedAt time.Time `gorm:"index" json:"created_at"`
 }
 
+type TaskStep struct {
+	TaskID    string    `gorm:"primaryKey;size:36" json:"-"`
+	StepID    string    `gorm:"primaryKey;size:128" json:"id"`
+	Status    string    `gorm:"size:128;not null" json:"status"`
+	Current   int64     `gorm:"not null;default:0" json:"current"`
+	Total     int64     `gorm:"not null;default:0" json:"total"`
+	Progress  int       `gorm:"not null;default:0" json:"progress"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type AuditLog struct {
 	ID           uint      `gorm:"primaryKey" json:"id"`
 	NodeID       string    `gorm:"size:64;not null;default:local;index" json:"node_id"`

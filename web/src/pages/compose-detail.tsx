@@ -14,7 +14,7 @@ import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { TooltipHint } from '../components/ui/tooltip-hint'
 import { TakeoverWarningDialog } from '../features/compose/takeover-warning-dialog'
 import type { Project } from '../features/compose/types'
-import type { ContainerSummary } from '../features/containers/types'
+import type { ContainerMetrics, ContainerSummary } from '../features/containers/types'
 import { api } from '../lib/api'
 import { nodePath } from '../lib/nodes'
 import { useI18n } from '../lib/i18n'
@@ -52,7 +52,19 @@ export function ComposeDetailPage() {
     if (!query.data.managed) setView('Services')
   }, [query.data])
 
-  const services = useQuery({ queryKey: ['project-services', nodeID, projectName], queryFn: () => api<ContainerSummary[]>(nodePath(nodeID, `/projects/compose/${encodedName}/services`)), enabled: view === 'Services', refetchInterval: 5_000 })
+  const services = useQuery({
+    queryKey: ['project-services', nodeID, projectName],
+    queryFn: async () => {
+      const [rows, metrics] = await Promise.all([
+        api<ContainerSummary[]>(nodePath(nodeID, `/projects/compose/${encodedName}/services`)),
+        api<ContainerMetrics[]>(nodePath(nodeID, '/containers/metrics')).catch(() => []),
+      ])
+      const metricsByID = new Map(metrics.map((row) => [row.id, row]))
+      return rows.map((row) => ({ ...row, ...metricsByID.get(row.id) }))
+    },
+    enabled: view === 'Services',
+    refetchInterval: 5_000,
+  })
   const logs = useQuery({ queryKey: ['project-logs', nodeID, projectName], queryFn: () => api<{ logs: string }>(nodePath(nodeID, `/projects/compose/${encodedName}/logs`)), enabled: view === 'Logs', refetchInterval: 3_000, retry: false })
   const save = useMutation({
     mutationFn: () => api<Project>(nodePath(nodeID, `/projects/compose/${encodedName}`), { method: 'PUT', body: JSON.stringify({ compose, environment }) }),
@@ -100,8 +112,8 @@ export function ComposeDetailPage() {
   const dirty = compose !== project.compose || environment !== project.environment
   const headerActions = <div className="flex flex-wrap items-center gap-2">
     <StatusBadge tone={statusTone(project.status)}>{project.status}</StatusBadge>
-    {project.managed && ['start', 'stop', 'restart', 'pull', 'build', 'down'].map((name) => <Button key={name} variant={name === 'down' ? 'destructive' : 'outline'} disabled={action.isPending} onClick={() => void run(name)}>{name}</Button>)}
-    {project.managed && <Button disabled={action.isPending} onClick={() => void run('up')}>{action.isPending ? <Spinner className="size-4" /> : <Play size={16} />}Up</Button>}
+    {project.managed && ['stop', 'restart', 'pull', 'build', 'down'].map((name) => <Button key={name} variant={name === 'down' ? 'destructive' : 'outline'} disabled={action.isPending} onClick={() => void run(name)}>{name}</Button>)}
+    {project.managed && <Button disabled={action.isPending} onClick={() => void run('up')}>{action.isPending ? <Spinner className="size-4" /> : <Play size={16} />}{zh ? '启动' : 'Start'}</Button>}
     {!project.managed && <Button onClick={() => setTakeoverOpen(true)}><Download />{zh ? '接管' : 'Take over'}</Button>}
   </div>
   return <div className="flex w-full flex-col items-start gap-4">
@@ -117,7 +129,7 @@ export function ComposeDetailPage() {
           </TabsList>
         </Tabs>
         {view === 'Files' && project.managed && <ComposeFiles dark={dark} file={file} compose={compose} environment={environment} dirty={dirty} notice={notice} zh={zh} setFile={setFile} setCompose={setCompose} setEnvironment={setEnvironment} onRemove={() => void remove()} onValidate={() => validate.mutate()} onSave={() => save.mutate()} onDeploy={() => void deploy()} validating={validate.isPending} saving={save.isPending} />}
-        {view === 'Services' && <Services rows={services.data} loading={services.isPending} zh={zh} />}
+        {view === 'Services' && <Services rows={services.data} loading={services.isPending} error={services.error?.message} zh={zh} />}
         {view === 'Logs' && project.managed && <Logs value={logs.data?.logs} loading={logs.isPending} error={logs.isError} zh={zh} />}
       </div>
     </ResourceFrame>
@@ -141,24 +153,39 @@ function ComposeFiles({ dark, file, compose, environment, dirty, notice, zh, set
   </Card>
 }
 
-function Services({ rows, loading, zh }: { rows?: ContainerSummary[]; loading: boolean; zh: boolean }) {
+const servicePorts = (row: ContainerSummary) => {
+  if (!row.ports.length) return '—'
+  const values = row.ports.slice(0, 3).map((port) => port.public_port ? `${port.ip || '0.0.0.0'}:${port.public_port} → ${port.private_port}/${port.type}` : `${port.private_port}/${port.type}`)
+  return `${values.join(', ')}${row.ports.length > 3 ? ` +${row.ports.length - 3}` : ''}`
+}
+const serviceMemory = (bytes: number) => !bytes ? '—' : bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(2)} GB` : `${(bytes / 1024 ** 2).toFixed(0)} MB`
+const serviceUptime = (seconds: number, zh: boolean) => !seconds ? '—' : seconds >= 86400 ? `${Math.floor(seconds / 86400)} ${zh ? '天' : 'd'}` : seconds >= 3600 ? `${Math.floor(seconds / 3600)} ${zh ? '小时' : 'h'}` : `${Math.max(1, Math.floor(seconds / 60))} ${zh ? '分钟' : 'm'}`
+const serviceState = (state: string, zh: boolean) => zh ? ({ running: '运行中', paused: '已暂停', restarting: '重启中', exited: '已停止', dead: '异常', created: '已创建' }[state] ?? state) : state
+
+function Services({ rows, loading, error, zh }: { rows?: ContainerSummary[]; loading: boolean; error?: string; zh: boolean }) {
   if (loading) return <LoadingState compact label={zh ? '正在加载项目服务' : 'Loading project services'} />
+  if (error) return <ErrorState description={error} />
   return <Table className="w-full">
     <TableHeader>
       <TableRow>
-        <TableHead>{zh ? '服务' : 'Service'}</TableHead>
+        <TableHead className="min-w-[190px]">{zh ? '服务 / 容器' : 'Service / container'}</TableHead>
         <TableHead>{zh ? '镜像' : 'Image'}</TableHead>
-        <TableHead>{zh ? '状态' : 'State'}</TableHead>
-        <TableHead>{zh ? '详情' : 'Detail'}</TableHead>
+        <TableHead className="min-w-[140px]">{zh ? '状态 / 运行时间' : 'State / uptime'}</TableHead>
+        <TableHead className="min-w-[120px]">{zh ? '资源' : 'Resources'}</TableHead>
+        <TableHead className="min-w-[190px]">{zh ? '端口' : 'Ports'}</TableHead>
+        <TableHead className="min-w-[150px]">{zh ? '创建时间' : 'Created'}</TableHead>
       </TableRow>
     </TableHeader>
     <TableBody>
+      {(rows ?? []).length === 0 && <TableRow><TableCell colSpan={6} className="h-24 text-center text-muted-foreground">{zh ? '项目尚未创建容器，请先启动项目。' : 'No containers have been created. Start the project first.'}</TableCell></TableRow>}
       {(rows ?? []).map((row) => (
         <TableRow key={row.id}>
-          <TableCell className="font-medium">{row.labels['com.docker.compose.service'] || row.name}</TableCell>
+          <TableCell><div className="flex flex-col gap-0.5"><span className="font-medium">{row.labels['com.docker.compose.service'] || row.name}</span><a href={`/containers/${row.id}`} className="text-xs text-muted-foreground hover:text-foreground hover:underline">{row.name}</a><span className="font-mono text-[11px] text-muted-foreground">{row.id.slice(0, 12)}{row.labels['com.docker.compose.container-number'] ? ` · #${row.labels['com.docker.compose.container-number']}` : ''}</span></div></TableCell>
           <TableCell><TooltipHint content={row.image}><span className="block max-w-72 truncate text-muted-foreground">{row.image}</span></TooltipHint></TableCell>
-          <TableCell><StatusBadge tone={stateTone(row.state)}>{row.state}</StatusBadge></TableCell>
-          <TableCell className="text-muted-foreground">{row.status}</TableCell>
+          <TableCell><div className="flex flex-col items-start gap-1"><StatusBadge tone={stateTone(row.state)}>{serviceState(row.state, zh)}</StatusBadge><TooltipHint content={row.status}><span className="max-w-40 truncate text-xs text-muted-foreground">{serviceUptime(row.uptime_seconds, zh)}</span></TooltipHint></div></TableCell>
+          <TableCell>{row.state === 'running' ? <div className="flex flex-col"><span className="tabular-nums">CPU {row.cpu_percent.toFixed(1)}%</span><span className="text-xs text-muted-foreground tabular-nums">{serviceMemory(row.memory_bytes)}</span></div> : '—'}</TableCell>
+          <TableCell className="font-mono text-xs"><TooltipHint content={servicePorts(row)}><span className="block max-w-64 truncate">{servicePorts(row)}</span></TooltipHint></TableCell>
+          <TableCell className="text-xs text-muted-foreground tabular-nums">{new Date(row.created).toLocaleString(zh ? 'zh-CN' : 'en-US')}</TableCell>
         </TableRow>
       ))}
     </TableBody>

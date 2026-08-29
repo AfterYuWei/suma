@@ -31,7 +31,7 @@ export function LoadingState({ label, rows = 5, compact = false, embedded = fals
   )
 
   return (
-    <div role="status" aria-live="polite" aria-label={label}>
+    <div className="w-full" role="status" aria-live="polite" aria-label={label}>
       {embedded ? content : (
         <div className="flex flex-col gap-4 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
           {content}

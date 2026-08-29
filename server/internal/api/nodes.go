@@ -439,7 +439,7 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 400, 20315, "Between 1 and 100 Compose project names are required")
 			return
 		}
-		allowed := map[string]bool{"start": true, "stop": true, "restart": true, "update": true, "down": true}
+		allowed := map[string]bool{"up": true, "start": true, "stop": true, "restart": true, "update": true, "down": true}
 		if !allowed[input.Action] {
 			failure(c, 400, 20316, "Unsupported Compose batch action")
 			return
@@ -651,7 +651,7 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 400, 20406, "Between 1 and 100 Compose Project names are required")
 			return
 		}
-		allowed := map[string]bool{"start": true, "stop": true, "restart": true, "update": true, "down": true}
+		allowed := map[string]bool{"up": true, "start": true, "stop": true, "restart": true, "update": true, "down": true}
 		if !allowed[input.Action] {
 			failure(c, 400, 20407, "Unsupported Project batch action")
 			return

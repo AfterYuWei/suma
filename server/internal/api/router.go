@@ -777,7 +777,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			failure(c, http.StatusBadRequest, 18013, "Between 1 and 100 Compose project names are required")
 			return
 		}
-		allowed := map[string]bool{"start": true, "stop": true, "restart": true, "update": true, "down": true}
+		allowed := map[string]bool{"up": true, "start": true, "stop": true, "restart": true, "update": true, "down": true}
 		if !allowed[input.Action] {
 			failure(c, http.StatusBadRequest, 18014, "Unsupported Compose batch action")
 			return
@@ -1025,6 +1025,14 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		rows, err := deps.Tasks.Logs(c.Request.Context(), c.Param("id"))
 		if err != nil {
 			failure(c, http.StatusInternalServerError, 16002, "Unable to list task logs")
+			return
+		}
+		success(c, rows)
+	})
+	v1.GET("/tasks/:id/steps", requireAuth(deps.Auth), func(c *gin.Context) {
+		rows, err := deps.Tasks.Steps(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			failure(c, http.StatusInternalServerError, 16004, "Unable to list task steps")
 			return
 		}
 		success(c, rows)

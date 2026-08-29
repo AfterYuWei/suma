@@ -192,6 +192,58 @@ func TestPullForNodeWithRegistryStreamParsing(t *testing.T) {
 	}
 }
 
+func TestPullPersistsEveryLayerProgress(t *testing.T) {
+	adapter := &stubAdapter{pullStream: stream(
+		`{"status":"Pulling from library/app","id":"latest"}`,
+		`{"status":"Pulling fs layer","id":"layer-a"}`,
+		`{"status":"Downloading","id":"layer-a","progressDetail":{"current":50,"total":100}}`,
+		`{"status":"Already exists","id":"layer-b"}`,
+		`{"status":"Extracting","id":"layer-a","progressDetail":{"current":50,"total":100}}`,
+		`{"status":"Pull complete","id":"layer-a"}`,
+	)}
+	service, db := newTestService(t, adapter)
+	row, err := service.Pull("example/app:latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := waitTask(t, db, row.ID)
+	if finished.Status != task.StatusSuccess {
+		t.Fatalf("expected successful task, got %q", finished.Status)
+	}
+	steps, err := service.tasks.Steps(context.Background(), row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(steps) != 2 {
+		t.Fatalf("expected two layer steps, got %+v", steps)
+	}
+	for _, step := range steps {
+		if step.Progress != 100 {
+			t.Fatalf("expected completed layer %q, got %+v", step.StepID, step)
+		}
+	}
+}
+
+func TestPullLayerStageProgress(t *testing.T) {
+	layer := &pullLayer{id: "layer-a"}
+	layer.update("Downloading", 50, 100)
+	if layer.progress != 40 {
+		t.Fatalf("expected download stage at 40, got %d", layer.progress)
+	}
+	layer.update("Download complete", 0, 0)
+	if layer.progress != 80 {
+		t.Fatalf("expected completed download at 80, got %d", layer.progress)
+	}
+	layer.update("Extracting", 50, 100)
+	if layer.progress != 89 {
+		t.Fatalf("expected extraction stage at 89, got %d", layer.progress)
+	}
+	layer.update("Pull complete", 0, 0)
+	if layer.progress != 100 {
+		t.Fatalf("expected completed layer at 100, got %d", layer.progress)
+	}
+}
+
 func TestPullFailsWhenStreamIOErrors(t *testing.T) {
 	adapter := &stubAdapter{pullStream: io.NopCloser(errReader{})}
 	service, db := newTestService(t, adapter)

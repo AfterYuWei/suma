@@ -62,18 +62,22 @@ func TestResourceIPAMSerialization(t *testing.T) {
 		IPv6:       true,
 		Internal:   true,
 		Containers: 2,
-		Labels:     map[string]string{"stack": "edge"},
-		IPAM:       []IPAM{{Subnet: "10.10.0.0/24", Gateway: "10.10.0.1"}},
+		AttachedContainers: []AttachedContainer{
+			{ID: "container-1", Name: "api", IPv4Address: "10.10.0.2/24", IPv6Address: "fd00::2/64"},
+		},
+		Labels: map[string]string{"stack": "edge"},
+		IPAM:   []IPAM{{Subnet: "10.10.0.0/24", Gateway: "10.10.0.1"}},
 	}
 	data, err := json.Marshal(row)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var decoded struct {
-		Name       string   `json:"name"`
-		Scope      string   `json:"scope"`
-		Containers int      `json:"containers"`
-		IPAM       []struct {
+		Name               string              `json:"name"`
+		Scope              string              `json:"scope"`
+		Containers         int                 `json:"containers"`
+		AttachedContainers []AttachedContainer `json:"attached_containers"`
+		IPAM               []struct {
 			Subnet  string `json:"subnet"`
 			Gateway string `json:"gateway"`
 		} `json:"ipam"`
@@ -83,6 +87,9 @@ func TestResourceIPAMSerialization(t *testing.T) {
 	}
 	if decoded.Name != "bridge0" || decoded.Scope != "local" || decoded.Containers != 2 {
 		t.Fatalf("unexpected resource serialization: %s", data)
+	}
+	if len(decoded.AttachedContainers) != 1 || decoded.AttachedContainers[0].Name != "api" || decoded.AttachedContainers[0].IPv4Address != "10.10.0.2/24" {
+		t.Fatalf("unexpected attached container serialization: %s", data)
 	}
 	if len(decoded.IPAM) != 1 || decoded.IPAM[0].Subnet != "10.10.0.0/24" || decoded.IPAM[0].Gateway != "10.10.0.1" {
 		t.Fatalf("unexpected IPAM serialization: %s", data)

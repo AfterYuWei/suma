@@ -359,6 +359,10 @@ func TestAdapterListNetworksMapping(t *testing.T) {
 		ID: strings.Repeat("12", 32), Name: "dockport-web", Driver: "bridge", Scope: "local",
 		Internal: true, Containers: 2, Labels: map[string]string{"dockport.project": "web"},
 		IPAM: []networkdomain.IPAM{{Subnet: "172.28.0.0/16", Gateway: "172.28.0.1"}},
+		AttachedContainers: []networkdomain.AttachedContainer{
+			{ID: strings.Repeat("ef", 16), Name: "api", IPv4Address: "172.28.0.2/16"},
+			{ID: strings.Repeat("ab", 16), Name: "db", IPv4Address: "172.28.0.3/16"},
+		},
 	}
 	if !reflect.DeepEqual(first, wantFirst) {
 		t.Fatalf("unexpected mapped network:\n got %#v\nwant %#v", first, wantFirst)
@@ -368,6 +372,39 @@ func TestAdapterListNetworksMapping(t *testing.T) {
 	}
 	if len(second.IPAM) != 0 || second.Containers != 0 {
 		t.Fatalf("empty ipam/container mapping expected, got %#v", second)
+	}
+}
+
+func TestAdapterInspectNetworkMapsAttachedContainerAddresses(t *testing.T) {
+	ctx := context.Background()
+	networkID := strings.Repeat("56", 32)
+	containerID := strings.Repeat("cd", 32)
+	stub := newDockerStub(t, map[string]http.HandlerFunc{
+		"/networks/" + networkID: func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, dockernetwork.Inspect{
+				ID: networkID, Name: "app-net", Driver: "bridge",
+				Containers: map[string]dockernetwork.EndpointResource{
+					containerID: {Name: "web", IPv4Address: "172.30.0.2/16", IPv6Address: "fd00::2/64"},
+				},
+			})
+		},
+	})
+	adapter := newAdapter(t, stub)
+
+	row, err := adapter.InspectNetwork(ctx, networkID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(row.AttachedContainers) != 1 {
+		t.Fatalf("expected one attached container, got %#v", row.AttachedContainers)
+	}
+	container := row.AttachedContainers[0]
+	if container.ID != containerID || container.Name != "web" || container.IPv4Address != "172.30.0.2/16" || container.IPv6Address != "fd00::2/64" {
+		t.Fatalf("unexpected attached container: %#v", container)
+	}
+	requests := stub.find(t, func(request stubRequest) bool { return request.Path == "/networks/"+networkID })
+	if len(requests) != 1 || requests[0].Query.Get("verbose") != "true" {
+		t.Fatalf("expected one verbose inspect request, got %#v", requests)
 	}
 }
 

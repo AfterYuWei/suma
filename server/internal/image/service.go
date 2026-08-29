@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/suma/suma/server/internal/database"
@@ -64,7 +65,7 @@ func (s *Service) PullForNode(nodeID, nodeName, reference string) (database.Task
 	return s.PullForNodeWithRegistry(nodeID, nodeName, reference, "", "", "", false)
 }
 func (s *Service) PullForNodeWithRegistry(nodeID, nodeName, reference, server, username, secret string, token bool) (database.Task, error) {
-	return s.tasks.StartForNode(nodeID, nodeName, "image.pull", "Pull "+reference, func(ctx context.Context, report task.Reporter) error {
+	return s.tasks.StartWithIDForNode(nodeID, nodeName, "image.pull", "Pull "+reference, func(ctx context.Context, taskID string, report task.Reporter) error {
 		var stream io.ReadCloser
 		var err error
 		if server != "" {
@@ -82,6 +83,7 @@ func (s *Service) PullForNodeWithRegistry(nodeID, nodeName, reference, server, u
 		defer stream.Close()
 		scanner := bufio.NewScanner(stream)
 		progress := 1
+		layers := map[string]*pullLayer{}
 		for scanner.Scan() {
 			var event struct {
 				Status         string `json:"status"`
@@ -96,10 +98,18 @@ func (s *Service) PullForNodeWithRegistry(nodeID, nodeName, reference, server, u
 				continue
 			}
 			if event.Error != "" {
+				markIncompleteLayers(s.tasks, taskID, layers, "Failed", false)
 				return fmt.Errorf("%s", event.Error)
 			}
-			if event.ProgressDetail.Total > 0 {
-				progress = int(float64(event.ProgressDetail.Current) / float64(event.ProgressDetail.Total) * 90)
+			if event.ID != "" && isLayerStatus(event.Status) {
+				layer := layers[event.ID]
+				if layer == nil {
+					layer = &pullLayer{id: event.ID}
+					layers[event.ID] = layer
+				}
+				layer.update(event.Status, event.ProgressDetail.Current, event.ProgressDetail.Total)
+				s.tasks.ReportStep(ctx, taskID, layer.id, layer.status, layer.current, layer.total, layer.progress)
+				progress = aggregateLayerProgress(layers)
 			}
 			message := event.Status
 			if event.ID != "" {
@@ -107,10 +117,80 @@ func (s *Service) PullForNodeWithRegistry(nodeID, nodeName, reference, server, u
 			}
 			report(progress, message)
 		}
+		if ctx.Err() != nil {
+			markIncompleteLayers(s.tasks, taskID, layers, "Canceled", false)
+			return ctx.Err()
+		}
 		if err := scanner.Err(); err != nil {
+			markIncompleteLayers(s.tasks, taskID, layers, "Failed", false)
 			return err
 		}
+		markIncompleteLayers(s.tasks, taskID, layers, "Pull complete", true)
 		report(100, "Pull complete")
 		return nil
 	})
+}
+
+type pullLayer struct {
+	id       string
+	status   string
+	current  int64
+	total    int64
+	progress int
+}
+
+func (l *pullLayer) update(status string, current, total int64) {
+	l.status = status
+	if total > 0 {
+		l.current, l.total = current, total
+	}
+	normalized := strings.ToLower(status)
+	switch {
+	case normalized == "pull complete" || normalized == "already exists":
+		l.progress = 100
+	case normalized == "download complete" || normalized == "verifying checksum":
+		if l.progress < 80 {
+			l.progress = 80
+		}
+	case total > 0 && normalized == "downloading":
+		l.progress = int(float64(current) / float64(total) * 80)
+	case total > 0 && normalized == "extracting":
+		l.progress = 80 + int(float64(current)/float64(total)*19)
+	}
+	if l.progress > 100 {
+		l.progress = 100
+	}
+}
+
+func isLayerStatus(status string) bool {
+	switch strings.ToLower(status) {
+	case "pulling fs layer", "waiting", "downloading", "verifying checksum", "download complete", "extracting", "pull complete", "already exists":
+		return true
+	default:
+		return false
+	}
+}
+
+func aggregateLayerProgress(layers map[string]*pullLayer) int {
+	if len(layers) == 0 {
+		return 1
+	}
+	total := 0
+	for _, layer := range layers {
+		total += layer.progress
+	}
+	return total / len(layers) * 95 / 100
+}
+
+func markIncompleteLayers(tasks *task.Service, taskID string, layers map[string]*pullLayer, status string, complete bool) {
+	for _, layer := range layers {
+		if layer.progress >= 100 {
+			continue
+		}
+		layer.status = status
+		if complete {
+			layer.progress = 100
+		}
+		tasks.ReportStep(context.Background(), taskID, layer.id, layer.status, layer.current, layer.total, layer.progress)
+	}
 }

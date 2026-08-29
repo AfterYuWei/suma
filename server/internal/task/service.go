@@ -130,6 +130,22 @@ func (s *Service) Logs(ctx context.Context, id string) ([]database.TaskLog, erro
 	var rows []database.TaskLog
 	return rows, s.db.WithContext(ctx).Where("task_id = ?", id).Order("created_at ASC").Find(&rows).Error
 }
+func (s *Service) ReportStep(ctx context.Context, taskID, stepID, status string, current, total int64, progress int) {
+	if progress < 0 {
+		progress = 0
+	}
+	if progress > 100 {
+		progress = 100
+	}
+	row := database.TaskStep{TaskID: taskID, StepID: stepID}
+	s.db.WithContext(ctx).Where("task_id = ? AND step_id = ?", taskID, stepID).Assign(map[string]any{
+		"status": status, "current": current, "total": total, "progress": progress,
+	}).FirstOrCreate(&row)
+}
+func (s *Service) Steps(ctx context.Context, id string) ([]database.TaskStep, error) {
+	var rows []database.TaskStep
+	return rows, s.db.WithContext(ctx).Where("task_id = ?", id).Order("created_at ASC").Find(&rows).Error
+}
 func (s *Service) Cancel(id string) bool {
 	s.mu.RLock()
 	cancel, ok := s.cancels[id]
