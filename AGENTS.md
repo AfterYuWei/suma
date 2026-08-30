@@ -9,7 +9,7 @@ SUMA V2 is a monolithic, agentless multi-node Docker management application. Nod
 - Web: React 19, TypeScript, Vite, Tailwind CSS v4, shadcn/ui conventions, Base UI, TanStack Router, TanStack Query, Zustand, Lucide React, Motion, Monaco Editor, xterm.js, and ECharts.
 - Server: Go, Gin, GORM, SQLite, Docker Go SDK, WebSocket, and the `docker compose` CLI.
 - Deployment: one monolith container, persistent application data, Compose, and one or more mounted Unix sockets and/or mTLS Docker TCP endpoints.
-- TCP defaults to mutual TLS. Plaintext TCP is permitted only for loopback endpoints; never expose an unauthenticated Docker API to a network. Do not add Redis, message brokers, microservices, Swarm, or Kubernetes.
+- TCP defaults to mutual TLS. Plaintext TCP is permitted only for loopback, private-network, or Tailscale IP endpoints and requires typed endpoint confirmation; never expose an unauthenticated Docker API to a public network. Do not add Redis, message brokers, microservices, Swarm, or Kubernetes.
 
 ## Architecture
 

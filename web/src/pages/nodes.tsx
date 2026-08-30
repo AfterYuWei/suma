@@ -19,12 +19,12 @@ import { TooltipHint } from '../components/ui/tooltip-hint'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import type { DockerNode } from '../lib/nodes'
-import { confirmDialog } from '../stores/dialog'
+import { confirmDialog, promptDialog } from '../stores/dialog'
 import { ResourceFrame } from './images'
 
 interface TLSCredential { id: number; name: string; fingerprint: string; authorized_node_ids: string[] }
-interface NodeInput { name: string; connection_type: 'unix' | 'tcp'; endpoint: string; tls_mode: 'required' | 'disabled'; tls_credential_id?: number; enabled: boolean }
-type NodeFormValues = NodeInput
+interface NodeFormValues { name: string; connection_type: 'unix' | 'tcp'; endpoint: string; tls_mode: 'required' | 'disabled'; tls_credential_id?: number; enabled: boolean }
+interface NodeInput extends NodeFormValues { plaintext_confirmation?: string }
 
 const blank = (): NodeFormValues => ({ name: '', connection_type: 'unix', endpoint: 'unix:///var/run/docker.sock', tls_mode: 'disabled', enabled: true })
 
@@ -43,6 +43,28 @@ export function NodesPage() {
   const test = useMutation({ mutationFn: (id: string) => api(`/nodes/${id}/test`, { method: 'POST' }), onSuccess: () => client.invalidateQueries({ queryKey: ['nodes'] }) })
   const edit = (node: DockerNode) => { setEditing(node); setValues({ name: node.name, connection_type: node.connection_type, endpoint: node.endpoint, tls_mode: node.tls_mode, tls_credential_id: node.tls_credential_id, enabled: node.enabled }); setOpen(true) }
   const remove = async (node: DockerNode) => { if (!await confirmDialog({ title: zh ? `删除节点 ${node.name}？` : `Delete node ${node.name}?`, description: zh ? '必须先解绑 Compose、CD 和全部凭据授权。历史任务和审计记录会保留。' : 'Compose, CD, and credential grants must be detached first. Historical tasks and audits remain.', confirmLabel: zh ? '删除节点' : 'Delete node', danger: true })) return; await api(`/nodes/${node.id}`, { method: 'DELETE' }); await client.invalidateQueries({ queryKey: ['nodes'] }) }
+  const submitNode = async () => {
+    if (values.connection_type !== 'tcp' || values.tls_mode !== 'disabled') {
+      save.mutate(values)
+      return
+    }
+    let host = ''
+    try { host = new URL(values.endpoint).hostname.replace(/^\[|\]$/g, '') } catch { /* The server returns the canonical endpoint validation error. */ }
+    if (!host) {
+      save.mutate(values)
+      return
+    }
+    const confirmation = await promptDialog({
+      title: zh ? '确认使用无 TLS Docker TCP？' : 'Confirm plaintext Docker TCP?',
+      description: zh
+        ? `任何能够访问 ${host} Docker API 端口的设备都可能取得宿主机的完整控制权。仅应在可信内网或 Tailscale 网络中使用。`
+        : `Any device that can reach the Docker API port on ${host} may gain full control of the host. Use this only on a trusted private or Tailscale network.`,
+      confirmLabel: zh ? '确认并保存' : 'Confirm and save',
+      danger: true,
+      input: { label: zh ? `再次输入 IP ${host} 以确认` : `Enter IP ${host} again to confirm`, requiredValue: host },
+    })
+    if (confirmation === host) save.mutate({ ...values, plaintext_confirmation: host })
+  }
   const createNode = () => { setEditing(null); setValues(blank()); setOpen(true) }
   const update = (patch: Partial<NodeFormValues>) => setValues((previous) => ({ ...previous, ...patch }))
   const tcp = values.connection_type === 'tcp'
@@ -109,7 +131,7 @@ export function NodesPage() {
           <SheetTitle>{editing ? (zh ? '编辑节点' : 'Edit node') : (zh ? '添加节点' : 'Add node')}</SheetTitle>
           <SheetDescription>{zh ? '保存前会连接 Engine 并校验身份。' : 'The Engine identity is verified before saving.'}</SheetDescription>
         </SheetHeader>
-        <form onSubmit={(event) => { event.preventDefault(); save.mutate(values) }} className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 pb-4">
+        <form onSubmit={(event) => { event.preventDefault(); void submitNode() }} className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 pb-4">
           <div className="grid gap-1.5">
             <Label htmlFor="node-name">{zh ? '节点名称' : 'Node name'}</Label>
             <Input id="node-name" required value={values.name} onChange={(event) => update({ name: event.target.value })} />
@@ -132,10 +154,10 @@ export function NodesPage() {
             <div className="grid gap-1.5">
               <Label>TLS</Label>
               <Select<'required' | 'disabled'> value={values.tls_mode} onValueChange={(next) => { if (next !== null) update({ tls_mode: next }) }}>
-                <SelectTrigger aria-label="TLS" className="w-full"><SelectValue>{values.tls_mode === 'required' ? `mTLS (${zh ? '推荐' : 'recommended'})` : (zh ? '无 TLS（仅回环地址）' : 'No TLS (loopback only)')}</SelectValue></SelectTrigger>
+                <SelectTrigger aria-label="TLS" className="w-full"><SelectValue>{values.tls_mode === 'required' ? `mTLS (${zh ? '推荐' : 'recommended'})` : (zh ? '无 TLS（内网或 Tailscale）' : 'No TLS (private network or Tailscale)')}</SelectValue></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="required">{`mTLS (${zh ? '推荐' : 'recommended'})`}</SelectItem>
-                  <SelectItem value="disabled">{zh ? '无 TLS（仅回环地址）' : 'No TLS (loopback only)'}</SelectItem>
+                  <SelectItem value="disabled">{zh ? '无 TLS（内网或 Tailscale）' : 'No TLS (private network or Tailscale)'}</SelectItem>
                 </SelectContent>
               </Select>
             </div>

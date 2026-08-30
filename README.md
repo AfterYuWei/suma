@@ -9,7 +9,7 @@ SUMA 是一个面向多节点 Docker 管理的单体控制平面：通过一个 
 ### 多节点引擎接入
 
 - 无 Agent 接入：挂载 Unix socket 直连本机/宿主机引擎，或添加远程 Docker TCP 端点
-- TCP 默认强制双向 TLS（mTLS），明文 TCP 仅允许回环地址；TLS 凭据加密存储并按节点授权
+- TCP 默认强制双向 TLS（mTLS）；明文 TCP 仅允许回环、私有内网或 Tailscale IP，且保存时必须再次输入目标 IP 确认风险
 - 全局节点选择器：Header 一键切换当前操作节点，资源、Projects、任务全部跟随
 - 自动状态探测：每 30 秒探测所有节点在线状态与延迟，异常自动降级显示
 - 远端 bind 安全校验：TCP 节点上的 Compose 挂载源必须使用不可插值的绝对路径

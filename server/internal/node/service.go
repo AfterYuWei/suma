@@ -31,13 +31,19 @@ const (
 
 var validID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
+var tailscaleIPv4 = &net.IPNet{
+	IP:   net.IPv4(100, 64, 0, 0),
+	Mask: net.CIDRMask(10, 32),
+}
+
 type Input struct {
-	Name            string `json:"name"`
-	ConnectionType  string `json:"connection_type"`
-	Endpoint        string `json:"endpoint"`
-	TLSMode         string `json:"tls_mode"`
-	TLSCredentialID *uint  `json:"tls_credential_id"`
-	Enabled         bool   `json:"enabled"`
+	Name                  string `json:"name"`
+	ConnectionType        string `json:"connection_type"`
+	Endpoint              string `json:"endpoint"`
+	TLSMode               string `json:"tls_mode"`
+	TLSCredentialID       *uint  `json:"tls_credential_id"`
+	PlaintextConfirmation string `json:"plaintext_confirmation"`
+	Enabled               bool   `json:"enabled"`
 }
 
 type View struct {
@@ -440,6 +446,13 @@ func (s *Service) prepare(ctx context.Context, id string, input Input) (database
 	if err := validateEndpoint(input.ConnectionType, input.Endpoint, input.TLSMode, input.TLSCredentialID); err != nil {
 		return database.Node{}, err
 	}
+	if input.ConnectionType == ConnectionTCP && input.TLSMode == TLSDisabled {
+		parsed, _ := url.Parse(input.Endpoint)
+		host, _, _ := net.SplitHostPort(parsed.Host)
+		if strings.TrimSpace(input.PlaintextConfirmation) != host {
+			return database.Node{}, fmt.Errorf("type Docker endpoint IP %q to confirm plaintext TCP", host)
+		}
+	}
 	if input.TLSCredentialID != nil {
 		var count int64
 		if err := s.db.WithContext(ctx).Model(&database.DockerTLSCredential{}).Where("id = ?", *input.TLSCredentialID).Count(&count).Error; err != nil {
@@ -478,8 +491,8 @@ func validateEndpoint(connection, endpoint, tlsMode string, credentialID *uint) 
 		}
 		if tlsMode == TLSDisabled {
 			ip := net.ParseIP(host)
-			if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback()) {
-				return errors.New("plaintext Docker TCP is allowed only on loopback addresses")
+			if !strings.EqualFold(host, "localhost") && (ip == nil || (!ip.IsLoopback() && !ip.IsPrivate() && !tailscaleIPv4.Contains(ip))) {
+				return errors.New("plaintext Docker TCP is allowed only on loopback, private network, or Tailscale addresses")
 			}
 			if credentialID != nil {
 				return errors.New("plaintext TCP nodes cannot select a TLS credential")
