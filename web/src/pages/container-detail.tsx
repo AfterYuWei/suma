@@ -51,7 +51,7 @@ export function ContainerDetailPage() {
       : <Button disabled={action.isPending} onClick={() => action.mutate('start')}>{action.isPending ? <Spinner /> : <Play />}{zh ? '启动' : 'Start'}</Button>}
     <Button variant="outline" disabled={action.isPending} onClick={() => action.mutate('restart')}>{action.isPending ? <Spinner /> : <RefreshCw />}{zh ? '重启' : 'Restart'}</Button>
     <DropdownMenu>
-      <DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label={zh ? '更多操作' : 'More actions'}><MoreHorizontal /></Button>} />
+      <DropdownMenuTrigger render={<Button variant="outline"><MoreHorizontal />{zh ? '更多' : 'More'}</Button>} />
       <DropdownMenuContent align="end" className="w-44">
         {row.state === 'paused' ? <MenuAction label={zh ? '恢复' : 'Unpause'} icon={Play} run={() => action.mutate('unpause')} /> : <MenuAction label={zh ? '暂停' : 'Pause'} icon={Pause} run={() => action.mutate('pause')} />}
         <MenuAction label={zh ? '强制终止' : 'Kill process'} icon={OctagonX} danger run={() => void kill()} />

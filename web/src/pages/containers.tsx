@@ -121,7 +121,7 @@ export function ContainersPage() {
                 <TableHead className="min-w-[140px]">{zh ? '状态 / 运行时间' : 'State / uptime'}</TableHead>
                 <TableHead className="min-w-[130px]">{zh ? '资源' : 'Resources'}</TableHead>
                 <TableHead className="min-w-[160px]">{zh ? '端口' : 'Ports'}</TableHead>
-                <TableHead className="min-w-[210px] text-right">{zh ? '操作' : 'Actions'}</TableHead>
+                <TableHead className="min-w-[180px] text-right">{zh ? '操作' : 'Actions'}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -175,10 +175,7 @@ function ContainerActions({ row, zh, pending, run, rename, kill, remove }: { row
   return <div className="flex items-center justify-end gap-1">
     <TooltipHint content={zh ? '日志' : 'Logs'}><Button variant="ghost" size="icon-sm" aria-label={zh ? '日志' : 'Logs'} onClick={() => location.assign(`/containers/${row.id}#logs`)}><FileText /></Button></TooltipHint>
     <TooltipHint content={zh ? '终端' : 'Terminal'}><Button variant="ghost" size="icon-sm" disabled={row.state !== 'running'} aria-label={zh ? '终端' : 'Terminal'} onClick={() => location.assign(`/containers/${row.id}#terminal`)}><SquareTerminal /></Button></TooltipHint>
-    <Button variant={primary === 'stop' ? 'outline' : 'secondary'} size="sm" disabled={pending} onClick={() => run(primary)}>
-      {pending ? <Spinner /> : primary === 'stop' ? <Square /> : <Play />}
-      {primaryLabel}
-    </Button>
+    <TooltipHint content={primaryLabel}><Button variant={primary === 'stop' ? 'outline' : 'secondary'} size="icon-sm" disabled={pending} aria-label={primaryLabel} onClick={() => run(primary)}>{pending ? <Spinner /> : primary === 'stop' ? <Square /> : <Play />}</Button></TooltipHint>
     <TooltipHint content={zh ? '重启' : 'Restart'}><Button variant="ghost" size="icon-sm" disabled={pending} aria-label={zh ? '重启' : 'Restart'} onClick={() => run('restart')}><RefreshCw /></Button></TooltipHint>
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label={zh ? '更多操作' : 'More actions'}><MoreHorizontal /></Button>} />
