@@ -4,14 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/url"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -34,32 +32,30 @@ const (
 var validID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 type Input struct {
-	Name             string   `json:"name"`
-	ConnectionType   string   `json:"connection_type"`
-	Endpoint         string   `json:"endpoint"`
-	TLSMode          string   `json:"tls_mode"`
-	TLSCredentialID  *uint    `json:"tls_credential_id"`
-	AllowedBindRoots []string `json:"allowed_bind_roots"`
-	Enabled          bool     `json:"enabled"`
+	Name            string `json:"name"`
+	ConnectionType  string `json:"connection_type"`
+	Endpoint        string `json:"endpoint"`
+	TLSMode         string `json:"tls_mode"`
+	TLSCredentialID *uint  `json:"tls_credential_id"`
+	Enabled         bool   `json:"enabled"`
 }
 
 type View struct {
-	ID               string     `json:"id"`
-	Name             string     `json:"name"`
-	ConnectionType   string     `json:"connection_type"`
-	Endpoint         string     `json:"endpoint"`
-	TLSMode          string     `json:"tls_mode"`
-	TLSCredentialID  *uint      `json:"tls_credential_id,omitempty"`
-	AllowedBindRoots []string   `json:"allowed_bind_roots"`
-	Enabled          bool       `json:"enabled"`
-	EngineID         string     `json:"engine_id,omitempty"`
-	EngineVersion    string     `json:"engine_version,omitempty"`
-	Status           string     `json:"status"`
-	LastError        string     `json:"last_error,omitempty"`
-	LastLatencyMS    int64      `json:"last_latency_ms,omitempty"`
-	LastCheckedAt    *time.Time `json:"last_checked_at,omitempty"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	ID              string     `json:"id"`
+	Name            string     `json:"name"`
+	ConnectionType  string     `json:"connection_type"`
+	Endpoint        string     `json:"endpoint"`
+	TLSMode         string     `json:"tls_mode"`
+	TLSCredentialID *uint      `json:"tls_credential_id,omitempty"`
+	Enabled         bool       `json:"enabled"`
+	EngineID        string     `json:"engine_id,omitempty"`
+	EngineVersion   string     `json:"engine_version,omitempty"`
+	Status          string     `json:"status"`
+	LastError       string     `json:"last_error,omitempty"`
+	LastLatencyMS   int64      `json:"last_latency_ms,omitempty"`
+	LastCheckedAt   *time.Time `json:"last_checked_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 type TLSCredentialInput struct {
@@ -211,11 +207,11 @@ func (s *Service) Create(ctx context.Context, input Input) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
-	row, roots, err := s.prepare(ctx, id, input)
+	row, err := s.prepare(ctx, id, input)
 	if err != nil {
 		return View{}, err
 	}
-	row.ID, row.AllowedBindRootsJSON = id, roots
+	row.ID = id
 	client, info, latency, err := s.connect(ctx, row)
 	if err != nil {
 		return View{}, err
@@ -246,11 +242,11 @@ func (s *Service) Update(ctx context.Context, id string, input Input) (View, err
 	if err != nil {
 		return View{}, err
 	}
-	row, roots, err := s.prepare(ctx, id, input)
+	row, err := s.prepare(ctx, id, input)
 	if err != nil {
 		return View{}, err
 	}
-	row.ID, row.CreatedAt, row.AllowedBindRootsJSON = current.ID, current.CreatedAt, roots
+	row.ID, row.CreatedAt = current.ID, current.CreatedAt
 	client, info, latency, err := s.connect(ctx, row)
 	if err != nil {
 		return View{}, err
@@ -264,7 +260,7 @@ func (s *Service) Update(ctx context.Context, id string, input Input) (View, err
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&database.Node{}).Where("id = ?", id).Updates(map[string]any{
 			"name": row.Name, "connection_type": row.ConnectionType, "endpoint": row.Endpoint, "tls_mode": row.TLSMode,
-			"tls_credential_id": row.TLSCredentialID, "allowed_bind_roots_json": roots, "enabled": row.Enabled,
+			"tls_credential_id": row.TLSCredentialID, "enabled": row.Enabled,
 			"engine_id": row.EngineID, "engine_version": row.EngineVersion, "status": row.Status, "last_error": "",
 			"last_latency_ms": latency, "last_checked_at": now,
 		}).Error; err != nil {
@@ -436,29 +432,24 @@ func (s *Service) row(ctx context.Context, id string) (database.Node, error) {
 	return row, s.db.WithContext(ctx).Where("id = ?", id).First(&row).Error
 }
 
-func (s *Service) prepare(ctx context.Context, id string, input Input) (database.Node, string, error) {
+func (s *Service) prepare(ctx context.Context, id string, input Input) (database.Node, error) {
 	input.Name, input.Endpoint = strings.TrimSpace(input.Name), strings.TrimSpace(input.Endpoint)
 	if input.Name == "" || len(input.Name) > 128 {
-		return database.Node{}, "", errors.New("node name is required and must not exceed 128 characters")
+		return database.Node{}, errors.New("node name is required and must not exceed 128 characters")
 	}
 	if err := validateEndpoint(input.ConnectionType, input.Endpoint, input.TLSMode, input.TLSCredentialID); err != nil {
-		return database.Node{}, "", err
+		return database.Node{}, err
 	}
-	roots, encoded, err := normalizeRoots(input.AllowedBindRoots)
-	if err != nil {
-		return database.Node{}, "", err
-	}
-	_ = roots
 	if input.TLSCredentialID != nil {
 		var count int64
 		if err := s.db.WithContext(ctx).Model(&database.DockerTLSCredential{}).Where("id = ?", *input.TLSCredentialID).Count(&count).Error; err != nil {
-			return database.Node{}, "", err
+			return database.Node{}, err
 		}
 		if count == 0 {
-			return database.Node{}, "", errors.New("Docker TLS credential not found")
+			return database.Node{}, errors.New("Docker TLS credential not found")
 		}
 	}
-	return database.Node{ID: id, Name: input.Name, ConnectionType: input.ConnectionType, Endpoint: input.Endpoint, TLSMode: input.TLSMode, TLSCredentialID: input.TLSCredentialID, AllowedBindRootsJSON: encoded, Enabled: input.Enabled, Status: "unknown"}, encoded, nil
+	return database.Node{ID: id, Name: input.Name, ConnectionType: input.ConnectionType, Endpoint: input.Endpoint, TLSMode: input.TLSMode, TLSCredentialID: input.TLSCredentialID, AllowedBindRootsJSON: "[]", Enabled: input.Enabled, Status: "unknown"}, nil
 }
 
 func validateEndpoint(connection, endpoint, tlsMode string, credentialID *uint) error {
@@ -500,29 +491,6 @@ func validateEndpoint(connection, endpoint, tlsMode string, credentialID *uint) 
 		return errors.New("connection type must be unix or tcp")
 	}
 	return nil
-}
-
-func normalizeRoots(values []string) ([]string, string, error) {
-	seen := map[string]bool{}
-	roots := make([]string, 0, len(values))
-	for _, value := range values {
-		value = filepath.Clean(strings.TrimSpace(value))
-		if value == "." || !filepath.IsAbs(value) {
-			return nil, "", errors.New("allowed bind roots must be absolute paths")
-		}
-		for _, forbidden := range []string{"/", "/etc", "/proc", "/sys", "/dev", "/var/run"} {
-			if value == forbidden || strings.HasPrefix(value, forbidden+string(filepath.Separator)) {
-				return nil, "", fmt.Errorf("bind root %q is protected", value)
-			}
-		}
-		if !seen[value] {
-			seen[value] = true
-			roots = append(roots, value)
-		}
-	}
-	sort.Strings(roots)
-	encoded, _ := json.Marshal(roots)
-	return roots, string(encoded), nil
 }
 
 func (s *Service) connect(ctx context.Context, row database.Node) (*docker.Adapter, docker.Info, int64, error) {
@@ -620,9 +588,7 @@ func (s *Service) invalidate(id string) {
 }
 
 func view(row database.Node) View {
-	roots := []string{}
-	_ = json.Unmarshal([]byte(row.AllowedBindRootsJSON), &roots)
-	return View{ID: row.ID, Name: row.Name, ConnectionType: row.ConnectionType, Endpoint: row.Endpoint, TLSMode: row.TLSMode, TLSCredentialID: row.TLSCredentialID, AllowedBindRoots: roots, Enabled: row.Enabled, EngineID: row.EngineID, EngineVersion: row.EngineVersion, Status: row.Status, LastError: row.LastError, LastLatencyMS: row.LastLatencyMS, LastCheckedAt: row.LastCheckedAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+	return View{ID: row.ID, Name: row.Name, ConnectionType: row.ConnectionType, Endpoint: row.Endpoint, TLSMode: row.TLSMode, TLSCredentialID: row.TLSCredentialID, Enabled: row.Enabled, EngineID: row.EngineID, EngineVersion: row.EngineVersion, Status: row.Status, LastError: row.LastError, LastLatencyMS: row.LastLatencyMS, LastCheckedAt: row.LastCheckedAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 }
 
 func newID(name string) (string, error) {

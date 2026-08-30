@@ -14,9 +14,9 @@ const sessionKey = 'suma-demo-session'
 const user: User = { id: 1, username: 'admin', nickname: 'Demo Admin', email: 'admin@suma.demo', has_avatar: false }
 
 const nodes: DockerNode[] = [
-  { id: 'local', name: 'homelab-01', connection_type: 'unix', endpoint: 'unix:///var/run/docker.sock', tls_mode: 'disabled', allowed_bind_roots: ['/srv', '/mnt/data'], enabled: true, engine_id: 'engine-homelab', engine_version: '28.3.3', status: 'online', last_latency_ms: 12, last_checked_at: now, created_at: earlier, updated_at: now },
-  { id: 'edge-hk', name: 'edge-hk', connection_type: 'tcp', endpoint: 'tcp://10.20.0.8:2376', tls_mode: 'required', tls_credential_id: 1, allowed_bind_roots: ['/opt/apps'], enabled: true, engine_id: 'engine-edge-hk', engine_version: '28.3.3', status: 'online', last_latency_ms: 46, last_checked_at: now, created_at: earlier, updated_at: now },
-  { id: 'nas-prod', name: 'nas-prod', connection_type: 'unix', endpoint: 'unix:///var/run/docker.sock', tls_mode: 'disabled', allowed_bind_roots: ['/volume1/docker', '/volume2/media'], enabled: true, engine_id: 'engine-nas-prod', engine_version: '27.5.1', status: 'online', last_latency_ms: 21, last_checked_at: now, created_at: earlier, updated_at: now },
+  { id: 'local', name: 'homelab-01', connection_type: 'unix', endpoint: 'unix:///var/run/docker.sock', tls_mode: 'disabled', enabled: true, engine_id: 'engine-homelab', engine_version: '28.3.3', status: 'online', last_latency_ms: 12, last_checked_at: now, created_at: earlier, updated_at: now },
+  { id: 'edge-hk', name: 'edge-hk', connection_type: 'tcp', endpoint: 'tcp://10.20.0.8:2376', tls_mode: 'required', tls_credential_id: 1, enabled: true, engine_id: 'engine-edge-hk', engine_version: '28.3.3', status: 'online', last_latency_ms: 46, last_checked_at: now, created_at: earlier, updated_at: now },
+  { id: 'nas-prod', name: 'nas-prod', connection_type: 'unix', endpoint: 'unix:///var/run/docker.sock', tls_mode: 'disabled', enabled: true, engine_id: 'engine-nas-prod', engine_version: '27.5.1', status: 'online', last_latency_ms: 21, last_checked_at: now, created_at: earlier, updated_at: now },
 ]
 
 const makeContainer = (id: string, name: string, image: string, state: string, cpu: number, memory: number, labels: Record<string, string>, ports: ContainerSummary['ports']): ContainerSummary => ({

@@ -7,7 +7,6 @@ export interface DockerNode {
   endpoint: string
   tls_mode: 'required' | 'disabled'
   tls_credential_id?: number
-  allowed_bind_roots: string[]
   enabled: boolean
   engine_id?: string
   engine_version?: string

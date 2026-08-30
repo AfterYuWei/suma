@@ -270,7 +270,7 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 	}
 	validatePolicy := func(view node.View, content string) error {
 		if view.ConnectionType == node.ConnectionTCP {
-			return composeService.ValidateRemoteBindMounts(content, view.AllowedBindRoots)
+			return composeService.ValidateRemoteBindMounts(content)
 		}
 		return nil
 	}
@@ -594,7 +594,7 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 	}
 	validatePolicy := func(view node.View, content string) error {
 		if view.ConnectionType == node.ConnectionTCP {
-			return composeService.ValidateRemoteBindMounts(content, view.AllowedBindRoots)
+			return composeService.ValidateRemoteBindMounts(content)
 		}
 		return nil
 	}

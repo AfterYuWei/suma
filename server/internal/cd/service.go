@@ -1293,11 +1293,7 @@ func (s *Service) validateDeploymentTargets(ctx context.Context, projectID uint,
 			}
 			continue
 		}
-		var roots []string
-		if err := json.Unmarshal([]byte(row.AllowedBindRootsJSON), &roots); err != nil {
-			return err
-		}
-		if err := validateRemoteDeploymentPolicy(rendered, roots); err != nil {
+		if err := validateRemoteDeploymentPolicy(rendered); err != nil {
 			return fmt.Errorf("node %s: %w", row.Name, err)
 		}
 	}

@@ -9,9 +9,9 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-// ValidateRemoteBindMounts rejects relative/interpolated host paths and limits
-// absolute bind sources to roots explicitly configured for the remote node.
-func ValidateRemoteBindMounts(content string, allowedRoots []string) error {
+// ValidateRemoteBindMounts rejects unsafe remote bind declarations. Remote host
+// paths must be explicit absolute paths because SUMA cannot resolve them locally.
+func ValidateRemoteBindMounts(content string) error {
 	var document struct {
 		Services map[string]struct {
 			Volumes []any `yaml:"volumes"`
@@ -38,9 +38,6 @@ func ValidateRemoteBindMounts(content string, allowedRoots []string) error {
 			if !filepath.IsAbs(source) {
 				return fmt.Errorf("service %q remote bind source %q must be absolute", serviceName, source)
 			}
-			if !belowAny(source, allowedRoots) {
-				return fmt.Errorf("service %q bind source %q is outside the node allowlist", serviceName, source)
-			}
 		}
 	}
 	return nil
@@ -50,7 +47,9 @@ func bindTarget(raw any) string {
 	switch value := raw.(type) {
 	case string:
 		parts := strings.SplitN(value, ":", 3)
-		if len(parts) > 1 { return strings.TrimSpace(parts[1]) }
+		if len(parts) > 1 {
+			return strings.TrimSpace(parts[1])
+		}
 	case map[string]any:
 		target, _ := value["target"].(string)
 		return strings.TrimSpace(target)
@@ -80,16 +79,4 @@ func bindSource(raw any) (string, bool, error) {
 	default:
 		return "", false, errors.New("unsupported volume declaration")
 	}
-}
-
-func belowAny(path string, roots []string) bool {
-	clean := filepath.Clean(path)
-	for _, root := range roots {
-		root = filepath.Clean(root)
-		relative, err := filepath.Rel(root, clean)
-		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative) {
-			return true
-		}
-	}
-	return false
 }

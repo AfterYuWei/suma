@@ -35,7 +35,7 @@ SUMA V2 is a monolithic, agentless multi-node Docker management application. Nod
 - Never log passwords, registry secrets, session tokens, or sensitive environment values. Mask likely secrets by default in the UI.
 - Confirm destructive actions. Volume deletion must explicitly warn about data loss and require the volume name.
 - Validate identifiers and paths. Compose project files must remain below the configured Compose root.
-- TCP-node bind mounts must use non-interpolated absolute sources inside that node's allowlist. TLS and registry material must use short-lived private temporary files and never enter logs.
+- TCP-node bind mounts must use non-interpolated absolute sources. TLS and registry material must use short-lived private temporary files and never enter logs.
 
 ## Testing and progress
 

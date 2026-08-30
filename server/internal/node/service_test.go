@@ -37,21 +37,6 @@ func TestValidateEndpointSecurity(t *testing.T) {
 	}
 }
 
-func TestNormalizeRootsRejectsProtectedPaths(t *testing.T) {
-	for _, value := range []string{"relative", "/", "/etc/suma", "/var/run/docker"} {
-		if _, _, err := normalizeRoots([]string{value}); err == nil {
-			t.Fatalf("expected %q to be rejected", value)
-		}
-	}
-	roots, encoded, err := normalizeRoots([]string{"/srv/apps", "/srv/apps", "/opt/stacks"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(roots) != 2 || encoded != `["/opt/stacks","/srv/apps"]` {
-		t.Fatalf("unexpected normalized roots: %#v %s", roots, encoded)
-	}
-}
-
 func TestTLSCredentialIsEncryptedAndRedacted(t *testing.T) {
 	db, err := database.Open(filepath.Join(t.TempDir(), "suma.db"))
 	if err != nil {

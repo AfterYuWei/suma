@@ -16,7 +16,6 @@ import { Spinner } from '../components/ui/spinner'
 import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { TooltipHint } from '../components/ui/tooltip-hint'
-import { Textarea } from '../components/ui/textarea'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import type { DockerNode } from '../lib/nodes'
@@ -24,10 +23,10 @@ import { confirmDialog } from '../stores/dialog'
 import { ResourceFrame } from './images'
 
 interface TLSCredential { id: number; name: string; fingerprint: string; authorized_node_ids: string[] }
-interface NodeInput { name: string; connection_type: 'unix' | 'tcp'; endpoint: string; tls_mode: 'required' | 'disabled'; tls_credential_id?: number; allowed_bind_roots: string[]; enabled: boolean }
-interface NodeFormValues extends Omit<NodeInput, 'allowed_bind_roots'> { allowed_bind_roots: string }
+interface NodeInput { name: string; connection_type: 'unix' | 'tcp'; endpoint: string; tls_mode: 'required' | 'disabled'; tls_credential_id?: number; enabled: boolean }
+type NodeFormValues = NodeInput
 
-const blank = (): NodeFormValues => ({ name: '', connection_type: 'unix', endpoint: 'unix:///var/run/docker.sock', tls_mode: 'disabled', allowed_bind_roots: '', enabled: true })
+const blank = (): NodeFormValues => ({ name: '', connection_type: 'unix', endpoint: 'unix:///var/run/docker.sock', tls_mode: 'disabled', enabled: true })
 
 const connectionLabels: Record<string, string> = { unix: 'Unix Socket', tcp: 'Docker TCP' }
 
@@ -40,9 +39,9 @@ export function NodesPage() {
   const [editing, setEditing] = useState<DockerNode | null>(null)
   const [values, setValues] = useState<NodeFormValues>(blank)
   const [open, setOpen] = useState(false)
-  const save = useMutation({ mutationFn: (form: NodeFormValues) => { const input: NodeInput = { ...form, allowed_bind_roots: form.allowed_bind_roots.split('\n').map((item) => item.trim()).filter(Boolean) }; return api<DockerNode>(editing ? `/nodes/${editing.id}` : '/nodes', { method: editing ? 'PUT' : 'POST', body: JSON.stringify(input) }) }, onSuccess: async () => { setOpen(false); await client.invalidateQueries({ queryKey: ['nodes'] }) } })
+  const save = useMutation({ mutationFn: (input: NodeInput) => api<DockerNode>(editing ? `/nodes/${editing.id}` : '/nodes', { method: editing ? 'PUT' : 'POST', body: JSON.stringify(input) }), onSuccess: async () => { setOpen(false); await client.invalidateQueries({ queryKey: ['nodes'] }) } })
   const test = useMutation({ mutationFn: (id: string) => api(`/nodes/${id}/test`, { method: 'POST' }), onSuccess: () => client.invalidateQueries({ queryKey: ['nodes'] }) })
-  const edit = (node: DockerNode) => { setEditing(node); setValues({ name: node.name, connection_type: node.connection_type, endpoint: node.endpoint, tls_mode: node.tls_mode, tls_credential_id: node.tls_credential_id, allowed_bind_roots: node.allowed_bind_roots.join('\n'), enabled: node.enabled }); setOpen(true) }
+  const edit = (node: DockerNode) => { setEditing(node); setValues({ name: node.name, connection_type: node.connection_type, endpoint: node.endpoint, tls_mode: node.tls_mode, tls_credential_id: node.tls_credential_id, enabled: node.enabled }); setOpen(true) }
   const remove = async (node: DockerNode) => { if (!await confirmDialog({ title: zh ? `删除节点 ${node.name}？` : `Delete node ${node.name}?`, description: zh ? '必须先解绑 Compose、CD 和全部凭据授权。历史任务和审计记录会保留。' : 'Compose, CD, and credential grants must be detached first. Historical tasks and audits remain.', confirmLabel: zh ? '删除节点' : 'Delete node', danger: true })) return; await api(`/nodes/${node.id}`, { method: 'DELETE' }); await client.invalidateQueries({ queryKey: ['nodes'] }) }
   const createNode = () => { setEditing(null); setValues(blank()); setOpen(true) }
   const update = (patch: Partial<NodeFormValues>) => setValues((previous) => ({ ...previous, ...patch }))
@@ -153,11 +152,6 @@ export function NodesPage() {
                 </Select>
               </div>
             )}
-            <div className="grid gap-1.5">
-              <Label htmlFor="node-bind-roots">{zh ? '允许的 Bind 根目录' : 'Allowed bind roots'}</Label>
-              <Textarea id="node-bind-roots" rows={5} className="min-h-32" value={values.allowed_bind_roots} onChange={(event) => update({ allowed_bind_roots: event.target.value })} />
-              <p className="text-xs text-muted-foreground">{zh ? '每行一个远端绝对路径；留空会禁止远端 bind mount。' : 'One remote absolute path per line. Empty disables remote bind mounts.'}</p>
-            </div>
           </>}
           <label className="flex items-center gap-2 text-sm">
             <Checkbox checked={values.enabled} onCheckedChange={(checked) => update({ enabled: Boolean(checked) })} />

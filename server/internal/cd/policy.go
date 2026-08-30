@@ -97,7 +97,7 @@ func validateDeploymentPolicy(worktreeRoot string, rendered string) error {
 	return nil
 }
 
-func validateRemoteDeploymentPolicy(rendered string, allowedRoots []string) error {
+func validateRemoteDeploymentPolicy(rendered string) error {
 	var document struct {
 		Services map[string]struct {
 			Image       string           `json:"image"`
@@ -156,18 +156,6 @@ func validateRemoteDeploymentPolicy(rendered string, allowedRoots []string) erro
 			}
 			if strings.Contains(volume.Source, "$") || !filepath.IsAbs(volume.Source) {
 				return fmt.Errorf("%s bind mount %q must be a non-interpolated absolute path", prefix, volume.Source)
-			}
-			allowed := false
-			clean := filepath.Clean(volume.Source)
-			for _, root := range allowedRoots {
-				relative, err := filepath.Rel(filepath.Clean(root), clean)
-				if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative) {
-					allowed = true
-					break
-				}
-			}
-			if !allowed {
-				return fmt.Errorf("%s bind mount %q is outside the node allowlist", prefix, volume.Source)
 			}
 		}
 	}

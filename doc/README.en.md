@@ -12,7 +12,7 @@ SUMA is a single monolithic control plane for multi-node Docker management: mana
 - TCP connections enforce mutual TLS by default; plaintext TCP is only accepted for loopback addresses. TLS material is stored encrypted and authorized per node
 - Global node switcher: flip the active node from the header; resources, Compose, and tasks all follow
 - Automatic probing: node status and latency refresh every 30 seconds with graceful degradation
-- Bind allowlists: on TCP nodes, Compose mount sources must stay within the node's approved host directories
+- Remote bind validation: Compose mount sources on TCP nodes must use non-interpolated absolute paths
 
 ### Fleet overview
 
@@ -144,7 +144,7 @@ Quality checks: `make check` (backend `go test ./...` + `go build ./...`; fronte
    - **Unix Socket**: mount the target machine's `/var/run/docker.sock` into the SUMA container at any path, then register that path;
    - **Docker TCP**: enter the remote endpoint such as `tcp://192.168.1.99:2376`, choose mTLS, and attach a Docker TLS credential.
 2. Use Test Connection to verify reachability and latency.
-3. Configure bind allowlists for TCP nodes to constrain which host directories their Compose projects may mount.
+3. Use explicit absolute host paths for bind mounts on TCP nodes; interpolated and relative sources are rejected.
 
 > Security note: never expose an unauthenticated Docker API (plaintext 2375) on a network. Always use mTLS for remote access. For public deployments, put SUMA behind an HTTPS reverse proxy and enable `SUMA_COOKIE_SECURE=true`.
 
