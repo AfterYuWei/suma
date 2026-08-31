@@ -45,8 +45,8 @@ export function ComposePage() {
   const zh = language === 'zh-CN'
   const query = useQuery({ queryKey: ['projects', nodeID], queryFn: () => api<ProjectSummary[]>(nodePath(nodeID, '/projects')), refetchInterval: 5_000 })
   const trackedTasks = useQuery({
-    queryKey: ['tasks', nodeID],
-    queryFn: () => api<ProjectTask[]>(`/tasks?node_id=${encodeURIComponent(nodeID)}`),
+    queryKey: ['tasks', 'current', nodeID],
+    queryFn: () => api<ProjectTask[]>(nodePath(nodeID, '/tasks')),
     enabled: feedback?.kind === 'task',
     refetchInterval: (current) => {
       if (feedback?.kind !== 'task') return false
@@ -60,7 +60,7 @@ export function ComposePage() {
   })
   const batch = useMutation({
     mutationFn: ({ names, action }: { names: string[]; action: string }) => api(nodePath(nodeID, '/projects/batch'), { method: 'POST', body: JSON.stringify({ backend: 'compose', names, action }) }),
-    onSuccess: async () => { setSelected(new Set()); await Promise.all([client.invalidateQueries({ queryKey: ['projects', nodeID] }), client.invalidateQueries({ queryKey: ['tasks', nodeID] })]) },
+    onSuccess: async () => { setSelected(new Set()); await Promise.all([client.invalidateQueries({ queryKey: ['projects', nodeID] }), client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] })]) },
   })
   const rows = query.data ?? []
   const manageable = rows.filter((row) => row.managed)
@@ -121,7 +121,7 @@ function projectFeedbackView(feedback: ProjectFeedback | null, task: ProjectTask
 function ProjectActions({ row, zh, onTakeover, onFeedback }: { row: ProjectSummary; zh: boolean; onTakeover: () => void; onFeedback: (feedback: ProjectFeedback) => void }) {
   const nodeID = useUIStore((state) => state.currentNodeID)
   const client = useQueryClient()
-  const action = useMutation({ mutationFn: (name: string) => api<ProjectTask>(nodePath(nodeID, `/projects/compose/${encodeURIComponent(row.name)}/actions/${name}`), { method: 'POST' }), onMutate: (name) => onFeedback({ kind: 'pending', projectName: row.name, action: name }), onSuccess: (task, name) => { onFeedback({ kind: 'task', projectName: row.name, action: name, taskID: task.id }); void client.invalidateQueries({ queryKey: ['projects', nodeID] }); void client.invalidateQueries({ queryKey: ['tasks', nodeID] }) }, onError: (error, name) => onFeedback({ kind: 'error', projectName: row.name, action: name, message: error.message }) })
+  const action = useMutation({ mutationFn: (name: string) => api<ProjectTask>(nodePath(nodeID, `/projects/compose/${encodeURIComponent(row.name)}/actions/${name}`), { method: 'POST' }), onMutate: (name) => onFeedback({ kind: 'pending', projectName: row.name, action: name }), onSuccess: (task, name) => { onFeedback({ kind: 'task', projectName: row.name, action: name, taskID: task.id }); void client.invalidateQueries({ queryKey: ['projects', nodeID] }); void client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] }) }, onError: (error, name) => onFeedback({ kind: 'error', projectName: row.name, action: name, message: error.message }) })
   const remove = useMutation({
     mutationFn: () => api(nodePath(nodeID, `/projects/compose/${encodeURIComponent(row.name)}?confirm=${encodeURIComponent(row.name)}`), { method: 'DELETE' }),
     onMutate: () => onFeedback({ kind: 'pending', projectName: row.name, action: 'remove' }),

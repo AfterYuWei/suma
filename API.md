@@ -10,8 +10,10 @@ Node-aware clients use these routes:
 - `GET /nodes/:nodeID/{overview,docker/info}`
 - `GET|POST|PUT|PATCH|DELETE /nodes/:nodeID/{containers,images,networks,volumes,projects}/...`
 - `POST /nodes/:nodeID/system/prune`
+- `GET /nodes/:nodeID/tasks`, `GET /nodes/:nodeID/tasks/:taskID`, `GET /nodes/:nodeID/tasks/:taskID/{logs|steps}`, `POST /nodes/:nodeID/tasks/:taskID/cancel`
+- `GET /nodes/:nodeID/audit-logs`
 
-The resource routes listed below remain deprecated aliases for the migrated default node. `GET /health` reports only control-plane/database health; a disconnected Docker node does not make it fail. `GET /tasks` and `GET /audit-logs` accept `node_id` filters.
+The resource routes listed below remain deprecated aliases for the migrated default node. `GET /health` reports only control-plane/database health; a disconnected Docker node does not make it fail. Legacy `node_id` filters validate that the node exists. Global `GET /tasks` and `GET /audit-logs` accept `scope=control_plane|all` and default to `control_plane`.
 
 - `GET /health`, `GET /docker/info`
 - `GET /auth/status`, `POST /auth/initialize`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/session`
@@ -22,7 +24,7 @@ The resource routes listed below remain deprecated aliases for the migrated defa
 - `GET|POST /volumes`, `GET|DELETE /volumes/:id`
 - Deprecated default-node aliases remain under `/compose`; there is no legacy single-file copy operation.
 - `GET /overview` for live host CPU, memory, disk, network, uptime, platform, and Docker summary data
-- `GET /tasks`, `GET /tasks/:id/logs`, `POST /tasks/:id/cancel`
+- `GET /tasks`, `GET /tasks/:id`, `GET /tasks/:id/{logs|steps}`, `POST /tasks/:id/cancel`
 - `GET /audit-logs`, `GET|PUT /settings`
 - `POST /system/prune` starts a confirmed task for unused containers, networks, dangling images, and anonymous volumes
 
@@ -96,6 +98,8 @@ Authenticated routes:
 - `GET /delivery-projects/:name/releases` lists up to 100 releases, newest first.
 - `GET /delivery-projects/:name/releases/:releaseID` reads one release.
 - `POST /delivery-projects/:name/releases/:releaseID/{approve|reject|deploy|rollback}` performs the corresponding release transition.
+- `POST /delivery-projects/:name/releases/:releaseID/remediations/retry-failed` retries only server-selected failed, interrupted, or auto-rolled-back target snapshots.
+- `POST /delivery-projects/:name/releases/:releaseID/remediations/rollback-failed` restores each eligible failed target to its own `previous_release_id`; it does not create a release.
 
 A representative `PUT /delivery-projects/:name/configuration` body is:
 
@@ -199,7 +203,11 @@ SUMA still fetches its stored clone URL; the request cannot choose a Compose fil
 
 Only one synchronization, approval/rejection, deployment, or rollback may be queued for a project at a time. `approve` and `reject` complete synchronously. Deployment and rollback return tasks whose final Task and Audit result reflects the asynchronous outcome.
 
-Deployment pulls declared images, runs `docker compose up -d --remove-orphans --wait`, then requires every reported service to be running and, when a health status exists, healthy. Drift reports both Git commit differences and missing/unhealthy active containers.
+Deployment pulls declared images, runs `docker compose up -d --remove-orphans --wait`, then requires every reported service to be running and, when a health status exists, healthy. Each node operation creates an immutable Deployment Attempt (`deploy`, `retry`, `manual_rollback`, or `auto_rollback`) linked to its child Task. The Deployment row remains the latest per-release/node summary.
+
+Drift probes every current target through its own Compose target with a five-second node timeout, concurrency capped at eight, and a five-second shared cache. `status` is `healthy`, `degraded`, or `unknown`; an unreachable node is unknown without being falsely marked drifted, while any confirmed commit/runtime failure makes the aggregate degraded. `nodes` carries the active release/commit, reason code, health summary, and check time for each target. Project-level active release/commit is present only when all current targets agree.
+
+On startup, SUMA atomically marks nonterminal Attempts `interrupted`, their Deployment summaries failed, and pending/running parent and child Tasks canceled, then recomputes Release and project aggregates. Recovery never connects to Docker, retries, or rolls back automatically.
 
 Rollback creates a new release record from a previously `succeeded` or `rolled_back` release; it does not rewrite the old record. If the project was in `auto` mode, a manual rollback first changes it to `manual` so polling cannot immediately redeploy the newer Git revision. A failed `docker compose up` may trigger automatic restoration when `auto_rollback` is enabled; that path also switches reconciliation to `manual`. Re-enable `auto` explicitly only after Git and the desired runtime state have been reconciled.
 
@@ -209,6 +217,7 @@ Rollback creates a new release record from a previously `succeeded` or `rolled_b
 - `/ws/containers/:id/stats` streams Docker Stats JSON samples.
 - `/ws/containers/:id/terminal` streams binary terminal output and accepts binary input or JSON `{type:"input",data}` / `{type:"resize",cols,rows}`.
 - `/ws/tasks/:id` replays retained task logs and streams progress/status events, including CD sync, delivery, and rollback tasks.
+- `/ws/nodes/:nodeID/tasks/:taskID` is the canonical node-task stream. The node and exact task scope/ownership are checked before WebSocket upgrade.
 
 All WebSockets require the same session cookie as REST. Disconnecting cancels the underlying context and closes Docker streams or exec sessions.
 

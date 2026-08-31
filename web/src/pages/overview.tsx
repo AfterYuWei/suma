@@ -55,10 +55,10 @@ export function OverviewPage() {
 
   const fleet = useQuery({ queryKey: ['fleet-overview'], queryFn: () => api<FleetOverview>('/fleet/overview'), refetchInterval: 15_000 })
   const cd = useQuery({ queryKey: ['cd-overview'], queryFn: () => api<CDOverview>('/cd/overview'), refetchInterval: 10_000 })
-  const tasks = useQuery({ queryKey: ['tasks'], queryFn: () => api<Task[]>('/tasks'), refetchInterval: 10_000 })
+  const tasks = useQuery({ queryKey: ['tasks', 'all'], queryFn: () => api<Task[]>('/tasks?scope=all'), refetchInterval: 10_000 })
   const overview = useQuery({ queryKey: ['overview', effectiveNodeID], queryFn: () => api<NodeOverview>(nodePath(effectiveNodeID, '/overview')), refetchInterval: 10_000 })
   const containers = useQuery({ queryKey: ['containers', effectiveNodeID], queryFn: () => api<ContainerSummary[]>(nodePath(effectiveNodeID, '/containers')), refetchInterval: 10_000 })
-  const audits = useQuery({ queryKey: ['audit-logs', effectiveNodeID], queryFn: () => api<Audit[]>(`/audit-logs?node_id=${encodeURIComponent(effectiveNodeID)}`) })
+  const audits = useQuery({ queryKey: ['audit-logs', 'current', effectiveNodeID], queryFn: () => api<Audit[]>(nodePath(effectiveNodeID, '/audit-logs')) })
   const networks = useQuery({ queryKey: ['networks', effectiveNodeID], queryFn: () => api<unknown[]>(nodePath(effectiveNodeID, '/networks')) })
   const volumes = useQuery({ queryKey: ['volumes', effectiveNodeID], queryFn: () => api<unknown[]>(nodePath(effectiveNodeID, '/volumes')) })
   const projects = useQuery({ queryKey: ['projects', effectiveNodeID], queryFn: () => api<unknown[]>(nodePath(effectiveNodeID, '/projects')) })

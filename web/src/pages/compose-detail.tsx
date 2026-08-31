@@ -83,7 +83,7 @@ export function ComposeDetailPage() {
     mutationFn: (name: string) => api(nodePath(nodeID, `/projects/compose/${encodedName}/actions/${name}`), { method: 'POST' }),
     onSuccess: () => {
       setNotice(zh ? '任务已启动。' : 'Task started.')
-      void client.invalidateQueries({ queryKey: ['tasks', nodeID] })
+      void client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] })
     },
     onError: (error) => setNotice(error.message),
   })

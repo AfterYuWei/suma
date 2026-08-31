@@ -65,12 +65,45 @@ export interface CDConfigureInput {
 
 export interface CDDrift {
   drifted: boolean
+  status: 'healthy' | 'degraded' | 'unknown'
   desired_commit: string
   observed_commit: string
   active_commit: string
   active_release_id?: number
   reason?: string
+  reason_code?: string
   runtime_healthy: boolean
+  checked_at: string
+  nodes: CDNodeDrift[]
+}
+
+export interface CDNodeDrift {
+  node_id: string
+  node_name: string
+  status: 'healthy' | 'degraded' | 'unknown'
+  drifted: boolean
+  active_release_id?: number
+  active_commit?: string
+  reason_code?: string
+  reason?: string
+  health_summary?: string
+  checked_at: string
+}
+
+export interface DeliveryDeploymentAttempt {
+  id: number
+  deployment_id: number
+  operation: 'deploy' | 'retry' | 'manual_rollback' | 'auto_rollback'
+  target_release_id: number
+  task_id?: string
+  status: string
+  failure_reason?: string
+  health_summary?: string
+  started_at?: string
+  finished_at?: string
+  created_at: string
+  progress?: number
+  message?: string
 }
 
 export interface DeliveryRelease {
@@ -97,7 +130,11 @@ export interface DeliveryRelease {
   health_summary?: string
   created_at: string
   updated_at: string
-	deployments?: { id: number; node_id: string; node_name: string; task_id?: string; status: string; previous_release_id?: number; failure_reason?: string; rollback_result?: string; health_summary?: string; started_at?: string; finished_at?: string }[]
+  deployments?: { id: number; node_id: string; node_name: string; task_id?: string; status: string; previous_release_id?: number; failure_reason?: string; rollback_result?: string; health_summary?: string; started_at?: string; finished_at?: string; progress?: number; message?: string; attempts?: DeliveryDeploymentAttempt[] }[]
+  remediation: {
+    retry_failed_node_ids: string[]
+    rollback_failed_node_ids: string[]
+  }
 }
 
 export interface GitCredential {

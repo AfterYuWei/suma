@@ -74,16 +74,16 @@ const volumes = [
 ]
 
 const tasks = [
-  { id: 'task-release-184', type: 'delivery', name: 'Deploy gateway-prod release #184', status: 'success', progress: 100, message: 'Health gate passed on 2 nodes', created_at: '2026-08-29T08:14:00.000Z' },
-  { id: 'task-pull-183', type: 'image_pull', name: 'Pull ghcr.io/afteryuwei/gateway:1.8.2', status: 'success', progress: 100, message: 'Image pulled', created_at: '2026-08-29T07:52:00.000Z' },
-  { id: 'task-prune-182', type: 'system_prune', name: 'Docker system prune', status: 'success', progress: 100, message: 'Reclaimed 768 MB', created_at: '2026-08-28T22:30:00.000Z' },
+  { id: 'task-release-184', scope: 'control_plane', type: 'delivery', name: 'Deploy gateway-prod release #184', status: 'success', progress: 100, message: 'Health gate passed on 2 nodes', created_at: '2026-08-29T08:14:00.000Z' },
+  { id: 'task-pull-183', scope: 'node', node_id: 'local', node_name: 'homelab-01', type: 'image_pull', name: 'Pull ghcr.io/afteryuwei/gateway:1.8.2', status: 'success', progress: 100, message: 'Image pulled', created_at: '2026-08-29T07:52:00.000Z' },
+  { id: 'task-prune-182', scope: 'node', node_id: 'local', node_name: 'homelab-01', type: 'system_prune', name: 'Docker system prune', status: 'success', progress: 100, message: 'Reclaimed 768 MB', created_at: '2026-08-28T22:30:00.000Z' },
 ]
 
 const audits = [
-  { id: 18, node_id: 'local', node_name: 'homelab-01', user_id: 1, action: 'container.restart', resource_type: 'container', resource_name: containerSets.local[0].id, ip: '192.168.1.36', result: 'success', created_at: '2026-08-29T08:25:00.000Z' },
-  { id: 17, node_id: 'local', node_name: 'homelab-01', user_id: 1, action: 'project.deploy', resource_type: 'project', resource_name: 'gateway-prod', ip: '192.168.1.36', result: 'success', created_at: '2026-08-29T08:14:00.000Z' },
-  { id: 16, node_id: 'edge-hk', node_name: 'edge-hk', user_id: 1, action: 'node.test', resource_type: 'node', resource_name: 'edge-hk', ip: '192.168.1.36', result: 'success', created_at: '2026-08-29T07:58:00.000Z' },
-  { id: 15, node_id: 'local', node_name: 'homelab-01', user_id: 1, action: 'image.pull', resource_type: 'image', resource_name: 'ghcr.io/afteryuwei/gateway:1.8.2', ip: '192.168.1.36', result: 'success', created_at: '2026-08-29T07:52:00.000Z' },
+  { id: 18, scope: 'node', node_id: 'local', node_name: 'homelab-01', user_id: 1, action: 'container.restart', resource_type: 'container', resource_name: containerSets.local[0].id, ip: '192.168.1.36', result: 'success', created_at: '2026-08-29T08:25:00.000Z' },
+  { id: 17, scope: 'node', node_id: 'local', node_name: 'homelab-01', user_id: 1, action: 'project.deploy', resource_type: 'project', resource_name: 'gateway-prod', ip: '192.168.1.36', result: 'success', created_at: '2026-08-29T08:14:00.000Z' },
+  { id: 16, scope: 'control_plane', user_id: 1, action: 'node.test', resource_type: 'node', resource_name: 'edge-hk', ip: '192.168.1.36', result: 'success', created_at: '2026-08-29T07:58:00.000Z' },
+  { id: 15, scope: 'node', node_id: 'local', node_name: 'homelab-01', user_id: 1, action: 'image.pull', resource_type: 'image', resource_name: 'ghcr.io/afteryuwei/gateway:1.8.2', ip: '192.168.1.36', result: 'success', created_at: '2026-08-29T07:52:00.000Z' },
 ]
 
 const deliveryProjects: DeliveryProject[] = [
@@ -94,8 +94,8 @@ const deliveryProjects: DeliveryProject[] = [
 const cdConfiguration = (name: string): CDConfiguration => ({ configured: true, repository: { clone_url: `https://github.com/example/${name}.git`, ref_type: 'branch', ref: name === 'gateway-prod' ? 'main' : 'stable', authentication: { source: 'center', credential_id: 1, summary: { name: 'GitHub Demo', auth_type: 'http_token', username: 'suma-demo' } }, compose_files: ['compose.yml'], environment_file: '.env' }, reconcile_mode: name === 'gateway-prod' ? 'auto' : 'manual', sync_interval_seconds: 300, desired_commit: name === 'gateway-prod' ? '7a31f0c87aa1' : 'f4c9a82e10d2', observed_commit: name === 'gateway-prod' ? '7a31f0c87aa1' : 'f4c9a82e10d2', active_release_id: name === 'gateway-prod' ? 184 : 181, auto_rollback: true, deployment_timeout: 180, webhook_enabled: true, webhook_id: `demo-${name}`, webhook_secret: '', node_ids: name === 'gateway-prod' ? ['local', 'edge-hk'] : ['local', 'nas-prod'], registry_credential_ids: [1] })
 
 const releases: DeliveryRelease[] = [
-  { id: 184, project_id: 1, repository_url: 'https://github.com/example/gateway.git', git_ref: 'main', commit_sha: '7a31f0c87aa1', commit_message: 'feat: expose fleet overview', commit_author: 'Demo Maintainer', config_hash: 'cfg-184', image_references: JSON.stringify(['ghcr.io/afteryuwei/gateway:1.8.2']), task_id: 'task-release-184', status: 'succeeded', trigger_type: 'webhook', trigger_actor: 'github', previous_release_id: 183, compose_files: JSON.stringify(['compose.yml']), approved_by: 1, approved_at: earlier, started_at: earlier, finished_at: now, health_summary: '2/2 targets healthy', created_at: earlier, updated_at: now, deployments: [{ id: 1, node_id: 'local', node_name: 'homelab-01', status: 'succeeded', health_summary: 'healthy', started_at: earlier, finished_at: now }, { id: 2, node_id: 'edge-hk', node_name: 'edge-hk', status: 'succeeded', health_summary: 'healthy', started_at: earlier, finished_at: now }] },
-  { id: 183, project_id: 1, repository_url: 'https://github.com/example/gateway.git', git_ref: 'main', commit_sha: 'a81d3e90d4c2', commit_message: 'fix: retain proxy headers', commit_author: 'Demo Maintainer', config_hash: 'cfg-183', image_references: JSON.stringify(['ghcr.io/afteryuwei/gateway:1.8.1']), status: 'succeeded', trigger_type: 'manual', trigger_actor: 'admin', compose_files: JSON.stringify(['compose.yml']), started_at: earlier, finished_at: earlier, health_summary: '2/2 targets healthy', created_at: earlier, updated_at: earlier },
+  { id: 184, project_id: 1, repository_url: 'https://github.com/example/gateway.git', git_ref: 'main', commit_sha: '7a31f0c87aa1', commit_message: 'feat: expose fleet overview', commit_author: 'Demo Maintainer', config_hash: 'cfg-184', image_references: JSON.stringify(['ghcr.io/afteryuwei/gateway:1.8.2']), task_id: 'task-release-184', status: 'succeeded', trigger_type: 'webhook', trigger_actor: 'github', previous_release_id: 183, compose_files: JSON.stringify(['compose.yml']), approved_by: 1, approved_at: earlier, started_at: earlier, finished_at: now, health_summary: '2/2 targets healthy', created_at: earlier, updated_at: now, remediation: { retry_failed_node_ids: [], rollback_failed_node_ids: [] }, deployments: [{ id: 1, node_id: 'local', node_name: 'homelab-01', status: 'succeeded', health_summary: 'healthy', started_at: earlier, finished_at: now, attempts: [{ id: 1, deployment_id: 1, operation: 'deploy', target_release_id: 184, status: 'succeeded', health_summary: 'healthy', started_at: earlier, finished_at: now, created_at: earlier }] }, { id: 2, node_id: 'edge-hk', node_name: 'edge-hk', status: 'succeeded', health_summary: 'healthy', started_at: earlier, finished_at: now }] },
+  { id: 183, project_id: 1, repository_url: 'https://github.com/example/gateway.git', git_ref: 'main', commit_sha: 'a81d3e90d4c2', commit_message: 'fix: retain proxy headers', commit_author: 'Demo Maintainer', config_hash: 'cfg-183', image_references: JSON.stringify(['ghcr.io/afteryuwei/gateway:1.8.1']), status: 'succeeded', trigger_type: 'manual', trigger_actor: 'admin', compose_files: JSON.stringify(['compose.yml']), started_at: earlier, finished_at: earlier, health_summary: '2/2 targets healthy', created_at: earlier, updated_at: earlier, remediation: { retry_failed_node_ids: [], rollback_failed_node_ids: [] } },
 ]
 
 const gitCredentials: GitCredential[] = [{ id: 1, name: 'GitHub Demo', auth_type: 'http_token', username: 'suma-demo', fingerprint: 'sha256:3c92…7ab1', created_at: earlier, updated_at: now, last_used_at: now, used_by: 2, authorized_node_ids: ['local', 'edge-hk', 'nas-prod'] }]
@@ -144,11 +144,17 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (pathname === '/cd/overview') return clone({ projects: deliveryProjects.map((project) => ({ name: project.name, configured: true, repository_url: project.repository_url, git_ref: project.git_ref, reconcile_mode: project.name === 'gateway-prod' ? 'auto' : 'manual', node_ids: project.node_ids, drifted: false, runtime_healthy: true, active_release: { id: project.active_release_id, status: 'succeeded', commit_sha: project.desired_commit, trigger_type: 'webhook', created_at: now }, latest_release: { id: project.active_release_id, status: 'succeeded', commit_sha: project.desired_commit, trigger_type: 'webhook', created_at: now }, awaiting_approval: false, releasing: false })), totals: { projects: 2, configured: 2, releasing: 0, awaiting_approval: 0, drifted: 0, healthy: 2 } }) as T
 
-  if (pathname === '/tasks' || pathname.startsWith('/tasks?')) return clone(tasks) as T
+  if (pathname === '/tasks') {
+    const scope = url.searchParams.get('scope') || 'control_plane'
+    return clone(scope === 'all' ? tasks : tasks.filter((item) => item.scope === scope)) as T
+  }
   if (/^\/tasks\/[^/]+\/logs$/.test(pathname)) return clone([{ id: 1, level: 'info', message: 'Task accepted by SUMA task service', created_at: earlier }, { id: 2, level: 'info', message: 'Docker operation completed successfully', created_at: now }]) as T
   if (/^\/tasks\/[^/]+\/steps$/.test(pathname)) return clone([{ id: 'download', status: 'success', current: 1, total: 1, progress: 100 }, { id: 'extract', status: 'success', current: 1, total: 1, progress: 100 }]) as T
   if (/^\/tasks\/[^/]+\/cancel$/.test(pathname)) return {} as T
-  if (pathname === '/audit-logs') return clone(audits.filter((item) => !url.searchParams.get('node_id') || item.node_id === url.searchParams.get('node_id'))) as T
+  if (pathname === '/audit-logs') {
+    const scope = url.searchParams.get('scope') || 'control_plane'
+    return clone(scope === 'all' ? audits : audits.filter((item) => item.scope === scope)) as T
+  }
 
   if (pathname === '/credentials/git' && method === 'GET') return clone(gitCredentials) as T
   if (pathname === '/credentials/registries' && method === 'GET') return clone(registryCredentials) as T
@@ -168,7 +174,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     const project = deliveryProjects.find((item) => item.name === name) ?? deliveryProjects[0]
     if (!suffix && method === 'GET') return clone(project) as T
     if (suffix === '/configuration') return clone(cdConfiguration(name)) as T
-    if (suffix === '/drift') return clone({ drifted: false, desired_commit: project.desired_commit ?? '', observed_commit: project.observed_commit ?? '', active_commit: project.observed_commit ?? '', active_release_id: project.active_release_id, runtime_healthy: true } satisfies CDDrift) as T
+    if (suffix === '/drift') return clone({ drifted: false, status: 'healthy', desired_commit: project.desired_commit ?? '', observed_commit: project.observed_commit ?? '', active_commit: project.observed_commit ?? '', active_release_id: project.active_release_id, runtime_healthy: true, checked_at: now, nodes: project.node_ids.map((nodeID) => ({ node_id: nodeID, node_name: nodes.find((item) => item.id === nodeID)?.name ?? nodeID, status: 'healthy' as const, drifted: false, active_release_id: project.active_release_id, active_commit: project.observed_commit, health_summary: '[{"State":"running","Health":"healthy"}]', checked_at: now })) } satisfies CDDrift) as T
     if (suffix === '/releases') return clone(releases.map((release) => ({ ...release, project_id: project.id }))) as T
     return {} as T
   }
@@ -178,6 +184,11 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     const nodeID = nodeMatch[1]
     const suffix = nodeMatch[2] || ''
     const containers = nodeContainers(nodeID)
+    if (suffix === '/tasks') return clone(tasks.filter((item) => item.scope === 'node' && item.node_id === nodeID)) as T
+    if (/^\/tasks\/[^/]+\/logs$/.test(suffix)) return clone([{ id: 1, level: 'info', message: 'Task accepted by SUMA task service', created_at: earlier }, { id: 2, level: 'info', message: 'Docker operation completed successfully', created_at: now }]) as T
+    if (/^\/tasks\/[^/]+\/steps$/.test(suffix)) return clone([{ id: 'download', status: 'success', current: 1, total: 1, progress: 100 }, { id: 'extract', status: 'success', current: 1, total: 1, progress: 100 }]) as T
+    if (/^\/tasks\/[^/]+\/cancel$/.test(suffix)) return {} as T
+    if (suffix === '/audit-logs') return clone(audits.filter((item) => item.scope === 'node' && item.node_id === nodeID)) as T
     if (suffix === '/overview') {
       const running = containers.filter((item) => item.state === 'running')
       return clone({ host: { hostname: nodes.find((item) => item.id === nodeID)?.name ?? nodeID, os: 'Ubuntu 24.04.3 LTS', kernel: '6.8.0-71-generic', architecture: 'x86_64', cpus: 8, uptime_seconds: 1_284_220, cpu_percent: 31.4, memory_used: 6_978_321_408, memory_total: 17_179_869_184, disk_used: 184_683_593_728, disk_total: 512_110_190_592 }, containers: { cpu_percent: running.reduce((sum, item) => sum + item.cpu_percent, 0), memory_bytes: running.reduce((sum, item) => sum + item.memory_bytes, 0) }, docker: { server_version: nodes.find((item) => item.id === nodeID)?.engine_version ?? '28.3.3', containers_running: running.length, containers_stopped: containers.length - running.length, images: images.length }, docker_disk_usage_bytes: 14_495_514_624 }) as T

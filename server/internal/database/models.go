@@ -91,20 +91,45 @@ type DeliveryProjectRegistryCredential struct {
 }
 
 type DeliveryReleaseDeployment struct {
-	ID                uint       `gorm:"primaryKey" json:"id"`
-	ReleaseID         uint       `gorm:"index;not null" json:"release_id"`
-	NodeID            string     `gorm:"size:64;index;not null" json:"node_id"`
-	NodeName          string     `gorm:"size:128;not null" json:"node_name"`
-	TaskID            string     `gorm:"size:36;index" json:"task_id,omitempty"`
-	Status            string     `gorm:"size:32;index;not null" json:"status"`
-	PreviousReleaseID *uint      `gorm:"index" json:"previous_release_id,omitempty"`
-	FailureReason     string     `json:"failure_reason,omitempty"`
-	RollbackResult    string     `gorm:"size:32" json:"rollback_result,omitempty"`
-	HealthSummary     string     `json:"health_summary,omitempty"`
-	StartedAt         *time.Time `json:"started_at,omitempty"`
-	FinishedAt        *time.Time `json:"finished_at,omitempty"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
+	ID                uint                        `gorm:"primaryKey" json:"id"`
+	ReleaseID         uint                        `gorm:"index;uniqueIndex:idx_release_node;not null" json:"release_id"`
+	NodeID            string                      `gorm:"size:64;index;uniqueIndex:idx_release_node;not null" json:"node_id"`
+	NodeName          string                      `gorm:"size:128;not null" json:"node_name"`
+	TaskID            string                      `gorm:"size:36;index" json:"task_id,omitempty"`
+	Status            string                      `gorm:"size:32;index;not null" json:"status"`
+	PreviousReleaseID *uint                       `gorm:"index" json:"previous_release_id,omitempty"`
+	FailureReason     string                      `json:"failure_reason,omitempty"`
+	RollbackResult    string                      `gorm:"size:32" json:"rollback_result,omitempty"`
+	HealthSummary     string                      `json:"health_summary,omitempty"`
+	StartedAt         *time.Time                  `json:"started_at,omitempty"`
+	FinishedAt        *time.Time                  `json:"finished_at,omitempty"`
+	CreatedAt         time.Time                   `json:"created_at"`
+	UpdatedAt         time.Time                   `json:"updated_at"`
+	Attempts          []DeliveryDeploymentAttempt `gorm:"-" json:"attempts,omitempty"`
+	Progress          int                         `gorm:"-" json:"progress,omitempty"`
+	Message           string                      `gorm:"-" json:"message,omitempty"`
+}
+
+type DeliveryDeploymentAttempt struct {
+	ID              uint       `gorm:"primaryKey" json:"id"`
+	DeploymentID    uint       `gorm:"index;not null" json:"deployment_id"`
+	Operation       string     `gorm:"size:32;index;not null" json:"operation"`
+	TargetReleaseID uint       `gorm:"index;not null" json:"target_release_id"`
+	TaskID          string     `gorm:"size:36;index" json:"task_id,omitempty"`
+	Status          string     `gorm:"size:32;index;not null" json:"status"`
+	FailureReason   string     `json:"failure_reason,omitempty"`
+	HealthSummary   string     `json:"health_summary,omitempty"`
+	StartedAt       *time.Time `json:"started_at,omitempty"`
+	FinishedAt      *time.Time `json:"finished_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	Progress        int        `gorm:"-" json:"progress,omitempty"`
+	Message         string     `gorm:"-" json:"message,omitempty"`
+}
+
+type RemediationCapabilities struct {
+	RetryFailedNodeIDs    []string `json:"retry_failed_node_ids"`
+	RollbackFailedNodeIDs []string `json:"rollback_failed_node_ids"`
 }
 
 type DeliveryTargetState struct {
@@ -134,6 +159,7 @@ type DeliveryProject struct {
 	SyncIntervalSeconds int    `gorm:"not null;default:300"`
 	DesiredCommit       string `gorm:"size:64"`
 	ObservedCommit      string `gorm:"size:64"`
+	ActiveCommit        string `gorm:"size:64"`
 	ActiveReleaseID     *uint  `gorm:"index"`
 	AutoRollback        bool
 	DeploymentTimeout   int    `gorm:"not null;default:120"`
@@ -220,6 +246,7 @@ type DeliveryRelease struct {
 	CreatedAt         time.Time                   `json:"created_at"`
 	UpdatedAt         time.Time                   `json:"updated_at"`
 	Deployments       []DeliveryReleaseDeployment `gorm:"-" json:"deployments,omitempty"`
+	Remediation       RemediationCapabilities     `gorm:"-" json:"remediation"`
 }
 
 type GitWebhookDelivery struct {
@@ -239,7 +266,8 @@ type GitWebhookDelivery struct {
 
 type Task struct {
 	ID         string     `gorm:"primaryKey;size:36" json:"id"`
-	NodeID     string     `gorm:"size:64;not null;default:local;index" json:"node_id"`
+	Scope      string     `gorm:"size:24;not null;default:node;index" json:"scope"`
+	NodeID     string     `gorm:"size:64;not null;default:'';index" json:"node_id,omitempty"`
 	NodeName   string     `gorm:"size:128" json:"node_name,omitempty"`
 	Type       string     `gorm:"size:64;not null" json:"type"`
 	Name       string     `gorm:"not null" json:"name"`
@@ -272,7 +300,8 @@ type TaskStep struct {
 
 type AuditLog struct {
 	ID           uint      `gorm:"primaryKey" json:"id"`
-	NodeID       string    `gorm:"size:64;not null;default:local;index" json:"node_id"`
+	Scope        string    `gorm:"size:24;not null;default:node;index" json:"scope"`
+	NodeID       string    `gorm:"size:64;not null;default:'';index" json:"node_id,omitempty"`
 	NodeName     string    `gorm:"size:128" json:"node_name,omitempty"`
 	UserID       *uint     `gorm:"index" json:"user_id,omitempty"`
 	Action       string    `gorm:"size:64;not null;index" json:"action"`

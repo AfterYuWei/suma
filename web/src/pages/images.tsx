@@ -46,12 +46,12 @@ export function ImagesPage() {
   const query = useQuery({ queryKey: ['images', nodeID], queryFn: () => api<Image[]>(nodePath(nodeID, '/images')) })
   const detail = useQuery({ queryKey: ['image', nodeID, detailImageID], queryFn: () => api<Image>(nodePath(nodeID, `/images/${encodeURIComponent(detailImageID)}`)), enabled: !!detailImageID })
   const credentials = useQuery({ queryKey: ['registry-credentials'], queryFn: () => api<RegistryCredential[]>('/credentials/registries') })
-  const pull = useMutation({ mutationFn: () => api<PullTask>(nodePath(nodeID, '/images/pull'), { method: 'POST', body: JSON.stringify({ reference: reference.trim(), credential_id: credentialID ? Number(credentialID) : undefined }) }), onSuccess: (task) => { setPullTaskID(task.id); client.invalidateQueries({ queryKey: ['tasks', nodeID] }) } })
-  const pullTasks = useQuery({ queryKey: ['tasks', nodeID], queryFn: () => api<PullTask[]>(`/tasks?node_id=${encodeURIComponent(nodeID)}`), enabled: !!pullTaskID, refetchInterval: (result) => {
+  const pull = useMutation({ mutationFn: () => api<PullTask>(nodePath(nodeID, '/images/pull'), { method: 'POST', body: JSON.stringify({ reference: reference.trim(), credential_id: credentialID ? Number(credentialID) : undefined }) }), onSuccess: (task) => { setPullTaskID(task.id); client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] }) } })
+  const pullTasks = useQuery({ queryKey: ['tasks', 'current', nodeID], queryFn: () => api<PullTask[]>(nodePath(nodeID, '/tasks')), enabled: !!pullTaskID, refetchInterval: (result) => {
     const task = result.state.data?.find((row) => row.id === pullTaskID)
     return task && ['success', 'failed', 'canceled'].includes(task.status) ? false : 1_000
   } })
-  const cancelPull = useMutation({ mutationFn: (id: string) => api(`/tasks/${encodeURIComponent(id)}/cancel`, { method: 'POST' }), onSuccess: () => client.invalidateQueries({ queryKey: ['tasks', nodeID] }) })
+  const cancelPull = useMutation({ mutationFn: (id: string) => api(nodePath(nodeID, `/tasks/${encodeURIComponent(id)}/cancel`), { method: 'POST' }), onSuccess: () => client.invalidateQueries({ queryKey: ['tasks'] }) })
   const remove = useMutation({ mutationFn: (id: string) => api(nodePath(nodeID, `/images/${encodeURIComponent(id)}?force=false`), { method: 'DELETE' }), onMutate: () => setOperationError(''), onSuccess: (_result, id) => { if (detailImageID === id) setDetailImageID(''); client.invalidateQueries({ queryKey: ['images', nodeID] }) }, onError: (error) => setOperationError(error.message) })
   const batchRemove = useMutation({
     mutationFn: async (ids: string[]) => Promise.allSettled(ids.map((id) => api(nodePath(nodeID, `/images/${encodeURIComponent(id)}?force=false`), { method: 'DELETE' }))),
@@ -73,7 +73,7 @@ export function ImagesPage() {
   const unused = (query.data?.length ?? 0) - used
   const trackedPull = pullTasks.data?.find((row) => row.id === pullTaskID) ?? (pull.data?.id === pullTaskID ? pull.data : undefined)
   const pullRunning = !!trackedPull && (trackedPull.status === 'pending' || trackedPull.status === 'running')
-  const pullSteps = useQuery({ queryKey: ['task-steps', pullTaskID], queryFn: () => api<TaskStep[]>(`/tasks/${encodeURIComponent(pullTaskID)}/steps`), enabled: !!pullTaskID, refetchInterval: pullRunning ? 1_000 : false })
+  const pullSteps = useQuery({ queryKey: ['task-steps', nodeID, pullTaskID], queryFn: () => api<TaskStep[]>(nodePath(nodeID, `/tasks/${encodeURIComponent(pullTaskID)}/steps`)), enabled: !!pullTaskID, refetchInterval: pullRunning ? 1_000 : false })
   const selectedRows = query.data?.filter((row) => selected.has(row.id)) ?? []
   const allSelected = rows.length > 0 && rows.every((row) => selected.has(row.id))
   const someSelected = !allSelected && rows.some((row) => selected.has(row.id))

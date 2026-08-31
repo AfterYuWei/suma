@@ -18,6 +18,7 @@ import (
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/docker"
 	"github.com/suma/suma/server/internal/secret"
+	"github.com/suma/suma/server/internal/task"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -160,16 +161,16 @@ func NewService(db *gorm.DB, secrets *secret.Store, bootstrapHost string) (*Serv
 	if err := db.Where("id = ?", "local").First(&local).Error; err != nil {
 		return nil, err
 	}
-	if err := db.Model(&database.Task{}).Where("node_id = '' OR node_id IS NULL").Updates(map[string]any{"node_id": local.ID, "node_name": local.Name}).Error; err != nil {
+	if err := db.Model(&database.Task{}).Where("scope = ? AND (node_id = '' OR node_id IS NULL)", task.ScopeNode).Updates(map[string]any{"node_id": local.ID, "node_name": local.Name}).Error; err != nil {
 		return nil, err
 	}
-	if err := db.Model(&database.Task{}).Where("node_id = ? AND node_name = ''", local.ID).Update("node_name", local.Name).Error; err != nil {
+	if err := db.Model(&database.Task{}).Where("scope = ? AND node_id = ? AND node_name = ''", task.ScopeNode, local.ID).Update("node_name", local.Name).Error; err != nil {
 		return nil, err
 	}
-	if err := db.Model(&database.AuditLog{}).Where("node_id = '' OR node_id IS NULL").Updates(map[string]any{"node_id": local.ID, "node_name": local.Name}).Error; err != nil {
+	if err := db.Model(&database.AuditLog{}).Where("scope = ? AND (node_id = '' OR node_id IS NULL)", task.ScopeNode).Updates(map[string]any{"node_id": local.ID, "node_name": local.Name}).Error; err != nil {
 		return nil, err
 	}
-	if err := db.Model(&database.AuditLog{}).Where("node_id = ? AND node_name = ''", local.ID).Update("node_name", local.Name).Error; err != nil {
+	if err := db.Model(&database.AuditLog{}).Where("scope = ? AND node_id = ? AND node_name = ''", task.ScopeNode, local.ID).Update("node_name", local.Name).Error; err != nil {
 		return nil, err
 	}
 	var projects []database.DeliveryProject

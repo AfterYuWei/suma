@@ -32,6 +32,7 @@ type ProjectOverview struct {
 	ActiveCommit     string          `json:"active_commit,omitempty"`
 	ActiveReleaseID  *uint           `json:"active_release_id,omitempty"`
 	Drifted          bool            `json:"drifted"`
+	DriftStatus      string          `json:"drift_status"`
 	RuntimeHealthy   bool            `json:"runtime_healthy"`
 	DriftReason      string          `json:"drift_reason,omitempty"`
 	ActiveRelease    *ReleaseSummary `json:"active_release,omitempty"`
@@ -131,8 +132,20 @@ func (s *Service) projectOverview(ctx context.Context, row database.DeliveryProj
 	cancel()
 	if err == nil {
 		item.Drifted = drift.Drifted
+		item.DriftStatus = drift.Status
 		item.RuntimeHealthy = drift.RuntimeHealthy
 		item.DriftReason = drift.Reason
+		item.ActiveReleaseID = drift.ActiveReleaseID
+		item.ActiveCommit = drift.ActiveCommit
+		item.ActiveRelease = nil
+		if drift.ActiveReleaseID != nil {
+			for index := range releases {
+				if releases[index].ID == *drift.ActiveReleaseID {
+					item.ActiveRelease = &ReleaseSummary{ID: releases[index].ID, Status: releases[index].Status, CommitSHA: releases[index].CommitSHA, TriggerType: releases[index].TriggerType, CreatedAt: releases[index].CreatedAt}
+					break
+				}
+			}
+		}
 	} else if item.DriftReason == "" {
 		item.DriftReason = "drift state unavailable"
 	}

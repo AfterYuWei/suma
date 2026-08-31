@@ -3,6 +3,7 @@ import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../../components/ui/collapsible'
+import { Progress } from '../../components/ui/progress'
 import { Spinner } from '../../components/ui/spinner'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui/table'
 import { CheckCircle2, ChevronDownIcon, GitCommitHorizontal, History, Loader2, RotateCcw, Rocket, TriangleAlert, XCircle } from 'lucide-react'
@@ -49,11 +50,12 @@ export function CDOverview({ configuration, drift, releases, zh }: { configurati
   const latest = releases?.[0]
   const repository = configuration.repository
   const checking = !drift
-  const aligned = !!drift && !drift.drifted
+  const aligned = drift?.status === 'healthy'
+  const unknown = drift?.status === 'unknown'
   return <div className="flex w-full flex-col gap-4">
     <Notice
       tone={checking ? 'checking' : aligned ? 'success' : 'warning'}
-      title={checking ? (zh ? '正在检查交付漂移' : 'Checking delivery drift') : aligned ? (zh ? '运行状态与 Git 已对齐' : 'Runtime is aligned with Git') : (zh ? '运行状态与 Git 期望不一致' : 'Runtime differs from the Git desired state')}
+      title={checking ? (zh ? '正在检查交付漂移' : 'Checking delivery drift') : aligned ? (zh ? '运行状态与 Git 已对齐' : 'Runtime is aligned with Git') : unknown ? (zh ? '部分节点状态暂时未知' : 'Some node states are unknown') : (zh ? '运行状态与 Git 期望不一致' : 'Runtime differs from the Git desired state')}
     >
       {checking ? (zh ? '正在读取期望 Commit 与当前活动 Release。' : 'Reading the desired commit and active release.') : driftReason(drift.reason, zh) || (zh ? '当前活动 Release 使用期望 Commit。' : 'The active release uses the desired commit.')}
     </Notice>
@@ -67,11 +69,26 @@ export function CDOverview({ configuration, drift, releases, zh }: { configurati
           [zh ? '交付模式' : 'Delivery mode', `${modeLabel(configuration.reconcile_mode, zh)} · ${zh ? `每 ${configuration.sync_interval_seconds} 秒轮询` : `poll every ${configuration.sync_interval_seconds}s`}`],
           [zh ? 'Git 期望' : 'Git desired', shortCommit(configuration.desired_commit)],
           [zh ? '已检查' : 'Observed', shortCommit(configuration.observed_commit)],
-          [zh ? '当前运行' : 'Active', `${shortCommit(drift?.active_commit)}${configuration.active_release_id ? ` · Release #${configuration.active_release_id}` : ''}`],
+          [zh ? '当前运行' : 'Active', `${shortCommit(drift?.active_commit)}${drift?.active_release_id ? ` · Release #${drift.active_release_id}` : ''}`],
           [zh ? '运行时健康' : 'Runtime health', !drift ? (zh ? '检查中' : 'Checking') : !drift.active_release_id ? (zh ? '无活动版本' : 'No active release') : drift.runtime_healthy ? (zh ? '健康' : 'Healthy') : (zh ? '异常' : 'Unhealthy')],
         ]} />
       </CardContent>
     </Card>
+    {!!drift?.nodes?.length && <Card>
+      <CardHeader><CardTitle>{zh ? '逐节点实时状态' : 'Live node state'}</CardTitle></CardHeader>
+      <CardContent>
+        <Table>
+          <TableHeader><TableRow><TableHead>{zh ? '节点' : 'Node'}</TableHead><TableHead>Release / Commit</TableHead><TableHead>{zh ? '状态' : 'Status'}</TableHead><TableHead>{zh ? '原因' : 'Reason'}</TableHead><TableHead>{zh ? '检查时间' : 'Checked'}</TableHead></TableRow></TableHeader>
+          <TableBody>{drift.nodes.map((node) => <TableRow key={node.node_id}>
+            <TableCell><div className="font-medium">{node.node_name}</div><div className="text-xs text-muted-foreground">{node.node_id}</div></TableCell>
+            <TableCell className="font-mono text-xs">{node.active_release_id ? `#${node.active_release_id} · ${shortCommit(node.active_commit)}` : '—'}</TableCell>
+            <TableCell><Badge className={node.status === 'healthy' ? statusBadgeClass('succeeded') : node.status === 'degraded' ? statusBadgeClass('failed') : statusBadgeClass('rolled_back')}>{node.status}</Badge></TableCell>
+            <TableCell className="max-w-80 whitespace-normal text-xs text-muted-foreground">{node.reason || '—'}{node.health_summary && <details className="mt-1"><summary className="cursor-pointer">{zh ? '健康摘要' : 'Health summary'}</summary><pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-muted p-2">{node.health_summary}</pre></details>}</TableCell>
+            <TableCell className="text-xs text-muted-foreground">{new Date(node.checked_at).toLocaleString(zh ? 'zh-CN' : 'en-US')}</TableCell>
+          </TableRow>)}</TableBody>
+        </Table>
+      </CardContent>
+    </Card>}
     <Card>
       <CardHeader><CardTitle>{zh ? '最近一次交付' : 'Latest delivery'}</CardTitle></CardHeader>
       <CardContent>
@@ -87,7 +104,7 @@ export function CDOverview({ configuration, drift, releases, zh }: { configurati
   </div>
 }
 
-export type ReleaseOperation = 'approve' | 'reject' | 'deploy' | 'rollback'
+export type ReleaseOperation = 'approve' | 'reject' | 'deploy' | 'rollback' | 'retry-failed' | 'rollback-failed'
 
 export function ReleasePanel({ configuration, releases, pendingReleaseID, zh, onAction }: { configuration: CDConfiguration; releases?: DeliveryRelease[]; pendingReleaseID?: number; zh: boolean; onAction: (release: DeliveryRelease, action: ReleaseOperation) => void }) {
   if (!releases?.length) return <EmptyHint icon={<History className="size-6" />} title={zh ? '还没有 Release' : 'No releases yet'} description={zh ? '点击同步以读取 Git 并验证 Compose 配置。' : 'Synchronize to read Git and validate the Compose configuration.'} />
@@ -98,6 +115,8 @@ export function ReleasePanel({ configuration, releases, pendingReleaseID, zh, on
     const canDeploy = configuration.reconcile_mode !== 'observe' && (release.status === 'approved' || release.status === 'failed')
     const canRollback = configuration.reconcile_mode !== 'observe' && (release.status === 'succeeded' || release.status === 'rolled_back') && !active
     const pending = pendingReleaseID === release.id
+    const retryCount = release.remediation?.retry_failed_node_ids?.length ?? 0
+    const rollbackCount = release.remediation?.rollback_failed_node_ids?.length ?? 0
     return <Collapsible key={release.id} className="group/collapsible w-full overflow-hidden rounded-xl border bg-card">
       <div className="flex items-start gap-2 pr-2">
         <CollapsibleTrigger className="flex min-w-0 flex-1 cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 py-2.5 pl-3 text-left hover:bg-muted/50 [&_svg]:shrink-0">
@@ -112,6 +131,8 @@ export function ReleasePanel({ configuration, releases, pendingReleaseID, zh, on
           {canApprove && <Button size="sm" variant="secondary" disabled={pending} onClick={() => onAction(release, 'approve')}><CheckCircle2 />{zh ? '批准' : 'Approve'}</Button>}
           {canReject && <Button size="sm" variant="destructive" disabled={pending} onClick={() => onAction(release, 'reject')}><XCircle />{zh ? '拒绝' : 'Reject'}</Button>}
           {canDeploy && <Button size="sm" disabled={pending} onClick={() => onAction(release, 'deploy')}>{pending ? <Spinner /> : <Rocket />}{release.status === 'failed' ? (zh ? '重新发布' : 'Redeploy') : (zh ? '发布' : 'Deploy')}</Button>}
+          {retryCount > 0 && <Button size="sm" variant="secondary" disabled={pending} onClick={() => onAction(release, 'retry-failed')}><Rocket />{zh ? `重试失败节点（${retryCount}）` : `Retry failed (${retryCount})`}</Button>}
+          {rollbackCount > 0 && <Button size="sm" variant="outline" disabled={pending} onClick={() => onAction(release, 'rollback-failed')}><RotateCcw />{zh ? `回滚失败节点（${rollbackCount}）` : `Rollback failed (${rollbackCount})`}</Button>}
           {canRollback && <Button size="sm" variant="outline" disabled={pending} onClick={() => onAction(release, 'rollback')}><RotateCcw />{zh ? '回滚' : 'Restore'}</Button>}
         </div>
       </div>
@@ -144,7 +165,7 @@ function ReleaseDetails({ release, zh }: { release: DeliveryRelease; zh: boolean
             <TableHead>{zh ? '节点' : 'Node'}</TableHead>
             <TableHead>{zh ? '状态' : 'Status'}</TableHead>
             <TableHead>{zh ? '任务 ID' : 'Task ID'}</TableHead>
-            <TableHead>{zh ? '失败原因' : 'Failure'}</TableHead>
+            <TableHead>{zh ? '最新尝试 / 历史' : 'Latest attempt / history'}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -152,8 +173,12 @@ function ReleaseDetails({ release, zh }: { release: DeliveryRelease; zh: boolean
             <TableRow key={deployment.id}>
               <TableCell>{deployment.node_name}</TableCell>
               <TableCell><ReleaseStatus status={String(deployment.status)} zh={zh} /></TableCell>
-              <TableCell className="font-mono text-xs">{deployment.task_id}</TableCell>
-              <TableCell className="whitespace-normal break-all text-xs text-muted-foreground">{deployment.failure_reason}</TableCell>
+              <TableCell className="min-w-48"><div className="font-mono text-xs">{deployment.task_id || '—'}</div>{['pulling', 'deploying', 'verifying', 'rolling_back'].includes(deployment.status) && <div className="mt-1"><Progress value={deployment.progress ?? 0} /><p className="mt-1 text-xs text-muted-foreground">{deployment.message}</p></div>}</TableCell>
+              <TableCell className="min-w-64 whitespace-normal break-all text-xs text-muted-foreground">
+                {deployment.failure_reason && <p className="text-destructive">{deployment.failure_reason}</p>}
+                {deployment.rollback_result && <p>{zh ? '回滚结果' : 'Rollback'}: {deployment.rollback_result}</p>}
+                {!!deployment.attempts?.length && <details className="mt-1"><summary className="cursor-pointer">{zh ? `${deployment.attempts.length} 次尝试` : `${deployment.attempts.length} attempts`}</summary><div className="mt-2 flex flex-col gap-2 border-l pl-3">{[...deployment.attempts].reverse().map((attempt) => <div key={attempt.id}><div className="flex flex-wrap items-center gap-2"><ReleaseStatus status={attempt.status} zh={zh} /><span>{attempt.operation.replaceAll('_', ' ')} → Release #{attempt.target_release_id}</span></div><p>{attempt.failure_reason || attempt.message || '—'}</p><p className="text-[11px]">{new Date(attempt.started_at || attempt.created_at).toLocaleString(zh ? 'zh-CN' : 'en-US')}{attempt.finished_at ? ` → ${new Date(attempt.finished_at).toLocaleString(zh ? 'zh-CN' : 'en-US')}` : ''}</p></div>)}</div></details>}
+              </TableCell>
             </TableRow>
           ))}
         </TableBody>

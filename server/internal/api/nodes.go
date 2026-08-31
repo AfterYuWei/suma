@@ -39,7 +39,7 @@ func registerNodeRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps Dependenci
 			failure(c, http.StatusUnprocessableEntity, 20003, err.Error())
 			return
 		}
-		recordNodeAudit(c, deps, row.ID, row.Name, "node.create", "node", row.Name, "success")
+		recordAudit(c, deps.Audit, "node.create", "node", row.Name, "success")
 		c.JSON(http.StatusCreated, envelope{Code: 0, Message: "success", Data: row})
 	})
 	nodes.GET("/:nodeID", func(c *gin.Context) {
@@ -61,7 +61,7 @@ func registerNodeRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps Dependenci
 			failure(c, http.StatusUnprocessableEntity, 20005, err.Error())
 			return
 		}
-		recordNodeAudit(c, deps, row.ID, row.Name, "node.update", "node", row.Name, "success")
+		recordAudit(c, deps.Audit, "node.update", "node", row.Name, "success")
 		success(c, row)
 	})
 	nodes.DELETE("/:nodeID", func(c *gin.Context) {
@@ -74,7 +74,7 @@ func registerNodeRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps Dependenci
 			failure(c, http.StatusConflict, 20006, err.Error())
 			return
 		}
-		recordNodeAudit(c, deps, row.ID, row.Name, "node.delete", "node", row.Name, "success")
+		recordAudit(c, deps.Audit, "node.delete", "node", row.Name, "success")
 		success(c, gin.H{"id": row.ID})
 	})
 	nodes.POST("/:nodeID/test", func(c *gin.Context) {
@@ -143,6 +143,82 @@ func registerNodeRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps Dependenci
 	})
 
 	resources := nodes.Group("/:nodeID")
+	resources.GET("/tasks", func(c *gin.Context) {
+		if _, err := deps.Nodes.Get(c.Request.Context(), c.Param("nodeID")); err != nil {
+			failure(c, http.StatusNotFound, 20004, "Docker node not found")
+			return
+		}
+		rows, err := deps.Tasks.ListForNode(c.Request.Context(), c.Param("nodeID"))
+		if err != nil {
+			failure(c, http.StatusInternalServerError, 16001, "Unable to list tasks")
+			return
+		}
+		success(c, rows)
+	})
+	resources.GET("/tasks/:taskID", func(c *gin.Context) {
+		if _, err := deps.Nodes.Get(c.Request.Context(), c.Param("nodeID")); err != nil {
+			failure(c, http.StatusNotFound, 20004, "Docker node not found")
+			return
+		}
+		row, err := deps.Tasks.GetForNode(c.Request.Context(), c.Param("nodeID"), c.Param("taskID"))
+		if err != nil {
+			failure(c, http.StatusNotFound, 16007, "Task not found")
+			return
+		}
+		success(c, row)
+	})
+	resources.GET("/tasks/:taskID/logs", func(c *gin.Context) {
+		if _, err := deps.Nodes.Get(c.Request.Context(), c.Param("nodeID")); err != nil {
+			failure(c, http.StatusNotFound, 20004, "Docker node not found")
+			return
+		}
+		rows, err := deps.Tasks.LogsForNode(c.Request.Context(), c.Param("nodeID"), c.Param("taskID"))
+		if err != nil {
+			failure(c, http.StatusNotFound, 16007, "Task not found")
+			return
+		}
+		success(c, rows)
+	})
+	resources.GET("/tasks/:taskID/steps", func(c *gin.Context) {
+		if _, err := deps.Nodes.Get(c.Request.Context(), c.Param("nodeID")); err != nil {
+			failure(c, http.StatusNotFound, 20004, "Docker node not found")
+			return
+		}
+		rows, err := deps.Tasks.StepsForNode(c.Request.Context(), c.Param("nodeID"), c.Param("taskID"))
+		if err != nil {
+			failure(c, http.StatusNotFound, 16007, "Task not found")
+			return
+		}
+		success(c, rows)
+	})
+	resources.POST("/tasks/:taskID/cancel", func(c *gin.Context) {
+		if _, err := deps.Nodes.Get(c.Request.Context(), c.Param("nodeID")); err != nil {
+			failure(c, http.StatusNotFound, 20004, "Docker node not found")
+			return
+		}
+		canceled, err := deps.Tasks.CancelForNode(c.Request.Context(), c.Param("nodeID"), c.Param("taskID"))
+		if err != nil {
+			failure(c, http.StatusNotFound, 16007, "Task not found")
+			return
+		}
+		if !canceled {
+			failure(c, http.StatusConflict, 16003, "Task is not running")
+			return
+		}
+		success(c, gin.H{"id": c.Param("taskID")})
+	})
+	resources.GET("/audit-logs", func(c *gin.Context) {
+		if _, err := deps.Nodes.Get(c.Request.Context(), c.Param("nodeID")); err != nil {
+			failure(c, http.StatusNotFound, 20004, "Docker node not found")
+			return
+		}
+		rows, err := deps.Audit.ListForNode(c.Request.Context(), 100, c.Param("nodeID"))
+		if err != nil {
+			failure(c, http.StatusInternalServerError, 17001, "Unable to list audit logs")
+			return
+		}
+		success(c, rows)
+	})
 	resources.GET("/docker/info", func(c *gin.Context) {
 		adapter, view, ok := resolveNode(c, deps)
 		if !ok {
@@ -248,6 +324,18 @@ func registerNodeRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps Dependenci
 		if ok {
 			streamTerminal(c, adapter)
 		}
+	})
+	nodeTaskWS := router.Group("/ws/nodes/:nodeID/tasks", requireAuth(deps.Auth))
+	nodeTaskWS.GET("/:id", func(c *gin.Context) {
+		if _, err := deps.Nodes.Get(c.Request.Context(), c.Param("nodeID")); err != nil {
+			failure(c, http.StatusNotFound, 20004, "Docker node not found")
+			return
+		}
+		if _, err := deps.Tasks.GetForNode(c.Request.Context(), c.Param("nodeID"), c.Param("id")); err != nil {
+			failure(c, http.StatusNotFound, 16007, "Task not found")
+			return
+		}
+		streamTask(c, deps.Tasks)
 	})
 }
 

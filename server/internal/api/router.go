@@ -19,6 +19,7 @@ import (
 	composeService "github.com/suma/suma/server/internal/compose"
 	containerdomain "github.com/suma/suma/server/internal/container"
 	credentialService "github.com/suma/suma/server/internal/credential"
+	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/docker"
 	gitService "github.com/suma/suma/server/internal/git"
 	imageService "github.com/suma/suma/server/internal/image"
@@ -1098,6 +1099,32 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		c.JSON(http.StatusAccepted, envelope{Code: 0, Message: "success", Data: row})
 	})
+	delivery.POST("/:name/releases/:releaseID/remediations/retry-failed", func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("releaseID"), 10, 64)
+		if err != nil {
+			failure(c, http.StatusBadRequest, 17705, "Invalid release ID")
+			return
+		}
+		row, err := deps.CD.RetryFailedNodes(c.Request.Context(), c.Param("name"), uint(id), requestActor(c))
+		if err != nil {
+			failure(c, http.StatusConflict, 17716, err.Error())
+			return
+		}
+		c.JSON(http.StatusAccepted, envelope{Code: 0, Message: "success", Data: row})
+	})
+	delivery.POST("/:name/releases/:releaseID/remediations/rollback-failed", func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("releaseID"), 10, 64)
+		if err != nil {
+			failure(c, http.StatusBadRequest, 17705, "Invalid release ID")
+			return
+		}
+		row, err := deps.CD.RollbackFailedNodes(c.Request.Context(), c.Param("name"), uint(id), requestActor(c))
+		if err != nil {
+			failure(c, http.StatusConflict, 17717, err.Error())
+			return
+		}
+		c.JSON(http.StatusAccepted, envelope{Code: 0, Message: "success", Data: row})
+	})
 	compose.POST("/:name/:action", func(c *gin.Context) {
 		action := c.Param("action")
 		allowed := map[string]bool{"up": true, "down": true, "start": true, "stop": true, "restart": true, "pull": true, "build": true, "update": true}
@@ -1136,7 +1163,29 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		success(c, values)
 	})
 	v1.GET("/audit-logs", requireAuth(deps.Auth), func(c *gin.Context) {
-		rows, err := deps.Audit.ListForNode(c.Request.Context(), 100, c.Query("node_id"))
+		var rows []database.AuditLog
+		var err error
+		if nodeID := c.Query("node_id"); nodeID != "" {
+			if deps.Nodes == nil {
+				failure(c, http.StatusNotFound, 17002, "Docker node not found")
+				return
+			}
+			if _, nodeErr := deps.Nodes.Get(c.Request.Context(), nodeID); nodeErr != nil {
+				failure(c, http.StatusNotFound, 17002, "Docker node not found")
+				return
+			}
+			rows, err = deps.Audit.ListForNode(c.Request.Context(), 100, nodeID)
+		} else {
+			switch c.DefaultQuery("scope", task.ScopeControlPlane) {
+			case task.ScopeControlPlane:
+				rows, err = deps.Audit.ListControlPlane(c.Request.Context(), 100)
+			case "all":
+				rows, err = deps.Audit.List(c.Request.Context(), 100)
+			default:
+				failure(c, http.StatusBadRequest, 17003, "Scope must be control_plane or all")
+				return
+			}
+		}
 		if err != nil {
 			failure(c, http.StatusInternalServerError, 17001, "Unable to list audit logs")
 			return
@@ -1144,12 +1193,42 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		success(c, rows)
 	})
 	v1.GET("/tasks", requireAuth(deps.Auth), func(c *gin.Context) {
-		rows, err := deps.Tasks.ListForNode(c.Request.Context(), c.Query("node_id"))
+		var rows []database.Task
+		var err error
+		if nodeID := c.Query("node_id"); nodeID != "" {
+			if deps.Nodes == nil {
+				failure(c, http.StatusNotFound, 16005, "Docker node not found")
+				return
+			}
+			if _, nodeErr := deps.Nodes.Get(c.Request.Context(), nodeID); nodeErr != nil {
+				failure(c, http.StatusNotFound, 16005, "Docker node not found")
+				return
+			}
+			rows, err = deps.Tasks.ListForNode(c.Request.Context(), nodeID)
+		} else {
+			switch c.DefaultQuery("scope", task.ScopeControlPlane) {
+			case task.ScopeControlPlane:
+				rows, err = deps.Tasks.ListControlPlane(c.Request.Context())
+			case "all":
+				rows, err = deps.Tasks.List(c.Request.Context())
+			default:
+				failure(c, http.StatusBadRequest, 16006, "Scope must be control_plane or all")
+				return
+			}
+		}
 		if err != nil {
 			failure(c, http.StatusInternalServerError, 16001, "Unable to list tasks")
 			return
 		}
 		success(c, rows)
+	})
+	v1.GET("/tasks/:id", requireAuth(deps.Auth), func(c *gin.Context) {
+		row, err := deps.Tasks.Get(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			failure(c, http.StatusNotFound, 16007, "Task not found")
+			return
+		}
+		success(c, row)
 	})
 	v1.GET("/tasks/:id/logs", requireAuth(deps.Auth), func(c *gin.Context) {
 		rows, err := deps.Tasks.Logs(c.Request.Context(), c.Param("id"))
@@ -1388,7 +1467,13 @@ func recordAudit(c *gin.Context, service *audit.Service, action, resourceType, r
 		user := value.(auth.User)
 		userID = &user.ID
 	}
-	_ = service.Record(c.Request.Context(), userID, action, resourceType, resourceName, c.ClientIP(), result)
+	for _, prefix := range []string{"container.", "image.", "network.", "volume.", "compose.", "project.", "system."} {
+		if strings.HasPrefix(action, prefix) {
+			_ = service.RecordForNode(c.Request.Context(), "local", "Local", userID, action, resourceType, resourceName, c.ClientIP(), result)
+			return
+		}
+	}
+	_ = service.RecordControlPlane(c.Request.Context(), userID, action, resourceType, resourceName, c.ClientIP(), result)
 }
 
 func currentUser(c *gin.Context) auth.User {

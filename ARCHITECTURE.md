@@ -23,7 +23,7 @@ Browser -- HTTP / WebSocket --> Go monolith
 
 Runtime Docker resources and Project inventory are not mirrored into SQLite. SQLite stores node definitions/status summaries, credential grants, global Delivery Projects and target snapshots, per-node deployments, tasks, and audit history. Each Docker Engine remains authoritative for current resources. SUMA's first-level runtime object is a backend/scope-aware `Project`; today `backend=compose` maps to Docker's official Compose Project. Compose Projects are discovered by grouping `com.docker.compose.project`, with Services and Container Instances nested beneath that boundary. SUMA-managed Projects without remaining containers are discovered from directories below the node Compose root. A runtime client is captured when work starts; updating or disabling a node prevents new work without invalidating an in-flight task's client.
 
-All asynchronous work is represented by a task with pending, running, success, failed, or canceled state. A bounded in-memory event broker streams fresh task output while SQLite retains task history. The same cancellation rule applies to container logs, stats, and terminal connections: closing the browser connection cancels the Docker operation and closes its stream.
+All asynchronous work is represented by a task with pending, running, success, failed, or canceled state. Tasks and audits carry an explicit `control_plane` or `node` scope; node scope requires the resolved node ID/name, and canonical node routes reject cross-node IDs before reading logs, steps, cancellation, or upgrading WebSockets. A bounded in-memory event broker streams fresh task output while SQLite retains task history. The same cancellation rule applies to container logs, stats, and terminal connections: closing the browser connection cancels the Docker operation and closes its stream.
 
 ## Compose and delivery domain boundaries
 
@@ -50,9 +50,11 @@ manual sync, periodic reconciliation, or verified webhook
   -> snapshot target nodes
   -> pull and deploy concurrently through a target-specific Compose runner
   -> per-node Docker health observation and result
-  -> failed-node-only rollback when enabled
+  -> immutable per-node Attempt history and failed-node-only retry/rollback
   -> aggregate release/task/audit final status
 ```
+
+Drift uses each target's confirmed `DeliveryTargetState` to select the release specification, then probes targets concurrently with bounded timeouts and a short shared cache. Aggregation is tri-state: confirmed commit/runtime failures are degraded, reachability/indeterminate errors are unknown, and healthy requires every target to agree and pass runtime checks. Startup reconciliation is database-only and transactionally interrupts nonterminal Attempts/Deployments/Tasks before recomputing Release and project activity.
 
 An in-process reservation plus project lock serializes sync, approval/rejection, delivery, and rollback for each Delivery Project, including work queued before its task goroutine starts. The background reconciler checks due projects at startup and every 15 seconds, using each project's configured synchronization interval. The Compose adapter always receives a stable explicit runtime name, project directory, ordered file list, and optional environment file, so different commit worktree paths do not change runtime identity. SUMA does not execute repository scripts, build application source, run tests, or build/publish images.
 

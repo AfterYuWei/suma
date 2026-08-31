@@ -51,9 +51,9 @@ export function ContinuousDeliveryDetailPage() {
     onError: (error) => setNotice(error.message),
   })
   const releaseAction = useMutation({
-    mutationFn: ({ release, operation }: { release: DeliveryRelease; operation: ReleaseOperation }) => api(`/delivery-projects/${encodedName}/releases/${release.id}/${operation}`, { method: 'POST' }),
+    mutationFn: ({ release, operation }: { release: DeliveryRelease; operation: ReleaseOperation }) => api(`/delivery-projects/${encodedName}/releases/${release.id}/${operation.endsWith('-failed') ? `remediations/${operation}` : operation}`, { method: 'POST' }),
     onSuccess: (_, variables) => {
-      const queued = variables.operation === 'deploy' || variables.operation === 'rollback'
+      const queued = ['deploy', 'rollback', 'retry-failed', 'rollback-failed'].includes(variables.operation)
       setNotice(queued ? (zh ? '交付任务已启动。' : 'Delivery task started.') : variables.operation === 'approve' ? (zh ? 'Release 已批准。' : 'Release approved.') : (zh ? 'Release 已拒绝。' : 'Release rejected.'))
       if (queued) void client.invalidateQueries({ queryKey: ['tasks'] })
       void client.invalidateQueries({ queryKey: ['delivery-releases', projectName] })
@@ -68,6 +68,16 @@ export function ContinuousDeliveryDetailPage() {
     if (operation === 'reject') confirmed = await confirmDialog({ title: zh ? `拒绝 Release #${release.id}？` : `Reject release #${release.id}?`, description: zh ? '该候选 Release 将不能再发布。' : 'This candidate release can no longer be deployed.', confirmLabel: zh ? '拒绝' : 'Reject', danger: true })
     if (operation === 'deploy') confirmed = await confirmDialog({ title: zh ? `${release.status === 'failed' ? '重新发布' : '发布'} Release #${release.id}？` : `${release.status === 'failed' ? 'Redeploy' : 'Deploy'} release #${release.id}?`, description: zh ? `将 Commit ${shortCommit(release.commit_sha)} 并行应用到 Release 快照中的全部目标节点；失败节点独立回滚。` : `Apply commit ${shortCommit(release.commit_sha)} to every node in the release target snapshot in parallel; failed nodes roll back independently.`, confirmLabel: release.status === 'failed' ? (zh ? '重新发布' : 'Redeploy') : (zh ? '发布' : 'Deploy') })
     if (operation === 'rollback') confirmed = await confirmDialog({ title: zh ? `回滚到 Release #${release.id}？` : `Restore release #${release.id}?`, description: zh ? '这会重新应用该版本，但不会回滚存储卷中的数据；自动交付会切换为手动。' : 'This reapplies the release without rolling back volume data; automatic delivery switches to manual.', confirmLabel: zh ? '回滚' : 'Restore', danger: true })
+    if (operation === 'retry-failed') {
+      const ids = release.remediation?.retry_failed_node_ids ?? []
+      const names = release.deployments?.filter((item) => ids.includes(item.node_id)).map((item) => item.node_name).join('、') || ids.join('、')
+      confirmed = await confirmDialog({ title: zh ? `重试 ${ids.length} 个失败节点？` : `Retry ${ids.length} failed nodes?`, description: zh ? `服务端将再次校验快照并只重试：${names}。自动回滚成功的节点也会重新尝试原 Release。` : `The server will revalidate the immutable snapshot and retry only: ${names}. Nodes recovered by auto rollback will retry the original release.`, confirmLabel: zh ? '重试失败节点' : 'Retry failed nodes' })
+    }
+    if (operation === 'rollback-failed') {
+      const ids = release.remediation?.rollback_failed_node_ids ?? []
+      const names = release.deployments?.filter((item) => ids.includes(item.node_id)).map((item) => item.node_name).join('、') || ids.join('、')
+      confirmed = await confirmDialog({ title: zh ? `回滚 ${ids.length} 个失败节点？` : `Rollback ${ids.length} failed nodes?`, description: zh ? `将仅处理：${names}。每个节点恢复到其部署前的 Release，各节点版本可能不同；不会创建新 Release。` : `Only these nodes are affected: ${names}. Each node restores its own pre-deployment release, which may differ; no new release is created.`, confirmLabel: zh ? '回滚失败节点' : 'Rollback failed nodes', danger: true })
+    }
     if (confirmed) releaseAction.mutate({ release, operation })
   }
 

@@ -163,7 +163,7 @@ Images may use tags or immutable digests. Digests are recommended for reproducib
 
 ## Release and drift model
 
-Each release records repository URL, ref, exact commit SHA, commit author/message, canonical config hash, image references, trigger, actor, task, Compose-source snapshot fields, approval, and immutable target snapshots. Each target Deployment records its node/name snapshot, child task, previous active Release, timing, failure reason, health observation, rollback attempt, and result.
+Each release records repository URL, ref, exact commit SHA, commit author/message, canonical config hash, image references, trigger, actor, task, Compose-source snapshot fields, approval, and immutable target snapshots. Each target Deployment records its node/name snapshot, latest child task, previous active Release, timing, failure reason, health observation, rollback result, and the latest aggregate status. Every deploy, retry, manual rollback, and automatic rollback is retained as an independent Attempt with its target Release, Task, timing, result, failure reason, and health summary.
 
 Relevant statuses are:
 
@@ -178,7 +178,11 @@ successful release selected -> new rollback release -> rolling_back
 
 Approval and rejection are synchronous state changes. Approval does not start delivery. The deploy endpoint accepts an explicitly `approved` release or retries a previously approved `failed` release. Auto mode proceeds directly from its newly prepared release without requiring a user approval record.
 
-Drift is reported when no repository synchronization has happened, no release is active, the desired Git commit differs from the active release commit, or the active release has missing/not-running/unhealthy containers. Runtime container truth is read from Docker and is not mirrored into SQLite as desired state.
+Drift is reported per current target and aggregated as `healthy`, `degraded`, or `unknown`. No active release, a commit mismatch, or missing/not-running/unhealthy containers is a confirmed degraded state. An unreachable or indeterminate target is unknown and does not by itself set `drifted`; a confirmed failure takes precedence when degraded and unknown nodes coexist. Runtime container truth is read from Docker and is not mirrored into SQLite as desired state. Project-level active Release/commit is persisted only while all current targets agree.
+
+Failed-node remediation never accepts a client-provided node list. Retry selects failed/interrupted/auto-rolled-back snapshots and targets the original Release. Rollback selects only failed targets with a previous Release and restores each node independently, so different nodes may end at different releases without creating a synthetic Release. Both paths use one control-plane parent Task, node child Tasks, Attempts, project serialization, and control-plane plus per-node Audits.
+
+After a process restart, SUMA performs database-only recovery in one transaction: nonterminal Attempts become `interrupted`, affected Deployment summaries become failed, pending/running Tasks become canceled, and Release/project aggregates are recalculated. It never probes Docker or starts retry/rollback work during recovery.
 
 ## Rollback boundary
 

@@ -96,6 +96,8 @@ func TestGitDeliveryAPIsRequireAuthentication(t *testing.T) {
 		{http.MethodPost, "/api/v1/delivery-projects/production/releases/1/reject"},
 		{http.MethodPost, "/api/v1/delivery-projects/production/releases/1/deploy"},
 		{http.MethodPost, "/api/v1/delivery-projects/production/releases/1/rollback"},
+		{http.MethodPost, "/api/v1/delivery-projects/production/releases/1/remediations/retry-failed"},
+		{http.MethodPost, "/api/v1/delivery-projects/production/releases/1/remediations/rollback-failed"},
 	}
 	for _, item := range requests {
 		t.Run(item.method+" "+item.path, func(t *testing.T) {
@@ -185,6 +187,80 @@ func TestUnknownAPIEndpointReturnsJSONInsteadOfSPA(t *testing.T) {
 	if body.Code == 0 || body.Message != "API endpoint not found" {
 		t.Fatalf("unknown API response = %#v", body)
 	}
+}
+
+func TestTaskAndAuditNodeScopesAreIsolated(t *testing.T) {
+	root := t.TempDir()
+	db, err := database.Open(filepath.Join(root, "scopes.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := secret.Open(filepath.Join(root, "secret.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes, err := nodeService.NewService(db, store, "unix:///var/run/docker.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = nodes.Close() })
+	if err := db.Create(&database.Node{ID: "edge", Name: "Edge", ConnectionType: "unix", Endpoint: "unix:///edge.sock", TLSMode: "disabled", AllowedBindRootsJSON: "[]", Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	rows := []database.Task{
+		{ID: "task-local", Scope: task.ScopeNode, NodeID: "local", NodeName: "Local", Type: "container.restart", Name: "local", Status: task.StatusSuccess},
+		{ID: "task-edge", Scope: task.ScopeNode, NodeID: "edge", NodeName: "Edge", Type: "container.restart", Name: "edge", Status: task.StatusSuccess},
+		{ID: "task-control", Scope: task.ScopeControlPlane, Type: "cd.sync", Name: "control", Status: task.StatusSuccess},
+	}
+	if err := db.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	audits := []database.AuditLog{
+		{Scope: task.ScopeNode, NodeID: "local", NodeName: "Local", Action: "container.restart", Result: "success"},
+		{Scope: task.ScopeNode, NodeID: "edge", NodeName: "Edge", Action: "container.restart", Result: "success"},
+		{Scope: task.ScopeControlPlane, Action: "cd.sync", Result: "success"},
+	}
+	if err := db.Create(&audits).Error; err != nil {
+		t.Fatal(err)
+	}
+	authService := auth.NewService(db, time.Hour)
+	if _, err := authService.Initialize(context.Background(), "admin", "admin@example.test", "", "long-password"); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := authService.Login(context.Background(), "admin", "long-password", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks := task.NewService(db)
+	router := NewRouter(Dependencies{Engine: &fakeEngine{}, Auth: authService, Audit: audit.NewService(db), Tasks: tasks, Nodes: nodes})
+	request := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		return response
+	}
+	assertContains := func(path string, status int, included string, excluded ...string) {
+		t.Helper()
+		response := request(path)
+		if response.Code != status || (included != "" && !strings.Contains(response.Body.String(), included)) {
+			t.Fatalf("%s = %d %s", path, response.Code, response.Body.String())
+		}
+		for _, value := range excluded {
+			if strings.Contains(response.Body.String(), value) {
+				t.Fatalf("%s leaked %q: %s", path, value, response.Body.String())
+			}
+		}
+	}
+	assertContains("/api/v1/nodes/local/tasks", http.StatusOK, "task-local", "task-edge", "task-control")
+	assertContains("/api/v1/nodes/local/tasks/task-edge", http.StatusNotFound, "")
+	assertContains("/ws/nodes/local/tasks/task-edge", http.StatusNotFound, "")
+	assertContains("/api/v1/nodes/missing/tasks", http.StatusNotFound, "")
+	assertContains("/api/v1/tasks?node_id=missing", http.StatusNotFound, "")
+	assertContains("/api/v1/tasks?scope=control_plane", http.StatusOK, "task-control", "task-local", "task-edge")
+	assertContains("/api/v1/tasks?scope=all", http.StatusOK, "task-local")
+	assertContains("/api/v1/nodes/local/audit-logs", http.StatusOK, "container.restart", "cd.sync")
+	assertContains("/api/v1/audit-logs?scope=control_plane", http.StatusOK, "cd.sync", "container.restart")
 }
 
 func TestAuthenticationLifecycle(t *testing.T) {

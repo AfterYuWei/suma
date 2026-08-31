@@ -206,7 +206,7 @@ export function ProjectTakeoverPage() {
   const dark = theme === 'dark' || (theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
   const preview = useQuery({ queryKey: ['project-takeover', nodeID, projectName], queryFn: () => api<ProjectTakeoverDraft>(nodePath(nodeID, `/projects/compose/${encoded}/takeover/preview`), { method: 'POST' }), select: normalizeTakeoverDraft, enabled: backend === 'compose', retry: false })
   const contentSignature = useMemo(() => `${compose}\u0000${environment}`, [compose, environment])
-  const tasks = useQuery({ queryKey: ['tasks', nodeID], queryFn: () => api<TaskRow[]>(`/tasks?node_id=${encodeURIComponent(nodeID)}`), enabled: shadowSession !== null, refetchInterval: 1_000 })
+  const tasks = useQuery({ queryKey: ['tasks', 'current', nodeID], queryFn: () => api<TaskRow[]>(nodePath(nodeID, '/tasks')), enabled: shadowSession !== null, refetchInterval: 1_000 })
   const shadowTask = tasks.data?.find((task) => task.id === shadowSession?.task.id)
   const shadowStatus = useQuery({ queryKey: ['project-shadow-status', nodeID, shadowSession?.session_id], queryFn: () => api<ShadowPreviewStatus>(nodePath(nodeID, `/projects/compose/${encoded}/takeover/shadow/${shadowSession?.session_id}`)), enabled: shadowSession !== null && shadowTask?.status === 'success', refetchInterval: 5_000, retry: false })
 
@@ -237,18 +237,18 @@ export function ProjectTakeoverPage() {
   const assessShadow = useMutation({ mutationFn: () => api<ShadowAssessment>(nodePath(nodeID, `/projects/compose/${encoded}/takeover/shadow/assess`), { method: 'POST', body: JSON.stringify({ compose }) }) })
   const startShadow = useMutation({
     mutationFn: () => api<ShadowPreviewSession>(nodePath(nodeID, `/projects/compose/${encoded}/takeover/shadow`), { method: 'POST', body: JSON.stringify({ fingerprint: preview.data?.fingerprint, compose, environment }) }),
-    onSuccess: (session) => { setShadowSession(session); void client.invalidateQueries({ queryKey: ['tasks', nodeID] }) },
+    onSuccess: (session) => { setShadowSession(session); void client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] }) },
   })
   const cleanupShadow = useMutation({
     mutationFn: (session: ShadowPreviewSession) => api(nodePath(nodeID, `/projects/compose/${encoded}/takeover/shadow/${session.session_id}`), { method: 'DELETE' }),
-    onSuccess: () => { shadowSessionRef.current = null; setShadowSession(null); void client.invalidateQueries({ queryKey: ['tasks', nodeID] }) },
+    onSuccess: () => { shadowSessionRef.current = null; setShadowSession(null); void client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] }) },
   })
   const cleanupExternal = useMutation({
     mutationFn: (input: { confirmation_name: string; remove_volumes: boolean }) => api<TaskRow>(nodePath(nodeID, `/projects/compose/${encoded}/cleanup`), { method: 'POST', body: JSON.stringify(input) }),
     onSuccess: async () => {
       await Promise.all([
         client.invalidateQueries({ queryKey: ['projects', nodeID] }),
-        client.invalidateQueries({ queryKey: ['tasks', nodeID] }),
+        client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] }),
       ])
       void navigate({ to: '/tasks' })
     },

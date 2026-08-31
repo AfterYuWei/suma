@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,11 +14,13 @@ import (
 )
 
 const (
-	StatusPending  = "pending"
-	StatusRunning  = "running"
-	StatusSuccess  = "success"
-	StatusFailed   = "failed"
-	StatusCanceled = "canceled"
+	ScopeControlPlane = "control_plane"
+	ScopeNode         = "node"
+	StatusPending     = "pending"
+	StatusRunning     = "running"
+	StatusSuccess     = "success"
+	StatusFailed      = "failed"
+	StatusCanceled    = "canceled"
 )
 
 type Event struct {
@@ -49,7 +52,16 @@ func (s *Service) RecoverInterrupted(ctx context.Context) error {
 }
 
 func (s *Service) Start(taskType, name string, work Work) (database.Task, error) {
-	return s.StartForNode("local", "Local", taskType, name, work)
+	if defaultNodeTaskType(taskType) {
+		return s.StartForNode("local", "Local", taskType, name, work)
+	}
+	return s.StartControlPlane(taskType, name, work)
+}
+
+func (s *Service) StartControlPlane(taskType, name string, work Work) (database.Task, error) {
+	return s.StartWithIDControlPlane(taskType, name, func(ctx context.Context, _ string, report Reporter) error {
+		return work(ctx, report)
+	})
 }
 
 func (s *Service) StartForNode(nodeID, nodeName, taskType, name string, work Work) (database.Task, error) {
@@ -59,15 +71,35 @@ func (s *Service) StartForNode(nodeID, nodeName, taskType, name string, work Wor
 }
 
 func (s *Service) StartWithID(taskType, name string, work IdentifiedWork) (database.Task, error) {
-	return s.StartWithIDForNode("local", "Local", taskType, name, work)
+	if defaultNodeTaskType(taskType) {
+		return s.StartWithIDForNode("local", "Local", taskType, name, work)
+	}
+	return s.StartWithIDControlPlane(taskType, name, work)
+}
+
+func defaultNodeTaskType(taskType string) bool {
+	for _, prefix := range []string{"container.", "image.", "network.", "volume.", "compose.", "project.", "system."} {
+		if strings.HasPrefix(taskType, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) StartWithIDControlPlane(taskType, name string, work IdentifiedWork) (database.Task, error) {
+	return s.startWithID(ScopeControlPlane, "", "", taskType, name, work)
 }
 
 func (s *Service) StartWithIDForNode(nodeID, nodeName, taskType, name string, work IdentifiedWork) (database.Task, error) {
+	return s.startWithID(ScopeNode, nodeID, nodeName, taskType, name, work)
+}
+
+func (s *Service) startWithID(scope, nodeID, nodeName, taskType, name string, work IdentifiedWork) (database.Task, error) {
 	id, err := randomID()
 	if err != nil {
 		return database.Task{}, err
 	}
-	row := database.Task{ID: id, NodeID: nodeID, NodeName: nodeName, Type: taskType, Name: name, Status: StatusPending}
+	row := database.Task{ID: id, Scope: scope, NodeID: nodeID, NodeName: nodeName, Type: taskType, Name: name, Status: StatusPending}
 	if err := s.db.Create(&row).Error; err != nil {
 		return row, err
 	}
@@ -116,15 +148,34 @@ func (s *Service) run(ctx context.Context, row database.Task, work Work) {
 }
 
 func (s *Service) List(ctx context.Context) ([]database.Task, error) {
-	return s.ListForNode(ctx, "")
+	return s.list(ctx, "", "")
 }
 func (s *Service) ListForNode(ctx context.Context, nodeID string) ([]database.Task, error) {
+	return s.list(ctx, ScopeNode, nodeID)
+}
+func (s *Service) ListControlPlane(ctx context.Context) ([]database.Task, error) {
+	return s.list(ctx, ScopeControlPlane, "")
+}
+func (s *Service) list(ctx context.Context, scope, nodeID string) ([]database.Task, error) {
 	var rows []database.Task
 	query := s.db.WithContext(ctx).Order("created_at DESC").Limit(200)
+	if scope != "" {
+		query = query.Where("scope = ?", scope)
+	}
 	if nodeID != "" {
 		query = query.Where("node_id = ?", nodeID)
 	}
 	return rows, query.Find(&rows).Error
+}
+
+func (s *Service) Get(ctx context.Context, id string) (database.Task, error) {
+	var row database.Task
+	return row, s.db.WithContext(ctx).First(&row, "id = ?", id).Error
+}
+
+func (s *Service) GetForNode(ctx context.Context, nodeID, id string) (database.Task, error) {
+	var row database.Task
+	return row, s.db.WithContext(ctx).Where("scope = ? AND node_id = ? AND id = ?", ScopeNode, nodeID, id).First(&row).Error
 }
 func (s *Service) Logs(ctx context.Context, id string) ([]database.TaskLog, error) {
 	var rows []database.TaskLog
@@ -146,6 +197,20 @@ func (s *Service) Steps(ctx context.Context, id string) ([]database.TaskStep, er
 	var rows []database.TaskStep
 	return rows, s.db.WithContext(ctx).Where("task_id = ?", id).Order("created_at ASC").Find(&rows).Error
 }
+
+func (s *Service) LogsForNode(ctx context.Context, nodeID, id string) ([]database.TaskLog, error) {
+	if _, err := s.GetForNode(ctx, nodeID, id); err != nil {
+		return nil, err
+	}
+	return s.Logs(ctx, id)
+}
+
+func (s *Service) StepsForNode(ctx context.Context, nodeID, id string) ([]database.TaskStep, error) {
+	if _, err := s.GetForNode(ctx, nodeID, id); err != nil {
+		return nil, err
+	}
+	return s.Steps(ctx, id)
+}
 func (s *Service) Cancel(id string) bool {
 	s.mu.RLock()
 	cancel, ok := s.cancels[id]
@@ -154,6 +219,13 @@ func (s *Service) Cancel(id string) bool {
 		cancel()
 	}
 	return ok
+}
+
+func (s *Service) CancelForNode(ctx context.Context, nodeID, id string) (bool, error) {
+	if _, err := s.GetForNode(ctx, nodeID, id); err != nil {
+		return false, err
+	}
+	return s.Cancel(id), nil
 }
 func (s *Service) Subscribe(id string) (<-chan Event, func()) {
 	channel := make(chan Event, 32)

@@ -7,6 +7,7 @@ import { LoadingState } from '../components/ui/loading-state'
 import { Progress } from '../components/ui/progress'
 import { Spinner } from '../components/ui/spinner'
 import { StatusBadge } from '../components/ui/status-badge'
+import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
@@ -15,7 +16,7 @@ import { promptDialog } from '../stores/dialog'
 import { useUIStore } from '../stores/ui'
 import { ResourceFrame } from './images'
 
-interface Task { id: string; type: string; name: string; status: string; progress: number; message: string; created_at: string }
+interface Task { id: string; scope: 'control_plane' | 'node'; node_id?: string; node_name?: string; type: string; name: string; status: string; progress: number; message: string; created_at: string }
 interface Log { id: number; level: string; message: string; created_at: string }
 
 const taskTone = (status: string) => status === 'success' ? 'success' : status === 'failed' ? 'critical' : status === 'running' ? 'warning' : 'neutral'
@@ -26,8 +27,9 @@ export function TasksPage() {
   const { t, language } = useI18n()
   const zh = language === 'zh-CN'
   const [expandedID, setExpandedID] = useState<string | null>(null)
-  const query = useQuery({ queryKey: ['tasks', nodeID], queryFn: () => api<Task[]>(`/tasks?node_id=${encodeURIComponent(nodeID)}`), refetchInterval: 2_000 })
-  const prune = useMutation({ mutationFn: () => api(nodePath(nodeID, '/system/prune'), { method: 'POST', body: JSON.stringify({ confirm: 'PRUNE' }) }), onSuccess: () => client.invalidateQueries({ queryKey: ['tasks', nodeID] }) })
+  const [scope, setScope] = useState<'current' | 'control_plane' | 'all'>('current')
+  const query = useQuery({ queryKey: ['tasks', scope, nodeID], queryFn: () => api<Task[]>(scope === 'current' ? nodePath(nodeID, '/tasks') : `/tasks?scope=${scope}`), refetchInterval: 2_000 })
+  const prune = useMutation({ mutationFn: () => api(nodePath(nodeID, '/system/prune'), { method: 'POST', body: JSON.stringify({ confirm: 'PRUNE' }) }), onSuccess: () => client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] }) })
   const startPrune = async () => { const value = await promptDialog({ title: t('systemPrune'), description: t('systemPruneDescription'), confirmLabel: t('systemPrune'), danger: true, input: { label: t('typeToConfirm', { value: 'PRUNE' }), requiredValue: 'PRUNE' } }); if (value === 'PRUNE') prune.mutate() }
 
   return (
@@ -35,10 +37,10 @@ export function TasksPage() {
       title={t('tasks')}
       detail={zh ? '长时间运行的 Docker 与 Compose 操作' : 'Long-running Docker and Compose operations'}
       action={(
-        <Button variant="outline" className="text-destructive hover:text-destructive" disabled={prune.isPending} onClick={() => void startPrune()}>
-          {prune.isPending && <Spinner className="size-4" />}
-          {t('systemPrune')}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2"><Tabs value={scope} onValueChange={(value) => { setScope(value as typeof scope); setExpandedID(null) }}><TabsList><TabsTrigger value="current">{zh ? '当前节点' : 'Current node'}</TabsTrigger><TabsTrigger value="control_plane">{zh ? '控制平面' : 'Control plane'}</TabsTrigger><TabsTrigger value="all">{zh ? '全部' : 'All'}</TabsTrigger></TabsList></Tabs><Button variant="outline" className="text-destructive hover:text-destructive" disabled={prune.isPending} onClick={() => void startPrune()}>
+            {prune.isPending && <Spinner className="size-4" />}
+            {t('systemPrune')}
+          </Button></div>
       )}
     >
       {query.isPending
@@ -48,6 +50,7 @@ export function TasksPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>{zh ? '任务' : 'Task'}</TableHead>
+                  {scope !== 'current' && <TableHead>{zh ? '作用域 / 节点' : 'Scope / node'}</TableHead>}
                   <TableHead className="w-56">{zh ? '进度' : 'Progress'}</TableHead>
                   <TableHead className="w-28">{zh ? '状态' : 'Status'}</TableHead>
                   <TableHead className="w-44">{zh ? '创建时间' : 'Created'}</TableHead>
@@ -56,7 +59,7 @@ export function TasksPage() {
               <TableBody>
                 {(query.data ?? []).length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">{zh ? '暂无任务' : 'No tasks'}</TableCell>
+                    <TableCell colSpan={scope === 'current' ? 4 : 5} className="h-24 text-center text-muted-foreground">{zh ? '暂无任务' : 'No tasks'}</TableCell>
                   </TableRow>
                 )}
                 {(query.data ?? []).map((row) => (
@@ -70,13 +73,14 @@ export function TasksPage() {
                         <div className="font-medium">{row.name}</div>
                         <div className="text-xs text-muted-foreground">{row.message || row.type}</div>
                       </TableCell>
+                      {scope !== 'current' && <TableCell><div>{row.scope === 'control_plane' ? (zh ? '控制平面' : 'Control plane') : (zh ? '节点' : 'Node')}</div>{row.node_id && <div className="text-xs text-muted-foreground">{row.node_name || row.node_id}</div>}</TableCell>}
                       <TableCell><Progress value={Number(row.progress)} /></TableCell>
                       <TableCell><StatusBadge tone={taskTone(row.status)}>{row.status}</StatusBadge></TableCell>
                       <TableCell className="text-muted-foreground tabular-nums">{new Date(row.created_at).toLocaleString(language)}</TableCell>
                     </TableRow>
                     {expandedID === row.id && (
                       <TableRow className="hover:bg-transparent">
-                        <TableCell colSpan={4} className="whitespace-normal bg-muted/40">
+                        <TableCell colSpan={scope === 'current' ? 4 : 5} className="whitespace-normal bg-muted/40">
                           <TaskLogs task={row} />
                         </TableCell>
                       </TableRow>
@@ -93,7 +97,8 @@ export function TasksPage() {
 function TaskLogs({ task }: { task: Task }) {
   const { language } = useI18n()
   const zh = language === 'zh-CN'
-  const logs = useQuery({ queryKey: ['task-logs', task.id], queryFn: () => api<Log[]>(`/tasks/${task.id}/logs`), refetchInterval: task.status === 'running' ? 1_000 : false })
+  const logsPath = task.scope === 'node' && task.node_id ? nodePath(task.node_id, `/tasks/${encodeURIComponent(task.id)}/logs`) : `/tasks/${encodeURIComponent(task.id)}/logs`
+  const logs = useQuery({ queryKey: ['task-logs', task.scope, task.node_id, task.id], queryFn: () => api<Log[]>(logsPath), refetchInterval: task.status === 'running' ? 1_000 : false })
   if (logs.isPending) return <LoadingState embedded compact rows={3} label={zh ? '正在加载任务输出' : 'Loading task output'} />
   return (
     <div className="flex max-h-64 flex-col gap-1.5 overflow-y-auto">

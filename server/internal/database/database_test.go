@@ -66,3 +66,50 @@ func TestOpenMigratesLegacyUserProfileColumns(t *testing.T) {
 		t.Fatalf("legacy user changed during migration: %#v", user)
 	}
 }
+
+func TestScopedHistoryMigrationBackfillsDeliveryStateIdempotently(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := DeliveryProject{Name: "production", ReconcileMode: "manual"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&DeliveryProjectNode{ProjectID: project.ID, NodeID: "edge"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	release := DeliveryRelease{ProjectID: project.ID, CommitSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Status: "succeeded"}
+	if err := db.Create(&release).Error; err != nil {
+		t.Fatal(err)
+	}
+	deployment := DeliveryReleaseDeployment{ReleaseID: release.ID, NodeID: "edge", NodeName: "Edge", TaskID: "node-task", Status: "succeeded", HealthSummary: "healthy"}
+	if err := db.Create(&deployment).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&Task{ID: "cd-parent", Scope: "node", NodeID: "local", NodeName: "Local", Type: "cd.deploy", Name: "deploy", Status: "success"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&AuditLog{Scope: "node", NodeID: "local", NodeName: "Local", Action: "settings.update", Result: "success"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateNodeScopesAndDeliveryHistory(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateNodeScopesAndDeliveryHistory(db); err != nil {
+		t.Fatal(err)
+	}
+	var attemptCount int64
+	_ = db.Model(&DeliveryDeploymentAttempt{}).Where("deployment_id = ?", deployment.ID).Count(&attemptCount).Error
+	var state DeliveryTargetState
+	stateErr := db.Where("project_id = ? AND node_id = ?", project.ID, "edge").First(&state).Error
+	var parent Task
+	_ = db.First(&parent, "id = ?", "cd-parent").Error
+	var audit AuditLog
+	_ = db.First(&audit, "action = ?", "settings.update").Error
+	var updatedProject DeliveryProject
+	_ = db.First(&updatedProject, project.ID).Error
+	if attemptCount != 1 || stateErr != nil || state.ActiveReleaseID == nil || *state.ActiveReleaseID != release.ID || parent.Scope != "control_plane" || parent.NodeID != "" || audit.Scope != "control_plane" || audit.NodeID != "" || updatedProject.ActiveCommit != release.CommitSHA {
+		t.Fatalf("backfill mismatch: attempts=%d state=%#v parent=%#v audit=%#v project=%#v err=%v", attemptCount, state, parent, audit, updatedProject, stateErr)
+	}
+}
