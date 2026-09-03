@@ -15,6 +15,7 @@ import { Spinner } from '../components/ui/spinner'
 import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { TooltipHint } from '../components/ui/tooltip-hint'
+import { confirmExternalProjectCleanup } from '../features/compose/external-project-cleanup'
 import { TakeoverWarningDialog } from '../features/compose/takeover-warning-dialog'
 import type { Project, ProjectSummary } from '../features/compose/types'
 import type { ContainerSummary } from '../features/containers/types'
@@ -107,7 +108,7 @@ export function ComposePage() {
 }
 
 function actionLabel(action: string, zh: boolean) {
-  const values: Record<string, [string, string]> = { up: ['启动', 'Start'], start: ['启动现有容器', 'Start existing containers'], stop: ['停止', 'Stop'], restart: ['重启', 'Restart'], update: ['更新', 'Update'], down: ['Down', 'Down'], remove: ['删除', 'Remove'] }
+  const values: Record<string, [string, string]> = { up: ['启动', 'Start'], start: ['启动现有容器', 'Start existing containers'], stop: ['停止', 'Stop'], restart: ['重启', 'Restart'], update: ['更新', 'Update'], down: ['Down', 'Down'], remove: ['删除', 'Remove'], cleanup: ['删除清理', 'Delete and clean'] }
   return values[action]?.[zh ? 0 : 1] ?? action
 }
 
@@ -133,6 +134,16 @@ function ProjectActions({ row, zh, onTakeover, onFeedback }: { row: ProjectSumma
     onSuccess: () => { onFeedback({ kind: 'success', projectName: row.name, action: 'remove' }); void client.invalidateQueries({ queryKey: ['projects', nodeID] }) },
     onError: (error) => onFeedback({ kind: 'error', projectName: row.name, action: 'remove', message: error.message }),
   })
+  const cleanup = useMutation({
+    mutationFn: (removeVolumes: boolean) => api<ProjectTask>(nodePath(nodeID, `/projects/compose/${encodeURIComponent(row.name)}/cleanup`), { method: 'POST', body: JSON.stringify({ confirmation_name: row.name, remove_volumes: removeVolumes }) }),
+    onMutate: () => onFeedback({ kind: 'pending', projectName: row.name, action: 'cleanup' }),
+    onSuccess: (task) => {
+      onFeedback({ kind: 'task', projectName: row.name, action: 'cleanup', taskID: task.id })
+      void client.invalidateQueries({ queryKey: ['projects', nodeID] })
+      void client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] })
+    },
+    onError: (error) => onFeedback({ kind: 'error', projectName: row.name, action: 'cleanup', message: error.message }),
+  })
   const run = async (name: string) => {
     if (action.isPending || remove.isPending) return
     if (name === 'down' && !await confirmDialog({ title: `Down ${row.name}?`, description: zh ? '将移除项目容器和网络。' : 'Project containers and networks will be removed.', confirmLabel: 'Down', danger: true })) return
@@ -144,7 +155,12 @@ function ProjectActions({ row, zh, onTakeover, onFeedback }: { row: ProjectSumma
     if (confirmed !== row.name) return
     remove.mutate()
   }
-  if (!row.managed) return <div className="flex items-center"><ActionIcon label={zh ? '查看项目' : 'View Project'}><Link to="/projects/$backend/$projectName" params={{ backend: row.backend, projectName: row.name }}><Eye /></Link></ActionIcon><ActionIcon label={zh ? '接管项目' : 'Take over Project'} onClick={onTakeover}><Download /></ActionIcon></div>
+  const cleanupProject = async () => {
+    if (action.isPending || remove.isPending || cleanup.isPending) return
+    const result = await confirmExternalProjectCleanup(row.name, zh)
+    if (result) cleanup.mutate(result.checked)
+  }
+  if (!row.managed) return <div className="flex items-center" aria-busy={cleanup.isPending}><ActionIcon label={zh ? '查看项目' : 'View Project'}><Link to="/projects/$backend/$projectName" params={{ backend: row.backend, projectName: row.name }}><Eye /></Link></ActionIcon><ActionIcon label={zh ? '接管项目' : 'Take over Project'} disabled={cleanup.isPending} onClick={onTakeover}><Download /></ActionIcon>{row.capabilities.includes('cleanup') && <ActionIcon label={zh ? '删除并清理项目' : 'Delete and clean Project'} destructive disabled={cleanup.isPending} onClick={() => void cleanupProject()}>{cleanup.isPending ? <Spinner /> : <Trash2 />}</ActionIcon>}</div>
   const supported = (capability: string) => row.capabilities.includes(capability as never)
   const primaryAction = row.status === 'running' || row.status === 'degraded' ? 'down' : 'up'
   const PrimaryIcon = primaryAction === 'down' ? PowerOff : Play

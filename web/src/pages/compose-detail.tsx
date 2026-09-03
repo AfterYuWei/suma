@@ -16,6 +16,7 @@ import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { TooltipHint } from '../components/ui/tooltip-hint'
+import { confirmExternalProjectCleanup } from '../features/compose/external-project-cleanup'
 import { TakeoverWarningDialog } from '../features/compose/takeover-warning-dialog'
 import type { Project } from '../features/compose/types'
 import { LogTailSelect } from '../features/containers/log-tail-select'
@@ -129,6 +130,16 @@ export function ComposeDetailPage() {
       void client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] })
     },
   })
+  const cleanup = useMutation({
+    mutationFn: (removeVolumes: boolean) => api<ComposeTask>(nodePath(nodeID, `/projects/compose/${encodedName}/cleanup`), { method: 'POST', body: JSON.stringify({ confirmation_name: projectName, remove_volumes: removeVolumes }) }),
+    onSuccess: (task) => {
+      client.setQueryData(['compose-action-task', nodeID, task.id], task)
+      void client.invalidateQueries({ queryKey: ['projects', nodeID] })
+      void client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] })
+      void navigate({ to: '/tasks' })
+    },
+    onError: (error) => setNotice(error.message),
+  })
   useEffect(() => {
     const task = trackedTask.data
     if (!task || task.status === 'pending' || task.status === 'running') return
@@ -162,6 +173,11 @@ export function ComposeDetailPage() {
     await api(nodePath(nodeID, `/projects/compose/${encodedName}?confirm=${encodedName}`), { method: 'DELETE' })
     void navigate({ to: '/projects' })
   }
+  const cleanupExternal = async () => {
+    if (cleanup.isPending) return
+    const result = await confirmExternalProjectCleanup(projectName, zh)
+    if (result) cleanup.mutate(result.checked)
+  }
   const run = async (name: string) => {
     if (action.isPending || taskRunning) {
       setOperationOpen(true)
@@ -189,7 +205,8 @@ export function ComposeDetailPage() {
     {project.managed && actionButton('build', <Hammer size={16} />)}
     {project.managed && actionButton('down', <PowerOff size={16} />)}
     {project.managed && <Button disabled={operationActive} onClick={() => void run('up')}>{operationActive && operation?.action === 'up' ? <Spinner className="size-4" /> : <Play size={16} />}{composeActionLabel('up', zh)}</Button>}
-    {!project.managed && <Button onClick={() => setTakeoverOpen(true)}><Download />{zh ? '接管' : 'Take over'}</Button>}
+    {!project.managed && project.capabilities.includes('cleanup') && <Button variant="destructive" disabled={cleanup.isPending} onClick={() => void cleanupExternal()}>{cleanup.isPending ? <Spinner className="size-4" /> : <Trash2 size={16} />}{zh ? '删除项目' : 'Delete Project'}</Button>}
+    {!project.managed && <Button disabled={cleanup.isPending} onClick={() => setTakeoverOpen(true)}><Download />{zh ? '接管' : 'Take over'}</Button>}
   </div>
   return <div className="flex w-full flex-col items-start gap-4">
     <Button variant="ghost" size="sm" className="-ml-2 text-muted-foreground" onClick={() => void navigate({ to: '/projects' })}><ChevronLeft />{zh ? '项目' : 'Projects'}</Button>
