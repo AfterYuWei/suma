@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from '@tanstack/react-router'
-import { CheckCircle2, ChevronLeft, CircleAlert, Download, FileCheck2, Hammer, Play, PowerOff, RefreshCw, Save, Square, Trash2, X } from 'lucide-react'
+import { CheckCircle2, ChevronLeft, CircleAlert, CircleStop, Download, FileCheck2, Hammer, ListTodo, PanelTopClose, Play, PowerOff, RefreshCw, Rocket, Save, Square, Trash2 } from 'lucide-react'
 import { lazy, type ReactNode, Suspense, useEffect, useState } from 'react'
 import { Button } from '../components/ui/button'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '../components/ui/alert'
@@ -280,9 +280,9 @@ function ComposeActionDialog({ open, operation, task, logs, submitting, loading,
         <p className="text-xs text-muted-foreground">{running ? (zh ? '关闭窗口不会停止操作，任务会继续在后台执行。' : 'Closing this window does not stop the operation; it continues in the background.') : (zh ? '可在任务中心查看完整记录。' : 'You can review the complete record in the Task Center.')}</p>
       </div>
       <DialogFooter className="mt-1">
-        {task && running && <Button type="button" variant="destructive" disabled={canceling} onClick={onCancel}>{canceling ? <Spinner /> : <X />}{zh ? '取消任务' : 'Cancel task'}</Button>}
-        {task && !running && <Button type="button" variant="outline" onClick={onViewTasks}>{zh ? '查看任务' : 'View task'}</Button>}
-        <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>{zh ? '关闭窗口' : 'Close window'}</Button>
+        {task && running && <Button type="button" variant="destructive" disabled={canceling} onClick={onCancel}>{canceling ? <Spinner /> : <CircleStop />}{zh ? '取消任务' : 'Cancel task'}</Button>}
+        {task && !running && <Button type="button" variant="outline" onClick={onViewTasks}><ListTodo />{zh ? '查看任务' : 'View task'}</Button>}
+        <Button type="button" variant="outline" onClick={() => onOpenChange(false)}><PanelTopClose />{zh ? '关闭窗口' : 'Close window'}</Button>
       </DialogFooter>
     </DialogContent>}
   </Dialog>
@@ -299,7 +299,7 @@ function ComposeFiles({ dark, file, compose, environment, dirty, notice, zh, set
         </TabsList>
       </Tabs>
       <div className="h-[52vh] overflow-hidden rounded-lg ring-1 ring-foreground/10"><Suspense fallback={<div className="grid h-full place-items-center"><Spinner className="size-5 text-muted-foreground" /></div>}><Monaco key={selected.path} language={selected.language} theme={dark ? 'vs-dark' : 'light'} value={selected.content} onChange={(value) => selected.path === 'compose' ? setCompose(value ?? '') : setEnvironment(value ?? '')} options={{ minimap: { enabled: false }, scrollBeyondLastLine: false, automaticLayout: true, wordWrap: 'on' }} /></Suspense></div>
-      <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-muted-foreground">{notice || (dirty ? (zh ? '有未保存更改' : 'Unsaved changes') : (zh ? '没有更改' : 'No changes'))}</p><div className="flex items-center gap-2"><Button variant="destructive" disabled={actionBusy} onClick={onRemove}><Trash2 size={16} />{zh ? '删除' : 'Remove'}</Button><Button variant="outline" disabled={actionBusy || validating} onClick={onValidate}>{validating ? <Spinner className="size-4" /> : <FileCheck2 size={16} />}{zh ? '校验' : 'Validate'}</Button><Button variant="outline" disabled={actionBusy || !dirty || saving} onClick={onSave}>{saving ? <Spinner className="size-4" /> : <Save size={16} />}{zh ? '保存' : 'Save'}</Button><Button disabled={actionBusy} onClick={onDeploy}>{deploying && <Spinner className="size-4" />}{zh ? '保存并部署' : 'Save & deploy'}</Button></div></div>
+      <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-muted-foreground">{notice || (dirty ? (zh ? '有未保存更改' : 'Unsaved changes') : (zh ? '没有更改' : 'No changes'))}</p><div className="flex items-center gap-2"><Button variant="destructive" disabled={actionBusy} onClick={onRemove}><Trash2 size={16} />{zh ? '删除' : 'Remove'}</Button><Button variant="outline" disabled={actionBusy || validating} onClick={onValidate}>{validating ? <Spinner className="size-4" /> : <FileCheck2 size={16} />}{zh ? '校验' : 'Validate'}</Button><Button variant="outline" disabled={actionBusy || !dirty || saving} onClick={onSave}>{saving ? <Spinner className="size-4" /> : <Save size={16} />}{zh ? '保存' : 'Save'}</Button><Button disabled={actionBusy} onClick={onDeploy}>{deploying ? <Spinner className="size-4" /> : <Rocket size={16} />}{zh ? '保存并部署' : 'Save & deploy'}</Button></div></div>
     </CardContent>
   </Card>
 }
