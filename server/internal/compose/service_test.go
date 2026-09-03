@@ -262,6 +262,35 @@ func TestBatchActionReturnsPerProjectTasks(t *testing.T) {
 	}
 }
 
+func TestReportWriterStreamsCarriageReturnAndPercentageProgress(t *testing.T) {
+	type update struct {
+		progress int
+		message  string
+	}
+	var updates []update
+	writer := newReportWriter(func(progress int, message string) {
+		updates = append(updates, update{progress: progress, message: message})
+	}, 5, 95)
+
+	if _, err := writer.Write([]byte("image Pulling\rimage Downloading 40%\rfinal fragment")); err != nil {
+		t.Fatal(err)
+	}
+	writer.Flush()
+
+	if len(updates) != 3 {
+		t.Fatalf("updates = %#v", updates)
+	}
+	if updates[0].message != "image Pulling" || updates[0].progress <= 5 {
+		t.Fatalf("first update = %#v", updates[0])
+	}
+	if updates[1].message != "image Downloading 40%" || updates[1].progress != 41 {
+		t.Fatalf("percentage update = %#v", updates[1])
+	}
+	if updates[2].message != "final fragment" || updates[2].progress <= updates[1].progress {
+		t.Fatalf("flushed update = %#v", updates[2])
+	}
+}
+
 func waitForTaskCompletion(t *testing.T, db *gorm.DB, id string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)

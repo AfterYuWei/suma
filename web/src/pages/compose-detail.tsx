@@ -1,12 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from '@tanstack/react-router'
-import { ChevronLeft, Download, FileCheck2, Play, Save, Trash2 } from 'lucide-react'
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { CheckCircle2, ChevronLeft, CircleAlert, Download, FileCheck2, Hammer, Play, PowerOff, RefreshCw, Save, Square, Trash2, X } from 'lucide-react'
+import { lazy, type ReactNode, Suspense, useEffect, useState } from 'react'
 import { Button } from '../components/ui/button'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '../components/ui/alert'
 import { Card, CardContent } from '../components/ui/card'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog'
 import { ErrorState } from '../components/ui/error-state'
 import { LoadingState } from '../components/ui/loading-state'
+import { Progress } from '../components/ui/progress'
 import { Spinner } from '../components/ui/spinner'
 import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
@@ -24,6 +26,9 @@ import { ResourceFrame } from './images'
 
 const Monaco = lazy(() => import('@monaco-editor/react'))
 type View = 'Files' | 'Services' | 'Logs'
+interface ComposeTask { id: string; type: string; name: string; status: string; progress: number; message: string }
+interface TaskLog { id: number; level: string; message: string; created_at: string }
+interface ComposeOperation { action: string; taskID: string }
 const statusTone = (status: string) => status === 'running' ? 'success' : status === 'degraded' ? 'warning' : 'neutral'
 const stateTone = (state: string) => state === 'running' ? 'success' : 'neutral'
 
@@ -44,6 +49,8 @@ export function ComposeDetailPage() {
   const [environment, setEnvironment] = useState('')
   const [notice, setNotice] = useState('')
   const [takeoverOpen, setTakeoverOpen] = useState(false)
+  const [operation, setOperation] = useState<ComposeOperation | null>(null)
+  const [operationOpen, setOperationOpen] = useState(false)
 
   useEffect(() => {
     if (!query.data) return
@@ -80,18 +87,69 @@ export function ComposeDetailPage() {
     onError: (error) => setNotice(error.message),
   })
   const action = useMutation({
-    mutationFn: (name: string) => api(nodePath(nodeID, `/projects/compose/${encodedName}/actions/${name}`), { method: 'POST' }),
-    onSuccess: () => {
-      setNotice(zh ? '任务已启动。' : 'Task started.')
+    mutationFn: (name: string) => api<ComposeTask>(nodePath(nodeID, `/projects/compose/${encodedName}/actions/${name}`), { method: 'POST' }),
+    onMutate: (name) => {
+      setNotice('')
+      setOperation({ action: name, taskID: '' })
+      setOperationOpen(true)
+    },
+    onSuccess: (task, name) => {
+      setOperation({ action: name, taskID: task.id })
+      client.setQueryData(['compose-action-task', nodeID, task.id], task)
+      setNotice(zh ? `${composeActionLabel(name, zh)}任务已启动。` : `${composeActionLabel(name, zh)} task started.`)
       void client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] })
     },
     onError: (error) => setNotice(error.message),
   })
+  const trackedTask = useQuery({
+    queryKey: ['compose-action-task', nodeID, operation?.taskID],
+    queryFn: () => api<ComposeTask>(nodePath(nodeID, `/tasks/${encodeURIComponent(operation?.taskID || '')}`)),
+    enabled: !!operation?.taskID,
+    refetchInterval: (result) => {
+      const status = result.state.data?.status
+      return !status || status === 'pending' || status === 'running' ? 1_000 : false
+    },
+  })
+  const taskRunning = trackedTask.data?.status === 'pending' || trackedTask.data?.status === 'running'
+  const taskLogs = useQuery({
+    queryKey: ['compose-action-logs', nodeID, operation?.taskID],
+    queryFn: () => api<TaskLog[]>(nodePath(nodeID, `/tasks/${encodeURIComponent(operation?.taskID || '')}/logs`)),
+    enabled: !!operation?.taskID,
+    refetchInterval: taskRunning ? 1_000 : false,
+  })
+  const cancelAction = useMutation({
+    mutationFn: (taskID: string) => api(nodePath(nodeID, `/tasks/${encodeURIComponent(taskID)}/cancel`), { method: 'POST' }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['compose-action-task', nodeID, operation?.taskID] })
+      void client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] })
+    },
+  })
+  useEffect(() => {
+    const task = trackedTask.data
+    if (!task || task.status === 'pending' || task.status === 'running') return
+    setNotice(task.status === 'success'
+      ? (zh ? `${composeActionLabel(operation?.action || '', zh)}完成。` : `${composeActionLabel(operation?.action || '', zh)} completed.`)
+      : (zh ? `${composeActionLabel(operation?.action || '', zh)}${task.status === 'canceled' ? '已取消' : '失败'}：${task.message}` : `${composeActionLabel(operation?.action || '', zh)} ${task.status}: ${task.message}`))
+    void Promise.all([
+      client.invalidateQueries({ queryKey: ['project', nodeID, backend, projectName] }),
+      client.invalidateQueries({ queryKey: ['project-services', nodeID, projectName] }),
+      client.invalidateQueries({ queryKey: ['project-logs', nodeID, projectName] }),
+      client.invalidateQueries({ queryKey: ['projects', nodeID] }),
+      client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] }),
+      client.invalidateQueries({ queryKey: ['compose-action-logs', nodeID, operation?.taskID] }),
+    ])
+  }, [backend, client, nodeID, operation?.action, operation?.taskID, projectName, trackedTask.data, zh])
   const deploy = async () => {
+    if (action.isPending || taskRunning) {
+      setOperationOpen(true)
+      return
+    }
     const changes = [compose !== query.data?.compose && 'compose.yml', environment !== query.data?.environment && '.env'].filter(Boolean)
     const firstTakeoverDeploy = query.data?.metadata?.origin === 'takeover' && !query.data.metadata.last_deployed_at
     if ((changes.length || firstTakeoverDeploy) && !await confirmDialog({ title: firstTakeoverDeploy ? (zh ? '首次由 SUMA 部署？' : 'First SUMA deployment?') : t('deployChanges'), description: firstTakeoverDeploy ? (zh ? '现有运行态可能与接管草稿不同，Compose 可能重建容器、改变网络或处理孤立容器。' : 'Runtime state may differ from the takeover draft; Compose may recreate containers, change networks, or handle orphans.') : t('deployChangesDescription', { files: changes.join(' / ') }), confirmLabel: zh ? '确认部署' : 'Deploy' })) return
     if (changes.length) await save.mutateAsync()
+    action.reset()
+    cancelAction.reset()
     await action.mutateAsync('update')
   }
   const remove = async () => {
@@ -100,7 +158,13 @@ export function ComposeDetailPage() {
     void navigate({ to: '/projects' })
   }
   const run = async (name: string) => {
+    if (action.isPending || taskRunning) {
+      setOperationOpen(true)
+      return
+    }
     if (name === 'down' && !await confirmDialog({ title: t('composeDown'), description: t('composeDownDescription', { name: projectName }), confirmLabel: 'Down', danger: true })) return
+    action.reset()
+    cancelAction.reset()
     action.mutate(name)
   }
 
@@ -110,10 +174,16 @@ export function ComposeDetailPage() {
 
   const project = query.data
   const dirty = compose !== project.compose || environment !== project.environment
+  const operationActive = action.isPending || taskRunning
+  const actionButton = (name: string, icon: ReactNode) => <Button key={name} variant={name === 'down' ? 'destructive' : 'outline'} disabled={operationActive} onClick={() => void run(name)}>{operationActive && operation?.action === name ? <Spinner className="size-4" /> : icon}{composeActionLabel(name, zh)}</Button>
   const headerActions = <div className="flex flex-wrap items-center gap-2">
     <StatusBadge tone={statusTone(project.status)}>{project.status}</StatusBadge>
-    {project.managed && ['stop', 'restart', 'pull', 'build', 'down'].map((name) => <Button key={name} variant={name === 'down' ? 'destructive' : 'outline'} disabled={action.isPending} onClick={() => void run(name)}>{name}</Button>)}
-    {project.managed && <Button disabled={action.isPending} onClick={() => void run('up')}>{action.isPending ? <Spinner className="size-4" /> : <Play size={16} />}{zh ? '启动' : 'Start'}</Button>}
+    {project.managed && actionButton('stop', <Square size={16} />)}
+    {project.managed && actionButton('restart', <RefreshCw size={16} />)}
+    {project.managed && actionButton('pull', <Download size={16} />)}
+    {project.managed && actionButton('build', <Hammer size={16} />)}
+    {project.managed && actionButton('down', <PowerOff size={16} />)}
+    {project.managed && <Button disabled={operationActive} onClick={() => void run('up')}>{operationActive && operation?.action === 'up' ? <Spinner className="size-4" /> : <Play size={16} />}{composeActionLabel('up', zh)}</Button>}
     {!project.managed && <Button onClick={() => setTakeoverOpen(true)}><Download />{zh ? '接管' : 'Take over'}</Button>}
   </div>
   return <div className="flex w-full flex-col items-start gap-4">
@@ -128,16 +198,97 @@ export function ComposeDetailPage() {
             {(project.managed ? ['Files', 'Services', 'Logs'] : ['Services']).map((name) => <TabsTrigger key={name} value={name}>{name === 'Files' ? (zh ? 'Compose 文件' : 'Compose files') : name === 'Services' ? (zh ? '服务' : 'Services') : (zh ? '日志' : 'Logs')}</TabsTrigger>)}
           </TabsList>
         </Tabs>
-        {view === 'Files' && project.managed && <ComposeFiles dark={dark} file={file} compose={compose} environment={environment} dirty={dirty} notice={notice} zh={zh} setFile={setFile} setCompose={setCompose} setEnvironment={setEnvironment} onRemove={() => void remove()} onValidate={() => validate.mutate()} onSave={() => save.mutate()} onDeploy={() => void deploy()} validating={validate.isPending} saving={save.isPending} />}
+        {view === 'Files' && project.managed && <ComposeFiles dark={dark} file={file} compose={compose} environment={environment} dirty={dirty} notice={notice} zh={zh} setFile={setFile} setCompose={setCompose} setEnvironment={setEnvironment} onRemove={() => void remove()} onValidate={() => validate.mutate()} onSave={() => save.mutate()} onDeploy={() => void deploy()} validating={validate.isPending} saving={save.isPending} actionBusy={operationActive} deploying={operationActive && operation?.action === 'update'} />}
         {view === 'Services' && <Services rows={services.data} loading={services.isPending} error={services.error?.message} zh={zh} />}
         {view === 'Logs' && project.managed && <Logs value={logs.data?.logs} loading={logs.isPending} error={logs.isError} zh={zh} />}
       </div>
     </ResourceFrame>
     <TakeoverWarningDialog open={takeoverOpen} projectName={projectName} zh={zh} onOpenChange={setTakeoverOpen} onContinue={() => { setTakeoverOpen(false); void navigate({ to: '/projects/$backend/$projectName/takeover', params: { backend: 'compose', projectName } }) }} />
+    <ComposeActionDialog
+      open={operationOpen}
+      operation={operation}
+      task={trackedTask.data}
+      logs={taskLogs.data ?? []}
+      submitting={action.isPending}
+      loading={trackedTask.isPending && !!operation?.taskID}
+      error={action.error?.message || trackedTask.error?.message || taskLogs.error?.message || cancelAction.error?.message}
+      canceling={cancelAction.isPending}
+      zh={zh}
+      projectName={projectName}
+      onOpenChange={setOperationOpen}
+      onCancel={() => { if (operation?.taskID) cancelAction.mutate(operation.taskID) }}
+      onViewTasks={() => { setOperationOpen(false); void navigate({ to: '/tasks' }) }}
+    />
   </div>
 }
 
-function ComposeFiles({ dark, file, compose, environment, dirty, notice, zh, setFile, setCompose, setEnvironment, onRemove, onValidate, onSave, onDeploy, validating, saving }: { dark: boolean; file: string; compose: string; environment: string; dirty: boolean; notice: string; zh: boolean; setFile: (file: string) => void; setCompose: (value: string) => void; setEnvironment: (value: string) => void; onRemove: () => void; onValidate: () => void; onSave: () => void; onDeploy: () => void; validating: boolean; saving: boolean }) {
+function composeActionLabel(action: string, zh: boolean) {
+  const labels: Record<string, [string, string]> = {
+    up: ['启动', 'Start'],
+    down: ['Down', 'Down'],
+    stop: ['停止', 'Stop'],
+    restart: ['重启', 'Restart'],
+    pull: ['拉取', 'Pull'],
+    build: ['构建', 'Build'],
+    update: ['更新', 'Update'],
+  }
+  return labels[action]?.[zh ? 0 : 1] ?? action
+}
+
+function ComposeActionDialog({ open, operation, task, logs, submitting, loading, error, canceling, zh, projectName, onOpenChange, onCancel, onViewTasks }: { open: boolean; operation: ComposeOperation | null; task?: ComposeTask; logs: TaskLog[]; submitting: boolean; loading: boolean; error?: string; canceling: boolean; zh: boolean; projectName: string; onOpenChange: (open: boolean) => void; onCancel: () => void; onViewTasks: () => void }) {
+  const status = task?.status || (submitting ? 'submitting' : error ? 'failed' : 'pending')
+  const running = submitting || status === 'pending' || status === 'running'
+  const label = zh
+    ? ({ submitting: '正在提交', pending: '等待中', running: '执行中', success: '已完成', failed: '失败', canceled: '已取消' }[status] ?? status)
+    : ({ submitting: 'Submitting', pending: 'Pending', running: 'Running', success: 'Completed', failed: 'Failed', canceled: 'Canceled' }[status] ?? status)
+  const tone = status === 'success' ? 'success' : status === 'failed' || status === 'canceled' ? 'critical' : status === 'running' || status === 'submitting' ? 'warning' : 'neutral'
+  const actionName = composeActionLabel(operation?.action || '', zh)
+  const progress = task?.progress ?? 0
+
+  return <Dialog open={open} onOpenChange={onOpenChange}>
+    {open && <DialogContent className="sm:max-w-lg">
+      <DialogHeader>
+        <div className="flex items-center gap-2 pr-8">
+          <DialogTitle>{zh ? `Compose ${actionName}进度` : `Compose ${actionName} progress`}</DialogTitle>
+          <StatusBadge tone={tone}>{label}</StatusBadge>
+        </div>
+        <DialogDescription className="break-all">{projectName}</DialogDescription>
+      </DialogHeader>
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-4 text-sm">
+          <span className="text-muted-foreground">{zh ? '任务进度' : 'Task progress'}</span>
+          <span className="font-medium tabular-nums">{progress}%</span>
+        </div>
+        <Progress value={progress} />
+        <div className="flex min-h-6 items-start gap-2 text-sm">
+          {running ? <Spinner className="mt-0.5 size-4 shrink-0 text-muted-foreground" /> : status === 'success' ? <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-600" /> : <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />}
+          <p className="break-all text-muted-foreground">{task?.message || (submitting ? (zh ? '正在创建后台任务…' : 'Creating background task…') : loading ? (zh ? '正在读取任务状态…' : 'Loading task status…') : (zh ? '等待 Docker Compose 输出…' : 'Waiting for Docker Compose output…'))}</p>
+        </div>
+        <div className="flex items-center justify-between gap-4 border-t pt-3">
+          <span className="text-sm font-medium">{zh ? '实时输出' : 'Live output'}</span>
+          {operation?.taskID && <span className="font-mono text-[11px] text-muted-foreground">{operation.taskID}</span>}
+        </div>
+        <div className="max-h-64 min-h-24 overflow-y-auto rounded-lg bg-muted/50 p-3">
+          {logs.length === 0 ? <p className="text-center text-xs text-muted-foreground">{zh ? '等待任务输出…' : 'Waiting for task output…'}</p> : <div className="flex flex-col gap-1.5">
+            {logs.map((log) => <div key={log.id} className="flex items-baseline gap-3">
+              <span className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">{new Date(log.created_at).toLocaleTimeString(zh ? 'zh-CN' : 'en-US')}</span>
+              <span className={`font-mono text-xs break-all ${log.level === 'error' ? 'text-destructive' : ''}`}>{log.message}</span>
+            </div>)}
+          </div>}
+        </div>
+        {error && <ErrorState description={error} />}
+        <p className="text-xs text-muted-foreground">{running ? (zh ? '关闭窗口不会停止操作，任务会继续在后台执行。' : 'Closing this window does not stop the operation; it continues in the background.') : (zh ? '可在任务中心查看完整记录。' : 'You can review the complete record in the Task Center.')}</p>
+      </div>
+      <DialogFooter className="mt-1">
+        {task && running && <Button type="button" variant="destructive" disabled={canceling} onClick={onCancel}>{canceling ? <Spinner /> : <X />}{zh ? '取消任务' : 'Cancel task'}</Button>}
+        {task && !running && <Button type="button" variant="outline" onClick={onViewTasks}>{zh ? '查看任务' : 'View task'}</Button>}
+        <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>{zh ? '关闭窗口' : 'Close window'}</Button>
+      </DialogFooter>
+    </DialogContent>}
+  </Dialog>
+}
+
+function ComposeFiles({ dark, file, compose, environment, dirty, notice, zh, setFile, setCompose, setEnvironment, onRemove, onValidate, onSave, onDeploy, validating, saving, actionBusy, deploying }: { dark: boolean; file: string; compose: string; environment: string; dirty: boolean; notice: string; zh: boolean; setFile: (file: string) => void; setCompose: (value: string) => void; setEnvironment: (value: string) => void; onRemove: () => void; onValidate: () => void; onSave: () => void; onDeploy: () => void; validating: boolean; saving: boolean; actionBusy: boolean; deploying: boolean }) {
   const files = [{ path: 'compose', label: 'compose.yml', content: compose, language: 'yaml' as const }, { path: 'environment', label: '.env', content: environment, language: 'plaintext' as const }]
   const selected = files.find((entry) => entry.path === file) || files[0]
   return <Card className="w-full">
@@ -148,7 +299,7 @@ function ComposeFiles({ dark, file, compose, environment, dirty, notice, zh, set
         </TabsList>
       </Tabs>
       <div className="h-[52vh] overflow-hidden rounded-lg ring-1 ring-foreground/10"><Suspense fallback={<div className="grid h-full place-items-center"><Spinner className="size-5 text-muted-foreground" /></div>}><Monaco key={selected.path} language={selected.language} theme={dark ? 'vs-dark' : 'light'} value={selected.content} onChange={(value) => selected.path === 'compose' ? setCompose(value ?? '') : setEnvironment(value ?? '')} options={{ minimap: { enabled: false }, scrollBeyondLastLine: false, automaticLayout: true, wordWrap: 'on' }} /></Suspense></div>
-      <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-muted-foreground">{notice || (dirty ? (zh ? '有未保存更改' : 'Unsaved changes') : (zh ? '没有更改' : 'No changes'))}</p><div className="flex items-center gap-2"><Button variant="destructive" onClick={onRemove}><Trash2 size={16} />{zh ? '删除' : 'Remove'}</Button><Button variant="outline" disabled={validating} onClick={onValidate}>{validating ? <Spinner className="size-4" /> : <FileCheck2 size={16} />}{zh ? '校验' : 'Validate'}</Button><Button variant="outline" disabled={!dirty || saving} onClick={onSave}>{saving ? <Spinner className="size-4" /> : <Save size={16} />}{zh ? '保存' : 'Save'}</Button><Button onClick={onDeploy}>{zh ? '保存并部署' : 'Save & deploy'}</Button></div></div>
+      <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-muted-foreground">{notice || (dirty ? (zh ? '有未保存更改' : 'Unsaved changes') : (zh ? '没有更改' : 'No changes'))}</p><div className="flex items-center gap-2"><Button variant="destructive" disabled={actionBusy} onClick={onRemove}><Trash2 size={16} />{zh ? '删除' : 'Remove'}</Button><Button variant="outline" disabled={actionBusy || validating} onClick={onValidate}>{validating ? <Spinner className="size-4" /> : <FileCheck2 size={16} />}{zh ? '校验' : 'Validate'}</Button><Button variant="outline" disabled={actionBusy || !dirty || saving} onClick={onSave}>{saving ? <Spinner className="size-4" /> : <Save size={16} />}{zh ? '保存' : 'Save'}</Button><Button disabled={actionBusy} onClick={onDeploy}>{deploying && <Spinner className="size-4" />}{zh ? '保存并部署' : 'Save & deploy'}</Button></div></div>
     </CardContent>
   </Card>
 }

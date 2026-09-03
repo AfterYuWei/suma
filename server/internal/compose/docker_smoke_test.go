@@ -20,6 +20,71 @@ import (
 	"gorm.io/gorm"
 )
 
+// TestRealDockerComposePullActionReportsProgress verifies the managed Project
+// action path against the actual Compose CLI without starting any containers.
+func TestRealDockerComposePullActionReportsProgress(t *testing.T) {
+	if os.Getenv("SUMA_RUN_DOCKER_SMOKE") != "1" {
+		t.Skip("set SUMA_RUN_DOCKER_SMOKE=1 to use the local Docker engine")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	root := t.TempDir()
+	db, err := database.Open(filepath.Join(root, "suma.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := compose.NewRunner("docker compose")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := dockerruntime.New("unix:///var/run/docker.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.Close()
+	if err := adapter.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
+	reference := strings.TrimSpace(os.Getenv("SUMA_SMOKE_LAYER_IMAGE"))
+	if reference == "" {
+		reference = "alpine:3.20.3"
+	}
+	if _, inspectErr := adapter.InspectImage(ctx, reference); inspectErr != nil {
+		t.Cleanup(func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			_ = adapter.RemoveImage(cleanupCtx, reference, false)
+		})
+	}
+	tasks := task.NewService(db)
+	service, err := compose.NewService(db, filepath.Join(root, "managed"), runner, tasks, adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Create(ctx, "pull-progress", "services:\n  app:\n    image: "+reference+"\n", ""); err != nil {
+		t.Fatal(err)
+	}
+	row, err := service.Action(ctx, "pull-progress", "pull")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitTask(t, ctx, db, row.ID, task.StatusSuccess)
+	logs, err := tasks.Logs(ctx, row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var composeOutput bool
+	for _, log := range logs {
+		if log.Message != "Starting docker compose pull" && log.Message != "Completed" {
+			composeOutput = true
+			break
+		}
+	}
+	if !composeOutput {
+		t.Fatalf("Compose pull produced no streamed task output: %#v", logs)
+	}
+}
+
 // TestRealDockerProjectTakeover is opt-in because it creates two temporary
 // Compose Projects on the local Docker engine. It covers multi-file mapped
 // source, whole-Project runtime fallback, scale aggregation, isolated preview,

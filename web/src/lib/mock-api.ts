@@ -151,6 +151,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
   if (/^\/tasks\/[^/]+\/logs$/.test(pathname)) return clone([{ id: 1, level: 'info', message: 'Task accepted by SUMA task service', created_at: earlier }, { id: 2, level: 'info', message: 'Docker operation completed successfully', created_at: now }]) as T
   if (/^\/tasks\/[^/]+\/steps$/.test(pathname)) return clone([{ id: 'download', status: 'success', current: 1, total: 1, progress: 100 }, { id: 'extract', status: 'success', current: 1, total: 1, progress: 100 }]) as T
   if (/^\/tasks\/[^/]+\/cancel$/.test(pathname)) return {} as T
+  if (/^\/tasks\/[^/]+$/.test(pathname)) return clone(tasks.find((item) => pathname.endsWith(item.id)) ?? { id: pathname.split('/').pop(), scope: 'node', node_id: 'local', type: 'compose.pull', name: 'Compose operation', status: 'success', progress: 100, message: 'Operation completed', created_at: now }) as T
   if (pathname === '/audit-logs') {
     const scope = url.searchParams.get('scope') || 'control_plane'
     return clone(scope === 'all' ? audits : audits.filter((item) => item.scope === scope)) as T
@@ -188,6 +189,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     if (/^\/tasks\/[^/]+\/logs$/.test(suffix)) return clone([{ id: 1, level: 'info', message: 'Task accepted by SUMA task service', created_at: earlier }, { id: 2, level: 'info', message: 'Docker operation completed successfully', created_at: now }]) as T
     if (/^\/tasks\/[^/]+\/steps$/.test(suffix)) return clone([{ id: 'download', status: 'success', current: 1, total: 1, progress: 100 }, { id: 'extract', status: 'success', current: 1, total: 1, progress: 100 }]) as T
     if (/^\/tasks\/[^/]+\/cancel$/.test(suffix)) return {} as T
+    if (/^\/tasks\/[^/]+$/.test(suffix)) return clone(tasks.find((item) => suffix.endsWith(item.id)) ?? { id: suffix.split('/').pop(), scope: 'node', node_id: nodeID, node_name: nodes.find((item) => item.id === nodeID)?.name ?? nodeID, type: 'compose.pull', name: 'Compose operation', status: 'success', progress: 100, message: 'Operation completed', created_at: now }) as T
     if (suffix === '/audit-logs') return clone(audits.filter((item) => item.scope === 'node' && item.node_id === nodeID)) as T
     if (suffix === '/overview') {
       const running = containers.filter((item) => item.state === 'running')
@@ -235,7 +237,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
       if (rest === '/takeover/shadow/assess') return clone({ eligible: true, reasons: [], warnings: [] } satisfies ShadowAssessment) as T
       if (rest === '/takeover/shadow' && method === 'POST') return clone({ session_id: 'shadow-demo', preview_project: `${name}-preview`, expires_at: now, task: { id: 'task-shadow-demo', status: 'success', progress: 100, message: 'Preview ready' } } satisfies ShadowPreviewSession) as T
       if (rest.startsWith('/takeover/shadow/')) return clone({ session_id: 'shadow-demo', preview_project: `${name}-preview`, expires_at: now, containers: '1 running', logs: 'Preview service is healthy' } satisfies ShadowPreviewStatus) as T
-      if (rest.startsWith('/actions/')) return clone({ id: `task-${name}`, status: 'success', message: 'Operation completed' }) as T
+      if (rest.startsWith('/actions/')) return clone({ id: `task-${name}`, scope: 'node', node_id: nodeID, type: `compose.${rest.slice('/actions/'.length)}`, name: `Compose ${name}`, status: 'success', progress: 100, message: 'Operation completed', created_at: now }) as T
       return {} as T
     }
     if (suffix === '/system/prune') return clone({ id: 'task-prune-demo', type: 'system_prune', name: 'Docker system prune', status: 'success', progress: 100, message: 'Reclaimed 512 MB', created_at: now }) as T

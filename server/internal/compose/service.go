@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -364,26 +365,32 @@ func (s *Service) Action(ctx context.Context, name, action string) (database.Tas
 	}
 	return s.tasks.StartForNode(s.effectiveNodeID(), s.effectiveNodeName(), "compose."+action, strings.Title(action)+" "+name, func(ctx context.Context, report task.Reporter) error {
 		var err error
-		writer := &reportWriter{report: report}
 		report(1, "Starting docker compose "+action)
+		run := func(start, end int, operation func(io.Writer) error) error {
+			writer := newReportWriter(report, start, end)
+			err := operation(writer)
+			writer.Flush()
+			return err
+		}
 		switch action {
 		case "up":
-			err = s.runner.Up(ctx, project.Path, writer)
+			err = run(5, 95, func(output io.Writer) error { return s.runner.Up(ctx, project.Path, output) })
 		case "down":
-			err = s.runner.Down(ctx, project.Path, writer)
+			err = run(5, 95, func(output io.Writer) error { return s.runner.Down(ctx, project.Path, output) })
 		case "start":
-			err = s.runner.Start(ctx, project.Path, writer)
+			err = run(5, 95, func(output io.Writer) error { return s.runner.Start(ctx, project.Path, output) })
 		case "stop":
-			err = s.runner.Stop(ctx, project.Path, writer)
+			err = run(5, 95, func(output io.Writer) error { return s.runner.Stop(ctx, project.Path, output) })
 		case "restart":
-			err = s.runner.Restart(ctx, project.Path, writer)
+			err = run(5, 95, func(output io.Writer) error { return s.runner.Restart(ctx, project.Path, output) })
 		case "pull":
-			err = s.runner.Pull(ctx, project.Path, writer)
+			err = run(5, 95, func(output io.Writer) error { return s.runner.Pull(ctx, project.Path, output) })
 		case "build":
-			err = s.runner.Build(ctx, project.Path, writer)
+			err = run(5, 95, func(output io.Writer) error { return s.runner.Build(ctx, project.Path, output) })
 		case "update":
-			if err = s.runner.Pull(ctx, project.Path, writer); err == nil {
-				err = s.runner.Up(ctx, project.Path, writer)
+			if err = run(5, 55, func(output io.Writer) error { return s.runner.Pull(ctx, project.Path, output) }); err == nil {
+				report(60, "Images ready; recreating Compose services")
+				err = run(60, 95, func(output io.Writer) error { return s.runner.Up(ctx, project.Path, output) })
 			}
 		default:
 			err = fmt.Errorf("unknown compose action")
@@ -572,24 +579,58 @@ func writeAtomic(path, content string) error {
 }
 
 type reportWriter struct {
-	report task.Reporter
-	buffer strings.Builder
+	report   task.Reporter
+	buffer   strings.Builder
+	start    int
+	progress int
+	maximum  int
+}
+
+var composeOutputPercentage = regexp.MustCompile(`([0-9]{1,3})%`)
+
+func newReportWriter(report task.Reporter, start, maximum int) *reportWriter {
+	return &reportWriter{report: report, start: start, progress: start, maximum: maximum}
 }
 
 func (w *reportWriter) Write(value []byte) (int, error) {
 	w.buffer.Write(value)
 	for {
 		text := w.buffer.String()
-		index := strings.IndexByte(text, '\n')
+		index := strings.IndexAny(text, "\r\n")
 		if index < 0 {
 			break
 		}
 		line := strings.TrimSpace(text[:index])
 		w.buffer.Reset()
 		w.buffer.WriteString(text[index+1:])
-		if line != "" {
-			w.report(50, line)
-		}
+		w.reportLine(line)
 	}
 	return len(value), nil
+}
+
+// Flush reports a final Compose line even when the CLI did not terminate it
+// with a newline. Some Compose progress modes use carriage returns or leave a
+// final status fragment behind when stdout is not attached to a terminal.
+func (w *reportWriter) Flush() {
+	line := strings.TrimSpace(w.buffer.String())
+	w.buffer.Reset()
+	w.reportLine(line)
+}
+
+func (w *reportWriter) reportLine(line string) {
+	if line == "" {
+		return
+	}
+	if match := composeOutputPercentage.FindStringSubmatch(line); len(match) == 2 {
+		if percentage, err := strconv.Atoi(match[1]); err == nil && percentage <= 100 {
+			mapped := w.start + (w.maximum-w.start)*percentage/100
+			if mapped > w.progress {
+				w.progress = mapped
+			}
+		}
+	} else if w.progress < w.maximum {
+		step := max(1, (w.maximum-w.start)/20)
+		w.progress = min(w.maximum, w.progress+step)
+	}
+	w.report(w.progress, line)
 }
