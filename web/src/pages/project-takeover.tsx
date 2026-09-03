@@ -17,6 +17,8 @@ import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import type { EnvironmentCandidate, Project, ProjectTakeoverDraft, ShadowAssessment, ShadowPreviewSession, ShadowPreviewStatus } from '../features/compose/types'
+import { LogTailSelect } from '../features/containers/log-tail-select'
+import { useLogAutoScroll } from '../features/containers/use-log-auto-scroll'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { nodePath } from '../lib/nodes'
@@ -188,6 +190,7 @@ export function ProjectTakeoverPage() {
   const { backend, projectName } = useParams({ from: '/projects/$backend/$projectName/takeover' })
   const nodeID = useUIStore((state) => state.currentNodeID)
   const theme = useUIStore((state) => state.theme)
+  const logTail = useUIStore((state) => state.logTail)
   const { language } = useI18n()
   const zh = language === 'zh-CN'
   const navigate = useNavigate()
@@ -208,7 +211,7 @@ export function ProjectTakeoverPage() {
   const contentSignature = useMemo(() => `${compose}\u0000${environment}`, [compose, environment])
   const tasks = useQuery({ queryKey: ['tasks', 'current', nodeID], queryFn: () => api<TaskRow[]>(nodePath(nodeID, '/tasks')), enabled: shadowSession !== null, refetchInterval: 1_000 })
   const shadowTask = tasks.data?.find((task) => task.id === shadowSession?.task.id)
-  const shadowStatus = useQuery({ queryKey: ['project-shadow-status', nodeID, shadowSession?.session_id], queryFn: () => api<ShadowPreviewStatus>(nodePath(nodeID, `/projects/compose/${encoded}/takeover/shadow/${shadowSession?.session_id}`)), enabled: shadowSession !== null && shadowTask?.status === 'success', refetchInterval: 5_000, retry: false })
+  const shadowStatus = useQuery({ queryKey: ['project-shadow-status', nodeID, shadowSession?.session_id, logTail], queryFn: () => api<ShadowPreviewStatus>(nodePath(nodeID, `/projects/compose/${encoded}/takeover/shadow/${shadowSession?.session_id}?tail=${logTail}`)), enabled: shadowSession !== null && shadowTask?.status === 'success', refetchInterval: 5_000, retry: false })
 
   useEffect(() => {
     if (!preview.data) return
@@ -322,6 +325,8 @@ export function ProjectTakeoverPage() {
 }
 
 function ShadowPreviewPanel({ zh, assessment, assessError, operationError, assessing, starting, session, task, status, statusError, cleaning, onAssess, onStart, onPostpone, onReject, onAccept }: { zh: boolean; assessment?: ShadowAssessment; assessError?: string; operationError?: string; assessing: boolean; starting: boolean; session: ShadowPreviewSession | null; task?: TaskRow; status?: ShadowPreviewStatus; statusError?: string; cleaning: boolean; onAssess: () => void; onStart: () => void; onPostpone: () => void; onReject: () => void; onAccept: () => Promise<void> }) {
+  const logTail = useUIStore((state) => state.logTail)
+  const { viewportRef: logViewportRef, onScroll: onLogScroll } = useLogAutoScroll<HTMLPreElement>(status?.logs || '', `${session?.session_id || ''}\n${logTail}`)
   const taskStatus = task?.status ?? session?.task.status ?? ''
   const taskMessage = task?.message ?? session?.task.message
   return <div className="rounded-lg border border-border p-4">
@@ -353,7 +358,7 @@ function ShadowPreviewPanel({ zh, assessment, assessError, operationError, asses
       {status && <>
         <div className="grid gap-3 lg:grid-cols-2">
           <div><p className="mb-1 text-xs font-medium">{zh ? '容器状态' : 'Container status'}</p><pre className="max-h-56 overflow-auto rounded-lg bg-muted p-3 font-mono text-xs whitespace-pre-wrap">{status.containers}</pre></div>
-          <div><p className="mb-1 text-xs font-medium">{zh ? '预演日志' : 'Preview logs'}</p><pre className="max-h-56 overflow-auto rounded-lg bg-muted p-3 font-mono text-xs whitespace-pre-wrap">{status.logs}</pre></div>
+          <div><div className="mb-1 flex items-center justify-between gap-2"><p className="text-xs font-medium">{zh ? '预演日志' : 'Preview logs'}</p><LogTailSelect zh={zh} /></div><pre ref={logViewportRef} onScroll={onLogScroll} className="max-h-56 overflow-auto rounded-lg bg-muted p-3 font-mono text-xs whitespace-pre-wrap">{status.logs}</pre></div>
         </div>
         <div className="flex flex-wrap justify-end gap-2">
           <Button variant="outline" disabled={cleaning} onClick={onPostpone}><CirclePause />{zh ? '稍后决定并清理' : 'Decide later and clean up'}</Button>

@@ -403,7 +403,11 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 		if !ok {
 			return
 		}
-		logs, err := current.Logs(c.Request.Context(), c.Param("name"))
+		tail, ok := requestedLogTail(c)
+		if !ok {
+			return
+		}
+		logs, err := current.Logs(c.Request.Context(), c.Param("name"), tail)
 		if err != nil {
 			failure(c, 409, 20305, logs)
 			return
@@ -784,7 +788,11 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 		if !ok {
 			return
 		}
-		value, err := current.Logs(c.Request.Context(), c.Param("name"))
+		tail, ok := requestedLogTail(c)
+		if !ok {
+			return
+		}
+		value, err := current.Logs(c.Request.Context(), c.Param("name"), tail)
 		if err != nil {
 			failure(c, 409, 20410, value)
 			return
@@ -1015,7 +1023,11 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 		if !ok {
 			return
 		}
-		status, err := current.ShadowPreviewStatus(c.Request.Context(), c.Param("session"))
+		tail, ok := requestedLogTail(c)
+		if !ok {
+			return
+		}
+		status, err := current.ShadowPreviewStatus(c.Request.Context(), c.Param("session"), tail)
 		if err != nil {
 			failure(c, 409, 20431, err.Error())
 			return

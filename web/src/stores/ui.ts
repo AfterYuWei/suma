@@ -2,6 +2,8 @@ import { create } from 'zustand'
 
 export type Theme = 'dark' | 'light' | 'system'
 export type Language = 'zh-CN' | 'en-US'
+export const logTailOptions = [100, 200, 500, 1000, 2000, 5000] as const
+export type LogTail = (typeof logTailOptions)[number]
 
 interface UIState {
   theme: Theme
@@ -9,11 +11,13 @@ interface UIState {
   commandOpen: boolean
   sidebarOpen: boolean
 	currentNodeID: string
+  logTail: LogTail
   setTheme: (theme: Theme) => void
   setLanguage: (language: Language) => void
   setCommandOpen: (open: boolean) => void
   toggleSidebar: () => void
 	setCurrentNodeID: (nodeID: string) => void
+  setLogTail: (tail: LogTail) => void
 }
 
 function applyTheme(theme: Theme) {
@@ -35,6 +39,8 @@ if (import.meta.hot) {
 
 const storedTheme = (localStorage.getItem('suma-theme') as Theme | null) ?? 'dark'
 const storedLanguage = (localStorage.getItem('suma-language') as Language | null) ?? (navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US')
+const storedLogTailValue = Number(localStorage.getItem('suma-log-tail'))
+const storedLogTail: LogTail = logTailOptions.includes(storedLogTailValue as LogTail) ? storedLogTailValue as LogTail : 200
 applyTheme(storedTheme)
 document.documentElement.lang = storedLanguage
 
@@ -44,6 +50,7 @@ export const useUIStore = create<UIState>((set) => ({
   commandOpen: false,
   sidebarOpen: matchMedia('(min-width: 1024px)').matches,
 	currentNodeID: localStorage.getItem('suma-node') || 'local',
+  logTail: storedLogTail,
   setTheme: (theme) => {
     localStorage.setItem('suma-theme', theme)
     applyTheme(theme)
@@ -57,4 +64,5 @@ export const useUIStore = create<UIState>((set) => ({
   setCommandOpen: (commandOpen) => set({ commandOpen }),
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
 	setCurrentNodeID: (currentNodeID) => { localStorage.setItem('suma-node', currentNodeID); set({ currentNodeID }) },
+  setLogTail: (logTail) => { localStorage.setItem('suma-log-tail', String(logTail)); set({ logTail }) },
 }))

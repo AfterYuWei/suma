@@ -600,9 +600,9 @@ func (f *fakeComposeRunner) Build(context.Context, string, io.Writer) error     
 func (f *fakeComposeRunner) Validate(context.Context, string, io.Writer) error {
 	return nil
 }
-func (f *fakeComposeRunner) Logs(context.Context, string, io.Writer) error { return nil }
+func (f *fakeComposeRunner) Logs(context.Context, string, int, io.Writer) error { return nil }
 
-func (f *fakeComposeRunner) LogsRelease(context.Context, compose.ExecutionSpec, io.Writer) error {
+func (f *fakeComposeRunner) LogsRelease(context.Context, compose.ExecutionSpec, int, io.Writer) error {
 	f.record("logs")
 	return nil
 }

@@ -279,13 +279,24 @@ func (s *Service) Services(ctx context.Context, name string) ([]containerdomain.
 	}
 	return result, nil
 }
-func (s *Service) Logs(ctx context.Context, name string) (string, error) {
+
+const defaultLogTail = 200
+const maximumLogTail = 5000
+
+func normalizeLogTail(tail int) int {
+	if tail <= 0 {
+		return defaultLogTail
+	}
+	return min(tail, maximumLogTail)
+}
+
+func (s *Service) Logs(ctx context.Context, name string, tail int) (string, error) {
 	project, err := s.managedProject(name)
 	if err != nil {
 		return "", err
 	}
 	var output strings.Builder
-	if err := s.runner.Logs(ctx, project.Path, &output); err != nil {
+	if err := s.runner.Logs(ctx, project.Path, normalizeLogTail(tail), &output); err != nil {
 		return output.String(), err
 	}
 	return output.String(), nil

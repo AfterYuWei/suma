@@ -193,7 +193,7 @@ func (s *Service) StartShadowPreview(ctx context.Context, name, fingerprint, con
 	return ShadowPreviewSession{SessionID: row.ID, PreviewProject: previewProject, ExpiresAt: expiresAt, Task: row}, nil
 }
 
-func (s *Service) ShadowPreviewStatus(ctx context.Context, sessionID string) (ShadowPreviewStatus, error) {
+func (s *Service) ShadowPreviewStatus(ctx context.Context, sessionID string, tail int) (ShadowPreviewStatus, error) {
 	metadata, directory, err := s.readShadowSession(sessionID)
 	if err != nil {
 		return ShadowPreviewStatus{}, err
@@ -204,7 +204,7 @@ func (s *Service) ShadowPreviewStatus(ctx context.Context, sessionID string) (Sh
 		return ShadowPreviewStatus{}, err
 	}
 	var logs strings.Builder
-	if err := s.runner.LogsRelease(ctx, spec, &logs); err != nil {
+	if err := s.runner.LogsRelease(ctx, spec, normalizeLogTail(tail), &logs); err != nil {
 		logs.WriteString("\n[logs unavailable: " + err.Error() + "]")
 	}
 	return ShadowPreviewStatus{SessionID: sessionID, PreviewProject: metadata.PreviewProject, ExpiresAt: metadata.ExpiresAt, Containers: containers, Logs: logs.String()}, nil

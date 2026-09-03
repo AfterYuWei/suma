@@ -16,6 +16,8 @@ import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { TooltipHint } from '../components/ui/tooltip-hint'
 import { TakeoverWarningDialog } from '../features/compose/takeover-warning-dialog'
 import type { Project } from '../features/compose/types'
+import { LogTailSelect } from '../features/containers/log-tail-select'
+import { useLogAutoScroll } from '../features/containers/use-log-auto-scroll'
 import type { ContainerMetrics, ContainerSummary } from '../features/containers/types'
 import { api } from '../lib/api'
 import { nodePath } from '../lib/nodes'
@@ -41,6 +43,7 @@ export function ComposeDetailPage() {
   const zh = language === 'zh-CN'
   const theme = useUIStore((state) => state.theme)
   const nodeID = useUIStore((state) => state.currentNodeID)
+  const logTail = useUIStore((state) => state.logTail)
   const dark = theme === 'dark' || (theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
   const query = useQuery({ queryKey: ['project', nodeID, backend, projectName], queryFn: () => api<Project>(nodePath(nodeID, `/projects/${encodeURIComponent(backend)}/${encodedName}`)), enabled: backend === 'compose' })
   const [view, setView] = useState<View>('Files')
@@ -72,7 +75,7 @@ export function ComposeDetailPage() {
     enabled: view === 'Services',
     refetchInterval: 5_000,
   })
-  const logs = useQuery({ queryKey: ['project-logs', nodeID, projectName], queryFn: () => api<{ logs: string }>(nodePath(nodeID, `/projects/compose/${encodedName}/logs`)), enabled: view === 'Logs', refetchInterval: 3_000, retry: false })
+  const logs = useQuery({ queryKey: ['project-logs', nodeID, projectName, logTail], queryFn: () => api<{ logs: string }>(nodePath(nodeID, `/projects/compose/${encodedName}/logs?tail=${logTail}`)), enabled: view === 'Logs', refetchInterval: 3_000, retry: false })
   const save = useMutation({
     mutationFn: () => api<Project>(nodePath(nodeID, `/projects/compose/${encodedName}`), { method: 'PUT', body: JSON.stringify({ compose, environment }) }),
     onSuccess: (row) => {
@@ -200,7 +203,7 @@ export function ComposeDetailPage() {
         </Tabs>
         {view === 'Files' && project.managed && <ComposeFiles dark={dark} file={file} compose={compose} environment={environment} dirty={dirty} notice={notice} zh={zh} setFile={setFile} setCompose={setCompose} setEnvironment={setEnvironment} onRemove={() => void remove()} onValidate={() => validate.mutate()} onSave={() => save.mutate()} onDeploy={() => void deploy()} validating={validate.isPending} saving={save.isPending} actionBusy={operationActive} deploying={operationActive && operation?.action === 'update'} />}
         {view === 'Services' && <Services rows={services.data} loading={services.isPending} error={services.error?.message} zh={zh} />}
-        {view === 'Logs' && project.managed && <Logs value={logs.data?.logs} loading={logs.isPending} error={logs.isError} zh={zh} />}
+        {view === 'Logs' && project.managed && <Logs value={logs.data?.logs} loading={logs.isPending} error={logs.isError} zh={zh} sourceKey={`${nodeID}\n${projectName}\n${logTail}`} />}
       </div>
     </ResourceFrame>
     <TakeoverWarningDialog open={takeoverOpen} projectName={projectName} zh={zh} onOpenChange={setTakeoverOpen} onContinue={() => { setTakeoverOpen(false); void navigate({ to: '/projects/$backend/$projectName/takeover', params: { backend: 'compose', projectName } }) }} />
@@ -343,12 +346,15 @@ function Services({ rows, loading, error, zh }: { rows?: ContainerSummary[]; loa
   </Table>
 }
 
-function Logs({ value, loading, error, zh }: { value?: string; loading: boolean; error: boolean; zh: boolean }) {
-  if (loading) return <LoadingState rows={6} label={zh ? '正在加载 Compose 日志' : 'Loading Compose logs'} />
-  return <Card className="h-[55vh] w-full overflow-auto">
-    <CardContent>
-      <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap">{value || ''}</pre>
-      {!value && <p className="text-sm text-muted-foreground">{error ? (zh ? '没有可用日志，请先启动项目。' : 'No Compose logs available. Start the project first.') : ''}</p>}
-    </CardContent>
-  </Card>
+function Logs({ value, loading, error, zh, sourceKey }: { value?: string; loading: boolean; error: boolean; zh: boolean; sourceKey: string }) {
+  const { viewportRef, onScroll } = useLogAutoScroll<HTMLDivElement>(value || '', sourceKey)
+  return <div className="flex w-full flex-col gap-3">
+    <div className="flex justify-end"><LogTailSelect zh={zh} /></div>
+    {loading ? <LoadingState rows={6} label={zh ? '正在加载 Compose 日志' : 'Loading Compose logs'} /> : <Card className="h-[55vh] w-full">
+      <CardContent ref={viewportRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto">
+        <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap">{value || ''}</pre>
+        {!value && <p className="text-sm text-muted-foreground">{error ? (zh ? '没有可用日志，请先启动项目。' : 'No Compose logs available. Start the project first.') : ''}</p>}
+      </CardContent>
+    </Card>}
+  </div>
 }

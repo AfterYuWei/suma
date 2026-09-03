@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -20,7 +21,7 @@ type Runner interface {
 	Pull(context.Context, string, io.Writer) error
 	Build(context.Context, string, io.Writer) error
 	Validate(context.Context, string, io.Writer) error
-	Logs(context.Context, string, io.Writer) error
+	Logs(context.Context, string, int, io.Writer) error
 	Render(context.Context, ExecutionSpec, io.Writer) (string, error)
 	ValidateRelease(context.Context, ExecutionSpec, io.Writer) error
 	PullRelease(context.Context, ExecutionSpec, io.Writer) error
@@ -28,7 +29,7 @@ type Runner interface {
 	DownRelease(context.Context, ExecutionSpec, io.Writer) error
 	ForceDownRelease(context.Context, ExecutionSpec, bool, io.Writer) error
 	PS(context.Context, ExecutionSpec, io.Writer) (string, error)
-	LogsRelease(context.Context, ExecutionSpec, io.Writer) error
+	LogsRelease(context.Context, ExecutionSpec, int, io.Writer) error
 }
 
 type ExecutionSpec struct {
@@ -188,8 +189,8 @@ func (r *CLIRunner) Build(ctx context.Context, project string, output io.Writer)
 func (r *CLIRunner) Validate(ctx context.Context, project string, output io.Writer) error {
 	return r.run(ctx, project, output, "config", "--quiet")
 }
-func (r *CLIRunner) Logs(ctx context.Context, project string, output io.Writer) error {
-	return r.run(ctx, project, output, "logs", "--tail", "500", "--no-color")
+func (r *CLIRunner) Logs(ctx context.Context, project string, tail int, output io.Writer) error {
+	return r.run(ctx, project, output, "logs", "--tail", strconv.Itoa(normalizeLogTail(tail)), "--no-color")
 }
 
 func (r *CLIRunner) Render(ctx context.Context, spec ExecutionSpec, output io.Writer) (string, error) {
@@ -235,8 +236,8 @@ func (r *CLIRunner) ForceDownRelease(ctx context.Context, spec ExecutionSpec, pr
 func (r *CLIRunner) PS(ctx context.Context, spec ExecutionSpec, output io.Writer) (string, error) {
 	return r.captureSpec(ctx, spec, output, "ps", "--format", "json", "--all")
 }
-func (r *CLIRunner) LogsRelease(ctx context.Context, spec ExecutionSpec, output io.Writer) error {
-	return r.runSpec(ctx, spec, output, "logs", "--tail", "500", "--no-color")
+func (r *CLIRunner) LogsRelease(ctx context.Context, spec ExecutionSpec, tail int, output io.Writer) error {
+	return r.runSpec(ctx, spec, output, "logs", "--tail", strconv.Itoa(normalizeLogTail(tail)), "--no-color")
 }
 
 func releaseEnvironment() []string {

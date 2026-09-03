@@ -126,7 +126,7 @@ func (runner *shadowRunner) ForceDownRelease(context.Context, ExecutionSpec, boo
 func (runner *shadowRunner) PS(context.Context, ExecutionSpec, io.Writer) (string, error) {
 	return `[{"State":"running"}]`, nil
 }
-func (runner *shadowRunner) LogsRelease(_ context.Context, _ ExecutionSpec, output io.Writer) error {
+func (runner *shadowRunner) LogsRelease(_ context.Context, _ ExecutionSpec, _ int, output io.Writer) error {
 	_, _ = io.WriteString(output, "ready\n")
 	return nil
 }
@@ -159,7 +159,7 @@ func TestShadowPreviewUsesTemporaryProjectAndCleanupTask(t *testing.T) {
 	if !strings.HasPrefix(session.PreviewProject, "suma-preview-shop-") || session.PreviewProject == "shop" {
 		t.Fatalf("session = %#v", session)
 	}
-	status, err := service.ShadowPreviewStatus(context.Background(), session.SessionID)
+	status, err := service.ShadowPreviewStatus(context.Background(), session.SessionID, 200)
 	if err != nil || !strings.Contains(status.Containers, "running") || !strings.Contains(status.Logs, "ready") {
 		t.Fatalf("status = %#v, err = %v", status, err)
 	}

@@ -231,6 +231,43 @@ func TestForceRemoveCanPreserveProjectVolumes(t *testing.T) {
 	}
 }
 
+type logTailRunner struct {
+	Runner
+	tails []int
+}
+
+func (runner *logTailRunner) Logs(_ context.Context, _ string, tail int, output io.Writer) error {
+	runner.tails = append(runner.tails, tail)
+	_, err := io.WriteString(output, "recent logs")
+	return err
+}
+
+func TestLogsNormalizesTailLimit(t *testing.T) {
+	root := t.TempDir()
+	projectPath := filepath.Join(root, "managed")
+	if err := os.MkdirAll(projectPath, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectPath, "compose.yml"), []byte("services: {}\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	runner := &logTailRunner{}
+	service := &Service{root: root, runner: runner}
+
+	for _, tail := range []int{0, 1200, 6000} {
+		logs, err := service.Logs(context.Background(), "managed", tail)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if logs != "recent logs" {
+			t.Fatalf("logs = %q", logs)
+		}
+	}
+	if got, want := runner.tails, []int{200, 1200, 5000}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("tails = %v, want %v", got, want)
+	}
+}
+
 type forceRemoveRunner struct {
 	Runner
 	managed         bool

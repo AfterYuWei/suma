@@ -170,7 +170,7 @@ func TestRealDockerProjectTakeover(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitTask(t, ctx, db, session.Task.ID, task.StatusSuccess)
-	status, err := service.ShadowPreviewStatus(ctx, session.SessionID)
+	status, err := service.ShadowPreviewStatus(ctx, session.SessionID, 200)
 	if err != nil || !strings.Contains(status.Containers, "running") {
 		t.Fatalf("preview status = %#v, err = %v", status, err)
 	}

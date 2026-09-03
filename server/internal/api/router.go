@@ -800,7 +800,11 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		success(c, rows)
 	})
 	compose.GET("/:name/logs", func(c *gin.Context) {
-		value, err := deps.Compose.Logs(c.Request.Context(), c.Param("name"))
+		tail, ok := requestedLogTail(c)
+		if !ok {
+			return
+		}
+		value, err := deps.Compose.Logs(c.Request.Context(), c.Param("name"), tail)
 		if err != nil {
 			failure(c, http.StatusConflict, 18012, value)
 			return
@@ -1324,6 +1328,10 @@ var upgrader = websocket.Upgrader{ReadBufferSize: 1024, WriteBufferSize: 4096, C
 }}
 
 func streamLogs(c *gin.Context, service containerdomain.Service) {
+	tail, ok := requestedLogTail(c)
+	if !ok {
+		return
+	}
 	connection, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		return
@@ -1331,7 +1339,7 @@ func streamLogs(c *gin.Context, service containerdomain.Service) {
 	ctx, cancel := context.WithCancel(c.Request.Context())
 	defer cancel()
 	defer connection.Close()
-	stream, err := service.Logs(ctx, c.Param("id"), c.Query("since"), c.DefaultQuery("tail", "200"))
+	stream, err := service.Logs(ctx, c.Param("id"), c.Query("since"), strconv.Itoa(tail))
 	if err != nil {
 		_ = connection.WriteJSON(gin.H{"type": "error", "message": "Unable to open container logs"})
 		return
@@ -1340,6 +1348,29 @@ func streamLogs(c *gin.Context, service containerdomain.Service) {
 	go watchDisconnect(connection, cancel)
 	writer := &websocketTextWriter{connection: connection}
 	_, _ = io.Copy(writer, stream)
+}
+
+const defaultLogTail = 200
+const maximumLogTail = 5000
+
+func requestedLogTail(c *gin.Context) (int, bool) {
+	tail, err := parseLogTail(c.Query("tail"))
+	if err != nil {
+		failure(c, http.StatusBadRequest, 10006, err.Error())
+		return 0, false
+	}
+	return tail, true
+}
+
+func parseLogTail(value string) (int, error) {
+	if value == "" {
+		return defaultLogTail, nil
+	}
+	tail, err := strconv.Atoi(value)
+	if err != nil || tail < 1 || tail > maximumLogTail {
+		return 0, fmt.Errorf("Log tail must be between 1 and %d lines", maximumLogTail)
+	}
+	return tail, nil
 }
 
 func streamStats(c *gin.Context, service containerdomain.Service) {
