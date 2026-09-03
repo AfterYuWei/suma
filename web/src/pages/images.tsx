@@ -10,6 +10,8 @@ import { Input } from '../components/ui/input'
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '../components/ui/input-group'
 import { Label } from '../components/ui/label'
 import { ListShell } from '../components/ui/list-shell'
+import { ListPagination } from '../components/ui/list-pagination'
+import { useListPagination } from '../components/ui/use-list-pagination'
 import { LoadingState } from '../components/ui/loading-state'
 import { ErrorState } from '../components/ui/error-state'
 import { Progress } from '../components/ui/progress'
@@ -69,16 +71,17 @@ export function ImagesPage() {
   const size = (bytes: number) => `${(bytes / 1024 ** 2).toFixed(1)} MB`
   const credentialOptions = [{ value: '', label: zh ? '不使用凭据（公开镜像）' : 'No credential (public image)' }, ...(credentials.data || []).filter((row) => row.authorized_node_ids?.includes(nodeID)).map((row) => ({ value: String(row.id), label: `${row.name} · ${row.server_address}` }))]
   const rows = (query.data ?? []).filter((row) => `${row.id} ${(row.tags ?? []).join(' ')} ${(row.digests ?? []).join(' ')}`.toLowerCase().includes(filter.toLowerCase()))
+  const pagination = useListPagination(rows, filter)
   const used = query.data?.filter((row) => row.containers > 0).length ?? 0
   const unused = (query.data?.length ?? 0) - used
   const trackedPull = pullTasks.data?.find((row) => row.id === pullTaskID) ?? (pull.data?.id === pullTaskID ? pull.data : undefined)
   const pullRunning = !!trackedPull && (trackedPull.status === 'pending' || trackedPull.status === 'running')
   const pullSteps = useQuery({ queryKey: ['task-steps', nodeID, pullTaskID], queryFn: () => api<TaskStep[]>(nodePath(nodeID, `/tasks/${encodeURIComponent(pullTaskID)}/steps`)), enabled: !!pullTaskID, refetchInterval: pullRunning ? 1_000 : false })
   const selectedRows = query.data?.filter((row) => selected.has(row.id)) ?? []
-  const allSelected = rows.length > 0 && rows.every((row) => selected.has(row.id))
-  const someSelected = !allSelected && rows.some((row) => selected.has(row.id))
+  const allSelected = pagination.items.length > 0 && pagination.items.every((row) => selected.has(row.id))
+  const someSelected = !allSelected && pagination.items.some((row) => selected.has(row.id))
 
-  const toggleAll = (checked: boolean | 'indeterminate') => setSelected(checked === true ? new Set(rows.map((row) => row.id)) : new Set())
+  const toggleAll = (checked: boolean | 'indeterminate') => setSelected((current) => { const next = new Set(current); for (const row of pagination.items) { if (checked === true) next.add(row.id); else next.delete(row.id) }; return next })
   const toggleOne = (id: string, checked: boolean) => setSelected((current) => { const next = new Set(current); if (checked) next.add(id); else next.delete(id); return next })
   const openPull = () => {
     if (!pullRunning) {
@@ -125,12 +128,12 @@ export function ImagesPage() {
 
   return <ResourceFrame title={t('images')} detail={zh ? `${query.data?.length ?? 0} 个本地镜像` : `${query.data?.length ?? 0} local images`} lead={statusStrip} action={toolbar}>
     {query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载镜像' : 'Loading images'} /> : query.isError ? <ErrorState description={query.error.message} /> : (query.data ?? []).length === 0 ? <EmptyState icon={<Package size={20} />} title={zh ? '暂无本地镜像' : 'No local images'} detail={zh ? '输入镜像引用并拉取后会显示在这里。' : 'Pull an image reference to see it here.'} /> : rows.length === 0 ? <EmptyState icon={<Search size={20} />} title={zh ? '没有匹配的镜像' : 'No matching images'} detail={zh ? '调整筛选条件后再试。' : 'Adjust the filter and try again.'} /> :
-      <ListShell>
+      <><ListShell>
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead className="w-10 pl-3">
-                <Checkbox checked={allSelected} indeterminate={someSelected} onCheckedChange={(checked) => toggleAll(checked)} aria-label={allSelected ? (zh ? '取消全选' : 'Deselect all') : (zh ? '全选筛选结果' : 'Select all filtered images')} />
+                <Checkbox checked={allSelected} indeterminate={someSelected} onCheckedChange={(checked) => toggleAll(checked)} aria-label={allSelected ? (zh ? '取消选择本页' : 'Deselect this page') : (zh ? '选择本页' : 'Select this page')} />
               </TableHead>
               <TableHead>{zh ? '镜像' : 'Image'}</TableHead>
               <TableHead className="min-w-[110px]">{zh ? '大小' : 'Size'}</TableHead>
@@ -140,7 +143,7 @@ export function ImagesPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.map((row) => (
+            {pagination.items.map((row) => (
               <TableRow key={row.id} data-state={selected.has(row.id) ? 'selected' : undefined}>
                 <TableCell className="pl-3">
                   <Checkbox checked={selected.has(row.id)} onCheckedChange={(checked) => toggleOne(row.id, Boolean(checked))} aria-label={`${zh ? '选择' : 'Select'} ${row.tags?.[0] || row.id}`} />
@@ -167,7 +170,7 @@ export function ImagesPage() {
             ))}
           </TableBody>
         </Table>
-      </ListShell>}
+      </ListShell><ListPagination {...pagination} zh={zh} /></>}
 
     {!!operationError && (
       <Alert variant="destructive" className="mt-4 w-full">
@@ -230,6 +233,7 @@ export function ImagesPage() {
 }
 
 function PullProgressView({ task, steps, loading, stepsLoading, queryError, cancelError, canceling, zh, reference, close, cancel }: { task?: PullTask; steps: TaskStep[]; loading: boolean; stepsLoading: boolean; queryError?: string; cancelError?: string; canceling: boolean; zh: boolean; reference: string; close: () => void; cancel: () => void }) {
+  const pagination = useListPagination(steps)
   const status = task?.status || 'pending'
   const running = status === 'pending' || status === 'running'
   const label = zh ? ({ pending: '等待中', running: '拉取中', success: '已完成', failed: '失败', canceled: '已取消' }[status] ?? status) : ({ pending: 'Pending', running: 'Pulling', success: 'Completed', failed: 'Failed', canceled: 'Canceled' }[status] ?? status)
@@ -253,8 +257,8 @@ function PullProgressView({ task, steps, loading, stepsLoading, queryError, canc
         <span className="text-sm font-medium">Layers</span>
         <span className="text-xs text-muted-foreground">{steps.length}</span>
       </div>
-      {stepsLoading && steps.length === 0 ? <LoadingState embedded compact rows={2} label={zh ? '正在读取 Layer 进度' : 'Loading layer progress'} /> : steps.length === 0 ? <p className="rounded-lg border border-dashed px-3 py-5 text-center text-xs text-muted-foreground">{zh ? '等待 Docker 返回 Layer 信息…' : 'Waiting for Docker layer information…'}</p> : <div className="flex max-h-72 flex-col gap-3 overflow-y-auto pr-1">
-        {steps.map((step) => <div key={step.id} className="flex flex-col gap-1.5 rounded-lg border p-3">
+      {stepsLoading && steps.length === 0 ? <LoadingState embedded compact rows={2} label={zh ? '正在读取 Layer 进度' : 'Loading layer progress'} /> : steps.length === 0 ? <p className="rounded-lg border border-dashed px-3 py-5 text-center text-xs text-muted-foreground">{zh ? '等待 Docker 返回 Layer 信息…' : 'Waiting for Docker layer information…'}</p> : <><div className="flex max-h-72 flex-col gap-3 overflow-y-auto overscroll-contain pr-1">
+        {pagination.items.map((step) => <div key={step.id} className="flex flex-col gap-1.5 rounded-lg border p-3">
           <div className="flex items-center justify-between gap-3">
             <span className="truncate font-mono text-xs font-medium">{step.id}</span>
             <span className="shrink-0 text-xs font-medium tabular-nums">{step.progress}%</span>
@@ -265,7 +269,7 @@ function PullProgressView({ task, steps, loading, stepsLoading, queryError, canc
             {step.total > 0 && <span className="shrink-0 tabular-nums">{formatBytes(step.current)} / {formatBytes(step.total)}</span>}
           </div>
         </div>)}
-      </div>}
+      </div><ListPagination {...pagination} zh={zh} /></>}
       {queryError && <ErrorState description={queryError} />}
       {cancelError && <ErrorState description={cancelError} />}
       <p className="text-xs text-muted-foreground">{running ? (zh ? '直接关闭此窗口不会停止拉取，任务会继续在后台运行。' : 'Closing this window does not stop the pull; the task continues in the background.') : (zh ? '可在任务中心查看本次拉取记录。' : 'You can review this pull in the Task Center.')}</p>

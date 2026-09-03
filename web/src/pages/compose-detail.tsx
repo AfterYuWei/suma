@@ -8,6 +8,8 @@ import { Card, CardContent } from '../components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog'
 import { ErrorState } from '../components/ui/error-state'
 import { LoadingState } from '../components/ui/loading-state'
+import { ListPagination } from '../components/ui/list-pagination'
+import { useListPagination } from '../components/ui/use-list-pagination'
 import { Progress } from '../components/ui/progress'
 import { Spinner } from '../components/ui/spinner'
 import { StatusBadge } from '../components/ui/status-badge'
@@ -239,6 +241,7 @@ function composeActionLabel(action: string, zh: boolean) {
 }
 
 function ComposeActionDialog({ open, operation, task, logs, submitting, loading, error, canceling, zh, projectName, onOpenChange, onCancel, onViewTasks }: { open: boolean; operation: ComposeOperation | null; task?: ComposeTask; logs: TaskLog[]; submitting: boolean; loading: boolean; error?: string; canceling: boolean; zh: boolean; projectName: string; onOpenChange: (open: boolean) => void; onCancel: () => void; onViewTasks: () => void }) {
+  const logPagination = useListPagination(logs)
   const status = task?.status || (submitting ? 'submitting' : error ? 'failed' : 'pending')
   const running = submitting || status === 'pending' || status === 'running'
   const label = zh
@@ -271,14 +274,15 @@ function ComposeActionDialog({ open, operation, task, logs, submitting, loading,
           <span className="text-sm font-medium">{zh ? '实时输出' : 'Live output'}</span>
           {operation?.taskID && <span className="font-mono text-[11px] text-muted-foreground">{operation.taskID}</span>}
         </div>
-        <div className="max-h-64 min-h-24 overflow-y-auto rounded-lg bg-muted/50 p-3">
+        <div className="max-h-64 min-h-24 overflow-y-auto overscroll-contain rounded-lg bg-muted/50 p-3">
           {logs.length === 0 ? <p className="text-center text-xs text-muted-foreground">{zh ? '等待任务输出…' : 'Waiting for task output…'}</p> : <div className="flex flex-col gap-1.5">
-            {logs.map((log) => <div key={log.id} className="flex items-baseline gap-3">
+            {logPagination.items.map((log) => <div key={log.id} className="flex items-baseline gap-3">
               <span className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">{new Date(log.created_at).toLocaleTimeString(zh ? 'zh-CN' : 'en-US')}</span>
               <span className={`font-mono text-xs break-all ${log.level === 'error' ? 'text-destructive' : ''}`}>{log.message}</span>
             </div>)}
           </div>}
         </div>
+        {logs.length > 0 && <ListPagination {...logPagination} zh={zh} />}
         {error && <ErrorState description={error} />}
         <p className="text-xs text-muted-foreground">{running ? (zh ? '关闭窗口不会停止操作，任务会继续在后台执行。' : 'Closing this window does not stop the operation; it continues in the background.') : (zh ? '可在任务中心查看完整记录。' : 'You can review the complete record in the Task Center.')}</p>
       </div>
@@ -317,9 +321,10 @@ const serviceUptime = (seconds: number, zh: boolean) => !seconds ? '—' : secon
 const serviceState = (state: string, zh: boolean) => zh ? ({ running: '运行中', paused: '已暂停', restarting: '重启中', exited: '已停止', dead: '异常', created: '已创建' }[state] ?? state) : state
 
 function Services({ rows, loading, error, zh }: { rows?: ContainerSummary[]; loading: boolean; error?: string; zh: boolean }) {
+  const pagination = useListPagination(rows ?? [])
   if (loading) return <LoadingState compact label={zh ? '正在加载项目服务' : 'Loading project services'} />
   if (error) return <ErrorState description={error} />
-  return <Table className="w-full">
+  return <><Table className="w-full">
     <TableHeader>
       <TableRow>
         <TableHead className="min-w-[190px]">{zh ? '服务 / 容器' : 'Service / container'}</TableHead>
@@ -332,7 +337,7 @@ function Services({ rows, loading, error, zh }: { rows?: ContainerSummary[]; loa
     </TableHeader>
     <TableBody>
       {(rows ?? []).length === 0 && <TableRow><TableCell colSpan={6} className="h-24 text-center text-muted-foreground">{zh ? '项目尚未创建容器，请先启动项目。' : 'No containers have been created. Start the project first.'}</TableCell></TableRow>}
-      {(rows ?? []).map((row) => (
+      {pagination.items.map((row) => (
         <TableRow key={row.id}>
           <TableCell><div className="flex flex-col gap-0.5"><span className="font-medium">{row.labels['com.docker.compose.service'] || row.name}</span><a href={`/containers/${row.id}`} className="text-xs text-muted-foreground hover:text-foreground hover:underline">{row.name}</a><span className="font-mono text-[11px] text-muted-foreground">{row.id.slice(0, 12)}{row.labels['com.docker.compose.container-number'] ? ` · #${row.labels['com.docker.compose.container-number']}` : ''}</span></div></TableCell>
           <TableCell><TooltipHint content={row.image}><span className="block max-w-72 truncate text-muted-foreground">{row.image}</span></TooltipHint></TableCell>
@@ -343,7 +348,7 @@ function Services({ rows, loading, error, zh }: { rows?: ContainerSummary[]; loa
         </TableRow>
       ))}
     </TableBody>
-  </Table>
+  </Table><ListPagination {...pagination} zh={zh} /></>
 }
 
 function Logs({ value, loading, error, zh, sourceKey }: { value?: string; loading: boolean; error: boolean; zh: boolean; sourceKey: string }) {
@@ -351,7 +356,7 @@ function Logs({ value, loading, error, zh, sourceKey }: { value?: string; loadin
   return <div className="flex w-full flex-col gap-3">
     <div className="flex justify-end"><LogTailSelect zh={zh} /></div>
     {loading ? <LoadingState rows={6} label={zh ? '正在加载 Compose 日志' : 'Loading Compose logs'} /> : <Card className="h-[55vh] w-full">
-      <CardContent ref={viewportRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto">
+      <CardContent ref={viewportRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto overscroll-contain">
         <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap">{value || ''}</pre>
         {!value && <p className="text-sm text-muted-foreground">{error ? (zh ? '没有可用日志，请先启动项目。' : 'No Compose logs available. Start the project first.') : ''}</p>}
       </CardContent>

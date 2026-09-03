@@ -8,6 +8,8 @@ import { Checkbox } from '../components/ui/checkbox'
 import { ErrorState } from '../components/ui/error-state'
 import { Input } from '../components/ui/input'
 import { ListShell } from '../components/ui/list-shell'
+import { ListPagination } from '../components/ui/list-pagination'
+import { useListPagination } from '../components/ui/use-list-pagination'
 import { LoadingState } from '../components/ui/loading-state'
 import { Spinner } from '../components/ui/spinner'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
@@ -48,11 +50,13 @@ export function VolumesPage() {
   const formatSize = (bytes: number) => bytes > 0 ? `${(bytes / 1024 ** 2).toFixed(1)} MB` : '—'
   const submitCreate = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); create.mutate({ name }); setName('') }
   const rows = query.data ?? []
+  const pagination = useListPagination(rows)
   const removableRows = rows.filter((row) => row.used_by.length === 0)
   const selectedRows = removableRows.filter((row) => selected.has(row.name))
-  const allSelected = removableRows.length > 0 && removableRows.every((row) => selected.has(row.name))
-  const someSelected = !allSelected && removableRows.some((row) => selected.has(row.name))
-  const toggleAll = (checked: boolean | 'indeterminate') => setSelected(checked === true ? new Set(removableRows.map((row) => row.name)) : new Set())
+  const pageRemovableRows = pagination.items.filter((row) => row.used_by.length === 0)
+  const allSelected = pageRemovableRows.length > 0 && pageRemovableRows.every((row) => selected.has(row.name))
+  const someSelected = !allSelected && pageRemovableRows.some((row) => selected.has(row.name))
+  const toggleAll = (checked: boolean | 'indeterminate') => setSelected((current) => { const next = new Set(current); for (const row of pageRemovableRows) { if (checked === true) next.add(row.name); else next.delete(row.name) }; return next })
   const toggleOne = (volumeName: string, checked: boolean) => setSelected((current) => { const next = new Set(current); if (checked) next.add(volumeName); else next.delete(volumeName); return next })
   const removeSelected = async () => {
     if (!selectedRows.length) return
@@ -81,11 +85,11 @@ export function VolumesPage() {
         <Database className="size-5 text-muted-foreground" />
         <p className="text-sm font-medium">{zh ? '暂无存储卷' : 'No volumes'}</p>
         <p className="text-sm text-muted-foreground">{zh ? '创建持久存储卷后会显示在这里。' : 'Create a persistent volume to see it here.'}</p>
-      </div> : <ListShell>
+      </div> : <><ListShell>
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-10 pl-3"><Checkbox checked={allSelected} indeterminate={someSelected} disabled={removableRows.length === 0} onCheckedChange={toggleAll} aria-label={allSelected ? (zh ? '取消全选' : 'Deselect all') : (zh ? '全选未使用的存储卷' : 'Select all unused volumes')} /></TableHead>
+              <TableHead className="w-10 pl-3"><Checkbox checked={allSelected} indeterminate={someSelected} disabled={pageRemovableRows.length === 0} onCheckedChange={toggleAll} aria-label={allSelected ? (zh ? '取消选择本页' : 'Deselect this page') : (zh ? '选择本页未使用的存储卷' : 'Select unused volumes on this page')} /></TableHead>
               <TableHead>{zh ? '存储卷' : 'Volume'}</TableHead>
               <TableHead>{zh ? '驱动' : 'Driver'}</TableHead>
               <TableHead>{zh ? '大小' : 'Size'}</TableHead>
@@ -95,7 +99,7 @@ export function VolumesPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.map((row) => (
+            {pagination.items.map((row) => (
               <TableRow key={row.name} data-state={row.used_by.length === 0 && selected.has(row.name) ? 'selected' : undefined}>
                 <TableCell className="pl-3"><Checkbox disabled={row.used_by.length > 0} checked={row.used_by.length === 0 && selected.has(row.name)} onCheckedChange={(checked) => toggleOne(row.name, Boolean(checked))} aria-label={row.used_by.length ? (zh ? `${row.name} 正在使用，无法选择` : `${row.name} is in use and cannot be selected`) : `${zh ? '选择' : 'Select'} ${row.name}`} /></TableCell>
                 <TableCell><div><span className="font-medium">{row.name}</span><TooltipHint content={row.mountpoint}><span className="block max-w-72 truncate text-xs text-muted-foreground">{row.mountpoint}</span></TooltipHint></div></TableCell>
@@ -108,7 +112,7 @@ export function VolumesPage() {
             ))}
           </TableBody>
         </Table>
-      </ListShell>}
+      </ListShell><ListPagination {...pagination} zh={zh} /></>}
       {!!operationError && <Alert variant="destructive" className="w-full"><CircleAlert /><AlertDescription>{operationError}</AlertDescription><AlertAction><Button variant="ghost" size="icon-xs" aria-label={zh ? '关闭' : 'Dismiss'} onClick={() => setOperationError('')}><X /></Button></AlertAction></Alert>}
       {create.isError && <ErrorState description={create.error.message} />}
     </div>

@@ -9,6 +9,8 @@ import { ErrorState } from '../components/ui/error-state'
 import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
 import { ListShell } from '../components/ui/list-shell'
+import { ListPagination } from '../components/ui/list-pagination'
+import { useListPagination } from '../components/ui/use-list-pagination'
 import { LoadingState } from '../components/ui/loading-state'
 import { Spinner } from '../components/ui/spinner'
 import { StatusBadge } from '../components/ui/status-badge'
@@ -36,10 +38,12 @@ export function ContinuousDeliveryPage() {
   const nodes = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes') })
   const create = useMutation({ mutationFn: (input: CreateValues) => api<DeliveryProject>('/delivery-projects', { method: 'POST', body: JSON.stringify(input) }), onSuccess: async (project) => { setCreateOpen(false); await client.invalidateQueries({ queryKey: ['delivery-projects'] }); void navigate({ to: '/continuous-delivery/$projectName', params: { projectName: project.name } }) } })
   const rows = query.data ?? []
+  const pagination = useListPagination(rows)
   const synchronized = rows.filter((project) => deliveryState(project) === 'synchronized').length
   const pending = rows.filter((project) => deliveryState(project) === 'pending').length
   const setup = rows.length - synchronized - pending
   const enabledNodes = (nodes.data || []).filter((node) => node.enabled)
+  const nodePagination = useListPagination(enabledNodes)
   const initialNodeIDs = currentNodeID && enabledNodes.some((node) => node.id === currentNodeID) ? [currentNodeID] : enabledNodes[0] ? [enabledNodes[0].id] : []
   const canCreate = !!nameInput.trim() && nodeIDsInput.length > 0 && !create.isPending
 
@@ -57,7 +61,7 @@ export function ContinuousDeliveryPage() {
 
   return <ResourceFrame title={zh ? '持续交付' : 'Continuous Delivery'} detail={zh ? `${rows.length} 个交付项目` : `${rows.length} delivery projects`} action={<div className="flex flex-wrap items-center gap-2"><StatusBadge tone="success">{synchronized} {zh ? '已同步' : 'synced'}</StatusBadge><StatusBadge tone="warning">{pending} {zh ? '待对账' : 'pending'}</StatusBadge><StatusBadge tone="outline">{setup} {zh ? '待配置' : 'setup'}</StatusBadge><Button onClick={openCreate}><Plus data-icon="inline-start" />{zh ? '新建项目' : 'New project'}</Button></div>}>
     {query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载持续交付项目' : 'Loading delivery projects'} /> : query.isError ? <ErrorState description={query.error.message} /> : rows.length === 0 ? <div className="flex w-full flex-col items-center gap-1.5 rounded-xl border border-dashed py-12 text-center"><GitPullRequest className="size-6 text-muted-foreground" /><p className="text-sm font-medium">{zh ? '还没有持续交付项目' : 'No delivery projects yet'}</p><p className="max-w-md text-xs text-muted-foreground">{zh ? '直接在这里创建项目并连接 Git 仓库。' : 'Create a project here and connect its Git repository.'}</p></div> : (
-      <ListShell><Table>
+      <><ListShell><Table>
         <TableHeader>
           <TableRow>
             <TableHead className="min-w-[240px]">{zh ? '项目' : 'Project'}</TableHead>
@@ -69,7 +73,7 @@ export function ContinuousDeliveryPage() {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.map((project) => {
+          {pagination.items.map((project) => {
             const state = deliveryState(project)
             return <TableRow key={project.id}>
               <TableCell className="whitespace-normal">
@@ -84,7 +88,7 @@ export function ContinuousDeliveryPage() {
             </TableRow>
           })}
         </TableBody>
-      </Table></ListShell>
+      </Table></ListShell><ListPagination {...pagination} zh={zh} /></>
     )}
     {create.isError && <ErrorState description={create.error.message} />}
     <Dialog open={createOpen} onOpenChange={(open) => setCreateOpen(open)}>
@@ -101,14 +105,14 @@ export function ContinuousDeliveryPage() {
             <div className="flex flex-col gap-1.5">
               <Label>{zh ? '目标节点（可多选）' : 'Target nodes (multiple allowed)'}</Label>
               {enabledNodes.length === 0 ? <p className="text-xs text-muted-foreground">{zh ? '没有已启用的节点。' : 'No enabled nodes.'}</p> : (
-                <div className="flex max-h-44 flex-col gap-2 overflow-y-auto rounded-lg border p-3">
-                  {enabledNodes.map((node) => (
+                <><div className="flex max-h-44 flex-col gap-2 overflow-y-auto overscroll-contain rounded-lg border p-3">
+                  {nodePagination.items.map((node) => (
                     <label key={node.id} className="flex cursor-pointer items-center gap-2">
                       <Checkbox checked={nodeIDsInput.includes(node.id)} onCheckedChange={() => toggleNode(node.id)} />
                       <span className="text-sm">{`${node.name} · ${node.connection_type}`}</span>
                     </label>
                   ))}
-                </div>
+                </div><ListPagination {...nodePagination} zh={zh} /></>
               )}
             </div>
           </div>

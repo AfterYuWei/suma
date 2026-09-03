@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { Button } from '../components/ui/button'
 import { ListShell } from '../components/ui/list-shell'
+import { ListPagination } from '../components/ui/list-pagination'
+import { useListPagination } from '../components/ui/use-list-pagination'
 import { LoadingState } from '../components/ui/loading-state'
 import { Progress } from '../components/ui/progress'
 import { Spinner } from '../components/ui/spinner'
@@ -29,6 +31,7 @@ export function TasksPage() {
   const [expandedID, setExpandedID] = useState<string | null>(null)
   const [scope, setScope] = useState<'current' | 'control_plane' | 'all'>('current')
   const query = useQuery({ queryKey: ['tasks', scope, nodeID], queryFn: () => api<Task[]>(scope === 'current' ? nodePath(nodeID, '/tasks') : `/tasks?scope=${scope}`), refetchInterval: 2_000 })
+  const pagination = useListPagination(query.data ?? [], scope)
   const prune = useMutation({ mutationFn: () => api(nodePath(nodeID, '/system/prune'), { method: 'POST', body: JSON.stringify({ confirm: 'PRUNE' }) }), onSuccess: () => client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] }) })
   const startPrune = async () => { const value = await promptDialog({ title: t('systemPrune'), description: t('systemPruneDescription'), confirmLabel: t('systemPrune'), danger: true, input: { label: t('typeToConfirm', { value: 'PRUNE' }), requiredValue: 'PRUNE' } }); if (value === 'PRUNE') prune.mutate() }
 
@@ -46,7 +49,7 @@ export function TasksPage() {
       {query.isPending
         ? <LoadingState label={zh ? '正在加载任务' : 'Loading tasks'} />
         : (
-            <ListShell><Table>
+            <><ListShell><Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>{zh ? '任务' : 'Task'}</TableHead>
@@ -62,7 +65,7 @@ export function TasksPage() {
                     <TableCell colSpan={scope === 'current' ? 4 : 5} className="h-24 text-center text-muted-foreground">{zh ? '暂无任务' : 'No tasks'}</TableCell>
                   </TableRow>
                 )}
-                {(query.data ?? []).map((row) => (
+                {pagination.items.map((row) => (
                   <Fragment key={row.id}>
                     <TableRow
                       aria-expanded={expandedID === row.id}
@@ -88,7 +91,7 @@ export function TasksPage() {
                   </Fragment>
                 ))}
               </TableBody>
-            </Table></ListShell>
+            </Table></ListShell><ListPagination {...pagination} zh={zh} /></>
           )}
     </ResourceFrame>
   )
@@ -99,16 +102,17 @@ function TaskLogs({ task }: { task: Task }) {
   const zh = language === 'zh-CN'
   const logsPath = task.scope === 'node' && task.node_id ? nodePath(task.node_id, `/tasks/${encodeURIComponent(task.id)}/logs`) : `/tasks/${encodeURIComponent(task.id)}/logs`
   const logs = useQuery({ queryKey: ['task-logs', task.scope, task.node_id, task.id], queryFn: () => api<Log[]>(logsPath), refetchInterval: task.status === 'running' ? 1_000 : false })
+  const pagination = useListPagination(logs.data ?? [])
   if (logs.isPending) return <LoadingState embedded compact rows={3} label={zh ? '正在加载任务输出' : 'Loading task output'} />
   return (
-    <div className="flex max-h-64 flex-col gap-1.5 overflow-y-auto">
+    <><div className="flex max-h-64 flex-col gap-1.5 overflow-y-auto overscroll-contain">
       {(logs.data ?? []).length === 0 && <p className="py-2 text-center text-sm text-muted-foreground">{zh ? '等待任务输出…' : 'Waiting for task output…'}</p>}
-      {(logs.data ?? []).map((log) => (
+      {pagination.items.map((log) => (
         <div key={log.id} className="flex items-baseline gap-3">
           <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">{new Date(log.created_at).toLocaleTimeString(language)}</span>
           <span className={cn('font-mono text-xs break-all', log.level === 'error' ? 'text-destructive' : 'text-foreground')}>{log.message}</span>
         </div>
       ))}
-    </div>
+    </div><ListPagination {...pagination} zh={zh} /></>
   )
 }

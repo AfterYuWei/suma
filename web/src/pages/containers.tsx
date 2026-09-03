@@ -9,6 +9,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { ErrorState } from '../components/ui/error-state'
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '../components/ui/input-group'
 import { ListShell } from '../components/ui/list-shell'
+import { ListPagination } from '../components/ui/list-pagination'
+import { useListPagination } from '../components/ui/use-list-pagination'
 import { LoadingState } from '../components/ui/loading-state'
 import { Spinner } from '../components/ui/spinner'
 import { StatusBadge } from '../components/ui/status-badge'
@@ -41,14 +43,15 @@ export function ContainersPage() {
   const batch = useMutation({ mutationFn: ({ ids, name }: { ids: string[]; name: string }) => api<{ results: { id: string; success: boolean }[] }>(nodePath(nodeID, '/containers/batch'), { method: 'POST', body: JSON.stringify({ ids, action: name, remove_volumes: false }) }), onMutate: () => setOperationError(''), onSuccess: async (result) => { const failed = result.results.filter((item) => !item.success).length; setSelected(new Set()); if (failed) setOperationError(zh ? `${failed} 个容器操作失败，请检查容器当前状态。` : `${failed} container operations failed. Check their current state.`); await Promise.all([queryClient.invalidateQueries({ queryKey: ['containers', nodeID] }), queryClient.invalidateQueries({ queryKey: ['container-metrics', nodeID] })]) }, onError: (error) => setOperationError(error.message) })
   const metricsById = new Map(metrics.data?.map((row) => [row.id, row]))
   const rows = query.data?.map((row) => ({ ...row, ...metricsById.get(row.id) })).filter((row) => `${row.id} ${row.name} ${row.image} ${row.state} ${row.status} ${ports(row)}`.toLowerCase().includes(filter.toLowerCase())) ?? []
+  const pagination = useListPagination(rows, filter)
   const running = query.data?.filter((row) => row.state === 'running').length ?? 0
   const paused = query.data?.filter((row) => row.state === 'paused').length ?? 0
   const stopped = (query.data?.length ?? 0) - running - paused
   const selectedRows = query.data?.filter((row) => selected.has(row.id)) ?? []
-  const allSelected = rows.length > 0 && rows.every((row) => selected.has(row.id))
-  const someSelected = !allSelected && rows.some((row) => selected.has(row.id))
+  const allSelected = pagination.items.length > 0 && pagination.items.every((row) => selected.has(row.id))
+  const someSelected = !allSelected && pagination.items.some((row) => selected.has(row.id))
 
-  const toggleAll = (checked: boolean | 'indeterminate') => setSelected(checked === true ? new Set(rows.map((row) => row.id)) : new Set())
+  const toggleAll = (checked: boolean | 'indeterminate') => setSelected((current) => { const next = new Set(current); for (const row of pagination.items) { if (checked === true) next.add(row.id); else next.delete(row.id) }; return next })
   const toggleOne = (id: string, checked: boolean) => setSelected((current) => { const next = new Set(current); if (checked) next.add(id); else next.delete(id); return next })
 
   const runBatch = async (name: string) => {
@@ -109,12 +112,12 @@ export function ContainersPage() {
         </Alert>
       )}
       {!query.isPending && !query.isError && (rows.length === 0 ? <EmptyState icon={<Search className="size-5" />} title={zh ? '没有匹配的容器' : 'No matching containers'} detail={zh ? '调整筛选条件或在本节点创建新的容器后再试。' : 'Adjust the filter or create a container on this node.'} /> :
-        <ListShell>
+        <><ListShell>
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead className="w-10 pl-3">
-                  <Checkbox checked={allSelected} indeterminate={someSelected} onCheckedChange={(checked) => toggleAll(checked)} aria-label={allSelected ? (zh ? '取消全选' : 'Deselect all') : (zh ? '全选本页' : 'Select all')} />
+                  <Checkbox checked={allSelected} indeterminate={someSelected} onCheckedChange={(checked) => toggleAll(checked)} aria-label={allSelected ? (zh ? '取消选择本页' : 'Deselect this page') : (zh ? '选择本页' : 'Select this page')} />
                 </TableHead>
                 <TableHead className="min-w-[190px]">{zh ? '容器' : 'Container'}</TableHead>
                 <TableHead>{zh ? '镜像 / 来源' : 'Image / source'}</TableHead>
@@ -125,7 +128,7 @@ export function ContainersPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((row) => (
+              {pagination.items.map((row) => (
                 <TableRow key={row.id} data-state={selected.has(row.id) ? 'selected' : undefined}>
                   <TableCell className="pl-3">
                     <Checkbox checked={selected.has(row.id)} onCheckedChange={(checked) => toggleOne(row.id, Boolean(checked))} aria-label={`${zh ? '选择' : 'Select'} ${row.name}`} />
@@ -165,7 +168,7 @@ export function ContainersPage() {
               ))}
             </TableBody>
           </Table>
-        </ListShell>)}
+        </ListShell><ListPagination {...pagination} zh={zh} /></>)}
   </ResourceFrame>
 }
 

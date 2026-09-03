@@ -8,6 +8,8 @@ import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Checkbox } from '../components/ui/checkbox'
 import { ListShell } from '../components/ui/list-shell'
+import { ListPagination } from '../components/ui/list-pagination'
+import { useListPagination } from '../components/ui/use-list-pagination'
 import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
@@ -68,12 +70,13 @@ export function NodesPage() {
   const createNode = () => { setEditing(null); setValues(blank()); setOpen(true) }
   const update = (patch: Partial<NodeFormValues>) => setValues((previous) => ({ ...previous, ...patch }))
   const tcp = values.connection_type === 'tcp'
+  const pagination = useListPagination(query.data ?? [])
 
   return <ResourceFrame title={zh ? 'Docker 节点' : 'Docker nodes'} detail={zh ? '通过本地 Unix Socket 或受保护的 Docker TCP API 管理多个 Engine。' : 'Manage Docker Engines through local Unix sockets or protected Docker TCP APIs.'} action={<Button onClick={createNode}><Plus />{zh ? '添加节点' : 'Add node'}</Button>}>
     {query.isPending
       ? <LoadingState compact rows={4} label={zh ? '正在加载节点' : 'Loading nodes'} />
       : (
-          <ListShell><Table>
+          <><ListShell><Table>
             <TableHeader>
               <TableRow>
                 <TableHead>{zh ? '节点' : 'Node'}</TableHead>
@@ -86,7 +89,7 @@ export function NodesPage() {
               {(query.data ?? []).length === 0 && (
                 <TableRow><TableCell colSpan={4} className="h-24 text-center text-muted-foreground">{zh ? '暂无节点' : 'No nodes'}</TableCell></TableRow>
               )}
-              {(query.data ?? []).map((node) => (
+              {pagination.items.map((node) => (
                 <TableRow key={node.id}>
                   <TableCell className="max-w-80 whitespace-normal">
                     <div className="font-medium">{node.name}</div>
@@ -122,7 +125,7 @@ export function NodesPage() {
                 </TableRow>
               ))}
             </TableBody>
-          </Table></ListShell>
+          </Table></ListShell><ListPagination {...pagination} zh={zh} /></>
         )}
 
     <Sheet open={open} onOpenChange={(next) => setOpen(next)} disablePointerDismissal>

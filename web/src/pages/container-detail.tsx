@@ -7,6 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '../components/ui/dropdown-menu'
 import { ErrorState } from '../components/ui/error-state'
 import { LoadingState } from '../components/ui/loading-state'
+import { ListPagination } from '../components/ui/list-pagination'
+import { useListPagination } from '../components/ui/use-list-pagination'
 import { Spinner } from '../components/ui/spinner'
 import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
@@ -35,6 +37,7 @@ export function ContainerDetailPage() {
   const initial = tabs.find((name) => name.toLowerCase() === hash) ?? 'Overview'
   const [tab, setTab] = useState<(typeof tabs)[number]>(initial)
   const query = useQuery({ queryKey: ['container', nodeID, containerId], queryFn: () => api<ContainerDetail>(nodePath(nodeID, `/containers/${containerId}`)) })
+  const environmentPagination = useListPagination(query.data?.environment ?? [])
   const action = useMutation({ mutationFn: (name: string) => api(nodePath(nodeID, `/containers/${containerId}/${name}`), { method: 'POST' }), onSuccess: () => { client.invalidateQueries({ queryKey: ['container', nodeID, containerId] }); client.invalidateQueries({ queryKey: ['containers', nodeID] }) } })
   const rename = async () => { const name = await promptDialog({ title: t('renameContainer'), confirmLabel: t('save'), input: { label: t('newContainerName'), initialValue: query.data?.name } }); if (!name) return; await api(nodePath(nodeID, `/containers/${containerId}`), { method: 'PATCH', body: JSON.stringify({ name }) }); await client.invalidateQueries({ queryKey: ['container', nodeID, containerId] }) }
   const remove = async () => { const name = query.data?.name ?? containerId; if (!await confirmDialog({ title: t('removeContainer'), description: t('removeContainerDescription', { name }), confirmLabel: t('remove'), danger: true })) return; await api(nodePath(nodeID, `/containers/${containerId}`), { method: 'DELETE' }); void navigate({ to: '/containers' }) }
@@ -99,7 +102,7 @@ export function ContainerDetailPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {row.environment.map((item) => (
+                  {environmentPagination.items.map((item) => (
                     <TableRow key={item.key}>
                       <TableCell className="max-w-[180px] break-all whitespace-normal font-mono text-xs">{item.key}</TableCell>
                       <TableCell className="break-all whitespace-normal">{item.sensitive ? '••••••••' : item.value}</TableCell>
@@ -107,6 +110,7 @@ export function ContainerDetailPage() {
                   ))}
                 </TableBody>
               </Table>
+              <ListPagination {...environmentPagination} zh={zh} />
             </div>
           )}
           </CardContent>
@@ -118,7 +122,7 @@ export function ContainerDetailPage() {
       {tab === 'Inspect' && (
         <Card>
           <CardContent>
-            <pre className="max-h-[60vh] overflow-auto rounded-lg bg-muted/50 p-3 text-xs leading-relaxed"><code>{JSON.stringify(row, null, 2)}</code></pre>
+            <pre className="max-h-[60vh] overflow-auto overscroll-contain rounded-lg bg-muted/50 p-3 text-xs leading-relaxed"><code>{JSON.stringify(row, null, 2)}</code></pre>
           </CardContent>
         </Card>
       )}

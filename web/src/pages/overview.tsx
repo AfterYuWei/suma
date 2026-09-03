@@ -6,6 +6,8 @@ import { cn } from '@/lib/utils'
 import { LoadingState } from '../components/ui/loading-state'
 import { Button } from '../components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
+import { ListPagination } from '../components/ui/list-pagination'
+import { useListPagination } from '../components/ui/use-list-pagination'
 import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { TooltipHint } from '../components/ui/tooltip-hint'
@@ -62,6 +64,10 @@ export function OverviewPage() {
   const networks = useQuery({ queryKey: ['networks', effectiveNodeID], queryFn: () => api<unknown[]>(nodePath(effectiveNodeID, '/networks')) })
   const volumes = useQuery({ queryKey: ['volumes', effectiveNodeID], queryFn: () => api<unknown[]>(nodePath(effectiveNodeID, '/volumes')) })
   const projects = useQuery({ queryKey: ['projects', effectiveNodeID], queryFn: () => api<unknown[]>(nodePath(effectiveNodeID, '/projects')) })
+  const cdPagination = useListPagination(cd.data?.projects ?? [])
+  const fleetPagination = useListPagination(fleet.data?.nodes ?? [])
+  const auditPagination = useListPagination(audits.data ?? [], effectiveNodeID)
+  const containerPagination = useListPagination(containers.data ?? [], effectiveNodeID)
 
   const data = overview.data
   const host = data?.host
@@ -236,8 +242,8 @@ export function OverviewPage() {
             : (cd.data?.projects ?? []).length === 0
               ? <p className="py-6 text-center text-sm text-muted-foreground">{zh ? '暂无交付项目' : 'No delivery projects'}</p>
               : (
-                  <div className="flex flex-col divide-y divide-border">
-                    {(cd.data?.projects ?? []).map((project) => {
+                  <><div className="flex max-h-[calc(100dvh-16rem)] flex-col divide-y divide-border overflow-y-auto overscroll-contain">
+                    {cdPagination.items.map((project) => {
                       const release = project.active_release ?? project.latest_release
                       return (
                         <div key={project.name} className="flex flex-wrap items-center gap-x-4 gap-y-1.5 py-2.5 first:pt-0 last:pb-0">
@@ -259,7 +265,7 @@ export function OverviewPage() {
                         </div>
                       )
                     })}
-                  </div>
+                  </div><ListPagination {...cdPagination} zh={zh} /></>
                 )}
         </CardContent>
       </Card>
@@ -279,7 +285,7 @@ export function OverviewPage() {
               : (fleet.data?.nodes ?? []).length === 0
                 ? <p className="py-6 text-center text-sm text-muted-foreground">{zh ? '暂无节点' : 'No nodes'}</p>
                 : (
-                    <Table className="border-separate border-spacing-x-0 border-spacing-y-0.5">
+                    <><Table className="border-separate border-spacing-x-0 border-spacing-y-0.5">
                       <TableHeader>
                         <TableRow className="hover:bg-transparent [&>th]:border-b [&>th]:pb-2 [&>th:first-child]:rounded-tl-lg [&>th:last-child]:rounded-tr-lg">
                           <TableHead>{zh ? '节点' : 'Node'}</TableHead>
@@ -292,7 +298,7 @@ export function OverviewPage() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {(fleet.data?.nodes ?? []).map((node) => {
+                        {fleetPagination.items.map((node) => {
                           const selected = node.id === effectiveNodeID
                           return (
                             <TableRow
@@ -332,7 +338,7 @@ export function OverviewPage() {
                           )
                         })}
                       </TableBody>
-                    </Table>
+                    </Table><ListPagination {...fleetPagination} zh={zh} /></>
                   )}
           </CardContent>
         </Card>
@@ -350,15 +356,15 @@ export function OverviewPage() {
               : (audits.data ?? []).length === 0
                 ? <p className="py-6 text-center text-sm text-muted-foreground">{zh ? '暂无活动记录' : 'No recent activity'}</p>
                 : (
-                    <ol className="ml-1.5 flex list-none flex-col border-l border-border">
-                      {(audits.data ?? []).slice(0, 5).map((row) => (
+                    <><ol className="ml-1.5 flex max-h-[calc(100dvh-16rem)] list-none flex-col overflow-y-auto overscroll-contain border-l border-border">
+                      {auditPagination.items.map((row) => (
                         <li key={row.id} className="relative pb-4 pl-5 last:pb-0">
                           <span className={cn('absolute top-1 -left-[7px] size-2.5 rounded-full border-2 border-card', row.result === 'success' ? 'bg-emerald-500' : 'bg-red-500')} />
                           <div className="text-sm font-medium">{row.resource_name ? (row.resource_type === 'container' ? displayDockerId(row.resource_name) : row.resource_name) : row.action}</div>
                           <div className="text-xs text-muted-foreground">{new Date(row.created_at).toLocaleTimeString(language)} · {row.action}</div>
                         </li>
                       ))}
-                    </ol>
+                    </ol><ListPagination {...auditPagination} zh={zh} /></>
                   )}
           </CardContent>
         </Card>
@@ -405,10 +411,10 @@ export function OverviewPage() {
           <CardContent>
             {containers.isPending
               ? <LoadingState embedded rows={5} label={zh ? '正在加载容器' : 'Loading containers'} />
-              : (containers.data?.slice(0, 6) ?? []).length === 0
+              : (containers.data ?? []).length === 0
                 ? <p className="py-8 text-center text-sm text-muted-foreground">{zh ? '暂无容器' : 'No containers'}</p>
                 : (
-                    <Table>
+                    <><Table>
                       <TableHeader>
                         <TableRow>
                           <TableHead>{zh ? '容器' : 'Container'}</TableHead>
@@ -420,7 +426,7 @@ export function OverviewPage() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {(containers.data ?? []).slice(0, 6).map((row) => (
+                        {containerPagination.items.map((row) => (
                           <TableRow key={row.id}>
                             <TableCell><a href={`/containers/${row.id}`} className="font-medium underline-offset-4 hover:underline">{row.name}</a></TableCell>
                             <TableCell className="max-w-56 text-muted-foreground"><TooltipHint content={row.image}><span className="block truncate">{row.image}</span></TooltipHint></TableCell>
@@ -431,7 +437,7 @@ export function OverviewPage() {
                           </TableRow>
                         ))}
                       </TableBody>
-                    </Table>
+                    </Table><ListPagination {...containerPagination} zh={zh} /></>
                   )}
           </CardContent>
         </Card>

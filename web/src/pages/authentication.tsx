@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { GitBranch, KeyRound, Pencil, Plus, Search, Server, ShieldCheck, Trash2, X } from 'lucide-react'
-import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { Children, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { Alert, AlertDescription } from '../components/ui/alert'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
@@ -8,6 +8,8 @@ import { Checkbox } from '../components/ui/checkbox'
 import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
 import { ListShell } from '../components/ui/list-shell'
+import { ListPagination } from '../components/ui/list-pagination'
+import { useListPagination } from '../components/ui/use-list-pagination'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '../components/ui/sheet'
 import { Spinner } from '../components/ui/spinner'
@@ -79,7 +81,10 @@ export function AuthenticationPage() {
   </ResourceFrame>
 }
 
-function CredentialList({ empty, zh, children }: { empty: boolean; zh: boolean; children: ReactNode }) { return empty ? <EmptyHint icon={<ShieldCheck className="size-6" />} title={zh ? '暂无匹配的凭据' : 'No matching credentials'} /> : <ListShell><ul className="flex w-full flex-col divide-y text-sm">{children}</ul></ListShell> }
+function CredentialList({ empty, zh, children }: { empty: boolean; zh: boolean; children: ReactNode }) {
+  const pagination = useListPagination(Children.toArray(children))
+  return empty ? <EmptyHint icon={<ShieldCheck className="size-6" />} title={zh ? '暂无匹配的凭据' : 'No matching credentials'} /> : <><ListShell><ul className="flex max-h-[calc(100dvh-16rem)] w-full flex-col divide-y overflow-y-auto overscroll-contain text-sm">{pagination.items}</ul></ListShell><ListPagination {...pagination} zh={zh} /></>
+}
 function EmptyHint({ icon, title }: { icon: ReactNode; title: string }) { return <div className="flex w-full flex-col items-center gap-1.5 rounded-xl border border-dashed py-10 text-center"><span className="text-muted-foreground">{icon}</span><p className="text-sm font-medium">{title}</p></div> }
 function CredentialRow({ icon, title, detail, meta, onEdit, onRemove }: { icon: ReactNode; title: string; detail: string; meta: string; onEdit: () => void; onRemove: () => void }) {
   return <li className="flex items-center gap-3 px-3 py-2.5">
@@ -188,11 +193,12 @@ function TLSEditor({ zh, nodes, editing, input, setInput, close, submit, error, 
 }
 
 function NodeGrantSelector({ zh, nodes, value, onChange }: { zh: boolean; nodes: DockerNode[]; value: string[]; onChange: (value: string[]) => void }) {
+  const pagination = useListPagination(nodes)
   const toggle = (id: string) => onChange(value.includes(id) ? value.filter((item) => item !== id) : [...value, id])
   return <Card className="w-full">
     <CardHeader><CardTitle className="text-sm">{zh ? '节点授权（默认不授权）' : 'Node grants (none by default)'}</CardTitle></CardHeader>
     <CardContent className="flex flex-col gap-2.5">
-      {nodes.length === 0 ? <p className="text-sm text-muted-foreground">{zh ? '暂无节点' : 'No nodes'}</p> : nodes.map((node) => (
+      {nodes.length === 0 ? <p className="text-sm text-muted-foreground">{zh ? '暂无节点' : 'No nodes'}</p> : pagination.items.map((node) => (
         <label key={node.id} className="flex cursor-pointer items-start gap-2">
           <Checkbox checked={value.includes(node.id)} onCheckedChange={() => toggle(node.id)} className="mt-0.5" />
           <span className="flex min-w-0 flex-col">
@@ -201,6 +207,7 @@ function NodeGrantSelector({ zh, nodes, value, onChange }: { zh: boolean; nodes:
           </span>
         </label>
       ))}
+      {nodes.length > 0 && <ListPagination {...pagination} zh={zh} />}
     </CardContent>
   </Card>
 }

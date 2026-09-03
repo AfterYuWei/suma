@@ -7,10 +7,12 @@ import { Card, CardContent } from '../../components/ui/card'
 import { Checkbox } from '../../components/ui/checkbox'
 import { Input } from '../../components/ui/input'
 import { Label } from '../../components/ui/label'
+import { ListPagination } from '../../components/ui/list-pagination'
 import { RadioGroup, RadioGroupItem } from '../../components/ui/radio-group'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select'
 import { Spinner } from '../../components/ui/spinner'
 import { Textarea } from '../../components/ui/textarea'
+import { useListPagination } from '../../components/ui/use-list-pagination'
 import { api } from '../../lib/api'
 import { cn } from '../../lib/utils'
 import { choiceDialog } from '../../stores/dialog'
@@ -114,7 +116,7 @@ export function CDSettings({ projectName, configuration, zh, onSaved }: { projec
     </Alert>}
 
     <SettingsSection title={zh ? '目标节点' : 'Target nodes'} description={zh ? '一次审批后并行发布到全部选中节点；修改只影响后续 Release。' : 'One approval deploys to every selected node in parallel. Changes affect only future releases.'}>
-      <TargetSelector nodes={nodes.data || []} value={draft.node_ids} onChange={(node_ids) => setDraft((current) => ({ ...current, node_ids }))} />
+      <TargetSelector nodes={nodes.data || []} value={draft.node_ids} zh={zh} onChange={(node_ids) => setDraft((current) => ({ ...current, node_ids }))} />
     </SettingsSection>
 
     <SettingsSection title={zh ? 'Git 仓库' : 'Git repository'} description={zh ? '支持任意标准 HTTPS 或 SSH Git 仓库，不区分代码托管平台。' : 'Works with any standard HTTPS or SSH Git repository without a hosting-provider setting.'}>
@@ -158,18 +160,7 @@ export function CDSettings({ projectName, configuration, zh, onSaved }: { projec
     </SettingsSection>
 
     <SettingsSection title={zh ? '镜像仓库凭据' : 'Registry credentials'} description={zh ? '为发布显式选择凭据；只显示已授权给全部目标节点的凭据。' : 'Explicitly select credentials for deployment. Only credentials granted to every target are available.'}>
-      <div className="flex flex-col gap-2">
-        {(registries.data || []).filter((row) => draft.node_ids.every((id) => row.authorized_node_ids.includes(id))).map((row) => (
-          <label key={row.id} className="flex cursor-pointer items-start gap-2">
-            <Checkbox checked={draft.registry_credential_ids.includes(row.id)} onCheckedChange={() => setDraft((current) => ({ ...current, registry_credential_ids: current.registry_credential_ids.includes(row.id) ? current.registry_credential_ids.filter((id) => id !== row.id) : [...current.registry_credential_ids, row.id] }))} className="mt-0.5" />
-            <span className="flex min-w-0 flex-col">
-              <span className="text-sm">{row.name}</span>
-              <span className="text-xs text-muted-foreground">{row.server_address}</span>
-            </span>
-          </label>
-        ))}
-        {registries.data?.length === 0 && <p className="text-sm text-muted-foreground">{zh ? '认证中心暂无镜像仓库凭据' : 'No registry credentials in the Authentication Center'}</p>}
-      </div>
+      <RegistryCredentialSelector rows={(registries.data || []).filter((row) => draft.node_ids.every((id) => row.authorized_node_ids.includes(id)))} value={draft.registry_credential_ids} zh={zh} onChange={(registry_credential_ids) => setDraft((current) => ({ ...current, registry_credential_ids }))} />
     </SettingsSection>
 
     <SettingsSection title={zh ? '交付策略' : 'Delivery policy'} description={zh ? 'Observe 只生成待发布版本，Manual 需要人工发布，Auto 验证后自动发布。' : 'Observe records a candidate, Manual waits for an operator, and Auto deploys after validation.'}>
@@ -310,9 +301,11 @@ function CredentialSelector({ zh, nodeIDs, value, onChange }: { zh: boolean; nod
   </div>
 }
 
-function TargetSelector({ nodes, value, onChange }: { nodes: DockerNode[]; value: string[]; onChange: (value: string[]) => void }) {
-  return <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
-    {nodes.filter((node) => node.enabled).map((node) => (
+function TargetSelector({ nodes, value, zh, onChange }: { nodes: DockerNode[]; value: string[]; zh: boolean; onChange: (value: string[]) => void }) {
+  const enabled = nodes.filter((node) => node.enabled)
+  const pagination = useListPagination(enabled)
+  return <><div className="grid max-h-72 gap-2.5 overflow-y-auto overscroll-contain sm:grid-cols-2 xl:grid-cols-3">
+    {pagination.items.map((node) => (
       <label key={node.id} className="flex cursor-pointer items-start gap-2">
         <Checkbox checked={value.includes(node.id)} onCheckedChange={() => onChange(value.includes(node.id) ? value.filter((id) => id !== node.id) : [...value, node.id])} className="mt-0.5" />
         <span className="flex min-w-0 flex-col">
@@ -321,6 +314,22 @@ function TargetSelector({ nodes, value, onChange }: { nodes: DockerNode[]; value
         </span>
       </label>
     ))}
+  </div><ListPagination {...pagination} zh={zh} /></>
+}
+
+function RegistryCredentialSelector({ rows, value, zh, onChange }: { rows: { id: number; name: string; server_address: string }[]; value: number[]; zh: boolean; onChange: (value: number[]) => void }) {
+  const pagination = useListPagination(rows)
+  return <div className="flex flex-col gap-2">
+    {pagination.items.map((row) => (
+      <label key={row.id} className="flex cursor-pointer items-start gap-2">
+        <Checkbox checked={value.includes(row.id)} onCheckedChange={() => onChange(value.includes(row.id) ? value.filter((id) => id !== row.id) : [...value, row.id])} className="mt-0.5" />
+        <span className="flex min-w-0 flex-col">
+          <span className="text-sm">{row.name}</span>
+          <span className="text-xs text-muted-foreground">{row.server_address}</span>
+        </span>
+      </label>
+    ))}
+    {rows.length === 0 ? <p className="text-sm text-muted-foreground">{zh ? '没有可用于全部目标节点的镜像仓库凭据' : 'No registry credentials are available to every target node'}</p> : <ListPagination {...pagination} zh={zh} />}
   </div>
 }
 

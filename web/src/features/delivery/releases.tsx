@@ -3,6 +3,8 @@ import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../../components/ui/collapsible'
+import { ListPagination } from '../../components/ui/list-pagination'
+import { useListPagination } from '../../components/ui/use-list-pagination'
 import { Progress } from '../../components/ui/progress'
 import { Spinner } from '../../components/ui/spinner'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui/table'
@@ -52,6 +54,7 @@ export function CDOverview({ configuration, drift, releases, zh }: { configurati
   const checking = !drift
   const aligned = drift?.status === 'healthy'
   const unknown = drift?.status === 'unknown'
+  const nodePagination = useListPagination(drift?.nodes ?? [])
   return <div className="flex w-full flex-col gap-4">
     <Notice
       tone={checking ? 'checking' : aligned ? 'success' : 'warning'}
@@ -79,14 +82,15 @@ export function CDOverview({ configuration, drift, releases, zh }: { configurati
       <CardContent>
         <Table>
           <TableHeader><TableRow><TableHead>{zh ? '节点' : 'Node'}</TableHead><TableHead>Release / Commit</TableHead><TableHead>{zh ? '状态' : 'Status'}</TableHead><TableHead>{zh ? '原因' : 'Reason'}</TableHead><TableHead>{zh ? '检查时间' : 'Checked'}</TableHead></TableRow></TableHeader>
-          <TableBody>{drift.nodes.map((node) => <TableRow key={node.node_id}>
+          <TableBody>{nodePagination.items.map((node) => <TableRow key={node.node_id}>
             <TableCell><div className="font-medium">{node.node_name}</div><div className="text-xs text-muted-foreground">{node.node_id}</div></TableCell>
             <TableCell className="font-mono text-xs">{node.active_release_id ? `#${node.active_release_id} · ${shortCommit(node.active_commit)}` : '—'}</TableCell>
             <TableCell><Badge className={node.status === 'healthy' ? statusBadgeClass('succeeded') : node.status === 'degraded' ? statusBadgeClass('failed') : statusBadgeClass('rolled_back')}>{node.status}</Badge></TableCell>
-            <TableCell className="max-w-80 whitespace-normal text-xs text-muted-foreground">{node.reason || '—'}{node.health_summary && <details className="mt-1"><summary className="cursor-pointer">{zh ? '健康摘要' : 'Health summary'}</summary><pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-muted p-2">{node.health_summary}</pre></details>}</TableCell>
+            <TableCell className="max-w-80 whitespace-normal text-xs text-muted-foreground">{node.reason || '—'}{node.health_summary && <details className="mt-1"><summary className="cursor-pointer">{zh ? '健康摘要' : 'Health summary'}</summary><pre className="mt-1 max-h-32 overflow-auto overscroll-contain whitespace-pre-wrap rounded bg-muted p-2">{node.health_summary}</pre></details>}</TableCell>
             <TableCell className="text-xs text-muted-foreground">{new Date(node.checked_at).toLocaleString(zh ? 'zh-CN' : 'en-US')}</TableCell>
           </TableRow>)}</TableBody>
         </Table>
+        <ListPagination {...nodePagination} zh={zh} />
       </CardContent>
     </Card>}
     <Card>
@@ -107,8 +111,9 @@ export function CDOverview({ configuration, drift, releases, zh }: { configurati
 export type ReleaseOperation = 'approve' | 'reject' | 'deploy' | 'rollback' | 'retry-failed' | 'rollback-failed'
 
 export function ReleasePanel({ configuration, releases, pendingReleaseID, zh, onAction }: { configuration: CDConfiguration; releases?: DeliveryRelease[]; pendingReleaseID?: number; zh: boolean; onAction: (release: DeliveryRelease, action: ReleaseOperation) => void }) {
+  const pagination = useListPagination(releases ?? [])
   if (!releases?.length) return <EmptyHint icon={<History className="size-6" />} title={zh ? '还没有 Release' : 'No releases yet'} description={zh ? '点击同步以读取 Git 并验证 Compose 配置。' : 'Synchronize to read Git and validate the Compose configuration.'} />
-  return <div className="flex w-full flex-col gap-2">{releases.map((release) => {
+  return <><div className="flex max-h-[calc(100dvh-16rem)] w-full flex-col gap-2 overflow-y-auto overscroll-contain">{pagination.items.map((release) => {
     const active = configuration.active_release_id === release.id
     const canApprove = configuration.reconcile_mode !== 'observe' && release.status === 'awaiting_approval'
     const canReject = release.status === 'awaiting_approval' || release.status === 'approved'
@@ -140,7 +145,7 @@ export function ReleasePanel({ configuration, releases, pendingReleaseID, zh, on
         <ReleaseDetails release={release} zh={zh} />
       </CollapsibleContent>
     </Collapsible>
-  })}</div>
+  })}</div><ListPagination {...pagination} zh={zh} /></>
 }
 
 function ReleaseDetails({ release, zh }: { release: DeliveryRelease; zh: boolean }) {
@@ -148,6 +153,7 @@ function ReleaseDetails({ release, zh }: { release: DeliveryRelease; zh: boolean
   const files = parseStringList(release.compose_files)
   const deployments = release.deployments ?? []
   type Deployment = (typeof deployments)[number]
+  const pagination = useListPagination(deployments)
   return <div className="flex w-full flex-col gap-4">
     {release.failure_reason && <Alert variant="destructive"><TriangleAlert /><AlertDescription>{release.failure_reason}</AlertDescription></Alert>}
     <DetailList items={[
@@ -159,7 +165,7 @@ function ReleaseDetails({ release, zh }: { release: DeliveryRelease; zh: boolean
       [zh ? '镜像' : 'Images', images.join(', ') || '—'],
     ]} />
     {!!deployments.length && (
-      <Table>
+      <><Table>
         <TableHeader>
           <TableRow>
             <TableHead>{zh ? '节点' : 'Node'}</TableHead>
@@ -169,7 +175,7 @@ function ReleaseDetails({ release, zh }: { release: DeliveryRelease; zh: boolean
           </TableRow>
         </TableHeader>
         <TableBody>
-          {(deployments as Deployment[]).map((deployment) => (
+          {(pagination.items as Deployment[]).map((deployment) => (
             <TableRow key={deployment.id}>
               <TableCell>{deployment.node_name}</TableCell>
               <TableCell><ReleaseStatus status={String(deployment.status)} zh={zh} /></TableCell>
@@ -182,11 +188,11 @@ function ReleaseDetails({ release, zh }: { release: DeliveryRelease; zh: boolean
             </TableRow>
           ))}
         </TableBody>
-      </Table>
+      </Table><ListPagination {...pagination} zh={zh} /></>
     )}
     {release.health_summary && <div className="flex flex-col gap-1.5">
       <span className="text-sm font-medium">{zh ? '健康状态' : 'Health summary'}</span>
-      <pre className="max-h-36 overflow-auto rounded-lg bg-muted p-3 font-mono text-xs text-muted-foreground">{release.health_summary}</pre>
+      <pre className="max-h-36 overflow-auto overscroll-contain rounded-lg bg-muted p-3 font-mono text-xs text-muted-foreground">{release.health_summary}</pre>
     </div>}
   </div>
 }

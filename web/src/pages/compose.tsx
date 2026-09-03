@@ -8,6 +8,8 @@ import { Button } from '../components/ui/button'
 import { Checkbox } from '../components/ui/checkbox'
 import { ErrorState } from '../components/ui/error-state'
 import { ListShell } from '../components/ui/list-shell'
+import { ListPagination } from '../components/ui/list-pagination'
+import { useListPagination } from '../components/ui/use-list-pagination'
 import { LoadingState } from '../components/ui/loading-state'
 import { Spinner } from '../components/ui/spinner'
 import { StatusBadge } from '../components/ui/status-badge'
@@ -63,9 +65,12 @@ export function ComposePage() {
     onSuccess: async () => { setSelected(new Set()); await Promise.all([client.invalidateQueries({ queryKey: ['projects', nodeID] }), client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] })]) },
   })
   const rows = query.data ?? []
+  const pagination = useListPagination(rows)
   const manageable = rows.filter((row) => row.managed)
+  const pageManageable = pagination.items.filter((row) => row.managed)
   const selectedRows = manageable.filter((row) => selected.has(row.name))
-  const allSelected = manageable.length > 0 && selectedRows.length === manageable.length
+  const allSelected = pageManageable.length > 0 && pageManageable.every((row) => selected.has(row.name))
+  const someSelected = !allSelected && pageManageable.some((row) => selected.has(row.name))
   const add = async () => {
     const name = await promptDialog({ title: t('newProject'), description: zh ? '创建一个使用 Docker Compose 后端的 SUMA Project。' : 'Create a SUMA Project using the Docker Compose backend.', confirmLabel: t('create'), input: { label: t('projectName') } })
     if (name) create.mutate(name)
@@ -75,7 +80,7 @@ export function ComposePage() {
     if (action === 'down' && !await confirmDialog({ title: zh ? `Down ${selectedRows.length} 个项目？` : `Down ${selectedRows.length} projects?`, description: zh ? '这会移除项目容器和网络，但保留托管文件和命名卷。' : 'This removes project containers and networks while preserving managed files and named volumes.', confirmLabel: 'Down', danger: true })) return
     batch.mutate({ names: selectedRows.map((row) => row.name), action })
   }
-  const toggleAll = (checked: boolean) => setSelected(checked ? new Set(manageable.map((row) => row.name)) : new Set())
+  const toggleAll = (checked: boolean) => setSelected((current) => { const next = new Set(current); for (const row of pageManageable) { if (checked) next.add(row.name); else next.delete(row.name) }; return next })
   const toggleRow = (name: string, checked: boolean) => setSelected((current) => { const next = new Set(current); if (checked) next.add(name); else next.delete(name); return next })
   const toggleExpanded = (name: string) => setExpanded((current) => { const next = new Set(current); if (next.has(name)) next.delete(name); else next.add(name); return next })
   const running = rows.filter((row) => row.status === 'running').length
@@ -89,13 +94,13 @@ export function ComposePage() {
       {feedbackView && <Alert variant={feedbackView.error ? 'destructive' : 'default'}>{feedbackView.error ? <CircleAlert /> : feedbackView.pending ? <Spinner /> : <CheckCircle2 />}<AlertDescription>{feedbackView.message}{feedback?.kind === 'task' && <> <Link to="/tasks">{zh ? '查看任务' : 'View task'}</Link></>}</AlertDescription></Alert>}
       {batch.isError && <ErrorState description={batch.error.message} />}
       {create.isError && <ErrorState description={create.error.message} />}
-      {query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载项目' : 'Loading Projects'} /> : query.isError ? <ErrorState description={query.error.message} /> : rows.length === 0 ? <div className="rounded-xl bg-card px-4 py-10 text-center ring-1 ring-foreground/10"><p className="text-sm font-medium">{zh ? '未发现 Project' : 'No Projects discovered'}</p><p className="text-sm text-muted-foreground">{zh ? 'Compose Project 会根据 Docker 标签自动聚合显示。' : 'Compose Projects are aggregated automatically from Docker labels.'}</p></div> : <ListShell><Table>
-        <TableHeader><TableRow><TableHead className="w-9 pr-0"><Checkbox checked={allSelected} indeterminate={!allSelected && selected.size > 0} onCheckedChange={(value) => toggleAll(value === true)} aria-label={zh ? '全选托管项目' : 'Select managed Projects'} /></TableHead><TableHead className="w-9" /><TableHead>{zh ? '项目' : 'Project'}</TableHead><TableHead className="w-24">Backend</TableHead><TableHead className="w-28">{zh ? '状态' : 'Status'}</TableHead><TableHead className="w-40">{zh ? '运行资源' : 'Runtime'}</TableHead><TableHead className="w-56">{zh ? '操作' : 'Actions'}</TableHead></TableRow></TableHeader>
-        <TableBody>{rows.flatMap((row) => {
+      {query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载项目' : 'Loading Projects'} /> : query.isError ? <ErrorState description={query.error.message} /> : rows.length === 0 ? <div className="rounded-xl bg-card px-4 py-10 text-center ring-1 ring-foreground/10"><p className="text-sm font-medium">{zh ? '未发现 Project' : 'No Projects discovered'}</p><p className="text-sm text-muted-foreground">{zh ? 'Compose Project 会根据 Docker 标签自动聚合显示。' : 'Compose Projects are aggregated automatically from Docker labels.'}</p></div> : <><ListShell><Table>
+        <TableHeader><TableRow><TableHead className="w-9 pr-0"><Checkbox checked={allSelected} indeterminate={someSelected} onCheckedChange={(value) => toggleAll(value === true)} aria-label={allSelected ? (zh ? '取消选择本页' : 'Deselect this page') : (zh ? '选择本页托管项目' : 'Select managed Projects on this page')} /></TableHead><TableHead className="w-9" /><TableHead>{zh ? '项目' : 'Project'}</TableHead><TableHead className="w-24">Backend</TableHead><TableHead className="w-28">{zh ? '状态' : 'Status'}</TableHead><TableHead className="w-40">{zh ? '运行资源' : 'Runtime'}</TableHead><TableHead className="w-56">{zh ? '操作' : 'Actions'}</TableHead></TableRow></TableHeader>
+        <TableBody>{pagination.items.flatMap((row) => {
           const open = expanded.has(row.name)
           return [<TableRow key={row.name}><TableCell className="pr-0"><Checkbox disabled={!row.managed} checked={selected.has(row.name)} onCheckedChange={(value) => toggleRow(row.name, value === true)} aria-label={row.managed ? row.name : (zh ? '外部项目不可批量操作' : 'External Project cannot be batch operated')} /></TableCell><TableCell><Button variant="ghost" size="icon-xs" onClick={() => toggleExpanded(row.name)} aria-label={zh ? '展开服务' : 'Expand services'}><ChevronRight className={open ? 'rotate-90 transition-transform' : 'transition-transform'} /></Button></TableCell><TableCell><div className="flex flex-col gap-1"><div className="flex items-center gap-2"><Link to="/projects/$backend/$projectName" params={{ backend: row.backend, projectName: row.name }} className="font-medium hover:underline">{row.name}</Link><StatusBadge tone={row.managed ? 'outline' : 'neutral'}>{row.managed ? (zh ? '托管' : 'Managed') : (zh ? '外部' : 'External')}</StatusBadge></div><span className="max-w-72 truncate text-xs text-muted-foreground">{row.source === 'managed' ? (zh ? 'SUMA 托管配置' : 'SUMA managed configuration') : (zh ? 'Docker 运行态发现' : 'Discovered from Docker runtime')} · {row.scope.id}</span></div></TableCell><TableCell><Badge variant="outline">{row.backend === 'compose' ? 'Compose' : 'Swarm'}</Badge></TableCell><TableCell><StatusBadge tone={projectTone(row.status)}>{row.status}</StatusBadge></TableCell><TableCell>{row.service_count} {zh ? '服务' : 'services'} · <span className="text-muted-foreground">{row.instance_count} {zh ? '实例' : 'instances'}</span></TableCell><TableCell><ProjectActions row={row} zh={zh} onTakeover={() => setTakeoverName(row.name)} onFeedback={setFeedback} /></TableCell></TableRow>, ...(open ? [<TableRow key={`${row.name}-services`}><TableCell colSpan={7} className="bg-muted/30 p-4"><ProjectServices project={row} zh={zh} /></TableCell></TableRow>] : [])]
         })}</TableBody>
-      </Table></ListShell>}
+      </Table></ListShell><ListPagination {...pagination} zh={zh} /></>}
     </div>
     <TakeoverWarningDialog open={!!takeoverName} projectName={takeoverName} zh={zh} onOpenChange={(open) => { if (!open) setTakeoverName('') }} onContinue={() => { const name = takeoverName; setTakeoverName(''); void navigate({ to: '/projects/$backend/$projectName/takeover', params: { backend: 'compose', projectName: name } }) }} />
   </ResourceFrame>
@@ -153,7 +158,8 @@ function ActionIcon({ label, destructive, disabled, onClick, children }: { label
 function ProjectServices({ project, zh }: { project: ProjectSummary; zh: boolean }) {
   const nodeID = useUIStore((state) => state.currentNodeID)
   const query = useQuery({ queryKey: ['project-services', nodeID, project.name], queryFn: () => api<ContainerSummary[]>(nodePath(nodeID, `/projects/compose/${encodeURIComponent(project.name)}/services`)), refetchInterval: 5_000 })
+  const pagination = useListPagination(query.data ?? [])
   if (query.isPending) return <LoadingState embedded compact rows={2} label={zh ? '正在加载实例' : 'Loading instances'} />
   if (query.isError) return <ErrorState description={query.error.message} />
-  return <Table><TableHeader><TableRow><TableHead>{zh ? '服务' : 'Service'}</TableHead><TableHead>{zh ? '容器实例' : 'Container instance'}</TableHead><TableHead>{zh ? '镜像' : 'Image'}</TableHead><TableHead>{zh ? '状态' : 'State'}</TableHead><TableHead className="w-28">{zh ? '操作' : 'Actions'}</TableHead></TableRow></TableHeader><TableBody>{(query.data ?? []).map((row) => <TableRow key={row.id}><TableCell>{row.labels['com.docker.compose.service'] || row.name}</TableCell><TableCell className="text-muted-foreground">{row.name}</TableCell><TableCell className="max-w-72 truncate">{row.image}</TableCell><TableCell><StatusBadge tone={containerTone(row.state)}>{row.state}</StatusBadge></TableCell><TableCell><div className="flex"><ActionIcon label={zh ? '日志' : 'Logs'} onClick={() => location.assign(`/containers/${row.id}#logs`)}><FileText /></ActionIcon><ActionIcon label={zh ? '终端' : 'Terminal'} disabled={row.state !== 'running'} onClick={() => location.assign(`/containers/${row.id}#terminal`)}><SquareTerminal /></ActionIcon></div></TableCell></TableRow>)}</TableBody></Table>
+  return <><Table><TableHeader><TableRow><TableHead>{zh ? '服务' : 'Service'}</TableHead><TableHead>{zh ? '容器实例' : 'Container instance'}</TableHead><TableHead>{zh ? '镜像' : 'Image'}</TableHead><TableHead>{zh ? '状态' : 'State'}</TableHead><TableHead className="w-28">{zh ? '操作' : 'Actions'}</TableHead></TableRow></TableHeader><TableBody>{pagination.items.map((row) => <TableRow key={row.id}><TableCell>{row.labels['com.docker.compose.service'] || row.name}</TableCell><TableCell className="text-muted-foreground">{row.name}</TableCell><TableCell className="max-w-72 truncate">{row.image}</TableCell><TableCell><StatusBadge tone={containerTone(row.state)}>{row.state}</StatusBadge></TableCell><TableCell><div className="flex"><ActionIcon label={zh ? '日志' : 'Logs'} onClick={() => location.assign(`/containers/${row.id}#logs`)}><FileText /></ActionIcon><ActionIcon label={zh ? '终端' : 'Terminal'} disabled={row.state !== 'running'} onClick={() => location.assign(`/containers/${row.id}#terminal`)}><SquareTerminal /></ActionIcon></div></TableCell></TableRow>)}</TableBody></Table><ListPagination {...pagination} zh={zh} /></>
 }

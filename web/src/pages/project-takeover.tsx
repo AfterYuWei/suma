@@ -11,6 +11,8 @@ import { ErrorState } from '../components/ui/error-state'
 import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
 import { LoadingState } from '../components/ui/loading-state'
+import { ListPagination } from '../components/ui/list-pagination'
+import { useListPagination } from '../components/ui/use-list-pagination'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Spinner } from '../components/ui/spinner'
 import { StatusBadge } from '../components/ui/status-badge'
@@ -357,8 +359,8 @@ function ShadowPreviewPanel({ zh, assessment, assessError, operationError, asses
       {statusError && <Alert variant="destructive"><AlertDescription>{takeoverMessage(statusError, zh)}</AlertDescription></Alert>}
       {status && <>
         <div className="grid gap-3 lg:grid-cols-2">
-          <div><p className="mb-1 text-xs font-medium">{zh ? '容器状态' : 'Container status'}</p><pre className="max-h-56 overflow-auto rounded-lg bg-muted p-3 font-mono text-xs whitespace-pre-wrap">{status.containers}</pre></div>
-          <div><div className="mb-1 flex items-center justify-between gap-2"><p className="text-xs font-medium">{zh ? '预演日志' : 'Preview logs'}</p><LogTailSelect zh={zh} /></div><pre ref={logViewportRef} onScroll={onLogScroll} className="max-h-56 overflow-auto rounded-lg bg-muted p-3 font-mono text-xs whitespace-pre-wrap">{status.logs}</pre></div>
+          <div><p className="mb-1 text-xs font-medium">{zh ? '容器状态' : 'Container status'}</p><pre className="max-h-56 overflow-auto overscroll-contain rounded-lg bg-muted p-3 font-mono text-xs whitespace-pre-wrap">{status.containers}</pre></div>
+          <div><div className="mb-1 flex items-center justify-between gap-2"><p className="text-xs font-medium">{zh ? '预演日志' : 'Preview logs'}</p><LogTailSelect zh={zh} /></div><pre ref={logViewportRef} onScroll={onLogScroll} className="max-h-56 overflow-auto overscroll-contain rounded-lg bg-muted p-3 font-mono text-xs whitespace-pre-wrap">{status.logs}</pre></div>
         </div>
         <div className="flex flex-wrap justify-end gap-2">
           <Button variant="outline" disabled={cleaning} onClick={onPostpone}><CirclePause />{zh ? '稍后决定并清理' : 'Decide later and clean up'}</Button>
@@ -372,6 +374,7 @@ function ShadowPreviewPanel({ zh, assessment, assessError, operationError, asses
 
 function AnalysisStep({ draft, zh, cleaning, cleanupError, onCleanup }: { draft: ProjectTakeoverDraft; zh: boolean; cleaning: boolean; cleanupError?: string; onCleanup: () => void }) {
   const instanceCount = draft.observation.services.reduce((total, service) => total + service.instances.length, 0)
+  const pagination = useListPagination(draft.observation.services)
   return <div className="flex flex-col gap-4">
     <div className="flex flex-wrap gap-2">
       <StatusBadge tone={draft.source === 'mapped' ? 'success' : 'warning'}>{draft.source === 'mapped' ? (zh ? '安全源配置' : 'Mapped source') : (zh ? '运行态重建' : 'Runtime reconstruction')}</StatusBadge>
@@ -384,14 +387,14 @@ function AnalysisStep({ draft, zh, cleaning, cleanupError, onCleanup }: { draft:
     {draft.warnings.map((message) => <Alert key={message}><AlertTriangle /><AlertDescription>{takeoverMessage(message, zh)}</AlertDescription></Alert>)}
     <Card><CardContent><Table>
       <TableHeader><TableRow><TableHead>Service</TableHead><TableHead>{zh ? '副本' : 'Replicas'}</TableHead><TableHead>{zh ? '配置变体' : 'Variants'}</TableHead><TableHead>{zh ? '运行态偏移' : 'Drift'}</TableHead><TableHead>{zh ? '容器实例' : 'Container instances'}</TableHead></TableRow></TableHeader>
-      <TableBody>{draft.observation.services.map((service) => <TableRow key={service.name}>
+      <TableBody>{pagination.items.map((service) => <TableRow key={service.name}>
         <TableCell className="font-medium">{service.name}</TableCell>
         <TableCell>{service.desired_replicas}</TableCell>
         <TableCell>{service.config_variants.length}</TableCell>
         <TableCell><StatusBadge tone={service.drift_status === 'in_sync' ? 'success' : 'warning'}>{localizedLabel(driftStatusLabels, service.drift_status, zh)}</StatusBadge></TableCell>
         <TableCell className="text-muted-foreground">{service.instances.length ? service.instances.map((instance) => instance.container_name).join(', ') : (zh ? '无运行实例' : 'No running instances')}</TableCell>
       </TableRow>)}</TableBody>
-    </Table></CardContent></Card>
+    </Table><ListPagination {...pagination} zh={zh} /></CardContent></Card>
     {(draft.observation.one_off_containers.length > 0 || draft.observation.orphan_containers.length > 0) && <Alert><AlertTriangle /><AlertTitle>{zh ? '不会写入 Service 的运行实例' : 'Runtime instances excluded from Services'}</AlertTitle><AlertDescription>{zh ? `一次性容器（one-off）${draft.observation.one_off_containers.length} 个，孤立容器 ${draft.observation.orphan_containers.length} 个；接管不会删除这些容器。` : `${draft.observation.one_off_containers.length} one-off and ${draft.observation.orphan_containers.length} orphan instances; takeover will not delete them.`}</AlertDescription></Alert>}
   </div>
 }
@@ -469,16 +472,17 @@ function EnvironmentStep({ variables, choices, revealed, zh, onChoice, onReveal 
 }
 
 function EnvironmentVariableTable({ variables, choices, revealed, zh, onChoice, onReveal, autoExcluded = false }: { variables: EnvironmentCandidate[]; choices: Record<string, Destination>; revealed: Set<string>; zh: boolean; onChoice: (id: string, value: Destination) => void; onReveal: (id: string) => void; autoExcluded?: boolean }) {
-  return <Table>
+  const pagination = useListPagination(variables)
+  return <><Table>
     <TableHeader><TableRow><TableHead>Service</TableHead><TableHead>{zh ? '变量名' : 'Key'}</TableHead><TableHead>{zh ? '值' : 'Value'}</TableHead><TableHead>{zh ? '识别来源' : 'Source'}</TableHead><TableHead className="w-44">{zh ? '写入位置' : 'Destination'}</TableHead></TableRow></TableHeader>
-    <TableBody>{variables.map((variable) => <TableRow key={variable.id}>
+    <TableBody>{pagination.items.map((variable) => <TableRow key={variable.id}>
       <TableCell>{variable.service}</TableCell>
       <TableCell className="font-mono text-xs">{variable.key}</TableCell>
       <TableCell><EnvironmentValue variable={variable} revealed={revealed.has(variable.id)} zh={zh} onReveal={() => onReveal(variable.id)} /></TableCell>
       <TableCell><Badge variant={variable.source === 'unknown' ? 'destructive' : 'outline'}>{localizedLabel(environmentSourceLabels, variable.source, zh)}</Badge><p className="mt-1 max-w-72 text-xs text-muted-foreground">{localizedLabel(environmentReasonLabels, variable.source, zh)}</p></TableCell>
       <TableCell>{autoExcluded ? <StatusBadge tone="neutral">{zh ? '自动排除' : 'Excluded'}</StatusBadge> : <Select value={choices[variable.id] ?? variable.destination} onValueChange={(value) => onChoice(variable.id, value as Destination)}><SelectTrigger className="w-40"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="compose">compose.yml</SelectItem><SelectItem value="env">.env</SelectItem><SelectItem value="exclude">{zh ? '不写入' : 'Exclude'}</SelectItem></SelectContent></Select>}</TableCell>
     </TableRow>)}</TableBody>
-  </Table>
+  </Table><ListPagination {...pagination} zh={zh} /></>
 }
 
 function EnvironmentValue({ variable, revealed, zh, onReveal }: { variable: EnvironmentCandidate; revealed: boolean; zh: boolean; onReveal: () => void }) {

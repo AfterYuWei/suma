@@ -67,7 +67,7 @@ export function LogViewer({ nodeID, containerId }: { nodeID: string; containerId
       <Button variant="outline" size="icon" aria-label={paused ? (zh ? '继续' : 'Continue') : (zh ? '暂停' : 'Pause')} onClick={toggle}>{paused ? <Play /> : <Pause />}</Button>
       <Button variant="outline" size="icon" aria-label={zh ? '下载' : 'Download'} onClick={download}><Download /></Button>
     </div>
-    <div ref={viewportRef} onScroll={onScroll} className="h-[56vh] w-full overflow-auto rounded-xl bg-card p-3 font-mono text-xs ring-1 ring-foreground/10">
+    <div ref={viewportRef} onScroll={onScroll} className="h-[56vh] w-full overflow-auto overscroll-contain rounded-xl bg-card p-3 font-mono text-xs ring-1 ring-foreground/10">
       {visible.map((line, index) => <div key={`${index}-${line.slice(0, 12)}`} className={cn('whitespace-pre-wrap break-all leading-relaxed', line.includes('ERROR') ? 'text-red-500 dark:text-red-400' : line.includes('WARN') ? 'text-amber-500 dark:text-amber-400' : 'text-foreground/80')}>{line}</div>)}
       {visible.length === 0 && <p className="text-muted-foreground">{zh ? '等待输出…' : 'Waiting for output…'}</p>}
     </div>

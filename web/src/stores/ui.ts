@@ -4,20 +4,24 @@ export type Theme = 'dark' | 'light' | 'system'
 export type Language = 'zh-CN' | 'en-US'
 export const logTailOptions = [100, 200, 500, 1000, 2000, 5000] as const
 export type LogTail = (typeof logTailOptions)[number]
+export const listPageSizeOptions = [10, 20, 50, 100] as const
+export type ListPageSize = (typeof listPageSizeOptions)[number]
 
 interface UIState {
   theme: Theme
   language: Language
   commandOpen: boolean
   sidebarOpen: boolean
-	currentNodeID: string
+  currentNodeID: string
   logTail: LogTail
+  listPageSize: ListPageSize
   setTheme: (theme: Theme) => void
   setLanguage: (language: Language) => void
   setCommandOpen: (open: boolean) => void
   toggleSidebar: () => void
 	setCurrentNodeID: (nodeID: string) => void
   setLogTail: (tail: LogTail) => void
+  setListPageSize: (pageSize: ListPageSize) => void
 }
 
 function applyTheme(theme: Theme) {
@@ -41,6 +45,8 @@ const storedTheme = (localStorage.getItem('suma-theme') as Theme | null) ?? 'dar
 const storedLanguage = (localStorage.getItem('suma-language') as Language | null) ?? (navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US')
 const storedLogTailValue = Number(localStorage.getItem('suma-log-tail'))
 const storedLogTail: LogTail = logTailOptions.includes(storedLogTailValue as LogTail) ? storedLogTailValue as LogTail : 200
+const storedListPageSizeValue = Number(localStorage.getItem('suma-list-page-size'))
+const storedListPageSize: ListPageSize = listPageSizeOptions.includes(storedListPageSizeValue as ListPageSize) ? storedListPageSizeValue as ListPageSize : 20
 applyTheme(storedTheme)
 document.documentElement.lang = storedLanguage
 
@@ -51,6 +57,7 @@ export const useUIStore = create<UIState>((set) => ({
   sidebarOpen: matchMedia('(min-width: 1024px)').matches,
 	currentNodeID: localStorage.getItem('suma-node') || 'local',
   logTail: storedLogTail,
+  listPageSize: storedListPageSize,
   setTheme: (theme) => {
     localStorage.setItem('suma-theme', theme)
     applyTheme(theme)
@@ -65,4 +72,5 @@ export const useUIStore = create<UIState>((set) => ({
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
 	setCurrentNodeID: (currentNodeID) => { localStorage.setItem('suma-node', currentNodeID); set({ currentNodeID }) },
   setLogTail: (logTail) => { localStorage.setItem('suma-log-tail', String(logTail)); set({ logTail }) },
+  setListPageSize: (listPageSize) => { localStorage.setItem('suma-list-page-size', String(listPageSize)); set({ listPageSize }) },
 }))
