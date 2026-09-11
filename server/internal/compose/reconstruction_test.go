@@ -40,7 +40,7 @@ func TestBuildTakeoverDraftPrefersCompleteMappedProject(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &reconstructionRunner{
-		rendered: `{"name":"shop","services":{"web":{"image":"app:v1","build":{"context":"."},"environment":{"MODE":"prod","PASSWORD":"secret"}}}}`,
+		rendered: `{"name":"shop","services":{"web":{"image":"app:v1","build":{"context":"."},"environment":{"MODE":"prod","PASSWORD":"secret"},"labels":{"team":"infra","com.docker.compose.project":"shop","com.docker.compose.project.working_dir":"/old"},"ports":[{"target":80,"published":8080,"protocol":"tcp","mode":"inbox"}]}}}`,
 		hashes:   map[string]string{"web": "expected-hash"},
 	}
 	containers := observableContainers{
@@ -60,6 +60,9 @@ func TestBuildTakeoverDraftPrefersCompleteMappedProject(t *testing.T) {
 	}
 	if strings.Contains(draft.Compose, "build:") || !strings.Contains(draft.Environment, "PASSWORD='secret'") {
 		t.Fatalf("rendered files:\n%s\n%s", draft.Compose, draft.Environment)
+	}
+	if !strings.Contains(draft.Compose, "team") || strings.Contains(draft.Compose, "com.docker.compose") || strings.Contains(draft.Compose, "protocol") || strings.Contains(draft.Compose, "inbox") {
+		t.Fatalf("mapped draft was not pruned:\n%s", draft.Compose)
 	}
 	if draft.Observation.Services[0].DriftStatus != "runtime_drift" {
 		t.Fatalf("expected source hash drift: %#v", draft.Observation.Services[0])
@@ -231,6 +234,51 @@ func TestBuildTakeoverDraftFallsBackToWholeRuntimeProject(t *testing.T) {
 	}
 	if !strings.Contains(draft.Compose, "shop_default") || !strings.Contains(draft.Compose, "shop_data") {
 		t.Fatalf("Project resources missing:\n%s", draft.Compose)
+	}
+}
+
+func TestBuildTakeoverDraftPrunesRuntimeNoise(t *testing.T) {
+	defaults := RuntimeConfig{
+		Image: "app:v1", Environment: []string{"MODE=prod"}, StopTimeout: 10, StopSignal: "SIGTERM",
+		Labels:   map[string]string{ProjectLabel: "shop", ServiceLabel: "web", "custom-label": "keep"},
+		Ports:    []RuntimePort{{Target: 8080, Published: 18080, Protocol: "tcp", HostIP: "0.0.0.0"}},
+		Mounts:   []RuntimeMount{{Type: "bind", Source: "/srv/site", Target: "/site", Propagation: "rprivate"}},
+		Networks: []RuntimeEndpoint{{Name: "shop_default", Aliases: []string{"web"}}},
+	}
+	overrides := RuntimeConfig{
+		Image: "worker:v1", StopTimeout: 25, StopSignal: "SIGINT",
+		Labels:   map[string]string{"team": "infra"},
+		Ports:    []RuntimePort{{Target: 5353, Published: 5353, Protocol: "udp"}, {Target: 9090, Published: 19090, Protocol: "tcp", HostIP: "192.168.1.10"}},
+		Mounts:   []RuntimeMount{{Type: "bind", Source: "/srv/logs", Target: "/logs", Propagation: "slave"}},
+		Networks: []RuntimeEndpoint{{Name: "shop_default"}},
+	}
+	containers := observableContainers{
+		staticContainers: staticContainers{rows: []containerdomain.Summary{{ID: "web-1", Labels: map[string]string{ProjectLabel: "shop"}}}},
+		snapshot: RuntimeProjectSnapshot{
+			ProjectName: "shop",
+			Containers: []RuntimeContainer{
+				{ID: "web-1", Name: "shop-web-1", Service: "web", ImageInspectOK: true, ImageEnvironment: []string{"PATH=/usr/bin"}, Config: defaults},
+				{ID: "worker-1", Name: "shop-worker-1", Service: "worker", ImageInspectOK: true, ImageEnvironment: []string{"PATH=/usr/bin"}, Config: overrides},
+			},
+			Networks: []RuntimeNetwork{{ID: "net", Name: "shop_default", Driver: "bridge", Labels: map[string]string{ProjectLabel: "shop", "com.docker.compose.network": "default"}}},
+			Volumes:  []RuntimeVolume{{Name: "shop_data", Driver: "local", Labels: map[string]string{ProjectLabel: "shop", "com.docker.compose.volume": "data"}}},
+		},
+	}
+	service := &Service{root: t.TempDir(), containers: containers, nodeID: "tcp-node"}
+	draft, err := service.BuildTakeoverDraft(context.Background(), "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose := draft.Compose
+	for _, noise := range []string{"com.docker.compose", "protocol: tcp", "rprivate", "10s", "SIGTERM", "0.0.0.0", "aliases"} {
+		if strings.Contains(compose, noise) {
+			t.Fatalf("runtime noise %q survived in draft:\n%s", noise, compose)
+		}
+	}
+	for _, kept := range []string{"custom-label", "team", "udp", "192.168.1.10", "slave", "25s", "SIGINT", "shop_default", "shop_data"} {
+		if !strings.Contains(compose, kept) {
+			t.Fatalf("meaningful content %q was lost from draft:\n%s", kept, compose)
+		}
 	}
 }
 

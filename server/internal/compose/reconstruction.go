@@ -124,6 +124,7 @@ func (s *Service) BuildTakeoverDraft(ctx context.Context, name string) (ProjectT
 		}
 		draft.Warnings = append(draft.Warnings, "Runtime reconstruction cannot recover comments, YAML anchors, source variable expressions, profiles, dependencies, build contexts, or removed services")
 	}
+	pruneTakeoverModel(model)
 	model["name"] = name
 	draft.model = model
 	draft.Fingerprint = takeoverFingerprint(observation.Fingerprint, draft.Source, model)
@@ -488,6 +489,143 @@ func renderTakeoverModel(base map[string]any, variables []EnvironmentCandidate) 
 		environment.WriteByte('\n')
 	}
 	return string(content), environment.String(), nil
+}
+
+const composeLabelPrefix = "com.docker.compose."
+
+// pruneTakeoverModel removes draft content whose semantics Docker Compose
+// restores by default: injected runtime labels and default-valued fields. It
+// mutates the model in place before the takeover fingerprint is computed, so
+// rendering and takeover stay consistent with the pruned content.
+func pruneTakeoverModel(model map[string]any) {
+	services, _ := model["services"].(map[string]any)
+	for name, raw := range services {
+		service, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		pruneServiceComposeLabels(service)
+		pruneServicePortDefaults(service)
+		pruneServiceMountDefaults(service)
+		pruneServiceStopDefaults(service)
+		pruneServiceSelfAliases(service, name)
+		pruneEmptyServiceMaps(service)
+	}
+}
+
+func pruneServiceComposeLabels(service map[string]any) {
+	switch labels := service["labels"].(type) {
+	case map[string]any:
+		for key := range labels {
+			if strings.HasPrefix(key, composeLabelPrefix) {
+				delete(labels, key)
+			}
+		}
+		if len(labels) == 0 {
+			delete(service, "labels")
+		}
+	case map[string]string:
+		for key := range labels {
+			if strings.HasPrefix(key, composeLabelPrefix) {
+				delete(labels, key)
+			}
+		}
+		if len(labels) == 0 {
+			delete(service, "labels")
+		}
+	}
+}
+
+func pruneServicePortDefaults(service map[string]any) {
+	ports, _ := service["ports"].([]any)
+	for _, raw := range ports {
+		port, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		deleteIfDefaultValue(port, "protocol", "tcp")
+		deleteIfDefaultValue(port, "host_ip", "", "0.0.0.0")
+		deleteIfDefaultValue(port, "mode", "", "inbox")
+	}
+}
+
+func pruneServiceMountDefaults(service map[string]any) {
+	volumes, _ := service["volumes"].([]any)
+	for _, raw := range volumes {
+		mount, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		bind, _ := mount["bind"].(map[string]any)
+		deleteIfDefaultValue(bind, "propagation", "rprivate")
+		if len(bind) == 0 {
+			delete(mount, "bind")
+		}
+	}
+}
+
+func pruneServiceStopDefaults(service map[string]any) {
+	deleteIfDefaultValue(service, "stop_grace_period", "10s")
+	deleteIfDefaultValue(service, "stop_signal", "SIGTERM")
+}
+
+func pruneServiceSelfAliases(service map[string]any, serviceName string) {
+	networks, _ := service["networks"].(map[string]any)
+	for _, raw := range networks {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		aliases, ok := stringSliceValue(entry["aliases"])
+		if !ok || len(aliases) != 1 || aliases[0] != serviceName {
+			continue
+		}
+		delete(entry, "aliases")
+	}
+}
+
+// stringSliceValue reads alias-like values from both JSON-decoded ([]any) and
+// runtime-constructed ([]string) slices.
+func stringSliceValue(value any) ([]string, bool) {
+	switch typed := value.(type) {
+	case []string:
+		return typed, true
+	case []any:
+		result := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			result = append(result, text)
+		}
+		return result, true
+	}
+	return nil, false
+}
+
+// pruneEmptyServiceMaps drops empty map values left behind by pruning while
+// keeping non-empty wiring such as a bare network entry, which declares the
+// connection itself.
+func pruneEmptyServiceMaps(service map[string]any) {
+	for key, value := range service {
+		if entry, ok := value.(map[string]any); ok && len(entry) == 0 {
+			delete(service, key)
+		}
+	}
+}
+
+func deleteIfDefaultValue(target map[string]any, key string, defaults ...string) {
+	value, ok := target[key].(string)
+	if !ok {
+		return
+	}
+	for _, candidate := range defaults {
+		if value == candidate {
+			delete(target, key)
+			return
+		}
+	}
 }
 
 func environmentAliases(values []EnvironmentCandidate) map[string]string {
