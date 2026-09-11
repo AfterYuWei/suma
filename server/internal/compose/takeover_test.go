@@ -128,3 +128,69 @@ func TestTakeoverRejectsFileBackedSecret(t *testing.T) {
 		t.Fatal("expected file-backed secret rejection")
 	}
 }
+
+func TestManualTakeoverSavesUserComposeAndRecordsManualSource(t *testing.T) {
+	runner := &takeoverRunner{}
+	service, draft := takeoverHarness(t, runner)
+	content := "name: shop\nservices:\n  web:\n    image: app:v2\n    environment:\n      MODE: manual\n"
+	project, err := service.Takeover(context.Background(), "shop", TakeoverInput{Mode: TakeoverModeManual, Fingerprint: draft.Fingerprint, ConfirmationName: "shop", Compose: content, Environment: "MODE='manual'\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !runner.validated || runner.deployed {
+		t.Fatalf("runner state = %#v", runner)
+	}
+	if !project.Managed || project.Metadata == nil || project.Metadata.Origin != "takeover" || project.Metadata.TakeoverSource != TakeoverModeManual || project.Metadata.LastDeployedAt != nil {
+		t.Fatalf("managed Project = %#v", project)
+	}
+	if project.Compose != content || project.Environment != "MODE='manual'\n" {
+		t.Fatalf("manual takeover rewrote user content: %#v", project)
+	}
+}
+
+func TestManualTakeoverStillRequiresCurrentFingerprint(t *testing.T) {
+	service, _ := takeoverHarness(t, &takeoverRunner{})
+	_, err := service.Takeover(context.Background(), "shop", TakeoverInput{Mode: TakeoverModeManual, Fingerprint: "stale", ConfirmationName: "shop", Compose: "services:\n  web:\n    image: app:v2\n"})
+	if err == nil {
+		t.Fatal("expected fingerprint rejection")
+	}
+	if _, statErr := os.Stat(filepath.Join(service.nodeRoot(), "shop")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("stale manual takeover created a managed Project: %v", statErr)
+	}
+}
+
+func TestTakeoverRejectsUnknownMode(t *testing.T) {
+	service, draft := takeoverHarness(t, &takeoverRunner{})
+	_, err := service.Takeover(context.Background(), "shop", TakeoverInput{Mode: "wizard", Fingerprint: draft.Fingerprint, ConfirmationName: "shop", Compose: draft.Compose})
+	if err == nil || !strings.Contains(err.Error(), "takeover mode") {
+		t.Fatalf("unknown mode error = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(service.nodeRoot(), "shop")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("unknown mode created a managed Project: %v", statErr)
+	}
+}
+
+func TestTakeoverRejectsMismatchedProjectIdentity(t *testing.T) {
+	service, draft := takeoverHarness(t, &takeoverRunner{})
+	cases := []struct{ name, compose, environment string }{
+		{"top-level name", "name: other\nservices:\n  web:\n    image: app:v1\n", ""},
+		{"COMPOSE_PROJECT_NAME", "services:\n  web:\n    image: app:v1\n", "export COMPOSE_PROJECT_NAME=\"other\"\n"},
+	}
+	for _, item := range cases {
+		t.Run(item.name, func(t *testing.T) {
+			_, err := service.Takeover(context.Background(), "shop", TakeoverInput{Mode: TakeoverModeManual, Fingerprint: draft.Fingerprint, ConfirmationName: "shop", Compose: item.compose, Environment: item.environment})
+			if err == nil || !strings.Contains(err.Error(), `"other"`) {
+				t.Fatalf("identity mismatch error = %v", err)
+			}
+			if _, statErr := os.Stat(filepath.Join(service.nodeRoot(), "shop")); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("identity mismatch created a managed Project: %v", statErr)
+			}
+			if err := service.ValidateTakeoverDraft(context.Background(), "shop", item.compose, item.environment); err == nil {
+				t.Fatal("draft validation accepted a mismatched Project identity")
+			}
+		})
+	}
+	if err := service.ValidateTakeoverDraft(context.Background(), "shop", "name: shop\nservices:\n  web:\n    image: app:v1\n", "COMPOSE_PROJECT_NAME=shop\n"); err != nil {
+		t.Fatal(err)
+	}
+}

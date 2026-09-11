@@ -339,6 +339,13 @@ func registerNodeRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps Dependenci
 	})
 }
 
+func takeoverAuditAction(mode string) string {
+	if strings.TrimSpace(mode) == composeService.TakeoverModeManual {
+		return "project.takeover_manual"
+	}
+	return "project.takeover"
+}
+
 func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 	if deps.Compose == nil || deps.ComposeRunner == nil {
 		return
@@ -490,7 +497,7 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 422, 20323, err.Error())
 			return
 		}
-		if err := current.ValidateDraft(c.Request.Context(), input.Compose, input.Environment); err != nil {
+		if err := current.ValidateTakeoverDraft(c.Request.Context(), c.Param("name"), input.Compose, input.Environment); err != nil {
 			failure(c, 422, 20324, err.Error())
 			return
 		}
@@ -515,7 +522,7 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 409, 20321, err.Error())
 			return
 		}
-		recordNodeAudit(c, deps, view.ID, view.Name, "project.takeover", "project", c.Param("name"), "success")
+		recordNodeAudit(c, deps, view.ID, view.Name, takeoverAuditAction(input.Mode), "project", c.Param("name"), "success")
 		c.JSON(201, envelope{Code: 0, Message: "success", Data: row})
 	})
 	routes.POST("/batch", func(c *gin.Context) {
@@ -963,7 +970,7 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 422, 20423, err.Error())
 			return
 		}
-		if err := current.ValidateDraft(c.Request.Context(), input.Compose, input.Environment); err != nil {
+		if err := current.ValidateTakeoverDraft(c.Request.Context(), c.Param("name"), input.Compose, input.Environment); err != nil {
 			failure(c, 422, 20424, err.Error())
 			return
 		}
@@ -1066,7 +1073,7 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 409, 20421, err.Error())
 			return
 		}
-		recordNodeAudit(c, deps, view.ID, view.Name, "project.takeover", "project", c.Param("name"), "success")
+		recordNodeAudit(c, deps, view.ID, view.Name, takeoverAuditAction(input.Mode), "project", c.Param("name"), "success")
 		c.JSON(201, envelope{Code: 0, Message: "success", Data: row})
 	})
 }

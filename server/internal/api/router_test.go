@@ -589,6 +589,67 @@ func TestConcurrentProjectTakeoverHTTPAllowsOneWinnerWithoutAuditSecrets(t *test
 	}
 }
 
+func TestManualProjectTakeoverHTTPSavesUserComposeAndAuditsMode(t *testing.T) {
+	harness := newProjectHTTPHarness(t)
+	preview := harness.request(http.MethodPost, "/api/v1/nodes/local/projects/compose/shop/takeover/preview", nil)
+	if preview.Code != http.StatusOK {
+		t.Fatalf("preview: %d %s", preview.Code, preview.Body.String())
+	}
+	var value struct {
+		Data composeService.ProjectTakeoverDraft `json:"data"`
+	}
+	if err := json.Unmarshal(preview.Body.Bytes(), &value); err != nil {
+		t.Fatal(err)
+	}
+	content := "name: shop\nservices:\n  web:\n    image: example/web:v2\n    restart: unless-stopped\n"
+	mismatched, err := json.Marshal(map[string]string{"compose": "name: other\nservices:\n  web:\n    image: example/web:v2\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejected := harness.request(http.MethodPost, "/api/v1/nodes/local/projects/compose/shop/takeover/validate", mismatched)
+	if rejected.Code != http.StatusUnprocessableEntity || !strings.Contains(rejected.Body.String(), "must match the Compose Project name") {
+		t.Fatalf("mismatched Project name validation = %d %s", rejected.Code, rejected.Body.String())
+	}
+	valid, err := json.Marshal(map[string]string{"compose": content, "environment": "APP_MODE=manual\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response := harness.request(http.MethodPost, "/api/v1/nodes/local/projects/compose/shop/takeover/validate", valid); response.Code != http.StatusOK {
+		t.Fatalf("validate manual draft: %d %s", response.Code, response.Body.String())
+	}
+	unknown, err := json.Marshal(composeService.TakeoverInput{Mode: "wizard", Fingerprint: value.Data.Fingerprint, ConfirmationName: "shop", Compose: content})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response := harness.request(http.MethodPost, "/api/v1/nodes/local/projects/compose/shop/takeover", unknown); response.Code != http.StatusConflict {
+		t.Fatalf("unknown takeover mode = %d %s", response.Code, response.Body.String())
+	}
+	payload, err := json.Marshal(composeService.TakeoverInput{Mode: composeService.TakeoverModeManual, Fingerprint: value.Data.Fingerprint, ConfirmationName: "shop", Compose: content, Environment: "APP_MODE=manual\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := harness.request(http.MethodPost, "/api/v1/nodes/local/projects/compose/shop/takeover", payload)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("manual takeover: %d %s", response.Code, response.Body.String())
+	}
+	var created struct {
+		Data composeService.Project `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if !created.Data.Managed || created.Data.Metadata == nil || created.Data.Metadata.Origin != "takeover" || created.Data.Metadata.TakeoverSource != composeService.TakeoverModeManual || created.Data.Compose != content || created.Data.Environment != "APP_MODE=manual\n" {
+		t.Fatalf("manual takeover Project = %#v", created.Data)
+	}
+	var audits []database.AuditLog
+	if err := harness.db.Where("action = ?", "project.takeover_manual").Find(&audits).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(audits) != 1 {
+		t.Fatalf("manual takeover audits = %#v", audits)
+	}
+}
+
 func TestExternalProjectCleanupHTTPRequiresExactNameAndAuditsTask(t *testing.T) {
 	harness := newProjectHTTPHarness(t)
 	wrong := harness.request(http.MethodPost, "/api/v1/nodes/local/projects/compose/shop/cleanup", []byte(`{"confirmation_name":"wrong","remove_volumes":false}`))

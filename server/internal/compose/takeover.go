@@ -6,19 +6,44 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/goccy/go-yaml"
 )
 
+const (
+	// TakeoverModeDraft claims the Project with the reviewed generated draft.
+	TakeoverModeDraft = "draft"
+	// TakeoverModeManual claims the Project with Compose content the operator
+	// wrote directly, skipping the generated draft and environment review.
+	TakeoverModeManual = "manual"
+)
+
 type TakeoverInput struct {
+	Mode             string `json:"mode"`
 	Fingerprint      string `json:"fingerprint"`
 	ConfirmationName string `json:"confirmation_name"`
 	Compose          string `json:"compose"`
 	Environment      string `json:"environment"`
 }
 
+func takeoverMode(value string) (string, error) {
+	switch strings.TrimSpace(value) {
+	case "", TakeoverModeDraft:
+		return TakeoverModeDraft, nil
+	case TakeoverModeManual:
+		return TakeoverModeManual, nil
+	default:
+		return "", errors.New("takeover mode must be draft or manual")
+	}
+}
+
 func (s *Service) Takeover(ctx context.Context, name string, input TakeoverInput) (Project, error) {
+	mode, err := takeoverMode(input.Mode)
+	if err != nil {
+		return Project{}, err
+	}
 	if input.ConfirmationName != name {
 		return Project{}, errors.New("type the Compose Project name to confirm takeover")
 	}
@@ -35,6 +60,9 @@ func (s *Service) Takeover(ctx context.Context, name string, input TakeoverInput
 		return Project{}, errors.New("Project changed while preparing takeover; analyze it again")
 	}
 	if err := validateManagedTakeoverContent(input.Compose); err != nil {
+		return Project{}, err
+	}
+	if err := validateTakeoverProjectName(name, input.Compose, input.Environment); err != nil {
 		return Project{}, err
 	}
 	if s.runner == nil {
@@ -67,7 +95,11 @@ func (s *Service) Takeover(ctx context.Context, name string, input TakeoverInput
 	if err := writeAtomic(filepath.Join(temporary, ".env"), input.Environment); err != nil {
 		return Project{}, err
 	}
-	metadata := newManagedProjectMetadata(s.effectiveNodeID(), name, "takeover", draft.Source, time.Now().UTC())
+	source := draft.Source
+	if mode == TakeoverModeManual {
+		source = TakeoverModeManual
+	}
+	metadata := newManagedProjectMetadata(s.effectiveNodeID(), name, "takeover", source, time.Now().UTC())
 	if err := writeManagedProjectMetadata(temporary, metadata); err != nil {
 		return Project{}, err
 	}
@@ -78,6 +110,16 @@ func (s *Service) Takeover(ctx context.Context, name string, input TakeoverInput
 		return Project{}, fmt.Errorf("claim Compose Project: %w", err)
 	}
 	return s.Get(ctx, name)
+}
+
+// ValidateTakeoverDraft validates unsaved takeover content for one Compose
+// Project, including the Project identity the content would run under, without
+// requiring a managed directory and without mutating runtime state.
+func (s *Service) ValidateTakeoverDraft(ctx context.Context, name, content, environment string) error {
+	if err := validateTakeoverProjectName(name, content, environment); err != nil {
+		return err
+	}
+	return s.ValidateDraft(ctx, content, environment)
 }
 
 func validateManagedTakeoverContent(content string) error {
@@ -99,4 +141,47 @@ func validateManagedTakeoverContent(content string) error {
 		}
 	}
 	return nil
+}
+
+// validateTakeoverProjectName rejects content that would make Compose run the
+// managed directory under a different Project name. The managed directory is
+// named after the native Project, so a declared top-level name or a
+// COMPOSE_PROJECT_NAME entry in .env must agree with it; otherwise the first
+// deployment would create a second Project and orphan the existing containers.
+func validateTakeoverProjectName(name, content, environment string) error {
+	var document map[string]any
+	if err := yaml.Unmarshal([]byte(content), &document); err != nil {
+		return fmt.Errorf("parse takeover Compose Project: %w", err)
+	}
+	if declared, ok := document["name"]; ok && declared != nil {
+		if value := strings.TrimSpace(fmt.Sprint(declared)); value != "" && value != name {
+			return fmt.Errorf("top-level name %q must match the Compose Project name %q", value, name)
+		}
+	}
+	if value, ok := dotEnvValue(environment, "COMPOSE_PROJECT_NAME"); ok && value != name {
+		return fmt.Errorf("COMPOSE_PROJECT_NAME %q must match the Compose Project name %q", value, name)
+	}
+	return nil
+}
+
+func dotEnvValue(environment, key string) (string, bool) {
+	for _, line := range strings.Split(environment, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		current, value, ok := strings.Cut(strings.TrimPrefix(line, "export "), "=")
+		if !ok || strings.TrimSpace(current) != key {
+			continue
+		}
+		return unquoteDotEnv(strings.TrimSpace(value)), true
+	}
+	return "", false
+}
+
+func unquoteDotEnv(value string) string {
+	if len(value) >= 2 && ((value[0] == '\'' && value[len(value)-1] == '\'') || (value[0] == '"' && value[len(value)-1] == '"')) {
+		return value[1 : len(value)-1]
+	}
+	return value
 }

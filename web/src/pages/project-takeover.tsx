@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from '@tanstack/react-router'
-import { AlertTriangle, Check, ChevronDown, ChevronLeft, ChevronRight, CirclePause, Eye, EyeOff, FileCheck2, FlaskConical, ShieldAlert, Trash2 } from 'lucide-react'
+import { AlertTriangle, Check, ChevronDown, ChevronLeft, ChevronRight, CirclePause, Eye, EyeOff, FileCheck2, FlaskConical, PencilLine, ShieldAlert, Trash2 } from 'lucide-react'
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
@@ -30,7 +30,9 @@ import { useUIStore } from '../stores/ui'
 import { ResourceFrame } from './images'
 
 const Monaco = lazy(() => import('@monaco-editor/react'))
-const steps = ['analysis', 'environment', 'editor', 'confirm'] as const
+type TakeoverMode = 'draft' | 'manual'
+type TakeoverStep = 'analysis' | 'environment' | 'editor' | 'confirm'
+const takeoverFlows: Record<TakeoverMode, TakeoverStep[]> = { draft: ['analysis', 'environment', 'editor', 'confirm'], manual: ['analysis', 'editor', 'confirm'] }
 type Destination = EnvironmentCandidate['destination']
 interface TaskRow { id: string; status: string; progress: number; message: string }
 
@@ -109,6 +111,8 @@ function takeoverMessage(message: string | undefined, zh: boolean): string {
     'top-level configs are not supported by shadow preview': '隔离预演暂不支持顶层 configs',
     'top-level secrets are not supported by shadow preview': '隔离预演暂不支持顶层 secrets',
     'Compose Project must define at least one service': 'Compose Project 至少需要定义一个 Service',
+    'takeover Compose Project must define at least one service': '接管的 Compose Project 至少需要定义一个 Service',
+    'takeover mode must be draft or manual': '接管模式必须是 draft 或 manual',
     'shadow preview runtime is unavailable': '隔离预演运行环境不可用',
     'Project changed while preparing shadow preview; analyze it again': '准备隔离预演期间 Project 已发生变化，请重新分析',
     'Project changed while preparing takeover': '准备接管期间 Project 已发生变化，请重新分析',
@@ -164,6 +168,14 @@ function takeoverMessage(message: string | undefined, zh: boolean): string {
         .replace(/^uses (.+)$/, '使用 $1')
     return `Service “${match[1]}”${action}`
   }
+  match = message.match(/^top-level name "([^"]+)" must match the Compose Project name "([^"]+)"$/)
+  if (match) return `顶层 name“${match[1]}”必须与 Compose Project 名称“${match[2]}”一致`
+  match = message.match(/^COMPOSE_PROJECT_NAME "([^"]+)" must match the Compose Project name "([^"]+)"$/)
+  if (match) return `COMPOSE_PROJECT_NAME“${match[1]}”必须与 Compose Project 名称“${match[2]}”一致`
+  match = message.match(/^(configs|secrets) "([^"]+)" is file-backed; convert it to an external resource before takeover$/)
+  if (match) return `${match[1]}“${match[2]}”依赖本地文件；接管前请改为 external 资源`
+  match = message.match(/^parse takeover Compose Project: (.+)$/)
+  if (match) return `无法解析接管的 Compose Project：${match[1]}`
   match = message.match(/^Compose working directory and config files must be absolute$/)
   if (match) return 'Compose working directory 和 config files 必须使用绝对路径'
   match = message.match(/^Compose working directory is not mapped into SUMA$/)
@@ -199,7 +211,8 @@ export function ProjectTakeoverPage() {
   const navigate = useNavigate()
   const client = useQueryClient()
   const encoded = encodeURIComponent(projectName)
-  const [step, setStep] = useState(0)
+  const [mode, setMode] = useState<TakeoverMode>('draft')
+  const [step, setStep] = useState<TakeoverStep>('analysis')
   const [choices, setChoices] = useState<Record<string, Destination>>({})
   const [compose, setCompose] = useState('')
   const [environment, setEnvironment] = useState('')
@@ -221,7 +234,7 @@ export function ProjectTakeoverPage() {
     setChoices(Object.fromEntries(preview.data.variables.map((variable) => [variable.id, variable.source === 'image_default' ? 'exclude' : variable.destination])))
   }, [preview.data])
   useEffect(() => {
-    if (step === 0) return
+    if (step === 'analysis') return
     const listener = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
     window.addEventListener('beforeunload', listener)
     return () => window.removeEventListener('beforeunload', listener)
@@ -234,7 +247,7 @@ export function ProjectTakeoverPage() {
 
   const render = useMutation({
     mutationFn: () => api<ProjectTakeoverDraft>(nodePath(nodeID, `/projects/compose/${encoded}/takeover/render`), { method: 'POST', body: JSON.stringify({ fingerprint: preview.data?.fingerprint, choices: Object.entries(choices).map(([id, destination]) => ({ id, destination })) }) }),
-    onSuccess: (draft) => { setCompose(draft.compose); setEnvironment(draft.environment); setValidated(''); setStep(2) },
+    onSuccess: (draft) => { setCompose(draft.compose); setEnvironment(draft.environment); setValidated(''); setStep('editor') },
   })
   const validate = useMutation({
     mutationFn: () => api(nodePath(nodeID, `/projects/compose/${encoded}/takeover/validate`), { method: 'POST', body: JSON.stringify({ compose, environment }) }),
@@ -260,11 +273,11 @@ export function ProjectTakeoverPage() {
     },
   })
   const takeover = useMutation({
-    mutationFn: () => api<Project>(nodePath(nodeID, `/projects/compose/${encoded}/takeover`), { method: 'POST', body: JSON.stringify({ fingerprint: preview.data?.fingerprint, confirmation_name: confirmation, compose, environment }) }),
+    mutationFn: () => api<Project>(nodePath(nodeID, `/projects/compose/${encoded}/takeover`), { method: 'POST', body: JSON.stringify({ mode, fingerprint: preview.data?.fingerprint, confirmation_name: confirmation, compose, environment }) }),
     onSuccess: async () => { if (shadowSession) await cleanupShadow.mutateAsync(shadowSession); await client.invalidateQueries({ queryKey: ['projects', nodeID] }); void navigate({ to: '/projects/$backend/$projectName', params: { backend: 'compose', projectName } }) },
   })
   const leave = async () => {
-    if (step > 0 && !await confirmDialog({ title: zh ? '放弃接管草稿？' : 'Discard takeover draft?', description: zh ? '未保存的变量选择和配置编辑将丢失。' : 'Unsaved variable choices and configuration edits will be lost.', confirmLabel: zh ? '放弃' : 'Discard', danger: true })) return
+    if (step !== 'analysis' && !await confirmDialog({ title: zh ? '放弃接管草稿？' : 'Discard takeover draft?', description: zh ? '未保存的变量选择和配置编辑将丢失。' : 'Unsaved variable choices and configuration edits will be lost.', confirmLabel: zh ? '放弃' : 'Discard', danger: true })) return
     if (shadowSession) await cleanupShadow.mutateAsync(shadowSession)
     void navigate({ to: '/projects/$backend/$projectName', params: { backend: 'compose', projectName } })
   }
@@ -279,6 +292,27 @@ export function ProjectTakeoverPage() {
     if (!result) return
     cleanupExternal.mutate({ confirmation_name: result.value, remove_volumes: result.checked })
   }
+  const startManual = () => {
+    if (mode !== 'manual') {
+      setMode('manual')
+      setCompose('')
+      setEnvironment('')
+      setFile('compose')
+      setValidated('')
+      validate.reset()
+      assessShadow.reset()
+    }
+    setStep('editor')
+  }
+  const startDraft = () => {
+    if (mode !== 'draft') {
+      setMode('draft')
+      setValidated('')
+      validate.reset()
+      assessShadow.reset()
+    }
+    setStep('environment')
+  }
 
   if (backend !== 'compose') return <ErrorState title={zh ? '后端尚不可用' : 'Backend unavailable'} description={zh ? '当前只支持 Compose Project 接管。' : 'Only Compose Project takeover is currently supported.'} />
   if (preview.isPending) return <LoadingState rows={8} label={zh ? '正在聚合并分析整个 Compose Project' : 'Aggregating and analyzing the complete Compose Project'} />
@@ -286,30 +320,45 @@ export function ProjectTakeoverPage() {
   const draft = preview.data
   const hasBlockers = draft.blockers.length > 0
   const canShadowPreview = draft.capabilities.includes('shadow_preview')
+  const manual = mode === 'manual'
+  const flow = takeoverFlows[mode]
+  const stepIndex = flow.indexOf(step)
   const selected = file === 'compose' ? { label: 'compose.yml', value: compose, language: 'yaml' } : { label: '.env', value: environment, language: 'plaintext' }
-  const stepLabels = zh ? ['Project 分析', '环境变量', canShadowPreview ? '配置编辑 · 可预演' : '配置编辑', '接管确认'] : ['Project analysis', 'Environment', canShadowPreview ? 'Configuration · preview' : 'Configuration', 'Confirmation']
+  const stepLabels: Record<TakeoverStep, string> = zh
+    ? { analysis: 'Project 分析', environment: '环境变量', editor: manual ? '直接填写配置' : canShadowPreview ? '配置编辑 · 可预演' : '配置编辑', confirm: '接管确认' }
+    : { analysis: 'Project analysis', environment: 'Environment', editor: manual ? 'Write configuration' : canShadowPreview ? 'Configuration · preview' : 'Configuration', confirm: 'Confirmation' }
 
   return <div className="flex w-full flex-col gap-4">
     <Button variant="ghost" size="sm" className="self-start text-muted-foreground" onClick={() => void leave()}><ChevronLeft />{zh ? '返回 Project' : 'Back to Project'}</Button>
     <ResourceFrame title={zh ? `接管 ${projectName}` : `Take over ${projectName}`} detail={zh ? '将整个 Compose Project 纳入 SUMA 管理' : 'The complete Compose Project will become one SUMA Project'} action={<Badge variant="outline">Compose</Badge>}>
       <div className="flex w-full flex-col gap-5">
-        <ol className="grid grid-cols-4 gap-2">{steps.map((name, index) => <li key={name} className={`flex items-center gap-2 border-b-2 px-1 pb-2 text-sm ${index === step ? 'border-primary font-medium' : index < step ? 'border-emerald-500 text-emerald-600 dark:text-emerald-400' : 'border-border text-muted-foreground'}`}><span className="grid size-5 shrink-0 place-items-center rounded-full bg-muted text-xs">{index < step ? <Check className="size-3" /> : index + 1}</span><span className="hidden sm:inline">{stepLabels[index]}</span></li>)}</ol>
+        <ol className={`grid gap-2 ${flow.length === 3 ? 'grid-cols-3' : 'grid-cols-4'}`}>{flow.map((name, index) => <li key={name} className={`flex items-center gap-2 border-b-2 px-1 pb-2 text-sm ${index === stepIndex ? 'border-primary font-medium' : index < stepIndex ? 'border-emerald-500 text-emerald-600 dark:text-emerald-400' : 'border-border text-muted-foreground'}`}><span className="grid size-5 shrink-0 place-items-center rounded-full bg-muted text-xs">{index < stepIndex ? <Check className="size-3" /> : index + 1}</span><span className="hidden sm:inline">{stepLabels[name]}</span></li>)}</ol>
 
-        {step === 0 && <AnalysisStep draft={draft} zh={zh} cleaning={cleanupExternal.isPending} cleanupError={cleanupExternal.error?.message} onCleanup={() => void confirmCleanup()} />}
-        {step === 0 && <DriftReport services={draft.observation.services} zh={zh} />}
-        {step === 1 && <EnvironmentStep variables={draft.variables} choices={choices} revealed={revealed} zh={zh} onChoice={(id, destination) => setChoices((current) => ({ ...current, [id]: destination }))} onReveal={(id) => setRevealed((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })} />}
-        {step === 1 && render.isError && <Alert variant="destructive"><ShieldAlert /><AlertTitle>{zh ? '无法生成配置草稿' : 'Unable to render draft'}</AlertTitle><AlertDescription>{takeoverMessage(render.error.message, zh)}</AlertDescription></Alert>}
-        {step === 2 && <Card><CardContent className="flex flex-col gap-3">
+        {step === 'analysis' && <AnalysisStep draft={draft} zh={zh} cleaning={cleanupExternal.isPending} cleanupError={cleanupExternal.error?.message} onCleanup={() => void confirmCleanup()} />}
+        {step === 'analysis' && <DriftReport services={draft.observation.services} zh={zh} />}
+        {step === 'environment' && <EnvironmentStep variables={draft.variables} choices={choices} revealed={revealed} zh={zh} onChoice={(id, destination) => setChoices((current) => ({ ...current, [id]: destination }))} onReveal={(id) => setRevealed((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })} />}
+        {step === 'environment' && render.isError && <Alert variant="destructive"><ShieldAlert /><AlertTitle>{zh ? '无法生成配置草稿' : 'Unable to render draft'}</AlertTitle><AlertDescription>{takeoverMessage(render.error.message, zh)}</AlertDescription></Alert>}
+        {step === 'editor' && <Card><CardContent className="flex flex-col gap-3">
+          {manual && <Alert><PencilLine /><AlertTitle>{zh ? '直接填写 Compose 接管' : 'Direct Compose takeover'}</AlertTitle><AlertDescription>{zh ? `粘贴或编写该 Project 的原始 compose.yml 与 .env，SUMA 会原样保存到托管目录，不生成也不改写草稿。若声明顶层 name 或 COMPOSE_PROJECT_NAME，必须为 ${projectName}；file 类型的 configs/secrets 不受支持。` : `Paste or write this Project's original compose.yml and .env. SUMA saves them verbatim into the managed directory without generating or rewriting a draft. A declared top-level name or COMPOSE_PROJECT_NAME must be ${projectName}; file-backed configs/secrets are not supported.`}</AlertDescription></Alert>}
           <Tabs value={file} onValueChange={(value) => setFile(value as 'compose' | 'environment')}><TabsList><TabsTrigger value="compose">compose.yml</TabsTrigger><TabsTrigger value="environment">.env</TabsTrigger></TabsList></Tabs>
           <div className="h-[52vh] overflow-hidden rounded-lg ring-1 ring-foreground/10"><Suspense fallback={<div className="grid h-full place-items-center"><Spinner /></div>}><Monaco key={selected.label} language={selected.language} theme={dark ? 'vs-dark' : 'light'} value={selected.value} onChange={(value) => { setValidated(''); assessShadow.reset(); if (file === 'compose') setCompose(value ?? ''); else setEnvironment(value ?? '') }} options={{ minimap: { enabled: false }, automaticLayout: true, wordWrap: 'on', scrollBeyondLastLine: false, readOnly: shadowSession !== null }} /></Suspense></div>
           {validate.isError && <Alert variant="destructive"><ShieldAlert /><AlertDescription>{takeoverMessage(validate.error.message, zh)}</AlertDescription></Alert>}
           {validated === contentSignature && <Alert><Check /><AlertDescription>{zh ? 'Compose 与安全策略校验通过。可直接进入确认，也可以先进行隔离预演。' : 'Compose and security policy validation passed. Continue directly or run an isolated preview first.'}</AlertDescription></Alert>}
           <div className="flex justify-end"><Button variant="outline" disabled={validate.isPending || shadowSession !== null} onClick={() => validate.mutate()}>{validate.isPending ? <Spinner /> : <FileCheck2 />}{zh ? '校验草稿' : 'Validate draft'}</Button></div>
-          {validated === contentSignature && <ShadowPreviewPanel zh={zh} assessment={assessShadow.data} assessError={assessShadow.error?.message} operationError={startShadow.error?.message || cleanupShadow.error?.message} assessing={assessShadow.isPending} starting={startShadow.isPending} session={shadowSession} task={shadowTask} status={shadowStatus.data} statusError={shadowStatus.error?.message} cleaning={cleanupShadow.isPending} onAssess={() => assessShadow.mutate()} onStart={() => startShadow.mutate()} onPostpone={() => void postpone()} onReject={() => { if (!shadowSession) return; if (shadowTask?.status === 'failed' || shadowTask?.status === 'canceled') { shadowSessionRef.current = null; setShadowSession(null) } else cleanupShadow.mutate(shadowSession) }} onAccept={async () => { if (shadowSession) await cleanupShadow.mutateAsync(shadowSession); setStep(3) }} />}
+          {validated === contentSignature && <ShadowPreviewPanel zh={zh} assessment={assessShadow.data} assessError={assessShadow.error?.message} operationError={startShadow.error?.message || cleanupShadow.error?.message} assessing={assessShadow.isPending} starting={startShadow.isPending} session={shadowSession} task={shadowTask} status={shadowStatus.data} statusError={shadowStatus.error?.message} cleaning={cleanupShadow.isPending} onAssess={() => assessShadow.mutate()} onStart={() => startShadow.mutate()} onPostpone={() => void postpone()} onReject={() => { if (!shadowSession) return; if (shadowTask?.status === 'failed' || shadowTask?.status === 'canceled') { shadowSessionRef.current = null; setShadowSession(null) } else cleanupShadow.mutate(shadowSession) }} onAccept={async () => { if (shadowSession) await cleanupShadow.mutateAsync(shadowSession); setStep('confirm') }} />}
         </CardContent></Card>}
-        {step === 3 && <Card><CardHeader><CardTitle>{zh ? '确认接管 Project' : 'Confirm Project takeover'}</CardTitle></CardHeader><CardContent className="flex flex-col gap-4"><Alert><AlertTriangle /><AlertTitle>{zh ? '接管不会触发部署' : 'Takeover will not deploy'}</AlertTitle><AlertDescription>{zh ? 'SUMA 将原子保存 compose.yml、.env 和 .suma/project.json。现有容器、网络和运行状态不会改变。' : 'SUMA atomically saves compose.yml, .env, and .suma/project.json. Existing containers, networks, and runtime state remain unchanged.'}</AlertDescription></Alert><div className="space-y-2"><Label htmlFor="project-confirm">{zh ? `输入 Project 名称 ${projectName} 以确认` : `Type ${projectName} to confirm`}</Label><Input id="project-confirm" autoComplete="off" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></div>{takeover.isError && <ErrorState description={takeoverMessage(takeover.error.message, zh)} />}</CardContent></Card>}
+        {step === 'confirm' && <Card><CardHeader><CardTitle>{zh ? '确认接管 Project' : 'Confirm Project takeover'}</CardTitle></CardHeader><CardContent className="flex flex-col gap-4"><p className="text-sm text-muted-foreground">{zh ? '配置来源：' : 'Configuration source: '}{manual ? (zh ? '直接填写的 compose.yml 与 .env' : 'compose.yml and .env written directly') : draft.source === 'mapped' ? (zh ? '由安全源配置生成并复核的草稿' : 'Draft generated from the mapped source and reviewed') : (zh ? '由运行态重建并复核的草稿' : 'Draft reconstructed from runtime and reviewed')}</p><Alert><AlertTriangle /><AlertTitle>{zh ? '接管不会触发部署' : 'Takeover will not deploy'}</AlertTitle><AlertDescription>{zh ? 'SUMA 将原子保存 compose.yml、.env 和 .suma/project.json。现有容器、网络和运行状态不会改变。' : 'SUMA atomically saves compose.yml, .env, and .suma/project.json. Existing containers, networks, and runtime state remain unchanged.'}</AlertDescription></Alert><div className="space-y-2"><Label htmlFor="project-confirm">{zh ? `输入 Project 名称 ${projectName} 以确认` : `Type ${projectName} to confirm`}</Label><Input id="project-confirm" autoComplete="off" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></div>{takeover.isError && <ErrorState description={takeoverMessage(takeover.error.message, zh)} />}</CardContent></Card>}
 
-        <div className="flex items-center justify-between"><Button variant="outline" disabled={step === 0 || render.isPending || takeover.isPending || shadowSession !== null} onClick={() => setStep((current) => Math.max(0, current - 1))}><ChevronLeft />{zh ? '上一步' : 'Back'}</Button>{step === 0 ? <Button disabled={hasBlockers} onClick={() => setStep(1)}>{zh ? '检查环境变量' : 'Review environment'}<ChevronRight /></Button> : step === 1 ? <Button disabled={render.isPending} onClick={() => render.mutate()}>{render.isPending ? <Spinner /> : null}{zh ? '生成配置草稿' : 'Render draft'}<ChevronRight /></Button> : step === 2 ? <Button disabled={validated !== contentSignature || shadowSession !== null} onClick={() => setStep(3)}>{zh ? '跳过预演，进入确认' : 'Skip preview and continue'}<ChevronRight /></Button> : <Button disabled={confirmation !== projectName || takeover.isPending} onClick={() => takeover.mutate()}>{takeover.isPending ? <Spinner /> : <Check />}{zh ? '完成接管' : 'Complete takeover'}</Button>}</div>
+        <div className="flex items-center justify-between gap-2">
+          <Button variant="outline" disabled={stepIndex <= 0 || render.isPending || takeover.isPending || shadowSession !== null} onClick={() => setStep(flow[Math.max(0, stepIndex - 1)])}><ChevronLeft />{zh ? '上一步' : 'Back'}</Button>
+          {step === 'analysis'
+            ? <div className="flex flex-wrap items-center justify-end gap-2"><Button variant="outline" onClick={startManual}><PencilLine />{zh ? '直接填写 Compose 接管' : 'Write Compose directly'}</Button><Button disabled={hasBlockers} onClick={startDraft}>{zh ? '检查环境变量' : 'Review environment'}<ChevronRight /></Button></div>
+            : step === 'environment'
+              ? <Button disabled={render.isPending} onClick={() => render.mutate()}>{render.isPending ? <Spinner /> : null}{zh ? '生成配置草稿' : 'Render draft'}<ChevronRight /></Button>
+              : step === 'editor'
+                ? <Button disabled={validated !== contentSignature || shadowSession !== null} onClick={() => setStep('confirm')}>{manual ? (zh ? '进入确认' : 'Continue to confirmation') : (zh ? '跳过预演，进入确认' : 'Skip preview and continue')}<ChevronRight /></Button>
+                : <Button disabled={confirmation !== projectName || takeover.isPending} onClick={() => takeover.mutate()}>{takeover.isPending ? <Spinner /> : <Check />}{zh ? '完成接管' : 'Complete takeover'}</Button>}
+        </div>
       </div>
     </ResourceFrame>
   </div>
@@ -372,6 +421,7 @@ function AnalysisStep({ draft, zh, cleaning, cleanupError, onCleanup }: { draft:
       <Badge variant="outline">{zh ? `${instanceCount} 个容器实例` : `${instanceCount} Instances`}</Badge>
     </div>
     {draft.blockers.map((message) => <Alert key={message} variant="destructive"><ShieldAlert /><AlertTitle>{zh ? '阻断项' : 'Blocker'}</AlertTitle><AlertDescription>{takeoverMessage(message, zh)}</AlertDescription></Alert>)}
+    {draft.blockers.length > 0 && <p className="text-sm text-muted-foreground">{zh ? '阻断项只影响自动生成的草稿；你仍然可以在下方选择直接填写符合策略的 Compose 配置完成接管。' : 'Blockers only affect the generated draft. You can still take over by writing a policy-compliant Compose configuration directly below.'}</p>}
     {draft.blockers.length > 0 && draft.capabilities.includes('cleanup') && <CleanupProjectCard zh={zh} cleaning={cleaning} error={cleanupError} onCleanup={onCleanup} />}
     {draft.warnings.map((message) => <Alert key={message}><AlertTriangle /><AlertDescription>{takeoverMessage(message, zh)}</AlertDescription></Alert>)}
     <Card><CardContent><Table>

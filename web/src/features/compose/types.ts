@@ -26,7 +26,7 @@ export interface Project extends ProjectSummary {
   containers: number
   compose: string
   environment: string
-  metadata?: { origin: 'created' | 'takeover' | 'legacy'; takeover_source?: 'mapped' | 'runtime'; claimed_at: string; last_deployed_at?: string }
+  metadata?: { origin: 'created' | 'takeover' | 'legacy'; takeover_source?: 'mapped' | 'runtime' | 'manual'; claimed_at: string; last_deployed_at?: string }
 }
 
 export interface ProjectContainerInstance {
