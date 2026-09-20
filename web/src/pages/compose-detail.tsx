@@ -24,6 +24,7 @@ import type { Project } from '../features/compose/types'
 import { LogTailSelect } from '../features/containers/log-tail-select'
 import { useLogAutoScroll } from '../features/containers/use-log-auto-scroll'
 import type { ContainerMetrics, ContainerSummary } from '../features/containers/types'
+import { compactTaskLogs } from '../features/tasks/compact-task-logs'
 import { api } from '../lib/api'
 import { nodePath } from '../lib/nodes'
 import { useI18n } from '../lib/i18n'
@@ -276,7 +277,9 @@ function composeActionLabel(action: string, zh: boolean) {
 }
 
 function ComposeActionDialog({ open, operation, task, logs, submitting, loading, error, canceling, zh, projectName, onOpenChange, onCancel, onViewTasks }: { open: boolean; operation: ComposeOperation | null; task?: ComposeTask; logs: TaskLog[]; submitting: boolean; loading: boolean; error?: string; canceling: boolean; zh: boolean; projectName: string; onOpenChange: (open: boolean) => void; onCancel: () => void; onViewTasks: () => void }) {
-  const logPagination = useListPagination(logs)
+  const visibleLogs = compactTaskLogs(logs)
+  const compactedCount = logs.length - visibleLogs.length
+  const { viewportRef, onScroll } = useLogAutoScroll<HTMLDivElement>(visibleLogs.at(-1)?.id, operation?.taskID)
   const status = task?.status || (submitting ? 'submitting' : error ? 'failed' : 'pending')
   const running = submitting || status === 'pending' || status === 'running'
   const label = zh
@@ -307,17 +310,16 @@ function ComposeActionDialog({ open, operation, task, logs, submitting, loading,
         </div>
         <div className="flex items-center justify-between gap-4 border-t pt-3">
           <span className="text-sm font-medium">{zh ? '实时输出' : 'Live output'}</span>
-          {operation?.taskID && <span className="font-mono text-[11px] text-muted-foreground">{operation.taskID}</span>}
+          <span className="text-right text-[11px] text-muted-foreground">{compactedCount > 0 ? (zh ? `${visibleLogs.length} 条状态 · 已合并 ${compactedCount} 条重复进度` : `${visibleLogs.length} states · ${compactedCount} repeated updates merged`) : operation?.taskID}</span>
         </div>
-        <div className="max-h-64 min-h-24 overflow-y-auto overscroll-contain rounded-lg bg-muted/50 p-3">
+        <div ref={viewportRef} onScroll={onScroll} className="max-h-64 min-h-24 overflow-y-auto overscroll-contain rounded-lg bg-muted/50 p-3">
           {logs.length === 0 ? <p className="text-center text-xs text-muted-foreground">{zh ? '等待任务输出…' : 'Waiting for task output…'}</p> : <div className="flex flex-col gap-1.5">
-            {logPagination.items.map((log) => <div key={log.id} className="flex items-baseline gap-3">
+            {visibleLogs.map((log) => <div key={log.id} className="flex items-baseline gap-3">
               <span className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">{new Date(log.created_at).toLocaleTimeString(zh ? 'zh-CN' : 'en-US')}</span>
               <span className={`font-mono text-xs break-all ${log.level === 'error' ? 'text-destructive' : ''}`}>{log.message}</span>
             </div>)}
           </div>}
         </div>
-        {logs.length > 0 && <ListPagination {...logPagination} zh={zh} />}
         {error && <ErrorState description={error} />}
         <p className="text-xs text-muted-foreground">{running ? (zh ? '关闭窗口不会停止操作，任务会继续在后台执行。' : 'Closing this window does not stop the operation; it continues in the background.') : (zh ? '可在任务中心查看完整记录。' : 'You can review the complete record in the Task Center.')}</p>
       </div>

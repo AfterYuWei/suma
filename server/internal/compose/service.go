@@ -370,11 +370,13 @@ func (s *Service) Action(ctx context.Context, name, action string) (database.Tas
 	if err != nil {
 		return database.Task{}, err
 	}
-	return s.tasks.StartForNode(s.effectiveNodeID(), s.effectiveNodeName(), "compose."+action, strings.Title(action)+" "+name, func(ctx context.Context, report task.Reporter) error {
+	return s.tasks.StartWithIDForNode(s.effectiveNodeID(), s.effectiveNodeName(), "compose."+action, strings.Title(action)+" "+name, func(ctx context.Context, taskID string, report task.Reporter) error {
 		var err error
 		report(1, "Starting docker compose "+action)
 		run := func(start, end int, operation func(io.Writer) error) error {
-			writer := newReportWriter(report, start, end)
+			writer := newReportWriter(report, func(progress int, message string) {
+				_ = s.tasks.UpdateProgress(ctx, taskID, progress, message)
+			}, start, end)
 			err := operation(writer)
 			writer.Flush()
 			return err
@@ -586,17 +588,23 @@ func writeAtomic(path, content string) error {
 }
 
 type reportWriter struct {
-	report   task.Reporter
-	buffer   strings.Builder
-	start    int
-	progress int
-	maximum  int
+	report      task.Reporter
+	update      task.Reporter
+	buffer      strings.Builder
+	start       int
+	progress    int
+	maximum     int
+	layerStages map[string]string
 }
 
 var composeOutputPercentage = regexp.MustCompile(`([0-9]{1,3})%`)
+var composeLayerOutput = regexp.MustCompile(`^([a-f0-9]{12,64})\s+(Pulling fs layer|Waiting|Downloading|Verifying Checksum|Download complete|Extracting|Pull complete|Already exists)(?:\s|$)`)
 
-func newReportWriter(report task.Reporter, start, maximum int) *reportWriter {
-	return &reportWriter{report: report, start: start, progress: start, maximum: maximum}
+func newReportWriter(report, update task.Reporter, start, maximum int) *reportWriter {
+	if update == nil {
+		update = report
+	}
+	return &reportWriter{report: report, update: update, start: start, progress: start, maximum: maximum, layerStages: map[string]string{}}
 }
 
 func (w *reportWriter) Write(value []byte) (int, error) {
@@ -628,6 +636,11 @@ func (w *reportWriter) reportLine(line string) {
 	if line == "" {
 		return
 	}
+	layer, stage, repeatedCounter := "", "", false
+	if match := composeLayerOutput.FindStringSubmatch(line); len(match) == 3 {
+		layer, stage = match[1], match[2]
+		repeatedCounter = (stage == "Downloading" || stage == "Extracting") && w.layerStages[layer] == stage
+	}
 	if match := composeOutputPercentage.FindStringSubmatch(line); len(match) == 2 {
 		if percentage, err := strconv.Atoi(match[1]); err == nil && percentage <= 100 {
 			mapped := w.start + (w.maximum-w.start)*percentage/100
@@ -635,9 +648,19 @@ func (w *reportWriter) reportLine(line string) {
 				w.progress = mapped
 			}
 		}
-	} else if w.progress < w.maximum {
+	} else if !repeatedCounter && w.progress < w.maximum {
 		step := max(1, (w.maximum-w.start)/20)
 		w.progress = min(w.maximum, w.progress+step)
+	}
+	if repeatedCounter {
+		// Compose redraws byte counters for these stages many times per
+		// second. Keep the task's live message current without turning
+		// every redraw into a permanent TaskLog row or fake progress.
+		w.update(w.progress, line)
+		return
+	}
+	if layer != "" {
+		w.layerStages[layer] = stage
 	}
 	w.report(w.progress, line)
 }

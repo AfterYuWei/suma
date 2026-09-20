@@ -101,12 +101,14 @@ func (s *Service) PullForNodeWithRegistry(nodeID, nodeName, reference, server, u
 				markIncompleteLayers(s.tasks, taskID, layers, "Failed", false)
 				return fmt.Errorf("%s", event.Error)
 			}
+			previousLayerStatus := ""
 			if event.ID != "" && isLayerStatus(event.Status) {
 				layer := layers[event.ID]
 				if layer == nil {
 					layer = &pullLayer{id: event.ID}
 					layers[event.ID] = layer
 				}
+				previousLayerStatus = layer.status
 				layer.update(event.Status, event.ProgressDetail.Current, event.ProgressDetail.Total)
 				s.tasks.ReportStep(ctx, taskID, layer.id, layer.status, layer.current, layer.total, layer.progress)
 				progress = aggregateLayerProgress(layers)
@@ -115,7 +117,11 @@ func (s *Service) PullForNodeWithRegistry(nodeID, nodeName, reference, server, u
 			if event.ID != "" {
 				message = event.ID + ": " + message
 			}
-			report(progress, message)
+			if previousLayerStatus == event.Status && (event.Status == "Downloading" || event.Status == "Extracting") {
+				_ = s.tasks.UpdateProgress(ctx, taskID, progress, message)
+			} else {
+				report(progress, message)
+			}
 		}
 		if ctx.Err() != nil {
 			markIncompleteLayers(s.tasks, taskID, layers, "Canceled", false)

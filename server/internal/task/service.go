@@ -116,15 +116,7 @@ func (s *Service) run(ctx context.Context, row database.Task, work Work) {
 	s.db.Model(&database.Task{}).Where("id = ?", row.ID).Updates(map[string]any{"status": StatusRunning, "started_at": now})
 	s.publish(row.ID, Event{Type: "status", Status: StatusRunning, Time: now})
 	reporter := func(progress int, message string) {
-		if progress < 0 {
-			progress = 0
-		}
-		if progress > 100 {
-			progress = 100
-		}
-		s.db.Model(&database.Task{}).Where("id = ?", row.ID).Updates(map[string]any{"progress": progress, "message": message})
-		s.db.Create(&database.TaskLog{TaskID: row.ID, Level: "info", Message: message})
-		s.publish(row.ID, Event{Type: "progress", Progress: progress, Message: message, Time: time.Now()})
+		_ = s.updateProgress(ctx, row.ID, progress, message, true)
 	}
 	err := work(ctx, reporter)
 	status, message := StatusSuccess, "Completed"
@@ -145,6 +137,27 @@ func (s *Service) run(ctx context.Context, row database.Task, work Work) {
 	s.mu.Lock()
 	delete(s.cancels, row.ID)
 	s.mu.Unlock()
+}
+
+// UpdateProgress refreshes a task's live state without appending another
+// historical log row. It is intended for replace-in-place output such as
+// Docker's per-layer download and extraction counters.
+func (s *Service) UpdateProgress(ctx context.Context, id string, progress int, message string) error {
+	return s.updateProgress(ctx, id, progress, message, false)
+}
+
+func (s *Service) updateProgress(ctx context.Context, id string, progress int, message string, persist bool) error {
+	progress = max(0, min(100, progress))
+	if err := s.db.WithContext(ctx).Model(&database.Task{}).Where("id = ?", id).Updates(map[string]any{"progress": progress, "message": message}).Error; err != nil {
+		return err
+	}
+	if persist {
+		if err := s.db.WithContext(ctx).Create(&database.TaskLog{TaskID: id, Level: "info", Message: message}).Error; err != nil {
+			return err
+		}
+	}
+	s.publish(id, Event{Type: "progress", Progress: progress, Message: message, Time: time.Now()})
+	return nil
 }
 
 func (s *Service) List(ctx context.Context) ([]database.Task, error) {

@@ -50,3 +50,29 @@ func TestTaskStepsAreUpserted(t *testing.T) {
 		t.Fatalf("unexpected task steps: %+v", steps)
 	}
 }
+
+func TestUpdateProgressDoesNotAppendTaskLog(t *testing.T) {
+	db, err := database.Open(filepath.Join(t.TempDir(), "task-progress.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(db)
+	row := database.Task{ID: "task-1", Scope: ScopeNode, NodeID: "local", Type: "compose.pull", Name: "Pull", Status: StatusRunning}
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := service.UpdateProgress(context.Background(), row.ID, 42, "layer Downloading 10MB"); err != nil {
+		t.Fatal(err)
+	}
+	var current database.Task
+	if err := db.First(&current, "id = ?", row.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	logs, err := service.Logs(context.Background(), row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Progress != 42 || current.Message != "layer Downloading 10MB" || len(logs) != 0 {
+		t.Fatalf("task = %#v, logs = %#v", current, logs)
+	}
+}

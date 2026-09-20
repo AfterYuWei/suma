@@ -224,6 +224,33 @@ func TestPullPersistsEveryLayerProgress(t *testing.T) {
 	}
 }
 
+func TestPullDoesNotPersistRepeatedLayerCounters(t *testing.T) {
+	adapter := &stubAdapter{pullStream: stream(
+		`{"status":"Downloading","id":"8acdb","progressDetail":{"current":10,"total":100}}`,
+		`{"status":"Downloading","id":"8acdb","progressDetail":{"current":20,"total":100}}`,
+		`{"status":"Downloading","id":"8acdb","progressDetail":{"current":30,"total":100}}`,
+		`{"status":"Pull complete","id":"8acdb"}`,
+	)}
+	service, db := newTestService(t, adapter)
+	row, err := service.Pull("example/app:latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finished := waitTask(t, db, row.ID); finished.Status != task.StatusSuccess {
+		t.Fatalf("expected successful task, got %#v", finished)
+	}
+	logs := logMessages(t, db, row.ID)
+	downloading := 0
+	for _, message := range logs {
+		if message == "8acdb: Downloading" {
+			downloading++
+		}
+	}
+	if downloading != 1 {
+		t.Fatalf("expected one persisted download stage, got %d in %v", downloading, logs)
+	}
+}
+
 func TestPullLayerStageProgress(t *testing.T) {
 	layer := &pullLayer{id: "layer-a"}
 	layer.update("Downloading", 50, 100)

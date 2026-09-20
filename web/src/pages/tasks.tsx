@@ -14,6 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { nodePath } from '../lib/nodes'
+import { compactTaskLogs } from '../features/tasks/compact-task-logs'
 import { promptDialog } from '../stores/dialog'
 import { useUIStore } from '../stores/ui'
 import { ResourceFrame } from './images'
@@ -102,17 +103,20 @@ function TaskLogs({ task }: { task: Task }) {
   const zh = language === 'zh-CN'
   const logsPath = task.scope === 'node' && task.node_id ? nodePath(task.node_id, `/tasks/${encodeURIComponent(task.id)}/logs`) : `/tasks/${encodeURIComponent(task.id)}/logs`
   const logs = useQuery({ queryKey: ['task-logs', task.scope, task.node_id, task.id], queryFn: () => api<Log[]>(logsPath), refetchInterval: task.status === 'running' ? 1_000 : false })
-  const pagination = useListPagination(logs.data ?? [])
+  const rawLogs = logs.data ?? []
+  const visibleLogs = compactTaskLogs(rawLogs)
+  const pagination = useListPagination(visibleLogs)
+  const compactedCount = rawLogs.length - visibleLogs.length
   if (logs.isPending) return <LoadingState embedded compact rows={3} label={zh ? '正在加载任务输出' : 'Loading task output'} />
   return (
     <><div className="flex max-h-64 flex-col gap-1.5 overflow-y-auto overscroll-contain">
-      {(logs.data ?? []).length === 0 && <p className="py-2 text-center text-sm text-muted-foreground">{zh ? '等待任务输出…' : 'Waiting for task output…'}</p>}
+      {rawLogs.length === 0 && <p className="py-2 text-center text-sm text-muted-foreground">{zh ? '等待任务输出…' : 'Waiting for task output…'}</p>}
       {pagination.items.map((log) => (
         <div key={log.id} className="flex items-baseline gap-3">
           <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">{new Date(log.created_at).toLocaleTimeString(language)}</span>
           <span className={cn('font-mono text-xs break-all', log.level === 'error' ? 'text-destructive' : 'text-foreground')}>{log.message}</span>
         </div>
       ))}
-    </div><ListPagination {...pagination} zh={zh} /></>
+    </div>{compactedCount > 0 && <p className="pt-2 text-xs text-muted-foreground">{zh ? `已将 ${compactedCount} 条重复的 Layer 进度刷新合并到最新状态。` : `${compactedCount} repeated layer progress updates were merged into their latest states.`}</p>}<ListPagination {...pagination} zh={zh} /></>
   )
 }

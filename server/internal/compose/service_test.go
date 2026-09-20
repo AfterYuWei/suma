@@ -378,7 +378,7 @@ func TestReportWriterStreamsCarriageReturnAndPercentageProgress(t *testing.T) {
 	var updates []update
 	writer := newReportWriter(func(progress int, message string) {
 		updates = append(updates, update{progress: progress, message: message})
-	}, 5, 95)
+	}, nil, 5, 95)
 
 	if _, err := writer.Write([]byte("image Pulling\rimage Downloading 40%\rfinal fragment")); err != nil {
 		t.Fatal(err)
@@ -396,6 +396,26 @@ func TestReportWriterStreamsCarriageReturnAndPercentageProgress(t *testing.T) {
 	}
 	if updates[2].message != "final fragment" || updates[2].progress <= updates[1].progress {
 		t.Fatalf("flushed update = %#v", updates[2])
+	}
+}
+
+func TestReportWriterDoesNotPersistRepeatedLayerCounters(t *testing.T) {
+	type update struct {
+		message   string
+		persisted bool
+	}
+	var updates []update
+	writer := newReportWriter(
+		func(_ int, message string) { updates = append(updates, update{message: message, persisted: true}) },
+		func(_ int, message string) { updates = append(updates, update{message: message}) },
+		5,
+		95,
+	)
+
+	_, _ = writer.Write([]byte("6ae69a20f383 Downloading 4.194MB\r6ae69a20f383 Downloading 8.389MB\r6ae69a20f383 Download complete\r"))
+
+	if len(updates) != 3 || !updates[0].persisted || updates[1].persisted || !updates[2].persisted {
+		t.Fatalf("updates = %#v", updates)
 	}
 }
 
