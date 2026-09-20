@@ -520,12 +520,41 @@ func writeProjectDockerJSON(w http.ResponseWriter, value any) {
 }
 
 func (h projectHTTPHarness) request(method, path string, body []byte) *httptest.ResponseRecorder {
+	return h.requestWithHeaders(method, path, body, nil)
+}
+
+func (h projectHTTPHarness) requestWithHeaders(method, path string, body []byte, headers map[string]string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, path, bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
+	for name, value := range headers {
+		request.Header.Set(name, value)
+	}
 	request.AddCookie(h.cookie)
 	response := httptest.NewRecorder()
 	h.router.ServeHTTP(response, request)
 	return response
+}
+
+func TestProjectSaveRequiresDockerSocketConfirmation(t *testing.T) {
+	harness := newProjectHTTPHarness(t)
+	if _, err := harness.compose.Create(context.Background(), "socket-app", "services:\n  app:\n    image: alpine\n", ""); err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]string{
+		"compose": "services:\n  app:\n    image: alpine\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/v1/nodes/local/projects/compose/socket-app"
+	unconfirmed := harness.request(http.MethodPut, path, body)
+	if unconfirmed.Code != http.StatusUnprocessableEntity || !strings.Contains(unconfirmed.Body.String(), "explicit confirmation") {
+		t.Fatalf("unconfirmed socket save = %d %s", unconfirmed.Code, unconfirmed.Body.String())
+	}
+	confirmed := harness.requestWithHeaders(http.MethodPut, path, body, map[string]string{composeService.DockerSocketConfirmationHeader: "true"})
+	if confirmed.Code != http.StatusOK {
+		t.Fatalf("confirmed socket save = %d %s", confirmed.Code, confirmed.Body.String())
+	}
 }
 
 func TestProjectSummaryHTTPDoesNotExposeManagedConfiguration(t *testing.T) {

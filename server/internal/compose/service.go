@@ -21,8 +21,6 @@ import (
 	"gorm.io/gorm"
 )
 
-var validName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
-
 type Project struct {
 	projectdomain.Summary
 	Path        string                  `json:"path"`
@@ -194,8 +192,9 @@ func decorate(project Project, containers []containerdomain.Summary) Project {
 	return project
 }
 func (s *Service) Create(ctx context.Context, name, content, environment string) (Project, error) {
-	if !validName.MatchString(name) {
-		return Project{}, fmt.Errorf("invalid project name")
+	name, err := normalizeNewProjectName(name)
+	if err != nil {
+		return Project{}, err
 	}
 	path, err := s.safePath(name)
 	if err != nil {
@@ -421,7 +420,7 @@ func (s *Service) managedProjects() ([]Project, error) {
 	}
 	projects := make([]Project, 0, len(entries))
 	for _, entry := range entries {
-		if !entry.IsDir() || !validName.MatchString(entry.Name()) {
+		if !entry.IsDir() || !nativeProjectName.MatchString(entry.Name()) {
 			continue
 		}
 		path := filepath.Join(base, entry.Name())
@@ -442,7 +441,7 @@ func (s *Service) managedProjects() ([]Project, error) {
 }
 
 func (s *Service) managedProject(name string) (Project, error) {
-	if !validName.MatchString(name) {
+	if !nativeProjectName.MatchString(name) {
 		return Project{}, fmt.Errorf("invalid project name")
 	}
 	path, err := s.safePath(name)

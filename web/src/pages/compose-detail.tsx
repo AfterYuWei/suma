@@ -17,6 +17,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { TooltipHint } from '../components/ui/tooltip-hint'
 import { confirmExternalProjectCleanup } from '../features/compose/external-project-cleanup'
+import { confirmDockerSocketMount, dockerSocketHeaders } from '../features/compose/docker-socket-confirmation'
 import { confirmManagedProjectRemoval } from '../features/compose/managed-project-removal'
 import { TakeoverWarningDialog } from '../features/compose/takeover-warning-dialog'
 import type { Project } from '../features/compose/types'
@@ -81,7 +82,7 @@ export function ComposeDetailPage() {
   })
   const logs = useQuery({ queryKey: ['project-logs', nodeID, projectName, logTail], queryFn: () => api<{ logs: string }>(nodePath(nodeID, `/projects/compose/${encodedName}/logs?tail=${logTail}`)), enabled: view === 'Logs', refetchInterval: 3_000, retry: false })
   const save = useMutation({
-    mutationFn: () => api<Project>(nodePath(nodeID, `/projects/compose/${encodedName}`), { method: 'PUT', body: JSON.stringify({ compose, environment }) }),
+    mutationFn: (allowDockerSocket: boolean) => api<Project>(nodePath(nodeID, `/projects/compose/${encodedName}`), { method: 'PUT', headers: dockerSocketHeaders(allowDockerSocket), body: JSON.stringify({ compose, environment }) }),
     onSuccess: (row) => {
       client.setQueryData(['project', nodeID, backend, projectName], row)
       setNotice(zh ? '已保存。' : 'Saved.')
@@ -89,7 +90,7 @@ export function ComposeDetailPage() {
     onError: (error) => setNotice(error.message),
   })
   const validate = useMutation({
-    mutationFn: () => api(nodePath(nodeID, `/projects/compose/${encodedName}/validate`), { method: 'POST', body: JSON.stringify({ compose, environment }) }),
+    mutationFn: (allowDockerSocket: boolean) => api(nodePath(nodeID, `/projects/compose/${encodedName}/validate`), { method: 'POST', headers: dockerSocketHeaders(allowDockerSocket), body: JSON.stringify({ compose, environment }) }),
     onSuccess: () => setNotice(zh ? 'Compose 配置有效。' : 'Compose configuration is valid.'),
     onError: (error) => setNotice(error.message),
   })
@@ -141,6 +142,21 @@ export function ComposeDetailPage() {
     },
     onError: (error) => setNotice(error.message),
   })
+  const authorizeDockerSocket = () => confirmDockerSocketMount(compose, zh)
+  const saveFiles = async () => {
+    const allowed = await authorizeDockerSocket()
+    if (allowed === null) return false
+    try {
+      await save.mutateAsync(allowed)
+      return true
+    } catch {
+      return false
+    }
+  }
+  const validateFiles = async () => {
+    const allowed = await authorizeDockerSocket()
+    if (allowed !== null) validate.mutate(allowed)
+  }
   useEffect(() => {
     const task = trackedTask.data
     if (!task || task.status === 'pending' || task.status === 'running') return
@@ -164,7 +180,7 @@ export function ComposeDetailPage() {
     const changes = [compose !== query.data?.compose && 'compose.yml', environment !== query.data?.environment && '.env'].filter(Boolean)
     const firstTakeoverDeploy = query.data?.metadata?.origin === 'takeover' && !query.data.metadata.last_deployed_at
     if ((changes.length || firstTakeoverDeploy) && !await confirmDialog({ title: firstTakeoverDeploy ? (zh ? '首次由 SUMA 部署？' : 'First SUMA deployment?') : t('deployChanges'), description: firstTakeoverDeploy ? (zh ? '现有运行态可能与接管草稿不同，Compose 可能重建容器、改变网络或处理孤立容器。' : 'Runtime state may differ from the takeover draft; Compose may recreate containers, change networks, or handle orphans.') : t('deployChangesDescription', { files: changes.join(' / ') }), confirmLabel: zh ? '确认部署' : 'Deploy' })) return
-    if (changes.length) await save.mutateAsync()
+    if (changes.length && !await saveFiles()) return
     action.reset()
     cancelAction.reset()
     await action.mutateAsync('update')
@@ -222,7 +238,7 @@ export function ComposeDetailPage() {
             {(project.managed ? ['Files', 'Services', 'Logs'] : ['Services']).map((name) => <TabsTrigger key={name} value={name}>{name === 'Files' ? (zh ? 'Compose 文件' : 'Compose files') : name === 'Services' ? (zh ? '服务' : 'Services') : (zh ? '日志' : 'Logs')}</TabsTrigger>)}
           </TabsList>
         </Tabs>
-        {view === 'Files' && project.managed && <ComposeFiles dark={dark} file={file} compose={compose} environment={environment} dirty={dirty} notice={notice} zh={zh} setFile={setFile} setCompose={setCompose} setEnvironment={setEnvironment} onRemove={() => void remove()} onValidate={() => validate.mutate()} onSave={() => save.mutate()} onDeploy={() => void deploy()} validating={validate.isPending} saving={save.isPending} actionBusy={operationActive} deploying={operationActive && operation?.action === 'update'} />}
+        {view === 'Files' && project.managed && <ComposeFiles dark={dark} file={file} compose={compose} environment={environment} dirty={dirty} notice={notice} zh={zh} setFile={setFile} setCompose={setCompose} setEnvironment={setEnvironment} onRemove={() => void remove()} onValidate={() => void validateFiles()} onSave={() => void saveFiles()} onDeploy={() => void deploy()} validating={validate.isPending} saving={save.isPending} actionBusy={operationActive} deploying={operationActive && operation?.action === 'update'} />}
         {view === 'Services' && <Services rows={services.data} loading={services.isPending} error={services.error?.message} zh={zh} />}
         {view === 'Logs' && project.managed && <Logs value={logs.data?.logs} loading={logs.isPending} error={logs.isError} zh={zh} sourceKey={`${nodeID}\n${projectName}\n${logTail}`} />}
       </div>

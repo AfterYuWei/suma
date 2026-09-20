@@ -9,9 +9,12 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-// ValidateRemoteBindMounts rejects unsafe remote bind declarations. Remote host
-// paths must be explicit absolute paths because SUMA cannot resolve them locally.
-func ValidateRemoteBindMounts(content string) error {
+const DockerSocketConfirmationHeader = "X-SUMA-Allow-Docker-Socket"
+
+// ValidateComposeBindMounts requires explicit authorization for Docker socket
+// access. Remote host paths must additionally be explicit absolute paths
+// because SUMA cannot resolve them locally.
+func ValidateComposeBindMounts(content string, remote, allowDockerSocket bool) error {
 	var document struct {
 		Services map[string]struct {
 			Volumes []any `yaml:"volumes"`
@@ -26,11 +29,18 @@ func ValidateRemoteBindMounts(content string) error {
 			if err != nil {
 				return fmt.Errorf("service %q volume: %w", serviceName, err)
 			}
+			dockerSocket := source == "/var/run/docker.sock" || bindTarget(raw) == "/var/run/docker.sock"
+			if dockerSocket && !allowDockerSocket {
+				return fmt.Errorf("service %q Docker socket mount requires explicit confirmation", serviceName)
+			}
+			// An interpolated short source may not look like a bind until Compose
+			// resolves it, but a Docker socket target makes the intent explicit.
+			bind = bind || dockerSocket
 			if !bind {
 				continue
 			}
-			if source == "/var/run/docker.sock" || bindTarget(raw) == "/var/run/docker.sock" {
-				return fmt.Errorf("service %q cannot mount the Docker socket", serviceName)
+			if !remote {
+				continue
 			}
 			if strings.Contains(source, "$") {
 				return fmt.Errorf("service %q bind source cannot be interpolated for a remote node", serviceName)
@@ -41,6 +51,12 @@ func ValidateRemoteBindMounts(content string) error {
 		}
 	}
 	return nil
+}
+
+// ValidateRemoteBindMounts preserves the strict, unconfirmed policy used by
+// non-interactive callers.
+func ValidateRemoteBindMounts(content string) error {
+	return ValidateComposeBindMounts(content, true, false)
 }
 
 func bindTarget(raw any) string {

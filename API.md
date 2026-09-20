@@ -15,6 +15,10 @@ Node-aware clients use these routes:
 
 `POST /nodes/:nodeID/containers/batch` accepts 1–100 IDs and a lifecycle `action`. Batch `start` and `stop` are idempotent: containers already in the requested state count as successful. Batch `restart` uses Docker's restart behavior for running and stopped containers. Batch `remove` may set `force: true` after destructive confirmation to remove running containers; `remove_volumes` remains independent and defaults to `false`. Every result includes `id`, `success`, and an optional Docker error for failed rows.
 
+Compose Project names and managed directories must match Docker Compose's lowercase native `[a-z0-9][a-z0-9_-]*` identity. Mixed-case input is rejected instead of silently rewritten, and runtime ownership is matched by exact native name.
+
+Compose requests containing a `/var/run/docker.sock` bind are rejected by default. After two explicit UI warnings, the confirmed request carries `X-SUMA-Allow-Docker-Socket: true`; this authorizes only that request. TCP-node binds must still use non-interpolated absolute source paths.
+
 The resource routes listed below remain deprecated aliases for the migrated default node. `GET /health` reports only control-plane/database health; a disconnected Docker node does not make it fail. Legacy `node_id` filters validate that the node exists. Global `GET /tasks` and `GET /audit-logs` accept `scope=control_plane|all` and default to `control_plane`.
 
 - `GET /health`, `GET /docker/info`

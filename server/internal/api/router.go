@@ -793,6 +793,14 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	})
 
 	compose := v1.Group("/compose", requireAuth(deps.Auth), deprecatedDefaultNode())
+	validateComposePolicy := func(c *gin.Context, content string) bool {
+		confirmed := strings.EqualFold(strings.TrimSpace(c.GetHeader(composeService.DockerSocketConfirmationHeader)), "true")
+		if err := composeService.ValidateComposeBindMounts(content, false, confirmed); err != nil {
+			failure(c, http.StatusUnprocessableEntity, 18024, err.Error())
+			return false
+		}
+		return true
+	}
 	compose.GET("", func(c *gin.Context) {
 		rows, err := deps.Compose.List(c.Request.Context())
 		if err != nil {
@@ -839,12 +847,15 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			failure(c, http.StatusBadRequest, 18003, "Project name and Compose YAML are required")
 			return
 		}
+		if !validateComposePolicy(c, input.Compose) {
+			return
+		}
 		row, err := deps.Compose.Create(c.Request.Context(), input.Name, input.Compose, input.Environment)
 		if err != nil {
 			failure(c, http.StatusConflict, 18004, err.Error())
 			return
 		}
-		recordAudit(c, deps.Audit, "compose.create", "compose", input.Name, "success")
+		recordAudit(c, deps.Audit, "compose.create", "compose", row.Name, "success")
 		c.JSON(http.StatusCreated, envelope{Code: 0, Message: "success", Data: row})
 	})
 	compose.POST("/:name/takeover/preview", func(c *gin.Context) {
@@ -880,6 +891,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			failure(c, http.StatusBadRequest, 18020, "Compose YAML is required")
 			return
 		}
+		if !validateComposePolicy(c, input.Compose) {
+			return
+		}
 		if err := deps.Compose.ValidateDraft(c.Request.Context(), input.Compose, input.Environment); err != nil {
 			failure(c, http.StatusUnprocessableEntity, 18021, err.Error())
 			return
@@ -911,6 +925,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		var input composeService.TakeoverInput
 		if c.ShouldBindJSON(&input) != nil {
 			failure(c, http.StatusBadRequest, 18018, "Invalid Project takeover request")
+			return
+		}
+		if !validateComposePolicy(c, input.Compose) {
 			return
 		}
 		row, err := deps.Compose.Takeover(c.Request.Context(), c.Param("name"), input)
@@ -952,6 +969,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		if c.ShouldBindJSON(&input) != nil {
 			failure(c, http.StatusBadRequest, 18003, "Compose YAML is required")
+			return
+		}
+		if !validateComposePolicy(c, input.Compose) {
 			return
 		}
 		row, err := deps.Compose.Save(c.Request.Context(), c.Param("name"), input.Compose, input.Environment)
@@ -996,6 +1016,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		if c.ShouldBindJSON(&input) != nil {
 			failure(c, http.StatusBadRequest, 18003, "Compose YAML is required")
+			return
+		}
+		if !validateComposePolicy(c, input.Compose) {
 			return
 		}
 		if err := deps.Compose.Validate(c.Request.Context(), c.Param("name"), input.Compose, input.Environment); err != nil {

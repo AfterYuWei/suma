@@ -20,7 +20,7 @@ type RuntimeProjectCleaner interface {
 // Compose Project. It deliberately does not use ComposeRunner because an
 // external Project may not have a safe, renderable Compose configuration.
 func (s *Service) CleanupExternalProject(ctx context.Context, name, confirmationName string, removeVolumes bool) (database.Task, error) {
-	if !validName.MatchString(name) {
+	if !nativeProjectName.MatchString(name) {
 		return database.Task{}, fmt.Errorf("invalid Project name")
 	}
 	if confirmationName != name {

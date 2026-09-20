@@ -363,11 +363,9 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 		}
 		return deps.Compose.ForNode(view.ID, view.Name, deps.ComposeRunner.ForTarget(target), adapter, view.ConnectionType == node.ConnectionUnix), view, true
 	}
-	validatePolicy := func(view node.View, content string) error {
-		if view.ConnectionType == node.ConnectionTCP {
-			return composeService.ValidateRemoteBindMounts(content)
-		}
-		return nil
+	validatePolicy := func(c *gin.Context, view node.View, content string) error {
+		confirmed := strings.EqualFold(strings.TrimSpace(c.GetHeader(composeService.DockerSocketConfirmationHeader)), "true")
+		return composeService.ValidateComposeBindMounts(content, view.ConnectionType == node.ConnectionTCP, confirmed)
 	}
 	routes.GET("", func(c *gin.Context) {
 		current, _, ok := service(c)
@@ -435,7 +433,7 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 400, 20306, "Project name and Compose YAML are required")
 			return
 		}
-		if err := validatePolicy(view, input.Compose); err != nil {
+		if err := validatePolicy(c, view, input.Compose); err != nil {
 			failure(c, 422, 20307, err.Error())
 			return
 		}
@@ -444,7 +442,7 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 409, 20308, err.Error())
 			return
 		}
-		recordNodeAudit(c, deps, view.ID, view.Name, "compose.create", "compose", input.Name, "success")
+		recordNodeAudit(c, deps, view.ID, view.Name, "compose.create", "compose", row.Name, "success")
 		c.JSON(201, envelope{Code: 0, Message: "success", Data: row})
 	})
 	routes.POST("/:name/takeover/preview", func(c *gin.Context) {
@@ -493,7 +491,7 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 400, 20322, "Compose YAML is required")
 			return
 		}
-		if err := validatePolicy(view, input.Compose); err != nil {
+		if err := validatePolicy(c, view, input.Compose); err != nil {
 			failure(c, 422, 20323, err.Error())
 			return
 		}
@@ -513,7 +511,7 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 400, 20320, "Invalid Project takeover request")
 			return
 		}
-		if err := validatePolicy(view, input.Compose); err != nil {
+		if err := validatePolicy(c, view, input.Compose); err != nil {
 			failure(c, 422, 20307, err.Error())
 			return
 		}
@@ -566,7 +564,7 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 400, 20306, "Compose YAML is required")
 			return
 		}
-		if err := validatePolicy(view, input.Compose); err != nil {
+		if err := validatePolicy(c, view, input.Compose); err != nil {
 			failure(c, 422, 20307, err.Error())
 			return
 		}
@@ -591,7 +589,7 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 400, 20306, "Compose YAML is required")
 			return
 		}
-		if err := validatePolicy(view, input.Compose); err != nil {
+		if err := validatePolicy(c, view, input.Compose); err != nil {
 			failure(c, 422, 20307, err.Error())
 			return
 		}
@@ -691,11 +689,9 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 		}
 		return deps.Compose.ForNode(view.ID, view.Name, deps.ComposeRunner.ForTarget(target), adapter, view.ConnectionType == node.ConnectionUnix), view, true
 	}
-	validatePolicy := func(view node.View, content string) error {
-		if view.ConnectionType == node.ConnectionTCP {
-			return composeService.ValidateRemoteBindMounts(content)
-		}
-		return nil
+	validatePolicy := func(c *gin.Context, view node.View, content string) error {
+		confirmed := strings.EqualFold(strings.TrimSpace(c.GetHeader(composeService.DockerSocketConfirmationHeader)), "true")
+		return composeService.ValidateComposeBindMounts(content, view.ConnectionType == node.ConnectionTCP, confirmed)
 	}
 	projects.GET("", func(c *gin.Context) {
 		current, _, ok := service(c)
@@ -724,7 +720,7 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 400, 20403, "A Compose Project name and Compose YAML are required")
 			return
 		}
-		if err := validatePolicy(view, input.Compose); err != nil {
+		if err := validatePolicy(c, view, input.Compose); err != nil {
 			failure(c, 422, 20404, err.Error())
 			return
 		}
@@ -733,7 +729,7 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 409, 20405, err.Error())
 			return
 		}
-		recordNodeAudit(c, deps, view.ID, view.Name, "project.create", "project", input.Name, "success")
+		recordNodeAudit(c, deps, view.ID, view.Name, "project.create", "project", row.Name, "success")
 		c.JSON(201, envelope{Code: 0, Message: "success", Data: row})
 	})
 	projects.POST("/batch", func(c *gin.Context) {
@@ -819,7 +815,7 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 400, 20403, "Compose YAML is required")
 			return
 		}
-		if err := validatePolicy(view, input.Compose); err != nil {
+		if err := validatePolicy(c, view, input.Compose); err != nil {
 			failure(c, 422, 20404, err.Error())
 			return
 		}
@@ -844,7 +840,7 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 400, 20403, "Compose YAML is required")
 			return
 		}
-		if err := validatePolicy(view, input.Compose); err != nil {
+		if err := validatePolicy(c, view, input.Compose); err != nil {
 			failure(c, 422, 20404, err.Error())
 			return
 		}
@@ -966,7 +962,7 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 400, 20422, "Compose YAML is required")
 			return
 		}
-		if err := validatePolicy(view, input.Compose); err != nil {
+		if err := validatePolicy(c, view, input.Compose); err != nil {
 			failure(c, 422, 20423, err.Error())
 			return
 		}
@@ -988,7 +984,7 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 400, 20425, "Compose YAML is required")
 			return
 		}
-		if err := validatePolicy(view, input.Compose); err != nil {
+		if err := validatePolicy(c, view, input.Compose); err != nil {
 			failure(c, 422, 20426, err.Error())
 			return
 		}
@@ -1013,7 +1009,7 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 400, 20428, "Fingerprint and Compose YAML are required")
 			return
 		}
-		if err := validatePolicy(view, input.Compose); err != nil {
+		if err := validatePolicy(c, view, input.Compose); err != nil {
 			failure(c, 422, 20429, err.Error())
 			return
 		}
@@ -1064,7 +1060,7 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 400, 20420, "Invalid Project takeover request")
 			return
 		}
-		if err := validatePolicy(view, input.Compose); err != nil {
+		if err := validatePolicy(c, view, input.Compose); err != nil {
 			failure(c, 422, 20404, err.Error())
 			return
 		}

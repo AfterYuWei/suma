@@ -74,8 +74,8 @@ export function ComposePage() {
   const allSelected = pageManageable.length > 0 && pageManageable.every((row) => selected.has(row.name))
   const someSelected = !allSelected && pageManageable.some((row) => selected.has(row.name))
   const add = async () => {
-    const name = await promptDialog({ title: t('newProject'), description: zh ? '创建一个使用 Docker Compose 后端的 SUMA Project。' : 'Create a SUMA Project using the Docker Compose backend.', confirmLabel: t('create'), input: { label: t('projectName') } })
-    if (name) create.mutate(name)
+    const name = await promptDialog({ title: t('newProject'), description: zh ? '创建一个使用 Docker Compose 后端的 SUMA Project。项目名必须使用小写字母、数字、连字符或下划线，并以字母或数字开头。' : 'Create a SUMA Project using the Docker Compose backend. The name must be lowercase and use only letters, numbers, hyphens, or underscores, starting with a letter or number.', confirmLabel: t('create'), input: { label: t('projectName') } })
+    if (name) create.mutate(name.trim())
   }
   const runBatch = async (action: string) => {
     if (!selectedRows.length) return

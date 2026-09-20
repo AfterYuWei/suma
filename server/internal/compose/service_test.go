@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -36,6 +37,76 @@ func TestCreateComposeDoesNotCreateDeliveryProject(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("Compose creation also created %d delivery projects", count)
+	}
+}
+
+func TestCreateRequiresLowercaseNativeComposeProjectName(t *testing.T) {
+	root := t.TempDir()
+	db, err := database.Open(filepath.Join(root, "suma.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(db, filepath.Join(root, "compose"), nil, nil, emptyContainers{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := service.Create(context.Background(), " newapi ", "services: {}\n", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if project.Name != "newapi" || filepath.Base(project.Path) != "newapi" || project.Metadata == nil || project.Metadata.NativeName != "newapi" {
+		t.Fatalf("normalized Project = %#v", project)
+	}
+	if _, err := service.Create(context.Background(), "NewApi", "services: {}\n", ""); err == nil || !strings.Contains(err.Error(), "must be lowercase") {
+		t.Fatalf("mixed-case native name error = %v", err)
+	}
+	if _, err := service.Create(context.Background(), "new.api", "services: {}\n", ""); err == nil || !strings.Contains(err.Error(), "must be lowercase") {
+		t.Fatalf("invalid native name error = %v", err)
+	}
+}
+
+func TestManagedRunnerPinsNativeRuntimeProjectName(t *testing.T) {
+	runner, err := NewRunner("docker compose")
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments, err := runner.managedArguments(filepath.Join(t.TempDir(), "rustfs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"compose", "--ansi", "never", "--project-name", "rustfs"}
+	if len(arguments) < len(want) || !reflect.DeepEqual(arguments[:len(want)], want) {
+		t.Fatalf("managed Compose arguments = %#v", arguments)
+	}
+	if _, err := runner.managedArguments(filepath.Join(t.TempDir(), "RustFs")); err == nil {
+		t.Fatal("managed runner accepted a mixed-case Project directory")
+	}
+}
+
+func TestManagedProjectsIgnoreMixedCaseDirectories(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"rustfs", "RustFs"} {
+		projectPath := filepath.Join(root, name)
+		if err := os.MkdirAll(projectPath, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeAtomic(filepath.Join(projectPath, "compose.yml"), "services: {}\n"); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeManagedProjectMetadata(projectPath, newManagedProjectMetadata("local", name, "created", "", time.Now().UTC())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	service, err := NewService(nil, root, nil, nil, emptyContainers{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projects, err := service.managedProjects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].Name != "rustfs" {
+		t.Fatalf("managed Projects = %#v", projects)
 	}
 }
 

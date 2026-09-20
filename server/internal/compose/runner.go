@@ -72,7 +72,10 @@ func NewRunner(command string) (*CLIRunner, error) {
 	return &CLIRunner{command: parts[0], prefix: parts[1:]}, nil
 }
 func (r *CLIRunner) run(ctx context.Context, project string, output io.Writer, args ...string) error {
-	values := append(append([]string{}, r.prefix...), "--project-directory", project)
+	values, err := r.managedArguments(project)
+	if err != nil {
+		return err
+	}
 	values = append(values, args...)
 	command := exec.CommandContext(ctx, r.command, values...)
 	command.Dir = project
@@ -88,6 +91,14 @@ func (r *CLIRunner) run(ctx context.Context, project string, output io.Writer, a
 		return fmt.Errorf("docker compose %s: %w", strings.Join(args, " "), err)
 	}
 	return nil
+}
+
+func (r *CLIRunner) managedArguments(project string) ([]string, error) {
+	name := filepath.Base(filepath.Clean(project))
+	if !nativeProjectName.MatchString(name) {
+		return nil, fmt.Errorf("Compose project directory name must be a lowercase native Project name")
+	}
+	return r.arguments(ExecutionSpec{ProjectName: name, ProjectDir: project})
 }
 func (r *CLIRunner) runSpec(ctx context.Context, spec ExecutionSpec, output io.Writer, args ...string) error {
 	values, err := r.arguments(spec)
@@ -187,7 +198,7 @@ func (r *CLIRunner) Build(ctx context.Context, project string, output io.Writer)
 	return r.run(ctx, project, output, "build")
 }
 func (r *CLIRunner) Validate(ctx context.Context, project string, output io.Writer) error {
-	return r.run(ctx, project, output, "config", "--quiet")
+	return r.runSpec(ctx, ExecutionSpec{ProjectName: "suma-validate", ProjectDir: project}, output, "config", "--quiet")
 }
 func (r *CLIRunner) Logs(ctx context.Context, project string, tail int, output io.Writer) error {
 	return r.run(ctx, project, output, "logs", "--tail", strconv.Itoa(normalizeLogTail(tail)), "--no-color")

@@ -26,6 +26,23 @@ func TestValidateRemoteBindMounts(t *testing.T) {
 	}
 }
 
+func TestValidateComposeBindMountsAllowsConfirmedDockerSocket(t *testing.T) {
+	socket := "services:\n  app:\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n"
+	if err := ValidateComposeBindMounts(socket, false, false); err == nil || !strings.Contains(err.Error(), "explicit confirmation") {
+		t.Fatalf("unconfirmed local socket error = %v", err)
+	}
+	if err := ValidateComposeBindMounts(socket, false, true); err != nil {
+		t.Fatalf("confirmed local socket: %v", err)
+	}
+	if err := ValidateComposeBindMounts(socket, true, true); err != nil {
+		t.Fatalf("confirmed remote socket: %v", err)
+	}
+	interpolated := "services:\n  app:\n    volumes:\n      - ${DOCKER_SOCKET}:/var/run/docker.sock\n"
+	if err := ValidateComposeBindMounts(interpolated, true, true); err == nil || !strings.Contains(err.Error(), "cannot be interpolated") {
+		t.Fatalf("confirmed remote interpolated socket error = %v", err)
+	}
+}
+
 func TestTargetEnvironmentUsesPrivateTemporaryFilesAndCleansUp(t *testing.T) {
 	runner, err := NewRunner("docker compose")
 	if err != nil {
