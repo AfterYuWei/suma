@@ -197,19 +197,13 @@ func TestAdapterContainerLifecycleActions(t *testing.T) {
 func TestAdapterInfoMapping(t *testing.T) {
 	ctx := context.Background()
 	engine := system.Info{
-		ID:                "engine-id-1",
-		Name:              "node-a",
-		ServerVersion:     "27.3.1",
-		OperatingSystem:   "Debian GNU/Linux 12",
-		OSType:            "linux",
-		Architecture:      "x86_64",
-		KernelVersion:     "6.8.0",
-		Containers:        5,
-		ContainersRunning: 3,
-		ContainersStopped: 2,
-		Images:            11,
-		NCPU:              8,
-		MemTotal:          16 << 30,
+		ID: "engine-id-1", Name: "node-a", ServerVersion: "27.3.1",
+		OperatingSystem: "Debian GNU/Linux 12", OSVersion: "12.8", OSType: "linux",
+		Architecture: "x86_64", KernelVersion: "6.8.0",
+		Containers: 6, ContainersRunning: 3, ContainersPaused: 1, ContainersStopped: 2,
+		Images: 11, NCPU: 8, MemTotal: 16 << 30,
+		Driver: "overlay2", LoggingDriver: "json-file", CgroupDriver: "systemd", CgroupVersion: "2",
+		DefaultRuntime: "runc", LiveRestoreEnabled: true, SecurityOptions: []string{"name=seccomp,profile=builtin"},
 	}
 	stub := newDockerStub(t, map[string]http.HandlerFunc{
 		"/info": func(w http.ResponseWriter, r *http.Request) {
@@ -223,9 +217,100 @@ func TestAdapterInfoMapping(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireRequested(t, stub, "/info")
-	want := Info{ID: "engine-id-1", Name: "node-a", ServerVersion: "27.3.1", OperatingSystem: "Debian GNU/Linux 12", OSType: "linux", Architecture: "x86_64", KernelVersion: "6.8.0", Containers: 5, Running: 3, Stopped: 2, Images: 11, CPUs: 8, MemoryBytes: 16 << 30}
+	want := Info{
+		ID: "engine-id-1", Name: "node-a", ServerVersion: "27.3.1",
+		OperatingSystem: "Debian GNU/Linux 12", OSVersion: "12.8", OSType: "linux",
+		Architecture: "x86_64", KernelVersion: "6.8.0",
+		Containers: 6, Running: 3, Paused: 1, Stopped: 2, Images: 11, CPUs: 8, MemoryBytes: 16 << 30,
+		StorageDriver: "overlay2", LoggingDriver: "json-file", CgroupDriver: "systemd", CgroupVersion: "2",
+		DefaultRuntime: "runc", LiveRestore: true, SecurityOptions: []string{"name=seccomp,profile=builtin"},
+	}
 	if !reflect.DeepEqual(info, want) {
 		t.Fatalf("unexpected mapped info:\n got %#v\nwant %#v", info, want)
+	}
+}
+
+func TestAdapterResourceCounts(t *testing.T) {
+	stub := newDockerStub(t, map[string]http.HandlerFunc{
+		"/networks": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, []dockernetwork.Summary{{ID: "network-a"}, {ID: "network-b"}})
+		},
+		"/volumes": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, dockervolume.ListResponse{Volumes: []*dockervolume.Volume{{Name: "data"}, {Name: "cache"}, {Name: "logs"}}})
+		},
+	})
+	adapter := newAdapter(t, stub)
+
+	counts, err := adapter.ResourceCounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (ResourceCounts{Networks: 2, Volumes: 3}); counts != want {
+		t.Fatalf("resource counts = %#v, want %#v", counts, want)
+	}
+	for _, path := range []string{"/networks", "/volumes"} {
+		requireRequested(t, stub, path)
+	}
+}
+
+func TestAdapterMetricsIncludesIOPIDsAndUptime(t *testing.T) {
+	startedAt := time.Now().Add(-90 * time.Second).UTC()
+	stub := newDockerStub(t, map[string]http.HandlerFunc{
+		"/containers/json": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, []dockercontainer.Summary{{ID: "container-a", Names: []string{"/api"}, Image: "example/api:latest", State: dockercontainer.StateRunning}})
+		},
+		"/containers/container-a/stats": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"cpu_stats":    map[string]any{"cpu_usage": map[string]any{"total_usage": 300, "percpu_usage": []uint64{150, 150}}, "system_cpu_usage": 1000, "online_cpus": 2},
+				"precpu_stats": map[string]any{"cpu_usage": map[string]any{"total_usage": 100}, "system_cpu_usage": 500},
+				"memory_stats": map[string]any{"usage": 1024, "stats": map[string]uint64{"inactive_file": 128}},
+				"networks":     map[string]any{"eth0": map[string]uint64{"rx_bytes": 2048, "tx_bytes": 4096}},
+				"blkio_stats":  map[string]any{"io_service_bytes_recursive": []map[string]any{{"op": "Read", "value": 8192}, {"op": "Write", "value": 16384}}},
+				"pids_stats":   map[string]uint64{"current": 7},
+			})
+		},
+		"/containers/container-a/json": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, map[string]any{"State": map[string]any{"StartedAt": startedAt.Format(time.RFC3339Nano)}})
+		},
+	})
+	adapter := newAdapter(t, stub)
+
+	metrics, err := adapter.Metrics(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metrics) != 1 {
+		t.Fatalf("metrics length = %d, want 1", len(metrics))
+	}
+	value := metrics[0]
+	if value.Name != "api" || value.Image != "example/api:latest" || value.State != "running" || !value.Available || value.CPUPercent != 80 || value.MemoryBytes != 896 || value.NetworkRXBytes != 2048 || value.NetworkTXBytes != 4096 || value.BlockReadBytes != 8192 || value.BlockWriteBytes != 16384 || value.PIDs != 7 {
+		t.Fatalf("unexpected metrics: %#v", value)
+	}
+	if value.UptimeSeconds < 89 || value.UptimeSeconds > 91 {
+		t.Fatalf("uptime = %d seconds, want about 90", value.UptimeSeconds)
+	}
+}
+
+func TestAdapterMetricsMarksFailedStatsUnavailable(t *testing.T) {
+	stub := newDockerStub(t, map[string]http.HandlerFunc{
+		"/containers/json": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, []dockercontainer.Summary{{ID: "container-a", State: dockercontainer.StateRunning}})
+		},
+		"/containers/container-a/stats": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "stats unavailable"})
+		},
+		"/containers/container-a/json": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, map[string]any{"State": map[string]any{"StartedAt": time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano)}})
+		},
+	})
+	adapter := newAdapter(t, stub)
+
+	metrics, err := adapter.Metrics(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metrics) != 1 || metrics[0].Available {
+		t.Fatalf("metrics should be marked unavailable after a stats failure: %#v", metrics)
 	}
 }
 

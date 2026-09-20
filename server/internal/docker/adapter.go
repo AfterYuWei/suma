@@ -36,19 +36,28 @@ import (
 )
 
 type Info struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	ServerVersion   string `json:"server_version"`
-	OperatingSystem string `json:"operating_system"`
-	OSType          string `json:"os_type"`
-	Architecture    string `json:"architecture"`
-	KernelVersion   string `json:"kernel_version"`
-	Containers      int    `json:"containers"`
-	Running         int    `json:"containers_running"`
-	Stopped         int    `json:"containers_stopped"`
-	Images          int    `json:"images"`
-	CPUs            int    `json:"cpus"`
-	MemoryBytes     int64  `json:"memory_bytes"`
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	ServerVersion   string   `json:"server_version"`
+	OperatingSystem string   `json:"operating_system"`
+	OSVersion       string   `json:"os_version"`
+	OSType          string   `json:"os_type"`
+	Architecture    string   `json:"architecture"`
+	KernelVersion   string   `json:"kernel_version"`
+	Containers      int      `json:"containers"`
+	Running         int      `json:"containers_running"`
+	Paused          int      `json:"containers_paused"`
+	Stopped         int      `json:"containers_stopped"`
+	Images          int      `json:"images"`
+	CPUs            int      `json:"cpus"`
+	MemoryBytes     int64    `json:"memory_bytes"`
+	StorageDriver   string   `json:"storage_driver"`
+	LoggingDriver   string   `json:"logging_driver"`
+	CgroupDriver    string   `json:"cgroup_driver"`
+	CgroupVersion   string   `json:"cgroup_version"`
+	DefaultRuntime  string   `json:"default_runtime"`
+	LiveRestore     bool     `json:"live_restore"`
+	SecurityOptions []string `json:"security_options,omitempty"`
 }
 
 type Engine interface {
@@ -138,8 +147,37 @@ func (a *Adapter) DiskUsage(ctx context.Context) (int64, error) {
 	return total, nil
 }
 
+type ResourceCounts struct {
+	Networks int
+	Volumes  int
+}
+
+// ResourceCounts returns lightweight inventory counts without the per-volume
+// usage inspection performed by the full volume listing endpoint.
+func (a *Adapter) ResourceCounts(ctx context.Context) (ResourceCounts, error) {
+	networks, err := a.client.NetworkList(ctx, dockernetwork.ListOptions{})
+	if err != nil {
+		return ResourceCounts{}, fmt.Errorf("list networks: %w", err)
+	}
+	volumes, err := a.client.VolumeList(ctx, dockervolume.ListOptions{})
+	if err != nil {
+		return ResourceCounts{}, fmt.Errorf("list volumes: %w", err)
+	}
+	return ResourceCounts{Networks: len(networks), Volumes: len(volumes.Volumes)}, nil
+}
+
 func mapInfo(value system.Info) Info {
-	return Info{ID: value.ID, Name: value.Name, ServerVersion: value.ServerVersion, OperatingSystem: value.OperatingSystem, OSType: value.OSType, Architecture: value.Architecture, KernelVersion: value.KernelVersion, Containers: value.Containers, Running: value.ContainersRunning, Stopped: value.ContainersStopped, Images: value.Images, CPUs: value.NCPU, MemoryBytes: value.MemTotal}
+	return Info{
+		ID: value.ID, Name: value.Name, ServerVersion: value.ServerVersion,
+		OperatingSystem: value.OperatingSystem, OSVersion: value.OSVersion, OSType: value.OSType,
+		Architecture: value.Architecture, KernelVersion: value.KernelVersion,
+		Containers: value.Containers, Running: value.ContainersRunning, Paused: value.ContainersPaused, Stopped: value.ContainersStopped,
+		Images: value.Images, CPUs: value.NCPU, MemoryBytes: value.MemTotal,
+		StorageDriver: value.Driver, LoggingDriver: value.LoggingDriver,
+		CgroupDriver: value.CgroupDriver, CgroupVersion: value.CgroupVersion,
+		DefaultRuntime: value.DefaultRuntime, LiveRestore: value.LiveRestoreEnabled,
+		SecurityOptions: append([]string(nil), value.SecurityOptions...),
+	}
 }
 
 func (a *Adapter) Close() error { return a.client.Close() }
@@ -434,32 +472,44 @@ func (a *Adapter) Metrics(ctx context.Context) ([]domain.Metrics, error) {
 		return nil, fmt.Errorf("list running containers for metrics: %w", err)
 	}
 	summaries := make([]domain.Summary, len(rows))
+	available := make([]bool, len(rows))
 	var wait sync.WaitGroup
 	limit := make(chan struct{}, 6)
 	for index, row := range rows {
-		summaries[index] = domain.Summary{ID: row.ID, State: string(row.State)}
+		name := row.ID[:min(12, len(row.ID))]
+		if len(row.Names) > 0 {
+			name = strings.TrimPrefix(row.Names[0], "/")
+		}
+		summaries[index] = domain.Summary{ID: row.ID, Name: name, Image: row.Image, State: string(row.State)}
 		wait.Add(1)
 		go func(index int) {
 			defer wait.Done()
 			limit <- struct{}{}
 			defer func() { <-limit }()
-			a.loadSummaryStats(ctx, &summaries[index])
+			available[index] = a.loadSummaryStats(ctx, &summaries[index])
 		}(index)
 	}
 	wait.Wait()
 	result := make([]domain.Metrics, len(summaries))
 	for index, summary := range summaries {
-		result[index] = domain.Metrics{ID: summary.ID, CPUPercent: summary.CPUPercent, MemoryBytes: summary.MemoryBytes, UptimeSeconds: summary.UptimeSeconds}
+		result[index] = domain.Metrics{
+			ID: summary.ID, Name: summary.Name, Image: summary.Image, State: summary.State,
+			Available: available[index], CPUPercent: summary.CPUPercent, MemoryBytes: summary.MemoryBytes, UptimeSeconds: summary.UptimeSeconds,
+			NetworkRXBytes: summary.NetworkRXBytes, NetworkTXBytes: summary.NetworkTXBytes,
+			BlockReadBytes: summary.BlockReadBytes, BlockWriteBytes: summary.BlockWriteBytes, PIDs: summary.PIDs,
+		}
 	}
 	return result, nil
 }
 
-func (a *Adapter) loadSummaryStats(ctx context.Context, summary *domain.Summary) {
+func (a *Adapter) loadSummaryStats(ctx context.Context, summary *domain.Summary) bool {
+	available := false
 	response, err := a.client.ContainerStats(ctx, summary.ID, false)
 	if err == nil {
 		defer response.Body.Close()
 		var stats dockercontainer.StatsResponse
 		if json.NewDecoder(response.Body).Decode(&stats) == nil {
+			available = true
 			cpuDelta, systemDelta := uint64(0), uint64(0)
 			if stats.CPUStats.CPUUsage.TotalUsage >= stats.PreCPUStats.CPUUsage.TotalUsage {
 				cpuDelta = stats.CPUStats.CPUUsage.TotalUsage - stats.PreCPUStats.CPUUsage.TotalUsage
@@ -478,6 +528,19 @@ func (a *Adapter) loadSummaryStats(ctx context.Context, summary *domain.Summary)
 			if cache := stats.MemoryStats.Stats["inactive_file"]; cache < summary.MemoryBytes {
 				summary.MemoryBytes -= cache
 			}
+			for _, network := range stats.Networks {
+				summary.NetworkRXBytes += network.RxBytes
+				summary.NetworkTXBytes += network.TxBytes
+			}
+			for _, item := range stats.BlkioStats.IoServiceBytesRecursive {
+				switch strings.ToLower(item.Op) {
+				case "read":
+					summary.BlockReadBytes += item.Value
+				case "write":
+					summary.BlockWriteBytes += item.Value
+				}
+			}
+			summary.PIDs = stats.PidsStats.Current
 		}
 	}
 	if inspect, err := a.client.ContainerInspect(ctx, summary.ID); err == nil && inspect.State != nil {
@@ -485,6 +548,7 @@ func (a *Adapter) loadSummaryStats(ctx context.Context, summary *domain.Summary)
 			summary.UptimeSeconds = int64(time.Since(started).Seconds())
 		}
 	}
+	return available
 }
 
 func (a *Adapter) Get(ctx context.Context, id string) (domain.Detail, error) {

@@ -139,8 +139,66 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
   if (/^\/nodes\/[^/]+(?:\/test)?$/.test(pathname) && method !== 'GET') return clone(nodes.find((item) => pathname.includes(item.id)) ?? nodes[0]) as T
 
   if (pathname === '/fleet/overview') {
-    const counts = Object.values(containerSets).flat()
-    return clone({ nodes: nodes.map((node) => ({ ...node, hostname: node.name, os: 'Ubuntu 24.04 LTS', containers_running: nodeContainers(node.id).filter((item) => item.state === 'running').length, containers_stopped: nodeContainers(node.id).filter((item) => item.state !== 'running').length, images: images.length, container_cpu_percent: nodeContainers(node.id).reduce((sum, item) => sum + item.cpu_percent, 0), container_memory_bytes: nodeContainers(node.id).reduce((sum, item) => sum + item.memory_bytes, 0) })), totals: { nodes_total: 3, nodes_online: 3, nodes_offline: 0, nodes_disabled: 0, containers_running: counts.filter((item) => item.state === 'running').length, containers_stopped: counts.filter((item) => item.state !== 'running').length, images: images.length * 3 } }) as T
+    const capacity: Record<string, { cpus: number; memory: number }> = {
+      local: { cpus: 8, memory: 16 * 1024 ** 3 },
+      'edge-hk': { cpus: 4, memory: 8 * 1024 ** 3 },
+      'nas-prod': { cpus: 12, memory: 32 * 1024 ** 3 },
+    }
+    const fleetNodes = nodes.map((node, index) => {
+      const containers = nodeContainers(node.id)
+      return {
+        ...node,
+        hostname: node.name,
+        os: 'Ubuntu 24.04 LTS',
+        os_version: '24.04',
+        architecture: 'x86_64',
+        kernel_version: '6.8.0-71-generic',
+        cpus: capacity[node.id]?.cpus ?? 4,
+        memory_total_bytes: capacity[node.id]?.memory ?? 8 * 1024 ** 3,
+        containers_running: containers.filter((item) => item.state === 'running').length,
+        containers_paused: 0,
+        containers_stopped: containers.filter((item) => item.state !== 'running').length,
+        images: images.length,
+        networks: 5 + index,
+        volumes: 8 + index * 3,
+        docker_disk_usage_bytes: (18 + index * 7) * 1024 ** 3,
+        storage_driver: 'overlay2',
+        logging_driver: 'json-file',
+        cgroup_driver: 'systemd',
+        cgroup_version: '2',
+        default_runtime: 'runc',
+        live_restore: index !== 1,
+        security_options: ['name=apparmor', 'name=seccomp,profile=builtin'],
+        metrics_available: true,
+        container_cpu_percent: containers.reduce((sum, item) => sum + item.cpu_percent, 0),
+        container_memory_bytes: containers.reduce((sum, item) => sum + item.memory_bytes, 0),
+        container_network_rx_bytes: (12 + index * 9) * 1024 ** 3,
+        container_network_tx_bytes: (4 + index * 5) * 1024 ** 3,
+        container_block_read_bytes: (8 + index * 6) * 1024 ** 3,
+        container_block_write_bytes: (3 + index * 4) * 1024 ** 3,
+        container_pids: 42 + index * 17,
+        longest_container_uptime_seconds: 86400 * (8 + index * 13) + 7200,
+        containers: containers
+          .filter((item) => item.state === 'running')
+          .map((item, containerIndex) => ({
+            id: item.id,
+            name: item.name,
+            image: item.image,
+            state: item.state,
+            available: true,
+            cpu_percent: item.cpu_percent,
+            memory_bytes: item.memory_bytes,
+            network_rx_bytes: (containerIndex + 1) * 768 * 1024 ** 2,
+            network_tx_bytes: (containerIndex + 1) * 256 * 1024 ** 2,
+            block_read_bytes: (containerIndex + 1) * 512 * 1024 ** 2,
+            block_write_bytes: (containerIndex + 1) * 192 * 1024 ** 2,
+            pids: 6 + containerIndex * 5,
+            uptime_seconds: item.uptime_seconds,
+          }))
+          .sort((left, right) => right.memory_bytes - left.memory_bytes),
+      }
+    })
+    return clone({ nodes: fleetNodes }) as T
   }
   if (pathname === '/cd/overview') return clone({ projects: deliveryProjects.map((project) => ({ name: project.name, configured: true, repository_url: project.repository_url, git_ref: project.git_ref, reconcile_mode: project.name === 'gateway-prod' ? 'auto' : 'manual', node_ids: project.node_ids, drifted: false, runtime_healthy: true, active_release: { id: project.active_release_id, status: 'succeeded', commit_sha: project.desired_commit, trigger_type: 'webhook', created_at: now }, latest_release: { id: project.active_release_id, status: 'succeeded', commit_sha: project.desired_commit, trigger_type: 'webhook', created_at: now }, awaiting_approval: false, releasing: false })), totals: { projects: 2, configured: 2, releasing: 0, awaiting_approval: 0, drifted: 0, healthy: 2 } }) as T
 

@@ -28,25 +28,39 @@ type Network struct {
 }
 
 type Summary struct {
-	ID            string            `json:"id"`
-	Name          string            `json:"name"`
-	Image         string            `json:"image"`
-	Command       string            `json:"command"`
-	Created       time.Time         `json:"created"`
-	State         string            `json:"state"`
-	Status        string            `json:"status"`
-	Ports         []Port            `json:"ports"`
-	Labels        map[string]string `json:"labels"`
-	CPUPercent    float64           `json:"cpu_percent"`
-	MemoryBytes   uint64            `json:"memory_bytes"`
-	UptimeSeconds int64             `json:"uptime_seconds"`
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	Image           string            `json:"image"`
+	Command         string            `json:"command"`
+	Created         time.Time         `json:"created"`
+	State           string            `json:"state"`
+	Status          string            `json:"status"`
+	Ports           []Port            `json:"ports"`
+	Labels          map[string]string `json:"labels"`
+	CPUPercent      float64           `json:"cpu_percent"`
+	MemoryBytes     uint64            `json:"memory_bytes"`
+	UptimeSeconds   int64             `json:"uptime_seconds"`
+	NetworkRXBytes  uint64            `json:"network_rx_bytes"`
+	NetworkTXBytes  uint64            `json:"network_tx_bytes"`
+	BlockReadBytes  uint64            `json:"block_read_bytes"`
+	BlockWriteBytes uint64            `json:"block_write_bytes"`
+	PIDs            uint64            `json:"pids"`
 }
 
 type Metrics struct {
-	ID            string  `json:"id"`
-	CPUPercent    float64 `json:"cpu_percent"`
-	MemoryBytes   uint64  `json:"memory_bytes"`
-	UptimeSeconds int64   `json:"uptime_seconds"`
+	ID              string  `json:"id"`
+	Name            string  `json:"name"`
+	Image           string  `json:"image"`
+	State           string  `json:"state"`
+	Available       bool    `json:"available"`
+	CPUPercent      float64 `json:"cpu_percent"`
+	MemoryBytes     uint64  `json:"memory_bytes"`
+	UptimeSeconds   int64   `json:"uptime_seconds"`
+	NetworkRXBytes  uint64  `json:"network_rx_bytes"`
+	NetworkTXBytes  uint64  `json:"network_tx_bytes"`
+	BlockReadBytes  uint64  `json:"block_read_bytes"`
+	BlockWriteBytes uint64  `json:"block_write_bytes"`
+	PIDs            uint64  `json:"pids"`
 }
 
 type Detail struct {
