@@ -10,7 +10,7 @@ export function TerminalView({ nodeID, containerId }: { nodeID: string; containe
   useEffect(() => {
     if (!host.current) return
     const styles = getComputedStyle(document.documentElement)
-    const terminal = new Terminal({ cursorBlink: true, convertEol: true, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12, theme: {
+    const terminal = new Terminal({ cursorBlink: true, convertEol: true, fontFamily: '"JetBrains Mono", "HarmonyOS Sans SC", ui-monospace, monospace', fontSize: 12, theme: {
       background: styles.getPropertyValue('--background'),
       foreground: styles.getPropertyValue('--foreground'),
       cursor: styles.getPropertyValue('--primary'),

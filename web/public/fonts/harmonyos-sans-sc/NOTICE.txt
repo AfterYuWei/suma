@@ -1,0 +1,4 @@
+SUMA uses unmodified HarmonyOS Sans SC font files for Chinese text.
+Copyright 2021 Huawei Device Co., Ltd.
+
+The complete HarmonyOS Sans Fonts License Agreement is included in LICENSE.txt.

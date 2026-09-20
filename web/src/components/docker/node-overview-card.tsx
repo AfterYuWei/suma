@@ -117,7 +117,6 @@ function ContainerMetricsList({ containers, detailed, zh }: { containers: FleetC
     <section className="mt-4 flex min-h-0 flex-1 flex-col border-t pt-3" aria-label={zh ? '运行中容器性能' : 'Running container performance'}>
       <div className="flex shrink-0 items-center justify-between gap-3">
         <div className="flex items-center gap-1.5 text-xs font-medium"><Container className="size-3.5 text-muted-foreground" />{zh ? '运行中容器' : 'Running containers'}</div>
-        <span className="text-[11px] text-muted-foreground">{zh ? '按内存倒序' : 'Memory descending'}</span>
       </div>
       {rows.length === 0
         ? <div className="flex min-h-20 flex-1 items-center justify-center text-xs text-muted-foreground">{zh ? '暂无运行中容器' : 'No running containers'}</div>
