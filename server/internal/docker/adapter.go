@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/containerd/errdefs"
 	dockertypes "github.com/docker/docker/api/types"
 	dockercontainer "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
@@ -536,14 +537,22 @@ func (a *Adapter) Get(ctx context.Context, id string) (domain.Detail, error) {
 }
 
 func (a *Adapter) Start(ctx context.Context, id string) error {
-	return a.client.ContainerStart(ctx, id, dockercontainer.StartOptions{})
+	return ignoreNotModified(a.client.ContainerStart(ctx, id, dockercontainer.StartOptions{}))
 }
 func (a *Adapter) Stop(ctx context.Context, id string) error {
-	return a.client.ContainerStop(ctx, id, dockercontainer.StopOptions{})
+	return ignoreNotModified(a.client.ContainerStop(ctx, id, dockercontainer.StopOptions{}))
 }
 func (a *Adapter) Restart(ctx context.Context, id string) error {
 	return a.client.ContainerRestart(ctx, id, dockercontainer.StopOptions{})
 }
+
+func ignoreNotModified(err error) error {
+	if errdefs.IsNotModified(err) {
+		return nil
+	}
+	return err
+}
+
 func (a *Adapter) Pause(ctx context.Context, id string) error {
 	return a.client.ContainerPause(ctx, id)
 }
@@ -558,6 +567,9 @@ func (a *Adapter) Rename(ctx context.Context, id, name string) error {
 }
 func (a *Adapter) Remove(ctx context.Context, id string, volumes bool) error {
 	return a.client.ContainerRemove(ctx, id, dockercontainer.RemoveOptions{RemoveVolumes: volumes})
+}
+func (a *Adapter) ForceRemove(ctx context.Context, id string, volumes bool) error {
+	return a.client.ContainerRemove(ctx, id, dockercontainer.RemoveOptions{Force: true, RemoveVolumes: volumes})
 }
 
 // CleanupComposeProject removes runtime resources carrying the exact official

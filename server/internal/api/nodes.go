@@ -1113,6 +1113,7 @@ func registerNodeContainerRoutes(group *gin.RouterGroup, _ *gin.Engine, deps Dep
 			IDs           []string `json:"ids"`
 			Action        string   `json:"action"`
 			RemoveVolumes bool     `json:"remove_volumes"`
+			Force         bool     `json:"force"`
 		}
 		if c.ShouldBindJSON(&input) != nil || len(input.IDs) == 0 || len(input.IDs) > 100 {
 			failure(c, 400, 20218, "Between 1 and 100 container IDs are required")
@@ -1126,6 +1127,7 @@ func registerNodeContainerRoutes(group *gin.RouterGroup, _ *gin.Engine, deps Dep
 		type result struct {
 			ID      string `json:"id"`
 			Success bool   `json:"success"`
+			Error   string `json:"error,omitempty"`
 		}
 		rows := make([]result, 0, len(input.IDs))
 		for _, id := range input.IDs {
@@ -1144,14 +1146,26 @@ func registerNodeContainerRoutes(group *gin.RouterGroup, _ *gin.Engine, deps Dep
 			case "kill":
 				err = adapter.Kill(c.Request.Context(), id)
 			case "remove":
-				err = adapter.Remove(c.Request.Context(), id, input.RemoveVolumes)
+				if input.Force {
+					err = adapter.ForceRemove(c.Request.Context(), id, input.RemoveVolumes)
+				} else {
+					err = adapter.Remove(c.Request.Context(), id, input.RemoveVolumes)
+				}
 			}
 			outcome := "success"
 			if err != nil {
 				outcome = "failed"
 			}
-			recordNodeAudit(c, deps, view.ID, view.Name, "container."+input.Action, "container", id, outcome)
-			rows = append(rows, result{ID: id, Success: err == nil})
+			auditAction := input.Action
+			if input.Action == "remove" && input.Force {
+				auditAction = "force_remove"
+			}
+			recordNodeAudit(c, deps, view.ID, view.Name, "container."+auditAction, "container", id, outcome)
+			row := result{ID: id, Success: err == nil}
+			if err != nil {
+				row.Error = err.Error()
+			}
+			rows = append(rows, row)
 		}
 		success(c, gin.H{"action": input.Action, "results": rows})
 	})

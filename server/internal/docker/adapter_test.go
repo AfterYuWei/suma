@@ -150,6 +150,50 @@ func TestAdapterPing(t *testing.T) {
 	}
 }
 
+func TestAdapterForceRemovesRunningContainerWithoutVolumes(t *testing.T) {
+	stub := newDockerStub(t, map[string]http.HandlerFunc{
+		"/containers/running": func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) },
+	})
+	adapter := newAdapter(t, stub)
+	if err := adapter.ForceRemove(context.Background(), "running", false); err != nil {
+		t.Fatal(err)
+	}
+	requests := stub.find(t, func(request stubRequest) bool {
+		return request.Method == http.MethodDelete && request.Path == "/containers/running"
+	})
+	if len(requests) != 1 || requests[0].Query.Get("force") != "1" || requests[0].Query.Has("v") {
+		t.Fatalf("forced container removal options = %#v", requests)
+	}
+}
+
+func TestAdapterContainerLifecycleActions(t *testing.T) {
+	stub := newDockerStub(t, map[string]http.HandlerFunc{
+		"/containers/running/start": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotModified)
+		},
+		"/containers/stopped/stop": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotModified)
+		},
+		"/containers/stopped/restart": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		},
+	})
+	adapter := newAdapter(t, stub)
+	ctx := context.Background()
+	if err := adapter.Start(ctx, "running"); err != nil {
+		t.Fatalf("start already-running container: %v", err)
+	}
+	if err := adapter.Stop(ctx, "stopped"); err != nil {
+		t.Fatalf("stop already-stopped container: %v", err)
+	}
+	if err := adapter.Restart(ctx, "stopped"); err != nil {
+		t.Fatalf("restart stopped container: %v", err)
+	}
+	for _, path := range []string{"/containers/running/start", "/containers/stopped/stop", "/containers/stopped/restart"} {
+		requireRequested(t, stub, path)
+	}
+}
+
 func TestAdapterInfoMapping(t *testing.T) {
 	ctx := context.Background()
 	engine := system.Info{

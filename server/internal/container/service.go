@@ -109,3 +109,10 @@ type Service interface {
 	Stats(context.Context, string) (io.ReadCloser, error)
 	Terminal(context.Context, string, uint, uint) (Terminal, error)
 }
+
+// ForceRemover is implemented by runtimes that can remove a running
+// container after an explicit destructive confirmation. Attached volumes are
+// controlled independently by the volumes argument.
+type ForceRemover interface {
+	ForceRemove(context.Context, string, bool) error
+}

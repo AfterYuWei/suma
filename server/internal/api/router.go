@@ -335,6 +335,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			IDs           []string `json:"ids" binding:"required"`
 			Action        string   `json:"action" binding:"required"`
 			RemoveVolumes bool     `json:"remove_volumes"`
+			Force         bool     `json:"force"`
 		}
 		if c.ShouldBindJSON(&input) != nil || len(input.IDs) == 0 || len(input.IDs) > 100 {
 			failure(c, http.StatusBadRequest, 12009, "Between 1 and 100 container IDs are required")
@@ -348,6 +349,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		type batchResult struct {
 			ID      string `json:"id"`
 			Success bool   `json:"success"`
+			Error   string `json:"error,omitempty"`
 		}
 		results := make([]batchResult, 0, len(input.IDs))
 		for _, id := range input.IDs {
@@ -371,14 +373,30 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			case "kill":
 				err = deps.Containers.Kill(c.Request.Context(), id)
 			case "remove":
-				err = deps.Containers.Remove(c.Request.Context(), id, input.RemoveVolumes)
+				if input.Force {
+					if remover, ok := deps.Containers.(containerdomain.ForceRemover); ok {
+						err = remover.ForceRemove(c.Request.Context(), id, input.RemoveVolumes)
+					} else {
+						err = errors.New("Docker runtime does not support forced container removal")
+					}
+				} else {
+					err = deps.Containers.Remove(c.Request.Context(), id, input.RemoveVolumes)
+				}
 			}
 			result := "success"
 			if err != nil {
 				result = "failed"
 			}
-			recordAudit(c, deps.Audit, "container."+input.Action, "container", id, result)
-			results = append(results, batchResult{ID: id, Success: err == nil})
+			auditAction := input.Action
+			if input.Action == "remove" && input.Force {
+				auditAction = "force_remove"
+			}
+			recordAudit(c, deps.Audit, "container."+auditAction, "container", id, result)
+			row := batchResult{ID: id, Success: err == nil}
+			if err != nil {
+				row.Error = err.Error()
+			}
+			results = append(results, row)
 		}
 		success(c, gin.H{"action": input.Action, "results": results})
 	})

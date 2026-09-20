@@ -40,7 +40,20 @@ export function ContainersPage() {
   const query = useQuery({ queryKey: ['containers', nodeID], queryFn: () => api<ContainerSummary[]>(nodePath(nodeID, '/containers')), refetchInterval: 10_000 })
   const metrics = useQuery({ queryKey: ['container-metrics', nodeID], queryFn: () => api<ContainerMetrics[]>(nodePath(nodeID, '/containers/metrics')), refetchInterval: 5_000 })
   const action = useMutation({ mutationFn: ({ id, name }: { id: string; name: string }) => api(nodePath(nodeID, `/containers/${id}/${name}`), { method: 'POST' }), onMutate: () => setOperationError(''), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['containers', nodeID] }); queryClient.invalidateQueries({ queryKey: ['container-metrics', nodeID] }) }, onError: (error) => setOperationError(error.message) })
-  const batch = useMutation({ mutationFn: ({ ids, name }: { ids: string[]; name: string }) => api<{ results: { id: string; success: boolean }[] }>(nodePath(nodeID, '/containers/batch'), { method: 'POST', body: JSON.stringify({ ids, action: name, remove_volumes: false }) }), onMutate: () => setOperationError(''), onSuccess: async (result) => { const failed = result.results.filter((item) => !item.success).length; setSelected(new Set()); if (failed) setOperationError(zh ? `${failed} 个容器操作失败，请检查容器当前状态。` : `${failed} container operations failed. Check their current state.`); await Promise.all([queryClient.invalidateQueries({ queryKey: ['containers', nodeID] }), queryClient.invalidateQueries({ queryKey: ['container-metrics', nodeID] })]) }, onError: (error) => setOperationError(error.message) })
+  const batch = useMutation({
+    mutationFn: ({ ids, name }: { ids: string[]; name: string }) => api<{ results: { id: string; success: boolean; error?: string }[] }>(nodePath(nodeID, '/containers/batch'), { method: 'POST', body: JSON.stringify({ ids, action: name, remove_volumes: false, force: name === 'remove' }) }),
+    onMutate: () => setOperationError(''),
+    onSuccess: async (result) => {
+      const failedRows = result.results.filter((item) => !item.success)
+      setSelected(new Set(failedRows.map((item) => item.id)))
+      if (failedRows.length) {
+        const reason = failedRows.find((item) => item.error)?.error
+        setOperationError(zh ? `${failedRows.length} 个容器操作失败${reason ? `：${reason}` : '。'}` : `${failedRows.length} container operations failed${reason ? `: ${reason}` : '.'}`)
+      }
+      await Promise.all([queryClient.invalidateQueries({ queryKey: ['containers', nodeID] }), queryClient.invalidateQueries({ queryKey: ['container-metrics', nodeID] })])
+    },
+    onError: (error) => setOperationError(error.message),
+  })
   const metricsById = new Map(metrics.data?.map((row) => [row.id, row]))
   const rows = query.data?.map((row) => ({ ...row, ...metricsById.get(row.id) })).filter((row) => `${row.id} ${row.name} ${row.image} ${row.state} ${row.status} ${ports(row)}`.toLowerCase().includes(filter.toLowerCase())) ?? []
   const pagination = useListPagination(rows, filter)
@@ -58,7 +71,7 @@ export function ContainersPage() {
     if (!selectedRows.length) return
     if (name === 'remove') {
       const names = selectedRows.slice(0, 3).map((row) => row.name).join('、')
-      if (!await confirmDialog({ title: zh ? `删除选中的 ${selectedRows.length} 个容器？` : `Remove ${selectedRows.length} selected containers?`, description: zh ? `${names}${selectedRows.length > 3 ? ' 等' : ''}。运行中的容器会删除失败，挂载卷将保留。` : `${names}${selectedRows.length > 3 ? ' and others' : ''}. Running containers will fail; attached volumes are preserved.`, confirmLabel: zh ? '批量删除' : 'Remove selected', danger: true })) return
+      if (!await confirmDialog({ title: zh ? `删除选中的 ${selectedRows.length} 个容器？` : `Remove ${selectedRows.length} selected containers?`, description: zh ? `${names}${selectedRows.length > 3 ? ' 等' : ''}。运行中的容器将被强制停止并删除；已挂载的存储卷会保留。` : `${names}${selectedRows.length > 3 ? ' and others' : ''}. Running containers will be forcibly stopped and removed; attached volumes are preserved.`, confirmLabel: zh ? '批量删除' : 'Remove selected', danger: true })) return
     }
     batch.mutate({ ids: selectedRows.map((row) => row.id), name })
   }

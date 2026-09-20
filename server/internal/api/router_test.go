@@ -409,10 +409,11 @@ func TestAccountProfilePasswordAndAvatarHTTP(t *testing.T) {
 var projectDockerVersion = regexp.MustCompile(`^/v[0-9]+\.[0-9]+`)
 
 type projectHTTPHarness struct {
-	router  *gin.Engine
-	cookie  *http.Cookie
-	db      *gorm.DB
-	compose *composeService.Service
+	router      *gin.Engine
+	cookie      *http.Cookie
+	db          *gorm.DB
+	compose     *composeService.Service
+	containerID string
 }
 
 type projectEmptyContainers struct{ containerdomain.Service }
@@ -456,9 +457,19 @@ func newProjectHTTPHarness(t *testing.T) projectHTTPHarness {
 			writeProjectDockerJSON(w, map[string]any{"Id": imageID, "Config": map[string]any{"Env": []string{"BASE=image"}}})
 		case "/networks":
 			writeProjectDockerJSON(w, []dockernetwork.Summary{})
+		case "/containers/" + containerID + "/start", "/containers/" + containerID + "/stop":
+			w.WriteHeader(http.StatusNotModified)
+		case "/containers/" + containerID + "/restart":
+			w.WriteHeader(http.StatusNoContent)
 		case "/containers/" + containerID:
 			if request.Method != http.MethodDelete {
 				http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
+				return
+			}
+			if request.URL.Query().Get("force") != "1" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]string{"message": "container is running"})
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)
@@ -500,7 +511,7 @@ func newProjectHTTPHarness(t *testing.T) projectHTTPHarness {
 		t.Fatal(err)
 	}
 	router := NewRouter(Dependencies{Engine: &fakeEngine{}, Auth: authService, Audit: audit.NewService(db), Tasks: tasks, Compose: projects, ComposeRunner: runner, Nodes: nodes})
-	return projectHTTPHarness{router: router, cookie: &http.Cookie{Name: sessionCookie, Value: token}, db: db, compose: projects}
+	return projectHTTPHarness{router: router, cookie: &http.Cookie{Name: sessionCookie, Value: token}, db: db, compose: projects, containerID: containerID}
 }
 
 func writeProjectDockerJSON(w http.ResponseWriter, value any) {
@@ -531,6 +542,67 @@ func TestProjectSummaryHTTPDoesNotExposeManagedConfiguration(t *testing.T) {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("Project Summary HTTP response contains %q: %s", forbidden, text)
 		}
+	}
+}
+
+func TestContainerBatchForceRemovesRunningContainers(t *testing.T) {
+	harness := newProjectHTTPHarness(t)
+	body, err := json.Marshal(map[string]any{"ids": []string{harness.containerID}, "action": "remove", "remove_volumes": false, "force": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := harness.request(http.MethodPost, "/api/v1/nodes/local/containers/batch", body)
+	if response.Code != http.StatusOK {
+		t.Fatalf("batch remove: %d %s", response.Code, response.Body.String())
+	}
+	var result struct {
+		Data struct {
+			Results []struct {
+				ID      string `json:"id"`
+				Success bool   `json:"success"`
+				Error   string `json:"error"`
+			} `json:"results"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Data.Results) != 1 || result.Data.Results[0].ID != harness.containerID || !result.Data.Results[0].Success || result.Data.Results[0].Error != "" {
+		t.Fatalf("batch results = %#v", result.Data.Results)
+	}
+	var audits int64
+	if err := harness.db.Model(&database.AuditLog{}).Where("action = ? AND resource_name = ?", "container.force_remove", harness.containerID).Count(&audits).Error; err != nil || audits != 1 {
+		t.Fatalf("force-remove audits = %d, %v", audits, err)
+	}
+}
+
+func TestContainerBatchLifecycleActions(t *testing.T) {
+	harness := newProjectHTTPHarness(t)
+	for _, action := range []string{"start", "stop", "restart"} {
+		t.Run(action, func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{"ids": []string{harness.containerID}, "action": action})
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := harness.request(http.MethodPost, "/api/v1/nodes/local/containers/batch", body)
+			if response.Code != http.StatusOK {
+				t.Fatalf("batch %s: %d %s", action, response.Code, response.Body.String())
+			}
+			var result struct {
+				Data struct {
+					Results []struct {
+						Success bool   `json:"success"`
+						Error   string `json:"error"`
+					} `json:"results"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Data.Results) != 1 || !result.Data.Results[0].Success || result.Data.Results[0].Error != "" {
+				t.Fatalf("batch %s results = %#v", action, result.Data.Results)
+			}
+		})
 	}
 }
 
