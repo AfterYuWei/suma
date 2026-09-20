@@ -21,6 +21,8 @@ interface ReleaseSummary { id: number; status: string; commit_sha: string; trigg
 interface CDProject { name: string; configured: boolean; repository_url?: string; git_ref?: string; reconcile_mode: string; node_ids: string[]; drifted: boolean; runtime_healthy: boolean; drift_reason?: string; active_release?: ReleaseSummary; latest_release?: ReleaseSummary; awaiting_approval: boolean; releasing: boolean }
 interface CDOverview { projects: CDProject[]; totals: { projects: number; configured: number; releasing: number; awaiting_approval: number; drifted: number; healthy: number } }
 
+const fleetRefreshInterval = 10_000
+
 function releaseTone(status: string) {
   if (status === 'succeeded' || status === 'approved') return 'success'
   if (status === 'failed' || status === 'partial_failed' || status === 'rollback_failed') return 'critical'
@@ -41,7 +43,13 @@ export function OverviewPage() {
   const [dragOrder, setDragOrder] = useState<string[] | null>(null)
   const dragOrderRef = useRef<string[] | null>(null)
 
-  const fleet = useQuery({ queryKey: ['fleet-overview'], queryFn: () => api<FleetOverview>('/fleet/overview'), refetchInterval: 15_000 })
+  const fleet = useQuery({
+    queryKey: ['fleet-overview'],
+    queryFn: () => api<FleetOverview>('/fleet/overview'),
+    refetchInterval: fleetRefreshInterval,
+    refetchOnWindowFocus: 'always',
+    refetchOnReconnect: 'always',
+  })
   const cd = useQuery({ queryKey: ['cd-overview'], queryFn: () => api<CDOverview>('/cd/overview'), refetchInterval: 10_000 })
 
   const nodes = fleet.data?.nodes ?? []
@@ -54,6 +62,9 @@ export function OverviewPage() {
   const cdTotals = cd.data?.totals
   const nodeNames = new Map(nodes.map((node) => [node.id, node.name]))
   const layoutTransition = reduceMotion ? { duration: 0 } : { layout: { duration: 0.3, ease: 'linear' as const } }
+  const fleetUpdatedAt = fleet.dataUpdatedAt > 0
+    ? new Date(fleet.dataUpdatedAt).toLocaleTimeString(language, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    : '—'
 
   const startNodeOrderDrag = (nodeID: string) => {
     const order = [...orderedNodeIDs]
@@ -109,7 +120,7 @@ export function OverviewPage() {
           <div className="flex flex-wrap items-end gap-3">
             <div>
               <h3 id="overview-nodes-heading" className="cn-font-heading text-base font-medium">{zh ? '节点资源' : 'Node resources'}</h3>
-              <p className="mt-0.5 text-sm text-muted-foreground">{zh ? '拖动卡片标题前的手柄调整顺序；右下角按钮切换信息密度' : 'Drag the title handle to reorder cards; use the corner button to change density'}</p>
+              <p className="mt-0.5 text-sm text-muted-foreground">{zh ? `每 10 秒自动刷新 · 最近更新 ${fleetUpdatedAt}；拖动标题手柄调整顺序` : `Refreshes every 10 seconds · Updated ${fleetUpdatedAt}; drag title handles to reorder`}</p>
             </div>
             <Button variant="ghost" size="sm" className="ml-auto text-muted-foreground" onClick={() => void navigate({ to: '/nodes' })}><ArrowUpRight className="size-4" />{zh ? '管理节点' : 'Manage nodes'}</Button>
           </div>

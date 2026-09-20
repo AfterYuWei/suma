@@ -23,7 +23,6 @@ type fleetContainer struct {
 	NetworkTXBytes  uint64  `json:"network_tx_bytes"`
 	BlockReadBytes  uint64  `json:"block_read_bytes"`
 	BlockWriteBytes uint64  `json:"block_write_bytes"`
-	PIDs            uint64  `json:"pids"`
 	UptimeSeconds   int64   `json:"uptime_seconds"`
 }
 
@@ -66,7 +65,6 @@ type fleetNode struct {
 	ContainerNetworkTX   uint64           `json:"container_network_tx_bytes"`
 	ContainerBlockRead   uint64           `json:"container_block_read_bytes"`
 	ContainerBlockWrite  uint64           `json:"container_block_write_bytes"`
-	ContainerPIDs        uint64           `json:"container_pids"`
 	LongestUptimeSeconds int64            `json:"longest_container_uptime_seconds"`
 	Containers           []fleetContainer `json:"containers"`
 }
@@ -141,7 +139,7 @@ func registerFleetRoutes(v1 gin.IRouter, deps Dependencies) {
 							CPUPercent: sample.CPUPercent, MemoryBytes: sample.MemoryBytes,
 							NetworkRXBytes: sample.NetworkRXBytes, NetworkTXBytes: sample.NetworkTXBytes,
 							BlockReadBytes: sample.BlockReadBytes, BlockWriteBytes: sample.BlockWriteBytes,
-							PIDs: sample.PIDs, UptimeSeconds: sample.UptimeSeconds,
+							UptimeSeconds: sample.UptimeSeconds,
 						})
 						if !sample.Available {
 							entry.MetricsAvailable = false
@@ -153,7 +151,6 @@ func registerFleetRoutes(v1 gin.IRouter, deps Dependencies) {
 						entry.ContainerNetworkTX += sample.NetworkTXBytes
 						entry.ContainerBlockRead += sample.BlockReadBytes
 						entry.ContainerBlockWrite += sample.BlockWriteBytes
-						entry.ContainerPIDs += sample.PIDs
 						if sample.UptimeSeconds > entry.LongestUptimeSeconds {
 							entry.LongestUptimeSeconds = sample.UptimeSeconds
 						}

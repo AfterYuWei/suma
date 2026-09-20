@@ -10,6 +10,8 @@ export const demoCredentials: DemoCredentials = { username: 'admin', password: '
 const now = '2026-08-29T08:30:00.000Z'
 const earlier = '2026-08-29T07:42:00.000Z'
 const sessionKey = 'suma-demo-session'
+const fleetOverviewRefreshSeconds = 10
+let fleetOverviewTick = 0
 
 const user: User = { id: 1, username: 'admin', nickname: 'Demo Admin', email: 'admin@suma.demo', has_avatar: false }
 
@@ -139,6 +141,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
   if (/^\/nodes\/[^/]+(?:\/test)?$/.test(pathname) && method !== 'GET') return clone(nodes.find((item) => pathname.includes(item.id)) ?? nodes[0]) as T
 
   if (pathname === '/fleet/overview') {
+    const refreshTick = fleetOverviewTick++
     const capacity: Record<string, { cpus: number; memory: number }> = {
       local: { cpus: 8, memory: 16 * 1024 ** 3 },
       'edge-hk': { cpus: 4, memory: 8 * 1024 ** 3 },
@@ -146,8 +149,30 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     }
     const fleetNodes = nodes.map((node, index) => {
       const containers = nodeContainers(node.id)
+      const metricContainers = containers
+        .filter((item) => item.state === 'running')
+        .map((item, containerIndex) => {
+          const sample = refreshTick + index + containerIndex
+          const cpuScale = 0.85 + sample % 6 * 0.06
+          const memoryScale = 0.99 + sample % 5 * 0.005
+          return {
+            id: item.id,
+            name: item.name,
+            image: item.image,
+            state: item.state,
+            available: true,
+            cpu_percent: item.cpu_percent * cpuScale,
+            memory_bytes: Math.round(item.memory_bytes * memoryScale),
+            network_rx_bytes: (containerIndex + 1) * 768 * 1024 ** 2 + refreshTick * (containerIndex + 1) * 8 * 1024 ** 2,
+            network_tx_bytes: (containerIndex + 1) * 256 * 1024 ** 2 + refreshTick * (containerIndex + 1) * 3 * 1024 ** 2,
+            block_read_bytes: (containerIndex + 1) * 512 * 1024 ** 2 + refreshTick * (containerIndex + 1) * 2 * 1024 ** 2,
+            block_write_bytes: (containerIndex + 1) * 192 * 1024 ** 2 + refreshTick * (containerIndex + 1) * 1024 ** 2,
+            uptime_seconds: item.uptime_seconds + refreshTick * fleetOverviewRefreshSeconds,
+          }
+        })
       return {
         ...node,
+        last_checked_at: new Date().toISOString(),
         hostname: node.name,
         os: 'Ubuntu 24.04 LTS',
         os_version: '24.04',
@@ -170,32 +195,14 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
         live_restore: index !== 1,
         security_options: ['name=apparmor', 'name=seccomp,profile=builtin'],
         metrics_available: true,
-        container_cpu_percent: containers.reduce((sum, item) => sum + item.cpu_percent, 0),
-        container_memory_bytes: containers.reduce((sum, item) => sum + item.memory_bytes, 0),
-        container_network_rx_bytes: (12 + index * 9) * 1024 ** 3,
-        container_network_tx_bytes: (4 + index * 5) * 1024 ** 3,
-        container_block_read_bytes: (8 + index * 6) * 1024 ** 3,
-        container_block_write_bytes: (3 + index * 4) * 1024 ** 3,
-        container_pids: 42 + index * 17,
-        longest_container_uptime_seconds: 86400 * (8 + index * 13) + 7200,
-        containers: containers
-          .filter((item) => item.state === 'running')
-          .map((item, containerIndex) => ({
-            id: item.id,
-            name: item.name,
-            image: item.image,
-            state: item.state,
-            available: true,
-            cpu_percent: item.cpu_percent,
-            memory_bytes: item.memory_bytes,
-            network_rx_bytes: (containerIndex + 1) * 768 * 1024 ** 2,
-            network_tx_bytes: (containerIndex + 1) * 256 * 1024 ** 2,
-            block_read_bytes: (containerIndex + 1) * 512 * 1024 ** 2,
-            block_write_bytes: (containerIndex + 1) * 192 * 1024 ** 2,
-            pids: 6 + containerIndex * 5,
-            uptime_seconds: item.uptime_seconds,
-          }))
-          .sort((left, right) => right.memory_bytes - left.memory_bytes),
+        container_cpu_percent: metricContainers.reduce((sum, item) => sum + item.cpu_percent, 0),
+        container_memory_bytes: metricContainers.reduce((sum, item) => sum + item.memory_bytes, 0),
+        container_network_rx_bytes: metricContainers.reduce((sum, item) => sum + item.network_rx_bytes, 0),
+        container_network_tx_bytes: metricContainers.reduce((sum, item) => sum + item.network_tx_bytes, 0),
+        container_block_read_bytes: metricContainers.reduce((sum, item) => sum + item.block_read_bytes, 0),
+        container_block_write_bytes: metricContainers.reduce((sum, item) => sum + item.block_write_bytes, 0),
+        longest_container_uptime_seconds: metricContainers.reduce((longest, item) => Math.max(longest, item.uptime_seconds), 0),
+        containers: metricContainers.sort((left, right) => right.memory_bytes - left.memory_bytes),
       }
     })
     return clone({ nodes: fleetNodes }) as T

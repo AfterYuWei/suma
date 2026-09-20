@@ -20,7 +20,6 @@ export interface FleetContainer {
   network_tx_bytes: number
   block_read_bytes: number
   block_write_bytes: number
-  pids: number
   uptime_seconds: number
 }
 
@@ -63,7 +62,6 @@ export interface FleetNode {
   container_network_tx_bytes: number
   container_block_read_bytes: number
   container_block_write_bytes: number
-  container_pids: number
   longest_container_uptime_seconds: number
   containers: FleetContainer[]
 }
@@ -133,10 +131,9 @@ function ContainerMetricsList({ containers, detailed, zh }: { containers: FleetC
                 <div className="text-right"><div className="text-[10px] text-muted-foreground">CPU</div><div className="text-xs font-medium tabular-nums">{container.available ? `${container.cpu_percent.toFixed(1)}%` : '—'}</div></div>
                 <div className="min-w-16 text-right"><div className="text-[10px] text-muted-foreground">{zh ? '内存' : 'Memory'}</div><div className="text-xs font-medium tabular-nums">{container.available ? bytes(container.memory_bytes) : '—'}</div></div>
                 {detailed && (
-                  <div className="col-span-3 ml-3 grid grid-cols-2 gap-x-4 gap-y-1 rounded-md bg-muted/30 px-2 py-1.5 text-[10px] sm:grid-cols-4">
+                  <div className="col-span-3 ml-3 grid grid-cols-2 gap-x-4 gap-y-1 rounded-md bg-muted/30 px-2 py-1.5 text-[10px] sm:grid-cols-3">
                     <div className="flex justify-between gap-2"><span className="text-muted-foreground">Network</span><span className="tabular-nums">{container.available ? `↓${bytes(container.network_rx_bytes)} ↑${bytes(container.network_tx_bytes)}` : '—'}</span></div>
                     <div className="flex justify-between gap-2"><span className="text-muted-foreground">Block I/O</span><span className="tabular-nums">{container.available ? `R ${bytes(container.block_read_bytes)} W ${bytes(container.block_write_bytes)}` : '—'}</span></div>
-                    <div className="flex justify-between gap-2"><span className="text-muted-foreground">PID</span><span className="tabular-nums">{container.available ? container.pids : '—'}</span></div>
                     <div className="flex justify-between gap-2"><span className="text-muted-foreground">{zh ? '运行时间' : 'Uptime'}</span><span className="tabular-nums">{container.available ? duration(container.uptime_seconds, zh) : '—'}</span></div>
                   </div>
                 )}
@@ -282,11 +279,10 @@ export function NodeOverviewCard({ node, size, isDragging, onSizeChange, onOrder
                 <Metric icon={MemoryStick} label={zh ? '容器内存' : 'Container memory'} value={memoryLoad == null ? unavailable : `${memoryLoad.toFixed(1)}%`} detail={metricsAvailable ? `${bytes(node.container_memory_bytes)} / ${bytes(node.memory_total_bytes)}` : undefined} bar={memoryLoad ?? undefined} />
                 <Metric icon={Boxes} label="Docker disk" value={node.docker_disk_usage_bytes == null ? unavailable : bytes(node.docker_disk_usage_bytes)} detail={zh ? '镜像、容器、卷与构建缓存' : 'Images, containers, volumes, and build cache'} />
               </div>
-              <dl className="mt-3 grid grid-cols-3 gap-3 border-t pt-3 text-xs sm:grid-cols-6">
+              <dl className="mt-3 grid grid-cols-3 gap-3 border-t pt-3 text-xs sm:grid-cols-5">
                 <div><dt className="text-muted-foreground">{zh ? '镜像' : 'Images'}</dt><dd className="mt-1 font-medium tabular-nums">{available ? node.images : unavailable}</dd></div>
                 <div><dt className="text-muted-foreground">{zh ? '网络' : 'Networks'}</dt><dd className="mt-1 font-medium tabular-nums">{node.networks ?? unavailable}</dd></div>
                 <div><dt className="text-muted-foreground">{zh ? '存储卷' : 'Volumes'}</dt><dd className="mt-1 font-medium tabular-nums">{node.volumes ?? unavailable}</dd></div>
-                <div><dt className="text-muted-foreground">PID</dt><dd className="mt-1 font-medium tabular-nums">{metricsAvailable ? node.container_pids : unavailable}</dd></div>
                 <div><dt className="text-muted-foreground">Engine</dt><dd className="mt-1 truncate font-mono">{available ? node.engine_version || unavailable : unavailable}</dd></div>
                 <div><dt className="text-muted-foreground">{zh ? '最长运行' : 'Longest uptime'}</dt><dd className="mt-1 truncate font-medium tabular-nums">{metricsAvailable ? duration(node.longest_container_uptime_seconds, zh) : unavailable}</dd></div>
               </dl>
@@ -306,10 +302,9 @@ export function NodeOverviewCard({ node, size, isDragging, onSizeChange, onOrder
                 <Metric icon={MemoryStick} label={zh ? '容器内存' : 'Container memory'} value={metricsAvailable ? bytes(node.container_memory_bytes) : unavailable} detail={metricsAvailable ? `${memoryLoad?.toFixed(1)}% · ${bytes(node.memory_total_bytes)} ${zh ? '总容量' : 'total'}` : undefined} bar={memoryLoad ?? undefined} />
                 <Metric icon={Boxes} label="Docker disk" value={node.docker_disk_usage_bytes == null ? unavailable : bytes(node.docker_disk_usage_bytes)} detail={zh ? `${node.images} 镜像 · ${node.volumes ?? '—'} 存储卷` : `${node.images} images · ${node.volumes ?? '—'} volumes`} />
               </div>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <Metric icon={Server} label="Network RX / TX" value={metricsAvailable ? bytes(node.container_network_rx_bytes) : unavailable} detail={metricsAvailable ? `${bytes(node.container_network_tx_bytes)} TX` : undefined} />
                 <Metric icon={Server} label="Block read / write" value={metricsAvailable ? bytes(node.container_block_read_bytes) : unavailable} detail={metricsAvailable ? `${bytes(node.container_block_write_bytes)} write` : undefined} />
-                <Metric icon={Container} label={zh ? '容器进程' : 'Container processes'} value={metricsAvailable ? String(node.container_pids) : unavailable} detail="PIDs" />
                 <Metric icon={Container} label={zh ? '最长容器运行时间' : 'Longest container uptime'} value={metricsAvailable ? duration(node.longest_container_uptime_seconds, zh) : unavailable} />
               </div>
               <div className="mt-4 grid gap-4 border-t pt-4 md:grid-cols-3">
