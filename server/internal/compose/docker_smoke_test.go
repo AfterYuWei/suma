@@ -154,6 +154,11 @@ func TestRealDockerProjectTakeover(t *testing.T) {
 	if runtimeDraft.Source != "runtime" || !containsWarning(runtimeDraft.Warnings, "rebuilt from runtime") {
 		t.Fatalf("runtime fallback = %#v", runtimeDraft)
 	}
+	for _, noise := range []string{"command:", "entrypoint:", "hostname:", "ipc:", "shm_size:", "stop_signal:", "expose:", "networks:"} {
+		if strings.Contains(runtimeDraft.Compose, noise) {
+			t.Fatalf("runtime fallback retained default field %q:\n%s", noise, runtimeDraft.Compose)
+		}
+	}
 	if err := os.Rename(missing, base); err != nil {
 		t.Fatal(err)
 	}

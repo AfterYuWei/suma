@@ -6,10 +6,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/goccy/go-yaml"
 	containerdomain "github.com/suma/suma/server/internal/container"
 )
 
@@ -40,7 +42,7 @@ func TestBuildTakeoverDraftPrefersCompleteMappedProject(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &reconstructionRunner{
-		rendered: `{"name":"shop","services":{"web":{"image":"app:v1","build":{"context":"."},"environment":{"MODE":"prod","PASSWORD":"secret"},"labels":{"team":"infra","com.docker.compose.project":"shop","com.docker.compose.project.working_dir":"/old"},"ports":[{"target":80,"published":8080,"protocol":"tcp","mode":"inbox"}]}}}`,
+		rendered: `{"name":"shop","services":{"web":{"image":"app:v1","build":{"context":"."},"environment":{"MODE":"prod","PASSWORD":"secret"},"labels":{"team":"infra","com.docker.compose.project":"shop","com.docker.compose.project.working_dir":"/old"},"ports":[{"target":80,"published":8080,"protocol":"tcp","mode":"ingress"}]}}}`,
 		hashes:   map[string]string{"web": "expected-hash"},
 	}
 	containers := observableContainers{
@@ -61,11 +63,53 @@ func TestBuildTakeoverDraftPrefersCompleteMappedProject(t *testing.T) {
 	if strings.Contains(draft.Compose, "build:") || !strings.Contains(draft.Environment, "PASSWORD='secret'") {
 		t.Fatalf("rendered files:\n%s\n%s", draft.Compose, draft.Environment)
 	}
-	if !strings.Contains(draft.Compose, "team") || strings.Contains(draft.Compose, "com.docker.compose") || strings.Contains(draft.Compose, "protocol") || strings.Contains(draft.Compose, "inbox") {
+	if !strings.Contains(draft.Compose, "team") || strings.Contains(draft.Compose, "com.docker.compose") || strings.Contains(draft.Compose, "protocol") || strings.Contains(draft.Compose, "ingress") {
 		t.Fatalf("mapped draft was not pruned:\n%s", draft.Compose)
 	}
 	if draft.Observation.Services[0].DriftStatus != "runtime_drift" {
 		t.Fatalf("expected source hash drift: %#v", draft.Observation.Services[0])
+	}
+}
+
+func TestBuildTakeoverDraftCompactsMinimalMappedCompose(t *testing.T) {
+	sourceRoot := t.TempDir()
+	file := filepath.Join(sourceRoot, "compose.yml")
+	if err := os.WriteFile(file, []byte("services:\n  web:\n    image: nginx:alpine\n    ports:\n      - \"8080:80\"\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	runner := &reconstructionRunner{rendered: `{
+  "name": "shop",
+  "networks": {"default": {"name": "shop_default", "ipam": {}}},
+  "services": {"web": {
+    "command": null,
+    "entrypoint": null,
+    "image": "nginx:alpine",
+    "networks": {"default": null},
+	    "ports": [{"mode": "ingress", "target": 80, "published": "8080", "protocol": "tcp"}]
+	  }}
+	}`}
+	containers := observableContainers{
+		staticContainers: staticContainers{rows: []containerdomain.Summary{{ID: "web", Labels: map[string]string{ProjectLabel: "shop", WorkingDirLabel: sourceRoot, ConfigFilesLabel: file}}}},
+		snapshot:         RuntimeProjectSnapshot{ProjectName: "shop", Containers: []RuntimeContainer{{ID: "web", Service: "web", Config: RuntimeConfig{Image: "nginx:alpine"}}}},
+	}
+	service := &Service{root: t.TempDir(), runner: runner, containers: containers, localSources: true}
+	draft, err := service.BuildTakeoverDraft(context.Background(), "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := yaml.Unmarshal([]byte(draft.Compose), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"name": "shop",
+		"services": map[string]any{"web": map[string]any{
+			"image": "nginx:alpine",
+			"ports": []any{"8080:80"},
+		}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("minimal mapped draft mismatch:\n got %#v\nwant %#v\n%s", got, want, draft.Compose)
 	}
 }
 
@@ -209,7 +253,7 @@ func TestBuildTakeoverDraftFallsBackToWholeRuntimeProject(t *testing.T) {
 		staticContainers: staticContainers{rows: []containerdomain.Summary{{ID: "web-1", Labels: map[string]string{ProjectLabel: "shop"}}}},
 		snapshot: RuntimeProjectSnapshot{
 			ProjectName: "shop",
-			Containers:  []RuntimeContainer{{ID: "web-1", Name: "shop-web-1", Service: "web", ContainerNumber: 1, CreatedAt: time.Unix(1, 0), ImageInspectOK: true, ImageEnvironment: []string{"PATH=/usr/bin"}, Config: config}},
+			Containers:  []RuntimeContainer{{ID: "web-1", Name: "shop-web-1", Service: "web", ContainerNumber: 1, CreatedAt: time.Unix(1, 0), ImageInspectOK: true, ImageDefaults: RuntimeImageDefaults{Environment: []string{"PATH=/usr/bin"}}, Config: config}},
 			Networks:    []RuntimeNetwork{{ID: "net", Name: "shop_default", Driver: "bridge", Labels: map[string]string{ProjectLabel: "shop", "com.docker.compose.network": "default"}}},
 			Volumes:     []RuntimeVolume{{Name: "shop_data", Driver: "local", Labels: map[string]string{ProjectLabel: "shop", "com.docker.compose.volume": "data"}}},
 		},
@@ -232,7 +276,7 @@ func TestBuildTakeoverDraftFallsBackToWholeRuntimeProject(t *testing.T) {
 	if strings.Contains(draft.Compose, "PATH") || !strings.Contains(draft.Compose, "MODE") || !strings.Contains(draft.Compose, "DATABASE_PASSWORD") || !strings.Contains(draft.Environment, "DATABASE_PASSWORD='secret'") {
 		t.Fatalf("rendered files:\n%s\n%s", draft.Compose, draft.Environment)
 	}
-	if !strings.Contains(draft.Compose, "shop_default") || !strings.Contains(draft.Compose, "shop_data") {
+	if strings.Contains(draft.Compose, "shop_default") || !strings.Contains(draft.Compose, "shop_data") {
 		t.Fatalf("Project resources missing:\n%s", draft.Compose)
 	}
 }
@@ -257,8 +301,8 @@ func TestBuildTakeoverDraftPrunesRuntimeNoise(t *testing.T) {
 		snapshot: RuntimeProjectSnapshot{
 			ProjectName: "shop",
 			Containers: []RuntimeContainer{
-				{ID: "web-1", Name: "shop-web-1", Service: "web", ImageInspectOK: true, ImageEnvironment: []string{"PATH=/usr/bin"}, Config: defaults},
-				{ID: "worker-1", Name: "shop-worker-1", Service: "worker", ImageInspectOK: true, ImageEnvironment: []string{"PATH=/usr/bin"}, Config: overrides},
+				{ID: "web-1", Name: "shop-web-1", Service: "web", ImageInspectOK: true, ImageDefaults: RuntimeImageDefaults{Environment: []string{"PATH=/usr/bin"}}, Config: defaults},
+				{ID: "worker-1", Name: "shop-worker-1", Service: "worker", ImageInspectOK: true, ImageDefaults: RuntimeImageDefaults{Environment: []string{"PATH=/usr/bin"}}, Config: overrides},
 			},
 			Networks: []RuntimeNetwork{{ID: "net", Name: "shop_default", Driver: "bridge", Labels: map[string]string{ProjectLabel: "shop", "com.docker.compose.network": "default"}}},
 			Volumes:  []RuntimeVolume{{Name: "shop_data", Driver: "local", Labels: map[string]string{ProjectLabel: "shop", "com.docker.compose.volume": "data"}}},
@@ -270,15 +314,98 @@ func TestBuildTakeoverDraftPrunesRuntimeNoise(t *testing.T) {
 		t.Fatal(err)
 	}
 	compose := draft.Compose
-	for _, noise := range []string{"com.docker.compose", "protocol: tcp", "rprivate", "10s", "SIGTERM", "0.0.0.0", "aliases"} {
+	for _, noise := range []string{"com.docker.compose", "protocol: tcp", "rprivate", "10s", "SIGTERM", "0.0.0.0", "aliases", "shop_data"} {
 		if strings.Contains(compose, noise) {
 			t.Fatalf("runtime noise %q survived in draft:\n%s", noise, compose)
 		}
 	}
-	for _, kept := range []string{"custom-label", "team", "udp", "192.168.1.10", "slave", "25s", "SIGINT", "shop_default", "shop_data"} {
+	for _, kept := range []string{"custom-label", "team", "udp", "192.168.1.10", "slave", "25s", "SIGINT"} {
 		if !strings.Contains(compose, kept) {
 			t.Fatalf("meaningful content %q was lost from draft:\n%s", kept, compose)
 		}
+	}
+}
+
+func TestBuildTakeoverDraftSubtractsImageAndEngineDefaults(t *testing.T) {
+	id := strings.Repeat("a", 64)
+	anonymousVolume := strings.Repeat("b", 64)
+	health := &RuntimeHealth{Test: []string{"CMD-SHELL", "curl -f http://localhost/ || exit 1"}, Interval: int64(30 * time.Second), Timeout: int64(3 * time.Second), Retries: 3}
+	command := []string{"nginx", "-g", "daemon off;"}
+	entrypoint := []string{"/docker-entrypoint.sh"}
+	config := RuntimeConfig{
+		Image: "nginx:alpine", Command: command, Entrypoint: entrypoint,
+		Environment: []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+		Healthcheck: health, StopSignal: "SIGQUIT", Hostname: id[:12], IPCMode: "private", ShmSize: 64 * 1024 * 1024,
+		Ports:    []RuntimePort{{Target: 80, Published: 8080, Protocol: "tcp"}, {Target: 443, Protocol: "tcp"}},
+		Mounts:   []RuntimeMount{{Type: "volume", Name: anonymousVolume, Source: anonymousVolume, Target: "/var/cache/nginx"}},
+		Networks: []RuntimeEndpoint{{Name: "shop_default", Aliases: []string{"web"}}},
+	}
+	containers := observableContainers{
+		staticContainers: staticContainers{rows: []containerdomain.Summary{{ID: id, Labels: map[string]string{ProjectLabel: "shop"}}}},
+		snapshot: RuntimeProjectSnapshot{
+			ProjectName: "shop",
+			Containers: []RuntimeContainer{{
+				ID: id, Name: "shop-web-1", Service: "web", ImageInspectOK: true, Config: config,
+				ImageDefaults: RuntimeImageDefaults{Command: command, Entrypoint: entrypoint, Environment: config.Environment, Healthcheck: health, StopSignal: "SIGQUIT", ExposedPorts: []RuntimePort{{Target: 80, Protocol: "tcp"}, {Target: 443, Protocol: "tcp"}}, VolumeTargets: []string{"/var/cache/nginx"}},
+			}},
+			Networks: []RuntimeNetwork{{ID: "net", Name: "shop_default", Driver: "bridge", Labels: map[string]string{ProjectLabel: "shop", "com.docker.compose.network": "default"}}},
+			Volumes:  []RuntimeVolume{{Name: anonymousVolume, Driver: "local"}},
+		},
+	}
+	service := &Service{root: t.TempDir(), containers: containers, nodeID: "tcp-node"}
+	draft, err := service.BuildTakeoverDraft(context.Background(), "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := yaml.Unmarshal([]byte(draft.Compose), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"name": "shop",
+		"services": map[string]any{"web": map[string]any{
+			"image": "nginx:alpine",
+			"ports": []any{"8080:80"},
+		}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("minimal runtime draft mismatch:\n got %#v\nwant %#v\n%s", got, want, draft.Compose)
+	}
+}
+
+func TestBuildTakeoverDraftKeepsNamedVolumeAtImageVolumeTarget(t *testing.T) {
+	id := strings.Repeat("c", 64)
+	config := RuntimeConfig{
+		Image:  "app:v1",
+		Mounts: []RuntimeMount{{Type: "volume", Name: "shared-cache", Source: "shared-cache", Target: "/cache"}},
+	}
+	containers := observableContainers{
+		staticContainers: staticContainers{rows: []containerdomain.Summary{{ID: id, Labels: map[string]string{ProjectLabel: "shop"}}}},
+		snapshot: RuntimeProjectSnapshot{
+			ProjectName: "shop",
+			Containers: []RuntimeContainer{{
+				ID: id, Service: "web", ImageInspectOK: true, Config: config,
+				ImageDefaults: RuntimeImageDefaults{VolumeTargets: []string{"/cache"}},
+			}},
+			Volumes: []RuntimeVolume{{Name: "shared-cache", Driver: "local"}},
+		},
+	}
+	service := &Service{root: t.TempDir(), containers: containers, nodeID: "tcp-node"}
+	draft, err := service.BuildTakeoverDraft(context.Background(), "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kept := range []string{"shared-cache", "/cache", "external: true"} {
+		if !strings.Contains(draft.Compose, kept) {
+			t.Fatalf("named image-target volume content %q was lost:\n%s", kept, draft.Compose)
+		}
+	}
+}
+
+func TestRuntimeServicePreservesRestartRetryLimit(t *testing.T) {
+	service := runtimeServiceModel(RuntimeConfig{Image: "app:v1", Restart: RuntimeRestart{Name: "on-failure", MaximumRetryCount: 5}}, 1)
+	if service["restart"] != "on-failure:5" {
+		t.Fatalf("restart = %#v", service["restart"])
 	}
 }
 
@@ -321,8 +448,8 @@ func TestRenderTakeoverDraftAlwaysExcludesImageDefaults(t *testing.T) {
 		staticContainers: staticContainers{rows: []containerdomain.Summary{{ID: "web", Labels: map[string]string{ProjectLabel: "shop"}}}},
 		snapshot: RuntimeProjectSnapshot{ProjectName: "shop", Containers: []RuntimeContainer{{
 			ID: "web", Service: "web", ImageInspectOK: true,
-			ImageEnvironment: []string{"PATH=/usr/bin"},
-			Config:           RuntimeConfig{Image: "app:v1", Environment: []string{"PATH=/usr/bin"}},
+			ImageDefaults: RuntimeImageDefaults{Environment: []string{"PATH=/usr/bin"}},
+			Config:        RuntimeConfig{Image: "app:v1", Environment: []string{"PATH=/usr/bin"}},
 		}}},
 	}
 	service := &Service{root: t.TempDir(), containers: containers, nodeID: "tcp-node"}

@@ -228,6 +228,11 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
       const rest = projectMatch[2] || ''
       const row = projects.find((item) => item.name === name) ?? projects[0]
       if (!rest && method === 'GET') return clone(projectDetail(row)) as T
+      if (!rest && method === 'DELETE') {
+        const index = projects.findIndex((item) => item.name === name)
+        if (index >= 0) projects.splice(index, 1)
+        return clone({ name }) as T
+      }
       if (rest === '/services') return clone(containers.filter((item) => item.labels['com.docker.compose.project'] === name)) as T
       if (rest === '/logs') return clone({ logs: 'gateway  | SUMA demo service ready\ngateway  | GET /health 200 1ms\ndatabase | checkpoint complete' }) as T
       if (rest === '/takeover/preview' || rest === '/takeover/render') {

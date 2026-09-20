@@ -17,6 +17,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { TooltipHint } from '../components/ui/tooltip-hint'
 import { confirmExternalProjectCleanup } from '../features/compose/external-project-cleanup'
+import { confirmManagedProjectRemoval } from '../features/compose/managed-project-removal'
 import { TakeoverWarningDialog } from '../features/compose/takeover-warning-dialog'
 import type { Project } from '../features/compose/types'
 import { LogTailSelect } from '../features/containers/log-tail-select'
@@ -25,7 +26,7 @@ import type { ContainerMetrics, ContainerSummary } from '../features/containers/
 import { api } from '../lib/api'
 import { nodePath } from '../lib/nodes'
 import { useI18n } from '../lib/i18n'
-import { confirmDialog, promptDialog } from '../stores/dialog'
+import { confirmDialog } from '../stores/dialog'
 import { useUIStore } from '../stores/ui'
 import { ResourceFrame } from './images'
 
@@ -169,8 +170,9 @@ export function ComposeDetailPage() {
     await action.mutateAsync('update')
   }
   const remove = async () => {
-    if (await promptDialog({ title: t('removeProject'), description: t('removeProjectDescription'), confirmLabel: t('remove'), danger: true, input: { label: t('typeToConfirm', { value: projectName }), requiredValue: projectName } }) !== projectName) return
-    await api(nodePath(nodeID, `/projects/compose/${encodedName}?confirm=${encodedName}`), { method: 'DELETE' })
+    const result = await confirmManagedProjectRemoval(projectName, zh)
+    if (!result) return
+    await api(nodePath(nodeID, `/projects/compose/${encodedName}?confirm=${encodedName}&force=true&preserve_volumes=${!result.checked}`), { method: 'DELETE' })
     void navigate({ to: '/projects' })
   }
   const cleanupExternal = async () => {

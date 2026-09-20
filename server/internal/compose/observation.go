@@ -34,20 +34,36 @@ type RuntimeProjectSnapshot struct {
 }
 
 type RuntimeContainer struct {
-	ID               string            `json:"id"`
-	Name             string            `json:"name"`
-	Service          string            `json:"service"`
-	ContainerNumber  int               `json:"container_number"`
-	ConfigHash       string            `json:"config_hash"`
-	OneOff           bool              `json:"one_off"`
-	CreatedAt        time.Time         `json:"created_at"`
-	State            string            `json:"state"`
-	ImageReference   string            `json:"image_reference"`
-	ImageID          string            `json:"image_id"`
-	ImageEnvironment []string          `json:"image_environment,omitempty"`
-	ImageInspectOK   bool              `json:"image_inspect_ok"`
-	Config           RuntimeConfig     `json:"config"`
-	Labels           map[string]string `json:"labels"`
+	ID              string               `json:"id"`
+	Name            string               `json:"name"`
+	Service         string               `json:"service"`
+	ContainerNumber int                  `json:"container_number"`
+	ConfigHash      string               `json:"config_hash"`
+	OneOff          bool                 `json:"one_off"`
+	CreatedAt       time.Time            `json:"created_at"`
+	State           string               `json:"state"`
+	ImageReference  string               `json:"image_reference"`
+	ImageID         string               `json:"image_id"`
+	ImageDefaults   RuntimeImageDefaults `json:"image_defaults,omitempty"`
+	ImageInspectOK  bool                 `json:"image_inspect_ok"`
+	Config          RuntimeConfig        `json:"config"`
+	Labels          map[string]string    `json:"labels"`
+}
+
+// RuntimeImageDefaults contains image-owned configuration that Docker copies
+// into every created container. Runtime reconstruction subtracts these values
+// so the generated Compose draft contains service overrides, not Dockerfile
+// defaults that the image restores on its own.
+type RuntimeImageDefaults struct {
+	Command          []string       `json:"command,omitempty"`
+	Entrypoint       []string       `json:"entrypoint,omitempty"`
+	User             string         `json:"user,omitempty"`
+	WorkingDirectory string         `json:"working_directory,omitempty"`
+	Environment      []string       `json:"environment,omitempty"`
+	Healthcheck      *RuntimeHealth `json:"healthcheck,omitempty"`
+	StopSignal       string         `json:"stop_signal,omitempty"`
+	ExposedPorts     []RuntimePort  `json:"exposed_ports,omitempty"`
+	VolumeTargets    []string       `json:"volume_targets,omitempty"`
 }
 
 type RuntimeConfig struct {

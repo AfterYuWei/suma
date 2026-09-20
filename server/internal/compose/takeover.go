@@ -165,18 +165,26 @@ func validateTakeoverProjectName(name, content, environment string) error {
 }
 
 func dotEnvValue(environment, key string) (string, bool) {
+	var result string
+	found := false
 	for _, line := range strings.Split(environment, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		current, value, ok := strings.Cut(strings.TrimPrefix(line, "export "), "=")
+		if strings.HasPrefix(line, "export") {
+			rest := strings.TrimPrefix(line, "export")
+			if len(rest) > 0 && (rest[0] == ' ' || rest[0] == '\t') {
+				line = strings.TrimSpace(rest)
+			}
+		}
+		current, value, ok := strings.Cut(line, "=")
 		if !ok || strings.TrimSpace(current) != key {
 			continue
 		}
-		return unquoteDotEnv(strings.TrimSpace(value)), true
+		result, found = unquoteDotEnv(strings.TrimSpace(value)), true
 	}
-	return "", false
+	return result, found
 }
 
 func unquoteDotEnv(value string) string {

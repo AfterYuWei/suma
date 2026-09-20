@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -212,8 +213,14 @@ func runtimeComposeModel(name string, snapshot RuntimeProjectSnapshot, observati
 	model := map[string]any{"name": name, "services": map[string]any{}}
 	services := model["services"].(map[string]any)
 	byContainer := map[string]RuntimeContainer{}
+	anonymousVolumes := map[string]bool{}
 	for _, container := range snapshot.Containers {
 		byContainer[container.ID] = container
+	}
+	for _, volume := range snapshot.Volumes {
+		if volume.Labels["com.docker.compose.volume"] == "" && isAnonymousVolumeName(volume.Name) {
+			anonymousVolumes[volume.Name] = true
+		}
 	}
 	variables := []EnvironmentCandidate{}
 	for _, observed := range observation.Services {
@@ -221,17 +228,108 @@ func runtimeComposeModel(name string, snapshot RuntimeProjectSnapshot, observati
 			continue
 		}
 		config := observed.ConfigVariants[0].Config
+		var container RuntimeContainer
+		if len(observed.ConfigVariants[0].Instances) > 0 {
+			container = byContainer[observed.ConfigVariants[0].Instances[0]]
+			config = subtractRuntimeDefaults(config, container, anonymousVolumes)
+		}
 		service := runtimeServiceModel(config, observed.DesiredReplicas)
 		services[observed.Name] = service
 		if len(observed.ConfigVariants[0].Instances) == 0 {
 			continue
 		}
-		container := byContainer[observed.ConfigVariants[0].Instances[0]]
-		variables = append(variables, inferRuntimeEnvironment(observed.Name, container.Config.Environment, container.ImageEnvironment, container.ImageInspectOK)...)
+		variables = append(variables, inferRuntimeEnvironment(observed.Name, container.Config.Environment, container.ImageDefaults.Environment, container.ImageInspectOK)...)
 		delete(service, "environment")
 	}
 	addRuntimeResources(model, name, observation)
 	return model, variables
+}
+
+func subtractRuntimeDefaults(config RuntimeConfig, container RuntimeContainer, anonymousVolumes map[string]bool) RuntimeConfig {
+	if container.ImageInspectOK {
+		defaults := container.ImageDefaults
+		if reflect.DeepEqual(config.Command, defaults.Command) {
+			config.Command = nil
+		}
+		if reflect.DeepEqual(config.Entrypoint, defaults.Entrypoint) {
+			config.Entrypoint = nil
+		}
+		if config.User == defaults.User {
+			config.User = ""
+		}
+		if config.WorkingDirectory == defaults.WorkingDirectory {
+			config.WorkingDirectory = ""
+		}
+		if reflect.DeepEqual(config.Healthcheck, defaults.Healthcheck) {
+			config.Healthcheck = nil
+		}
+		if config.StopSignal == defaults.StopSignal || (defaults.StopSignal == "" && config.StopSignal == "SIGTERM") {
+			config.StopSignal = ""
+		}
+		config.Ports = subtractImageExposedPorts(config.Ports, defaults.ExposedPorts)
+		config.Mounts = subtractImageVolumeMounts(config.Mounts, defaults.VolumeTargets, anonymousVolumes)
+	}
+	if isGeneratedContainerHostname(config.Hostname, container.ID) {
+		config.Hostname = ""
+	}
+	if config.IPCMode == "private" {
+		config.IPCMode = ""
+	}
+	if config.ShmSize == 64*1024*1024 {
+		config.ShmSize = 0
+	}
+	if config.Init != nil && !*config.Init {
+		config.Init = nil
+	}
+	return config
+}
+
+func subtractImageExposedPorts(ports, defaults []RuntimePort) []RuntimePort {
+	imagePorts := map[string]bool{}
+	for _, port := range defaults {
+		imagePorts[strconv.Itoa(int(port.Target))+"/"+port.Protocol] = true
+	}
+	result := make([]RuntimePort, 0, len(ports))
+	for _, port := range ports {
+		key := strconv.Itoa(int(port.Target)) + "/" + port.Protocol
+		if port.Published == 0 && imagePorts[key] {
+			continue
+		}
+		result = append(result, port)
+	}
+	return result
+}
+
+func subtractImageVolumeMounts(mounts []RuntimeMount, targets []string, anonymousVolumes map[string]bool) []RuntimeMount {
+	imageTargets := map[string]bool{}
+	for _, target := range targets {
+		imageTargets[target] = true
+	}
+	result := make([]RuntimeMount, 0, len(mounts))
+	for _, mount := range mounts {
+		if mount.Type == "volume" && imageTargets[mount.Target] && anonymousVolumes[mount.Name] {
+			continue
+		}
+		result = append(result, mount)
+	}
+	return result
+}
+
+func isGeneratedContainerHostname(hostname, id string) bool {
+	return len(id) >= 12 && isHexString(id) && hostname == id[:12]
+}
+
+func isAnonymousVolumeName(name string) bool {
+	return len(name) == 64 && isHexString(name)
+}
+
+func isHexString(value string) bool {
+	for _, char := range value {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
+			return false
+		}
+	}
+	return value != ""
 }
 
 func runtimeServiceModel(config RuntimeConfig, replicas int) map[string]any {
@@ -267,7 +365,11 @@ func runtimeServiceModel(config RuntimeConfig, replicas int) map[string]any {
 		service["scale"] = replicas
 	}
 	if config.Restart.Name != "" && config.Restart.Name != "no" {
-		service["restart"] = config.Restart.Name
+		restart := config.Restart.Name
+		if restart == "on-failure" && config.Restart.MaximumRetryCount > 0 {
+			restart += ":" + strconv.Itoa(config.Restart.MaximumRetryCount)
+		}
+		service["restart"] = restart
 	}
 	if config.Healthcheck != nil {
 		health := map[string]any{"test": config.Healthcheck.Test}
@@ -346,7 +448,29 @@ func isExplicitNetworkMode(value string) bool {
 func addRuntimeResources(model map[string]any, projectName string, observation ObservedComposeProject) {
 	networks, volumes := map[string]any{}, map[string]any{}
 	networkAliases, volumeAliases := map[string]string{}, map[string]string{}
+	usedNetworks, usedVolumes := map[string]bool{}, map[string]bool{}
+	services, _ := model["services"].(map[string]any)
+	for _, raw := range services {
+		service, _ := raw.(map[string]any)
+		if values, ok := service["networks"].(map[string]any); ok {
+			for name := range values {
+				usedNetworks[name] = true
+			}
+		}
+		if values, ok := service["volumes"].([]any); ok {
+			for _, rawMount := range values {
+				mount, _ := rawMount.(map[string]any)
+				if mount["type"] == "volume" {
+					name, _ := mount["source"].(string)
+					usedVolumes[name] = true
+				}
+			}
+		}
+	}
 	for _, network := range observation.Networks {
+		if !usedNetworks[network.Name] {
+			continue
+		}
 		alias := network.Labels["com.docker.compose.network"]
 		if alias == "" {
 			alias = safeModelName(network.Name)
@@ -361,6 +485,9 @@ func addRuntimeResources(model map[string]any, projectName string, observation O
 		networks[alias] = entry
 	}
 	for _, volume := range observation.Volumes {
+		if !usedVolumes[volume.Name] {
+			continue
+		}
 		alias := volume.Labels["com.docker.compose.volume"]
 		if alias == "" {
 			alias = safeModelName(volume.Name)
@@ -374,7 +501,6 @@ func addRuntimeResources(model map[string]any, projectName string, observation O
 		setIf(entry, "driver_opts", volume.Options, len(volume.Options) > 0)
 		volumes[alias] = entry
 	}
-	services, _ := model["services"].(map[string]any)
 	for _, raw := range services {
 		service, _ := raw.(map[string]any)
 		if values, ok := service["networks"].(map[string]any); ok {
@@ -504,12 +630,22 @@ func pruneTakeoverModel(model map[string]any) {
 		if !ok {
 			continue
 		}
+		pruneServiceNullDefaults(service)
 		pruneServiceComposeLabels(service)
 		pruneServicePortDefaults(service)
 		pruneServiceMountDefaults(service)
 		pruneServiceStopDefaults(service)
 		pruneServiceSelfAliases(service, name)
 		pruneEmptyServiceMaps(service)
+	}
+	pruneImplicitDefaultNetwork(model)
+}
+
+func pruneServiceNullDefaults(service map[string]any) {
+	for _, key := range []string{"command", "entrypoint"} {
+		if value, exists := service[key]; exists && value == nil {
+			delete(service, key)
+		}
 	}
 }
 
@@ -538,15 +674,70 @@ func pruneServiceComposeLabels(service map[string]any) {
 
 func pruneServicePortDefaults(service map[string]any) {
 	ports, _ := service["ports"].([]any)
+	compacted := make([]any, 0, len(ports))
 	for _, raw := range ports {
 		port, ok := raw.(map[string]any)
 		if !ok {
+			compacted = append(compacted, raw)
 			continue
 		}
 		deleteIfDefaultValue(port, "protocol", "tcp")
 		deleteIfDefaultValue(port, "host_ip", "", "0.0.0.0")
-		deleteIfDefaultValue(port, "mode", "", "inbox")
+		deleteIfDefaultValue(port, "mode", "", "ingress")
+		if value, ok := compactPortValue(port); ok {
+			compacted = append(compacted, value)
+		} else {
+			compacted = append(compacted, port)
+		}
 	}
+	if len(compacted) > 0 {
+		service["ports"] = compacted
+	}
+}
+
+func compactPortValue(port map[string]any) (string, bool) {
+	for key := range port {
+		if key != "target" && key != "published" && key != "host_ip" && key != "protocol" {
+			return "", false
+		}
+	}
+	target, targetOK := composeScalarString(port["target"])
+	published, publishedOK := composeScalarString(port["published"])
+	if !targetOK || !publishedOK || target == "" || published == "" {
+		return "", false
+	}
+	host, _ := composeScalarString(port["host_ip"])
+	if strings.Contains(host, ":") && !(strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]")) {
+		host = "[" + host + "]"
+	}
+	protocol, _ := composeScalarString(port["protocol"])
+	value := published + ":" + target
+	if host != "" {
+		value = host + ":" + value
+	}
+	return value + protocolSuffix(protocol), true
+}
+
+func composeScalarString(value any) (string, bool) {
+	switch typed := value.(type) {
+	case nil:
+		return "", false
+	case string:
+		return typed, true
+	case json.Number:
+		return typed.String(), true
+	case int:
+		return strconv.Itoa(typed), true
+	case int64:
+		return strconv.FormatInt(typed, 10), true
+	case uint16:
+		return strconv.FormatUint(uint64(typed), 10), true
+	case float64:
+		if typed == float64(int64(typed)) {
+			return strconv.FormatInt(int64(typed), 10), true
+		}
+	}
+	return "", false
 }
 
 func pruneServiceMountDefaults(service map[string]any) {
@@ -566,7 +757,6 @@ func pruneServiceMountDefaults(service map[string]any) {
 
 func pruneServiceStopDefaults(service map[string]any) {
 	deleteIfDefaultValue(service, "stop_grace_period", "10s")
-	deleteIfDefaultValue(service, "stop_signal", "SIGTERM")
 }
 
 func pruneServiceSelfAliases(service map[string]any, serviceName string) {
@@ -613,6 +803,79 @@ func pruneEmptyServiceMaps(service map[string]any) {
 			delete(service, key)
 		}
 	}
+}
+
+func pruneImplicitDefaultNetwork(model map[string]any) {
+	networks, _ := model["networks"].(map[string]any)
+	defaultNetwork, exists := networks["default"]
+	if !exists || !isImplicitDefaultNetwork(defaultNetwork, stringValue(model["name"])) {
+		return
+	}
+	services, _ := model["services"].(map[string]any)
+	for _, raw := range services {
+		service, _ := raw.(map[string]any)
+		serviceNetworks, _ := service["networks"].(map[string]any)
+		attachment, attached := serviceNetworks["default"]
+		if !attached || len(serviceNetworks) != 1 || !isBareNetworkAttachment(attachment) {
+			continue
+		}
+		delete(service, "networks")
+	}
+	for _, raw := range services {
+		service, _ := raw.(map[string]any)
+		serviceNetworks, _ := service["networks"].(map[string]any)
+		if _, stillUsed := serviceNetworks["default"]; stillUsed {
+			return
+		}
+	}
+	delete(networks, "default")
+	if len(networks) == 0 {
+		delete(model, "networks")
+	}
+}
+
+func isImplicitDefaultNetwork(value any, projectName string) bool {
+	if value == nil {
+		return true
+	}
+	entry, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	for key, raw := range entry {
+		switch key {
+		case "name":
+			name, _ := raw.(string)
+			if name != "" && name != projectName+"_default" {
+				return false
+			}
+		case "driver":
+			driver, _ := raw.(string)
+			if driver != "" && driver != "bridge" {
+				return false
+			}
+		case "ipam":
+			if !isEmptyMap(raw) {
+				return false
+			}
+		case "external", "internal", "attachable", "enable_ipv6":
+			if enabled, _ := raw.(bool); enabled {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func isBareNetworkAttachment(value any) bool {
+	return value == nil || isEmptyMap(value)
+}
+
+func isEmptyMap(value any) bool {
+	entry, ok := value.(map[string]any)
+	return ok && len(entry) == 0
 }
 
 func deleteIfDefaultValue(target map[string]any, key string, defaults ...string) {

@@ -16,6 +16,7 @@ import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { TooltipHint } from '../components/ui/tooltip-hint'
 import { confirmExternalProjectCleanup } from '../features/compose/external-project-cleanup'
+import { confirmManagedProjectRemoval } from '../features/compose/managed-project-removal'
 import { TakeoverWarningDialog } from '../features/compose/takeover-warning-dialog'
 import type { Project, ProjectSummary } from '../features/compose/types'
 import type { ContainerSummary } from '../features/containers/types'
@@ -129,7 +130,7 @@ function ProjectActions({ row, zh, onTakeover, onFeedback }: { row: ProjectSumma
   const client = useQueryClient()
   const action = useMutation({ mutationFn: (name: string) => api<ProjectTask>(nodePath(nodeID, `/projects/compose/${encodeURIComponent(row.name)}/actions/${name}`), { method: 'POST' }), onMutate: (name) => onFeedback({ kind: 'pending', projectName: row.name, action: name }), onSuccess: (task, name) => { onFeedback({ kind: 'task', projectName: row.name, action: name, taskID: task.id }); void client.invalidateQueries({ queryKey: ['projects', nodeID] }); void client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] }) }, onError: (error, name) => onFeedback({ kind: 'error', projectName: row.name, action: name, message: error.message }) })
   const remove = useMutation({
-    mutationFn: () => api(nodePath(nodeID, `/projects/compose/${encodeURIComponent(row.name)}?confirm=${encodeURIComponent(row.name)}`), { method: 'DELETE' }),
+    mutationFn: (removeVolumes: boolean) => api(nodePath(nodeID, `/projects/compose/${encodeURIComponent(row.name)}?confirm=${encodeURIComponent(row.name)}&force=true&preserve_volumes=${!removeVolumes}`), { method: 'DELETE' }),
     onMutate: () => onFeedback({ kind: 'pending', projectName: row.name, action: 'remove' }),
     onSuccess: () => { onFeedback({ kind: 'success', projectName: row.name, action: 'remove' }); void client.invalidateQueries({ queryKey: ['projects', nodeID] }) },
     onError: (error) => onFeedback({ kind: 'error', projectName: row.name, action: 'remove', message: error.message }),
@@ -151,9 +152,8 @@ function ProjectActions({ row, zh, onTakeover, onFeedback }: { row: ProjectSumma
   }
   const removeProject = async () => {
     if (action.isPending || remove.isPending) return
-    const confirmed = await promptDialog({ title: zh ? '删除 Compose 项目' : 'Remove Compose project', description: zh ? '将删除项目记录和文件，但不会删除仍在运行的容器。' : 'The project record and files will be deleted. Running containers are not removed.', confirmLabel: zh ? '删除' : 'Remove', danger: true, input: { label: zh ? `输入 ${row.name} 以确认` : `Type ${row.name} to confirm`, requiredValue: row.name } })
-    if (confirmed !== row.name) return
-    remove.mutate()
+    const result = await confirmManagedProjectRemoval(row.name, zh)
+    if (result) remove.mutate(result.checked)
   }
   const cleanupProject = async () => {
     if (action.isPending || remove.isPending || cleanup.isPending) return

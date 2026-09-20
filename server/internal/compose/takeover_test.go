@@ -193,4 +193,7 @@ func TestTakeoverRejectsMismatchedProjectIdentity(t *testing.T) {
 	if err := service.ValidateTakeoverDraft(context.Background(), "shop", "name: shop\nservices:\n  web:\n    image: app:v1\n", "COMPOSE_PROJECT_NAME=shop\n"); err != nil {
 		t.Fatal(err)
 	}
+	if err := service.ValidateTakeoverDraft(context.Background(), "shop", "services:\n  web:\n    image: app:v1\n", "COMPOSE_PROJECT_NAME=shop\nCOMPOSE_PROJECT_NAME=other\n"); err == nil || !strings.Contains(err.Error(), `"other"`) {
+		t.Fatalf("duplicate environment identity was not resolved using the final value: %v", err)
+	}
 }

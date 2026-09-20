@@ -25,6 +25,7 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
+	dockerimagespec "github.com/moby/docker-image-spec/specs-go/v1"
 	composedomain "github.com/suma/suma/server/internal/compose"
 	domain "github.com/suma/suma/server/internal/container"
 	imagedomain "github.com/suma/suma/server/internal/image"
@@ -191,9 +192,7 @@ func (a *Adapter) InspectComposeProject(ctx context.Context, projectName string)
 		container.ImageID = row.Image
 		if image, _, err := a.client.ImageInspectWithRaw(ctx, row.Image); err == nil {
 			container.ImageInspectOK = true
-			if image.Config != nil {
-				container.ImageEnvironment = append([]string(nil), image.Config.Env...)
-			}
+			container.ImageDefaults = mapComposeImageDefaults(image.Config)
 		} else {
 			snapshot.Warnings = append(snapshot.Warnings, "Unable to inspect image defaults for container "+shortDockerID(row.ID))
 		}
@@ -229,6 +228,43 @@ func (a *Adapter) InspectComposeProject(ctx context.Context, projectName string)
 	sort.Slice(snapshot.Networks, func(i, j int) bool { return snapshot.Networks[i].Name < snapshot.Networks[j].Name })
 	sort.Slice(snapshot.Volumes, func(i, j int) bool { return snapshot.Volumes[i].Name < snapshot.Volumes[j].Name })
 	return snapshot, nil
+}
+
+func mapComposeImageDefaults(config *dockerimagespec.DockerOCIImageConfig) composedomain.RuntimeImageDefaults {
+	if config == nil {
+		return composedomain.RuntimeImageDefaults{}
+	}
+	defaults := composedomain.RuntimeImageDefaults{
+		Command:          append([]string(nil), config.Cmd...),
+		Entrypoint:       append([]string(nil), config.Entrypoint...),
+		User:             config.User,
+		WorkingDirectory: config.WorkingDir,
+		Environment:      append([]string(nil), config.Env...),
+		Healthcheck:      mapComposeImageHealth(config.Healthcheck),
+		StopSignal:       config.StopSignal,
+	}
+	for port := range config.ExposedPorts {
+		target, protocol := parseDockerPort(string(port))
+		defaults.ExposedPorts = append(defaults.ExposedPorts, composedomain.RuntimePort{Target: target, Protocol: protocol})
+	}
+	for target := range config.Volumes {
+		defaults.VolumeTargets = append(defaults.VolumeTargets, target)
+	}
+	sort.Slice(defaults.ExposedPorts, func(i, j int) bool {
+		if defaults.ExposedPorts[i].Target != defaults.ExposedPorts[j].Target {
+			return defaults.ExposedPorts[i].Target < defaults.ExposedPorts[j].Target
+		}
+		return defaults.ExposedPorts[i].Protocol < defaults.ExposedPorts[j].Protocol
+	})
+	sort.Strings(defaults.VolumeTargets)
+	return defaults
+}
+
+func mapComposeImageHealth(value *dockerimagespec.HealthcheckConfig) *composedomain.RuntimeHealth {
+	if value == nil {
+		return nil
+	}
+	return &composedomain.RuntimeHealth{Test: append([]string(nil), value.Test...), Interval: int64(value.Interval), Timeout: int64(value.Timeout), StartPeriod: int64(value.StartPeriod), StartInterval: int64(value.StartInterval), Retries: value.Retries}
 }
 
 func mapComposeRuntimeConfig(row dockertypes.ContainerJSON) composedomain.RuntimeConfig {

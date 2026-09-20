@@ -284,7 +284,12 @@ func TestAdapterInspectsWholeComposeProject(t *testing.T) {
 			})
 		},
 		"/images/" + imageID + "/json": func(w http.ResponseWriter, r *http.Request) {
-			writeJSON(w, http.StatusOK, map[string]any{"Id": imageID, "Config": map[string]any{"Env": []string{"PATH=/usr/bin"}}})
+			writeJSON(w, http.StatusOK, map[string]any{"Id": imageID, "Config": map[string]any{
+				"Env": []string{"PATH=/usr/bin"}, "Cmd": []string{"serve"}, "Entrypoint": []string{"/entrypoint"},
+				"User": "1000", "WorkingDir": "/app", "StopSignal": "SIGQUIT",
+				"Healthcheck":  map[string]any{"Test": []string{"CMD", "check"}, "Interval": int64(time.Second)},
+				"ExposedPorts": map[string]any{"8080/tcp": map[string]any{}}, "Volumes": map[string]any{"/data": map[string]any{}},
+			}})
 		},
 		"/networks/shop_default": func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{"Name": "shop_default", "Id": "network-id", "Driver": "bridge", "Labels": map[string]string{composedomain.ProjectLabel: "shop"}})
@@ -303,6 +308,10 @@ func TestAdapterInspectsWholeComposeProject(t *testing.T) {
 	}
 	if len(value.Containers[0].Config.Ports) != 1 || value.Containers[0].Config.Ports[0].Published != 18080 {
 		t.Fatalf("ports = %#v", value.Containers[0].Config.Ports)
+	}
+	defaults := value.Containers[0].ImageDefaults
+	if !reflect.DeepEqual(defaults.Command, []string{"serve"}) || !reflect.DeepEqual(defaults.Entrypoint, []string{"/entrypoint"}) || defaults.User != "1000" || defaults.WorkingDirectory != "/app" || defaults.StopSignal != "SIGQUIT" || defaults.Healthcheck == nil || len(defaults.ExposedPorts) != 1 || !reflect.DeepEqual(defaults.VolumeTargets, []string{"/data"}) {
+		t.Fatalf("image defaults = %#v", defaults)
 	}
 	if len(value.Networks) != 1 || len(value.Volumes) != 1 {
 		t.Fatalf("resources = %#v / %#v", value.Networks, value.Volumes)
