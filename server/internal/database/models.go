@@ -30,6 +30,13 @@ type Setting struct {
 	UpdatedAt time.Time
 }
 
+// SchemaMigration records one-time data migrations without exposing internal
+// markers through the user-facing settings service.
+type SchemaMigration struct {
+	Key       string `gorm:"primaryKey;size:128"`
+	AppliedAt time.Time
+}
+
 // Node is a Docker Engine endpoint managed by this SUMA control plane.
 // Runtime Docker state is never persisted here; the status fields only record
 // the result of the most recent connectivity probe.
@@ -50,6 +57,23 @@ type Node struct {
 	LastCheckedAt        *time.Time `json:"last_checked_at,omitempty"`
 	CreatedAt            time.Time  `json:"created_at"`
 	UpdatedAt            time.Time  `json:"updated_at"`
+}
+
+// NodeGroup is an organizational layer above Docker nodes. Groups never own
+// runtime state and are not an execution or authorization boundary.
+type NodeGroup struct {
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	Name        string    `gorm:"uniqueIndex;collate:nocase;size:128;not null" json:"name"`
+	Description string    `gorm:"size:512;not null;default:''" json:"description"`
+	IsDefault   bool      `gorm:"index;not null;default:false" json:"is_default"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type NodeGroupNode struct {
+	GroupID   uint      `gorm:"primaryKey;index" json:"group_id"`
+	NodeID    string    `gorm:"primaryKey;size:64;index" json:"node_id"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type DockerTLSCredential struct {

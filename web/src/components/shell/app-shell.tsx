@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import {
-  Activity, Boxes, CircleGauge, Container, FileClock, GitPullRequest,
+  Activity, Boxes, CircleGauge, Container, FileClock, FolderTree, GitPullRequest,
   HardDrive, KeyRound, Layers3, Network, PanelLeftClose,
   LogOut, PanelLeftOpen, Search, Server, Settings, UserRound,
 } from 'lucide-react'
@@ -9,12 +9,12 @@ import { type ReactNode, useEffect, useState } from 'react'
 import { api, demoMode } from '../../lib/api'
 import type { User } from '../../features/auth/types'
 import { useI18n, type TranslationKey } from '../../lib/i18n'
-import type { DockerNode } from '../../lib/nodes'
+import { filterNodesByGroup, groupFilterID, type DockerNode, type NodeGroup, type NodeGroupFilter } from '../../lib/nodes'
 import { confirmDialog } from '../../stores/dialog'
 import { useUIStore } from '../../stores/ui'
 import { LogoMark } from '../ui/logo-mark'
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue,
 } from '../ui/select'
 import { Separator } from '../ui/separator'
 import { Sheet, SheetContent, SheetTitle } from '../ui/sheet'
@@ -49,12 +49,13 @@ function latencyTone(node: DockerNode) {
 export function AppShell({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const { commandOpen, setCommandOpen, sidebarOpen, toggleSidebar, language, currentNodeID, setCurrentNodeID } = useUIStore()
+  const { commandOpen, setCommandOpen, sidebarOpen, toggleSidebar, language, currentNodeID, setCurrentNodeID, currentGroupFilter, setCurrentGroupFilter } = useUIStore()
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const { t } = useI18n()
   const zh = language === 'zh-CN'
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   const nodes = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes'), refetchInterval: 30_000 })
+  const groups = useQuery({ queryKey: ['node-groups'], queryFn: () => api<NodeGroup[]>('/node-groups') })
   const session = useQuery({ queryKey: ['session'], queryFn: () => api<User>('/auth/session') })
 
   useEffect(() => {
@@ -63,6 +64,21 @@ export function AppShell({ children }: { children: ReactNode }) {
       setCurrentNodeID(nodes.data.find((node) => node.enabled && node.connection_type === 'unix')?.id ?? nodes.data.find((node) => node.enabled)?.id ?? nodes.data[0].id)
     }
   }, [nodes.data, currentNodeID, setCurrentNodeID])
+
+  useEffect(() => {
+    if (!groups.data) return
+    if (currentGroupFilter === 'default') {
+      const seeded = groups.data.find((group) => group.is_default)
+      setCurrentGroupFilter(seeded ? `group:${seeded.id}` : 'all')
+      return
+    }
+    const selectedID = groupFilterID(currentGroupFilter)
+    if (currentGroupFilter !== 'all' && selectedID == null) {
+      setCurrentGroupFilter('all')
+      return
+    }
+    if (selectedID != null && !groups.data.some((group) => group.id === selectedID)) setCurrentGroupFilter('all')
+  }, [groups.data, currentGroupFilter, setCurrentGroupFilter])
 
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
@@ -161,6 +177,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   const currentNode = nodes.data?.find((node) => node.id === currentNodeID)
+  const filteredNodes = filterNodesByGroup(nodes.data ?? [], currentGroupFilter)
+  const currentOutsideFilter = currentNode != null && !filteredNodes.some((node) => node.id === currentNode.id)
+  const selectedGroup = groups.data?.find((group) => group.id === groupFilterID(currentGroupFilter))
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -180,7 +199,20 @@ export function AppShell({ children }: { children: ReactNode }) {
             <PanelLeftOpen />
           </Button>
 
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <Select<NodeGroupFilter> value={currentGroupFilter} onValueChange={(value) => value && setCurrentGroupFilter(value)}>
+              <SelectTrigger aria-label={zh ? '节点 Group 筛选' : 'Node group filter'} className="w-9 px-2 [&>svg:last-child]:hidden sm:w-40 sm:pl-2.5 sm:[&>svg:last-child]:block">
+                <FolderTree className="text-muted-foreground" />
+                <SelectValue className="hidden sm:flex">
+                  <span className="truncate">{currentGroupFilter === 'all' ? (zh ? '全部 Group' : 'All groups') : selectedGroup?.name ?? (zh ? '加载中' : 'Loading')}</span>
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{zh ? '全部 Group' : 'All groups'}</SelectItem>
+                {(groups.data ?? []).length > 0 && <SelectSeparator />}
+                {(groups.data ?? []).map((group) => <SelectItem key={group.id} value={`group:${group.id}`}>{`${group.name} · ${group.node_count}`}</SelectItem>)}
+              </SelectContent>
+            </Select>
             <Select value={currentNodeID} onValueChange={(value) => setCurrentNodeID(String(value))}>
               <SelectTrigger aria-label={zh ? '当前 Docker 节点' : 'Current Docker node'} className="w-32 sm:w-52">
                 <SelectValue>
@@ -188,6 +220,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                     <span className="flex min-w-0 items-center gap-2">
                       <span aria-hidden="true" className={cn('size-1.5 shrink-0 rounded-full bg-current', latencyTone(currentNode).dot)} />
                       <span className="truncate">{currentNode.name}</span>
+                      {currentOutsideFilter && <span className="hidden shrink-0 text-[10px] text-amber-600 sm:inline dark:text-amber-400">{zh ? '筛选外' : 'outside'}</span>}
                       <span className={cn('ml-auto shrink-0 text-xs leading-none tabular-nums', latencyTone(currentNode).text)}>
                         {currentNode.status === 'online' && currentNode.last_latency_ms != null ? `${currentNode.last_latency_ms}ms` : zh ? '离线' : 'offline'}
                       </span>
@@ -196,7 +229,14 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                {(nodes.data ?? []).map((node) => {
+                {currentOutsideFilter && currentNode && <SelectGroup>
+                  <SelectLabel>{zh ? '当前上下文 · 筛选外' : 'Current context · outside filter'}</SelectLabel>
+                  <SelectItem value={currentNode.id} disabled={!currentNode.enabled}>{currentNode.name}</SelectItem>
+                </SelectGroup>}
+                {currentOutsideFilter && filteredNodes.length > 0 && <SelectSeparator />}
+                {filteredNodes.length > 0 && <SelectGroup>
+                  <SelectLabel>{zh ? '筛选内节点' : 'Filtered nodes'}</SelectLabel>
+                  {filteredNodes.map((node) => {
                   const tone = latencyTone(node)
                   return (
                     <SelectItem key={node.id} value={node.id} disabled={!node.enabled}>
@@ -209,7 +249,9 @@ export function AppShell({ children }: { children: ReactNode }) {
                       </span>
                     </SelectItem>
                   )
-                })}
+                  })}
+                </SelectGroup>}
+                {filteredNodes.length === 0 && <div className="px-2 py-3 text-center text-xs text-muted-foreground">{zh ? '此筛选下没有节点' : 'No nodes in this filter'}</div>}
               </SelectContent>
             </Select>
           </div>

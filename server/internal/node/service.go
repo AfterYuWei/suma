@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -38,13 +39,14 @@ var tailscaleIPv4 = &net.IPNet{
 }
 
 type Input struct {
-	Name                  string `json:"name"`
-	ConnectionType        string `json:"connection_type"`
-	Endpoint              string `json:"endpoint"`
-	TLSMode               string `json:"tls_mode"`
-	TLSCredentialID       *uint  `json:"tls_credential_id"`
-	PlaintextConfirmation string `json:"plaintext_confirmation"`
-	Enabled               bool   `json:"enabled"`
+	Name                  string  `json:"name"`
+	ConnectionType        string  `json:"connection_type"`
+	Endpoint              string  `json:"endpoint"`
+	TLSMode               string  `json:"tls_mode"`
+	TLSCredentialID       *uint   `json:"tls_credential_id"`
+	PlaintextConfirmation string  `json:"plaintext_confirmation"`
+	Enabled               bool    `json:"enabled"`
+	GroupIDs              *[]uint `json:"group_ids,omitempty"`
 }
 
 type View struct {
@@ -63,6 +65,7 @@ type View struct {
 	LastCheckedAt   *time.Time `json:"last_checked_at,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
+	GroupIDs        []uint     `json:"group_ids"`
 }
 
 type TLSCredentialInput struct {
@@ -149,7 +152,18 @@ func NewService(db *gorm.DB, secrets *secret.Store, bootstrapHost string) (*Serv
 			tlsMode = TLSRequired
 		}
 		row := database.Node{ID: "local", Name: "Local", ConnectionType: connection, Endpoint: bootstrapHost, TLSMode: tlsMode, AllowedBindRootsJSON: "[]", Enabled: true, Status: "unknown"}
-		if err := db.Create(&row).Error; err != nil {
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Create(&row).Error; err != nil {
+				return err
+			}
+			var group database.NodeGroup
+			if err := tx.Where("is_default = ?", true).First(&group).Error; err == nil {
+				return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&database.NodeGroupNode{GroupID: group.ID, NodeID: row.ID}).Error
+			} else if err != gorm.ErrRecordNotFound {
+				return err
+			}
+			return nil
+		}); err != nil {
 			return nil, fmt.Errorf("create default Docker node: %w", err)
 		}
 	}
@@ -194,11 +208,7 @@ func (s *Service) List(ctx context.Context) ([]View, error) {
 	if err := s.db.WithContext(ctx).Order("name ASC").Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	result := make([]View, 0, len(rows))
-	for _, row := range rows {
-		result = append(result, view(row))
-	}
-	return result, nil
+	return s.views(ctx, rows)
 }
 
 func (s *Service) Get(ctx context.Context, id string) (View, error) {
@@ -206,7 +216,11 @@ func (s *Service) Get(ctx context.Context, id string) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
-	return view(row), nil
+	groupIDs, err := s.groupIDs(ctx, row.ID)
+	if err != nil {
+		return View{}, err
+	}
+	return view(row, groupIDs), nil
 }
 
 func (s *Service) Create(ctx context.Context, input Input) (View, error) {
@@ -217,6 +231,13 @@ func (s *Service) Create(ctx context.Context, input Input) (View, error) {
 	row, err := s.prepare(ctx, id, input)
 	if err != nil {
 		return View{}, err
+	}
+	groupIDs := []uint{}
+	if input.GroupIDs != nil {
+		groupIDs, err = s.validateGroupIDs(ctx, *input.GroupIDs)
+		if err != nil {
+			return View{}, err
+		}
 	}
 	row.ID = id
 	client, info, latency, err := s.connect(ctx, row)
@@ -234,6 +255,9 @@ func (s *Service) Create(ctx context.Context, input Input) (View, error) {
 		if err := tx.Create(&row).Error; err != nil {
 			return err
 		}
+		if err := replaceNodeGroups(tx, row.ID, groupIDs); err != nil {
+			return err
+		}
 		if row.TLSCredentialID != nil {
 			return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&database.DockerTLSCredentialNode{CredentialID: *row.TLSCredentialID, NodeID: row.ID}).Error
 		}
@@ -241,7 +265,7 @@ func (s *Service) Create(ctx context.Context, input Input) (View, error) {
 	}); err != nil {
 		return View{}, err
 	}
-	return view(row), nil
+	return view(row, groupIDs), nil
 }
 
 func (s *Service) Update(ctx context.Context, id string, input Input) (View, error) {
@@ -252,6 +276,13 @@ func (s *Service) Update(ctx context.Context, id string, input Input) (View, err
 	row, err := s.prepare(ctx, id, input)
 	if err != nil {
 		return View{}, err
+	}
+	var groupIDs []uint
+	if input.GroupIDs != nil {
+		groupIDs, err = s.validateGroupIDs(ctx, *input.GroupIDs)
+		if err != nil {
+			return View{}, err
+		}
 	}
 	row.ID, row.CreatedAt = current.ID, current.CreatedAt
 	client, info, latency, err := s.connect(ctx, row)
@@ -272,6 +303,11 @@ func (s *Service) Update(ctx context.Context, id string, input Input) (View, err
 			"last_latency_ms": latency, "last_checked_at": now,
 		}).Error; err != nil {
 			return err
+		}
+		if input.GroupIDs != nil {
+			if err := replaceNodeGroups(tx, id, groupIDs); err != nil {
+				return err
+			}
 		}
 		if row.TLSCredentialID != nil {
 			return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&database.DockerTLSCredentialNode{CredentialID: *row.TLSCredentialID, NodeID: id}).Error
@@ -304,12 +340,20 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 			return errors.New("node is still referenced; remove projects and credential grants first")
 		}
 	}
-	result := s.db.WithContext(ctx).Delete(&database.Node{}, "id = ?", id)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("node_id = ?", id).Delete(&database.NodeGroupNode{}).Error; err != nil {
+			return err
+		}
+		result := tx.Delete(&database.Node{}, "id = ?", id)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	s.invalidate(id)
 	return nil
@@ -358,40 +402,46 @@ func (s *Service) ComposeTarget(ctx context.Context, id string) (compose.Target,
 	if err != nil {
 		return compose.Target{}, View{}, err
 	}
+	groupIDs, err := s.groupIDs(ctx, row.ID)
+	if err != nil {
+		return compose.Target{}, View{}, err
+	}
+	nodeView := view(row, groupIDs)
 	if !row.Enabled {
-		return compose.Target{}, view(row), errors.New("Docker node is disabled")
+		return compose.Target{}, nodeView, errors.New("Docker node is disabled")
 	}
 	target := compose.Target{NodeID: row.ID, NodeName: row.Name, Host: row.Endpoint, TLSRequired: row.ConnectionType == ConnectionTCP && row.TLSMode == TLSRequired}
 	if target.TLSRequired {
 		if row.TLSCredentialID == nil {
-			return compose.Target{}, view(row), errors.New("Docker TLS credential is required")
+			return compose.Target{}, nodeView, errors.New("Docker TLS credential is required")
 		}
 		var credential database.DockerTLSCredential
 		if err := s.db.WithContext(ctx).First(&credential, *row.TLSCredentialID).Error; err != nil {
-			return compose.Target{}, view(row), err
+			return compose.Target{}, nodeView, err
 		}
 		var grants int64
 		if err := s.db.WithContext(ctx).Model(&database.DockerTLSCredentialNode{}).Where("credential_id = ? AND node_id = ?", credential.ID, row.ID).Count(&grants).Error; err != nil {
-			return compose.Target{}, view(row), err
+			return compose.Target{}, nodeView, err
 		}
 		if grants == 0 {
-			return compose.Target{}, view(row), errors.New("Docker TLS credential is not authorized for this node")
+			return compose.Target{}, nodeView, errors.New("Docker TLS credential is not authorized for this node")
 		}
 		target.CA, err = s.secrets.Decrypt(credential.CACiphertext)
 		if err != nil {
-			return compose.Target{}, view(row), err
+			return compose.Target{}, nodeView, err
 		}
 		target.Certificate, err = s.secrets.Decrypt(credential.CertificateCiphertext)
 		if err != nil {
-			return compose.Target{}, view(row), err
+			return compose.Target{}, nodeView, err
 		}
 		target.PrivateKey, err = s.secrets.Decrypt(credential.PrivateKeyCiphertext)
 		if err != nil {
-			return compose.Target{}, view(row), err
+			return compose.Target{}, nodeView, err
 		}
 	}
-	return target, view(row), nil
+	return target, nodeView, nil
 }
+
 func (s *Service) ResolveComposeTarget(ctx context.Context, id string) (compose.Target, error) {
 	target, _, err := s.ComposeTarget(ctx, id)
 	return target, err
@@ -601,8 +651,83 @@ func (s *Service) invalidate(id string) {
 	}
 }
 
-func view(row database.Node) View {
-	return View{ID: row.ID, Name: row.Name, ConnectionType: row.ConnectionType, Endpoint: row.Endpoint, TLSMode: row.TLSMode, TLSCredentialID: row.TLSCredentialID, Enabled: row.Enabled, EngineID: row.EngineID, EngineVersion: row.EngineVersion, Status: row.Status, LastError: row.LastError, LastLatencyMS: row.LastLatencyMS, LastCheckedAt: row.LastCheckedAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+func view(row database.Node, groupIDs []uint) View {
+	if groupIDs == nil {
+		groupIDs = []uint{}
+	}
+	return View{ID: row.ID, Name: row.Name, ConnectionType: row.ConnectionType, Endpoint: row.Endpoint, TLSMode: row.TLSMode, TLSCredentialID: row.TLSCredentialID, Enabled: row.Enabled, EngineID: row.EngineID, EngineVersion: row.EngineVersion, Status: row.Status, LastError: row.LastError, LastLatencyMS: row.LastLatencyMS, LastCheckedAt: row.LastCheckedAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, GroupIDs: groupIDs}
+}
+
+func (s *Service) views(ctx context.Context, rows []database.Node) ([]View, error) {
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ID)
+	}
+	var memberships []database.NodeGroupNode
+	if len(ids) > 0 {
+		if err := s.db.WithContext(ctx).Where("node_id IN ?", ids).Order("group_id ASC").Find(&memberships).Error; err != nil {
+			return nil, err
+		}
+	}
+	byNode := make(map[string][]uint, len(rows))
+	for _, membership := range memberships {
+		byNode[membership.NodeID] = append(byNode[membership.NodeID], membership.GroupID)
+	}
+	result := make([]View, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, view(row, byNode[row.ID]))
+	}
+	return result, nil
+}
+
+func (s *Service) groupIDs(ctx context.Context, nodeID string) ([]uint, error) {
+	var rows []database.NodeGroupNode
+	if err := s.db.WithContext(ctx).Where("node_id = ?", nodeID).Order("group_id ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	ids := make([]uint, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.GroupID)
+	}
+	return ids, nil
+}
+
+func (s *Service) validateGroupIDs(ctx context.Context, values []uint) ([]uint, error) {
+	unique := make(map[uint]struct{}, len(values))
+	for _, id := range values {
+		if id == 0 {
+			return nil, errors.New("invalid node group ID")
+		}
+		unique[id] = struct{}{}
+	}
+	ids := make([]uint, 0, len(unique))
+	for id := range unique {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	if len(ids) == 0 {
+		return ids, nil
+	}
+	var count int64
+	if err := s.db.WithContext(ctx).Model(&database.NodeGroup{}).Where("id IN ?", ids).Count(&count).Error; err != nil {
+		return nil, err
+	}
+	if count != int64(len(ids)) {
+		return nil, errors.New("one or more node groups do not exist")
+	}
+	return ids, nil
+}
+
+func replaceNodeGroups(tx *gorm.DB, nodeID string, groupIDs []uint) error {
+	if err := tx.Where("node_id = ?", nodeID).Delete(&database.NodeGroupNode{}).Error; err != nil {
+		return err
+	}
+	for _, groupID := range groupIDs {
+		if err := tx.Create(&database.NodeGroupNode{GroupID: groupID, NodeID: nodeID}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func newID(name string) (string, error) {

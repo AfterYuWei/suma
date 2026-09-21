@@ -9,7 +9,10 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
+
+const nodeGroupsMigrationKey = "migration.node_groups_v1"
 
 func Open(path string) (*gorm.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
@@ -19,13 +22,52 @@ func Open(path string) (*gorm.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	if err := db.AutoMigrate(&User{}, &Session{}, &Setting{}, &Node{}, &DockerTLSCredential{}, &DockerTLSCredentialNode{}, &GitCredentialNode{}, &RegistryCredentialNode{}, &DeliveryProject{}, &DeliveryProjectNode{}, &DeliveryProjectRegistryCredential{}, &DeliveryTargetState{}, &GitCredential{}, &DeliveryProjectGitCredential{}, &RegistryCredential{}, &DeliveryRelease{}, &DeliveryReleaseDeployment{}, &DeliveryDeploymentAttempt{}, &GitWebhookDelivery{}, &Task{}, &TaskLog{}, &TaskStep{}, &AuditLog{}, &LoginLog{}); err != nil {
+	if err := db.AutoMigrate(&User{}, &Session{}, &Setting{}, &SchemaMigration{}, &Node{}, &NodeGroup{}, &NodeGroupNode{}, &DockerTLSCredential{}, &DockerTLSCredentialNode{}, &GitCredentialNode{}, &RegistryCredentialNode{}, &DeliveryProject{}, &DeliveryProjectNode{}, &DeliveryProjectRegistryCredential{}, &DeliveryTargetState{}, &GitCredential{}, &DeliveryProjectGitCredential{}, &RegistryCredential{}, &DeliveryRelease{}, &DeliveryReleaseDeployment{}, &DeliveryDeploymentAttempt{}, &GitWebhookDelivery{}, &Task{}, &TaskLog{}, &TaskStep{}, &AuditLog{}, &LoginLog{}); err != nil {
 		return nil, fmt.Errorf("migrate sqlite: %w", err)
+	}
+	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_node_groups_name_nocase ON node_groups(name COLLATE NOCASE)").Error; err != nil {
+		return nil, fmt.Errorf("create node group name index: %w", err)
+	}
+	if err := migrateNodeGroups(db); err != nil {
+		return nil, fmt.Errorf("migrate node groups: %w", err)
 	}
 	if err := migrateNodeScopesAndDeliveryHistory(db); err != nil {
 		return nil, fmt.Errorf("backfill scoped history: %w", err)
 	}
 	return db, nil
+}
+
+func migrateNodeGroups(db *gorm.DB) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		var marker SchemaMigration
+		if err := tx.Where("key = ?", nodeGroupsMigrationKey).First(&marker).Error; err == nil {
+			return nil
+		} else if err != gorm.ErrRecordNotFound {
+			return err
+		}
+
+		var group NodeGroup
+		if err := tx.Where("is_default = ?", true).First(&group).Error; err == gorm.ErrRecordNotFound {
+			group = NodeGroup{Name: "Default", Description: "", IsDefault: true}
+			if err := tx.Create(&group).Error; err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		}
+
+		var nodes []Node
+		if err := tx.Find(&nodes).Error; err != nil {
+			return err
+		}
+		for _, node := range nodes {
+			membership := NodeGroupNode{GroupID: group.ID, NodeID: node.ID}
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&membership).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Create(&SchemaMigration{Key: nodeGroupsMigrationKey, AppliedAt: time.Now()}).Error
+	})
 }
 
 func migrateNodeScopesAndDeliveryHistory(db *gorm.DB) error {

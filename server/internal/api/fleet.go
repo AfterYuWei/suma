@@ -4,11 +4,13 @@ import (
 	"context"
 	"net/http"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	nodeService "github.com/suma/suma/server/internal/node"
+	"gorm.io/gorm"
 )
 
 type fleetContainer struct {
@@ -74,8 +76,22 @@ type fleetNode struct {
 // their recorded state so the overview degrades gracefully.
 func registerFleetRoutes(v1 gin.IRouter, deps Dependencies) {
 	v1.GET("/fleet/overview", requireAuth(deps.Auth), func(c *gin.Context) {
-		nodes, err := deps.Nodes.List(c.Request.Context())
+		var groupID *uint
+		if raw := c.Query("group_id"); raw != "" {
+			parsed, err := strconv.ParseUint(raw, 10, 64)
+			if err != nil || parsed == 0 {
+				failure(c, http.StatusBadRequest, 20102, "Invalid node group ID")
+				return
+			}
+			value := uint(parsed)
+			groupID = &value
+		}
+		nodes, err := deps.Nodes.ListFiltered(c.Request.Context(), groupID)
 		if err != nil {
+			if err == gorm.ErrRecordNotFound {
+				failure(c, http.StatusNotFound, 20305, "Node group not found")
+				return
+			}
 			failure(c, http.StatusInternalServerError, 20101, "Unable to list nodes")
 			return
 		}

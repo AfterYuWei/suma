@@ -91,3 +91,71 @@ func TestTLSCredentialIsEncryptedAndRedacted(t *testing.T) {
 		t.Fatalf("credential material leaked in response: %s", response)
 	}
 }
+
+func TestNodeGroupsSupportMultipleAndNoGroupMemberships(t *testing.T) {
+	db, err := database.Open(filepath.Join(t.TempDir(), "groups.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := secret.Open(filepath.Join(t.TempDir(), "secret.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(db, store, "unix:///var/run/docker.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+
+	groups, err := service.ListGroups(context.Background())
+	if err != nil || len(groups) != 1 || !groups[0].IsDefault || groups[0].NodeCount != 1 {
+		t.Fatalf("bootstrapped groups = %#v, err = %v", groups, err)
+	}
+	edge, err := service.CreateGroup(context.Background(), GroupInput{Name: "Edge", Description: "Remote engines"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateGroup(context.Background(), GroupInput{Name: "edge"}); err == nil {
+		t.Fatal("expected case-insensitive duplicate group name rejection")
+	}
+	normalized, err := service.validateGroupIDs(context.Background(), []uint{edge.ID, groups[0].ID, edge.ID})
+	if err != nil || len(normalized) != 2 || normalized[0] >= normalized[1] {
+		t.Fatalf("normalized group IDs = %#v, err = %v", normalized, err)
+	}
+	if _, err := service.validateGroupIDs(context.Background(), []uint{999999}); err == nil {
+		t.Fatal("expected unknown group ID rejection")
+	}
+	if err := db.Create(&database.Node{ID: "remote", Name: "Remote", ConnectionType: "unix", Endpoint: "unix:///remote.sock", TLSMode: "disabled", AllowedBindRootsJSON: "[]", Enabled: false}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceNodeGroups(db, "remote", []uint{groups[0].ID, edge.ID}); err != nil {
+		t.Fatal(err)
+	}
+	filtered, err := service.ListFiltered(context.Background(), &edge.ID)
+	if err != nil || len(filtered) != 1 || filtered[0].ID != "remote" || len(filtered[0].GroupIDs) != 2 {
+		t.Fatalf("edge filter = %#v, err = %v", filtered, err)
+	}
+	if err := replaceNodeGroups(db, "remote", []uint{}); err != nil {
+		t.Fatal(err)
+	}
+	allNodes, err := service.ListFiltered(context.Background(), nil)
+	if err != nil || len(allNodes) != 2 || len(allNodes[1].GroupIDs) != 0 {
+		t.Fatalf("all-node filter with no-group node = %#v, err = %v", allNodes, err)
+	}
+	if err := service.DeleteGroup(context.Background(), edge.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.GetGroup(context.Background(), edge.ID); err == nil {
+		t.Fatal("deleted group is still readable")
+	}
+	if err := replaceNodeGroups(db, "remote", []uint{groups[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Delete(context.Background(), "remote"); err != nil {
+		t.Fatal(err)
+	}
+	var membershipCount int64
+	if err := db.Model(&database.NodeGroupNode{}).Where("node_id = ?", "remote").Count(&membershipCount).Error; err != nil || membershipCount != 0 {
+		t.Fatalf("deleted node memberships = %d, err = %v", membershipCount, err)
+	}
+}

@@ -19,7 +19,7 @@ import type { DeliveryProject } from '../features/delivery/types'
 import { shortCommit } from '../features/delivery/types'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
-import type { DockerNode } from '../lib/nodes'
+import { filterNodesByGroup, type DockerNode } from '../lib/nodes'
 import { useUIStore } from '../stores/ui'
 import { ResourceFrame } from './images'
 
@@ -31,6 +31,7 @@ export function ContinuousDeliveryPage() {
   const { language } = useI18n()
   const zh = language === 'zh-CN'
   const currentNodeID = useUIStore((state) => state.currentNodeID)
+  const currentGroupFilter = useUIStore((state) => state.currentGroupFilter)
   const [createOpen, setCreateOpen] = useState(false)
   const [nameInput, setNameInput] = useState('')
   const [nodeIDsInput, setNodeIDsInput] = useState<string[]>([])
@@ -42,7 +43,7 @@ export function ContinuousDeliveryPage() {
   const synchronized = rows.filter((project) => deliveryState(project) === 'synchronized').length
   const pending = rows.filter((project) => deliveryState(project) === 'pending').length
   const setup = rows.length - synchronized - pending
-  const enabledNodes = (nodes.data || []).filter((node) => node.enabled)
+  const enabledNodes = filterNodesByGroup(nodes.data || [], currentGroupFilter).filter((node) => node.enabled)
   const nodePagination = useListPagination(enabledNodes)
   const initialNodeIDs = currentNodeID && enabledNodes.some((node) => node.id === currentNodeID) ? [currentNodeID] : enabledNodes[0] ? [enabledNodes[0].id] : []
   const canCreate = !!nameInput.trim() && nodeIDsInput.length > 0 && !create.isPending

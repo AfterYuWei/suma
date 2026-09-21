@@ -18,8 +18,9 @@ import { Textarea } from '../components/ui/textarea'
 import type { GitAuthType, GitCredential, GitCredentialInput } from '../features/delivery/types'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
-import type { DockerNode } from '../lib/nodes'
+import { nodesForFilteredSelection, type DockerNode } from '../lib/nodes'
 import { confirmDialog } from '../stores/dialog'
+import { useUIStore } from '../stores/ui'
 import { ResourceFrame } from './images'
 
 type Tab = 'git' | 'registries' | 'docker-tls'
@@ -193,21 +194,23 @@ function TLSEditor({ zh, nodes, editing, input, setInput, close, submit, error, 
 }
 
 function NodeGrantSelector({ zh, nodes, value, onChange }: { zh: boolean; nodes: DockerNode[]; value: string[]; onChange: (value: string[]) => void }) {
-  const pagination = useListPagination(nodes)
+  const currentGroupFilter = useUIStore((state) => state.currentGroupFilter)
+  const { filtered, outsideSelected } = nodesForFilteredSelection(nodes, currentGroupFilter, value)
+  const pagination = useListPagination(filtered)
   const toggle = (id: string) => onChange(value.includes(id) ? value.filter((item) => item !== id) : [...value, id])
+  const option = (node: DockerNode) => <label key={node.id} className="flex cursor-pointer items-start gap-2">
+    <Checkbox checked={value.includes(node.id)} onCheckedChange={() => toggle(node.id)} className="mt-0.5" />
+    <span className="flex min-w-0 flex-col">
+      <span className="truncate text-sm">{node.name}</span>
+      <span className="text-xs text-muted-foreground">{node.connection_type}</span>
+    </span>
+  </label>
   return <Card className="w-full">
     <CardHeader><CardTitle className="text-sm">{zh ? '节点授权（默认不授权）' : 'Node grants (none by default)'}</CardTitle></CardHeader>
     <CardContent className="flex flex-col gap-2.5">
-      {nodes.length === 0 ? <p className="text-sm text-muted-foreground">{zh ? '暂无节点' : 'No nodes'}</p> : pagination.items.map((node) => (
-        <label key={node.id} className="flex cursor-pointer items-start gap-2">
-          <Checkbox checked={value.includes(node.id)} onCheckedChange={() => toggle(node.id)} className="mt-0.5" />
-          <span className="flex min-w-0 flex-col">
-            <span className="truncate text-sm">{node.name}</span>
-            <span className="text-xs text-muted-foreground">{node.connection_type}</span>
-          </span>
-        </label>
-      ))}
-      {nodes.length > 0 && <ListPagination {...pagination} zh={zh} />}
+      {outsideSelected.length > 0 && <div className="flex flex-col gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5"><p className="text-xs text-amber-700 dark:text-amber-300">{zh ? '筛选外的已有授权；取消勾选前会继续保留。' : 'Existing grants outside the filter; retained until explicitly unchecked.'}</p>{outsideSelected.map(option)}</div>}
+      {filtered.length === 0 ? <p className="text-sm text-muted-foreground">{zh ? '当前 Group 筛选下暂无节点' : 'No nodes match the current group filter'}</p> : pagination.items.map(option)}
+      {filtered.length > 0 && <ListPagination {...pagination} zh={zh} />}
     </CardContent>
   </Card>
 }

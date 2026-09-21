@@ -263,6 +263,87 @@ func TestTaskAndAuditNodeScopesAreIsolated(t *testing.T) {
 	assertContains("/api/v1/audit-logs?scope=control_plane", http.StatusOK, "cd.sync", "container.restart")
 }
 
+func TestNodeGroupHTTPAndFleetFiltering(t *testing.T) {
+	root := t.TempDir()
+	db, err := database.Open(filepath.Join(root, "groups-api.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := secret.Open(filepath.Join(root, "secret.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes, err := nodeService.NewService(db, store, "unix:///var/run/docker.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = nodes.Close() })
+	if err := db.Model(&database.Node{}).Where("id = ?", "local").Update("enabled", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&database.Node{ID: "orphan", Name: "Orphan", ConnectionType: "unix", Endpoint: "unix:///orphan.sock", TLSMode: "disabled", AllowedBindRootsJSON: "[]", Enabled: false}).Error; err != nil {
+		t.Fatal(err)
+	}
+	authService := auth.NewService(db, time.Hour)
+	if _, err := authService.Initialize(context.Background(), "admin", "admin@example.test", "", "long-password"); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := authService.Login(context.Background(), "admin", "long-password", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouter(Dependencies{Engine: &fakeEngine{}, Auth: authService, Audit: audit.NewService(db), Tasks: task.NewService(db), Nodes: nodes})
+	request := func(method, path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		return response
+	}
+
+	created := request(http.MethodPost, "/api/v1/node-groups", `{"name":"Edge","description":"Remote engines"}`)
+	if created.Code != http.StatusCreated || !strings.Contains(created.Body.String(), `"name":"Edge"`) {
+		t.Fatalf("create group = %d %s", created.Code, created.Body.String())
+	}
+	groups, err := nodes.ListGroups(context.Background())
+	if err != nil || len(groups) != 2 {
+		t.Fatalf("groups = %#v, err = %v", groups, err)
+	}
+	var edge nodeService.GroupView
+	for _, group := range groups {
+		if group.Name == "Edge" {
+			edge = group
+		}
+	}
+	if edge.ID == 0 {
+		t.Fatal("created Edge group not found")
+	}
+	if err := db.Create(&database.NodeGroupNode{GroupID: edge.ID, NodeID: "local"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	listed := request(http.MethodGet, "/api/v1/nodes", "")
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"group_ids"`) {
+		t.Fatalf("node group IDs = %d %s", listed.Code, listed.Body.String())
+	}
+	filtered := request(http.MethodGet, fmt.Sprintf("/api/v1/fleet/overview?group_id=%d", edge.ID), "")
+	if filtered.Code != http.StatusOK || !strings.Contains(filtered.Body.String(), `"id":"local"`) || strings.Contains(filtered.Body.String(), `"id":"orphan"`) {
+		t.Fatalf("group fleet = %d %s", filtered.Code, filtered.Body.String())
+	}
+	deleted := request(http.MethodDelete, fmt.Sprintf("/api/v1/node-groups/%d", edge.ID), "")
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("delete group = %d %s", deleted.Code, deleted.Body.String())
+	}
+	var membershipCount int64
+	if err := db.Model(&database.NodeGroupNode{}).Where("group_id = ?", edge.ID).Count(&membershipCount).Error; err != nil || membershipCount != 0 {
+		t.Fatalf("deleted memberships = %d, err = %v", membershipCount, err)
+	}
+	var auditCount int64
+	if err := db.Model(&database.AuditLog{}).Where("action IN ?", []string{"node_group.create", "node_group.delete"}).Count(&auditCount).Error; err != nil || auditCount != 2 {
+		t.Fatalf("group audit count = %d, err = %v", auditCount, err)
+	}
+}
+
 func TestAuthenticationLifecycle(t *testing.T) {
 	router := testRouter(t, &fakeEngine{})
 	initialize := httptest.NewRecorder()

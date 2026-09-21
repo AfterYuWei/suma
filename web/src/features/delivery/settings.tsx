@@ -16,7 +16,8 @@ import { useListPagination } from '../../components/ui/use-list-pagination'
 import { api } from '../../lib/api'
 import { cn } from '../../lib/utils'
 import { choiceDialog } from '../../stores/dialog'
-import type { DockerNode } from '../../lib/nodes'
+import { nodesForFilteredSelection, type DockerNode } from '../../lib/nodes'
+import { useUIStore } from '../../stores/ui'
 import {
   type CDConfiguration,
   type CDConfigureInput,
@@ -302,18 +303,27 @@ function CredentialSelector({ zh, nodeIDs, value, onChange }: { zh: boolean; nod
 }
 
 function TargetSelector({ nodes, value, zh, onChange }: { nodes: DockerNode[]; value: string[]; zh: boolean; onChange: (value: string[]) => void }) {
-  const enabled = nodes.filter((node) => node.enabled)
+  const currentGroupFilter = useUIStore((state) => state.currentGroupFilter)
+  const { filtered, outsideSelected } = nodesForFilteredSelection(nodes, currentGroupFilter, value)
+  const enabled = filtered.filter((node) => node.enabled)
+  const unavailableSelected = filtered.filter((node) => !node.enabled && value.includes(node.id))
+  const preservedSelected = [...outsideSelected, ...unavailableSelected]
   const pagination = useListPagination(enabled)
-  return <><div className="grid max-h-72 gap-2.5 overflow-y-auto overscroll-contain sm:grid-cols-2 xl:grid-cols-3">
+  const option = (node: DockerNode) => <label key={node.id} className="flex cursor-pointer items-start gap-2">
+    <Checkbox checked={value.includes(node.id)} onCheckedChange={() => onChange(value.includes(node.id) ? value.filter((id) => id !== node.id) : [...value, node.id])} className="mt-0.5" />
+    <span className="flex min-w-0 flex-col">
+      <span className="truncate text-sm">{node.name}</span>
+      <span className="text-xs text-muted-foreground">{node.connection_type} · {node.status || 'unknown'}</span>
+    </span>
+  </label>
+  return <><div className="flex flex-col gap-3">
+    {preservedSelected.length > 0 && <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3"><p className="mb-2 text-xs text-amber-700 dark:text-amber-300">{zh ? '筛选外或已停用的既有目标；取消勾选前会继续保留。' : 'Existing targets outside the filter or disabled; retained until explicitly unchecked.'}</p><div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">{preservedSelected.map(option)}</div></div>}
+    <div className="grid max-h-72 gap-2.5 overflow-y-auto overscroll-contain sm:grid-cols-2 xl:grid-cols-3">
     {pagination.items.map((node) => (
-      <label key={node.id} className="flex cursor-pointer items-start gap-2">
-        <Checkbox checked={value.includes(node.id)} onCheckedChange={() => onChange(value.includes(node.id) ? value.filter((id) => id !== node.id) : [...value, node.id])} className="mt-0.5" />
-        <span className="flex min-w-0 flex-col">
-          <span className="truncate text-sm">{node.name}</span>
-          <span className="text-xs text-muted-foreground">{node.connection_type} · {node.status || 'unknown'}</span>
-        </span>
-      </label>
+      option(node)
     ))}
+    {enabled.length === 0 && <p className="text-sm text-muted-foreground">{zh ? '当前 Group 筛选下没有已启用节点' : 'No enabled nodes match the current group filter'}</p>}
+    </div>
   </div><ListPagination {...pagination} zh={zh} /></>
 }
 

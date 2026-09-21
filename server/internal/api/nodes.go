@@ -19,6 +19,80 @@ import (
 )
 
 func registerNodeRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps Dependencies) {
+	groups := v1.Group("/node-groups", requireAuth(deps.Auth))
+	groups.GET("", func(c *gin.Context) {
+		rows, err := deps.Nodes.ListGroups(c.Request.Context())
+		if err != nil {
+			failure(c, http.StatusInternalServerError, 20301, "Unable to list node groups")
+			return
+		}
+		success(c, rows)
+	})
+	groups.POST("", func(c *gin.Context) {
+		var input node.GroupInput
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, http.StatusBadRequest, 20302, "Invalid node group")
+			return
+		}
+		row, err := deps.Nodes.CreateGroup(c.Request.Context(), input)
+		if err != nil {
+			failure(c, http.StatusUnprocessableEntity, 20303, err.Error())
+			return
+		}
+		recordAudit(c, deps.Audit, "node_group.create", "node_group", row.Name, "success")
+		c.JSON(http.StatusCreated, envelope{Code: 0, Message: "success", Data: row})
+	})
+	groups.GET("/:id", func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+		if err != nil || id == 0 {
+			failure(c, http.StatusBadRequest, 20304, "Invalid node group ID")
+			return
+		}
+		row, err := deps.Nodes.GetGroup(c.Request.Context(), uint(id))
+		if err != nil {
+			failure(c, http.StatusNotFound, 20305, "Node group not found")
+			return
+		}
+		success(c, row)
+	})
+	groups.PUT("/:id", func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+		if err != nil || id == 0 {
+			failure(c, http.StatusBadRequest, 20304, "Invalid node group ID")
+			return
+		}
+		var input node.GroupInput
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, http.StatusBadRequest, 20302, "Invalid node group")
+			return
+		}
+		row, err := deps.Nodes.UpdateGroup(c.Request.Context(), uint(id), input)
+		if err != nil {
+			failure(c, http.StatusUnprocessableEntity, 20306, err.Error())
+			return
+		}
+		recordAudit(c, deps.Audit, "node_group.update", "node_group", row.Name, "success")
+		success(c, row)
+	})
+	groups.DELETE("/:id", func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+		if err != nil || id == 0 {
+			failure(c, http.StatusBadRequest, 20304, "Invalid node group ID")
+			return
+		}
+		row, err := deps.Nodes.GetGroup(c.Request.Context(), uint(id))
+		if err != nil {
+			failure(c, http.StatusNotFound, 20305, "Node group not found")
+			return
+		}
+		if err := deps.Nodes.DeleteGroup(c.Request.Context(), uint(id)); err != nil {
+			failure(c, http.StatusConflict, 20307, err.Error())
+			return
+		}
+		recordAudit(c, deps.Audit, "node_group.delete", "node_group", row.Name, "success")
+		success(c, gin.H{"id": id})
+	})
+
 	nodes := v1.Group("/nodes", requireAuth(deps.Auth))
 	nodes.GET("", func(c *gin.Context) {
 		rows, err := deps.Nodes.List(c.Request.Context())

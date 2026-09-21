@@ -2,7 +2,7 @@ import type { User } from '../features/auth/types'
 import type { Project, ProjectSummary, ProjectTakeoverDraft, ShadowAssessment, ShadowPreviewSession, ShadowPreviewStatus } from '../features/compose/types'
 import type { ContainerDetail, ContainerMetrics, ContainerSummary } from '../features/containers/types'
 import type { CDConfiguration, CDDrift, DeliveryProject, DeliveryRelease, GitCredential } from '../features/delivery/types'
-import type { DockerNode } from './nodes'
+import type { DockerNode, NodeGroup } from './nodes'
 import { ApiError, type DemoCredentials, type DemoStream } from './api'
 
 export const demoCredentials: DemoCredentials = { username: 'admin', password: 'admin123' }
@@ -16,10 +16,17 @@ let fleetOverviewTick = 0
 const user: User = { id: 1, username: 'admin', nickname: 'Demo Admin', email: 'admin@suma.demo', has_avatar: false }
 
 const nodes: DockerNode[] = [
-  { id: 'local', name: 'homelab-01', connection_type: 'unix', endpoint: 'unix:///var/run/docker.sock', tls_mode: 'disabled', enabled: true, engine_id: 'engine-homelab', engine_version: '28.3.3', status: 'online', last_latency_ms: 12, last_checked_at: now, created_at: earlier, updated_at: now },
-  { id: 'edge-hk', name: 'edge-hk', connection_type: 'tcp', endpoint: 'tcp://10.20.0.8:2376', tls_mode: 'required', tls_credential_id: 1, enabled: true, engine_id: 'engine-edge-hk', engine_version: '28.3.3', status: 'online', last_latency_ms: 46, last_checked_at: now, created_at: earlier, updated_at: now },
-  { id: 'nas-prod', name: 'nas-prod', connection_type: 'unix', endpoint: 'unix:///var/run/docker.sock', tls_mode: 'disabled', enabled: true, engine_id: 'engine-nas-prod', engine_version: '27.5.1', status: 'online', last_latency_ms: 21, last_checked_at: now, created_at: earlier, updated_at: now },
+  { id: 'local', name: 'homelab-01', connection_type: 'unix', endpoint: 'unix:///var/run/docker.sock', tls_mode: 'disabled', enabled: true, engine_id: 'engine-homelab', engine_version: '28.3.3', status: 'online', last_latency_ms: 12, last_checked_at: now, created_at: earlier, updated_at: now, group_ids: [1, 2] },
+  { id: 'edge-hk', name: 'edge-hk', connection_type: 'tcp', endpoint: 'tcp://10.20.0.8:2376', tls_mode: 'required', tls_credential_id: 1, enabled: true, engine_id: 'engine-edge-hk', engine_version: '28.3.3', status: 'online', last_latency_ms: 46, last_checked_at: now, created_at: earlier, updated_at: now, group_ids: [1, 3] },
+  { id: 'nas-prod', name: 'nas-prod', connection_type: 'unix', endpoint: 'unix:///var/run/docker.sock', tls_mode: 'disabled', enabled: true, engine_id: 'engine-nas-prod', engine_version: '27.5.1', status: 'online', last_latency_ms: 21, last_checked_at: now, created_at: earlier, updated_at: now, group_ids: [1, 2] },
 ]
+
+const nodeGroups: NodeGroup[] = [
+  { id: 1, name: 'Default', description: 'Default node group', is_default: true, node_count: 3, created_at: earlier, updated_at: now },
+  { id: 2, name: 'HomeLab', description: 'Local home infrastructure', is_default: false, node_count: 2, created_at: earlier, updated_at: now },
+  { id: 3, name: 'Edge', description: 'Remote edge engines', is_default: false, node_count: 1, created_at: earlier, updated_at: now },
+]
+const syncNodeGroupCounts = () => nodeGroups.forEach((group) => { group.node_count = nodes.filter((node) => node.group_ids.includes(group.id)).length })
 
 const makeContainer = (id: string, name: string, image: string, state: string, cpu: number, memory: number, labels: Record<string, string>, ports: ContainerSummary['ports']): ContainerSummary => ({
   id: id.repeat(64).slice(0, 64), name, image, command: '/docker-entrypoint.sh', created: earlier, state, status: state === 'running' ? 'Up 6 hours (healthy)' : 'Exited (0) 2 hours ago', ports, labels, cpu_percent: state === 'running' ? cpu : 0, memory_bytes: state === 'running' ? memory : 0, uptime_seconds: state === 'running' ? 21_840 : 0,
@@ -136,9 +143,54 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (pathname === '/account/profile' && method === 'PUT') return clone({ ...user, ...body }) as T
   if (pathname.startsWith('/account/')) return clone(user) as T
+  if (pathname === '/node-groups' && method === 'GET') return clone(nodeGroups) as T
+  if (pathname === '/node-groups' && method === 'POST') {
+    const group: NodeGroup = { id: Math.max(0, ...nodeGroups.map((item) => item.id)) + 1, name: String(body.name || ''), description: String(body.description || ''), is_default: false, node_count: 0, created_at: now, updated_at: now }
+    nodeGroups.push(group)
+    return clone(group) as T
+  }
+  const groupMatch = pathname.match(/^\/node-groups\/(\d+)$/)
+  if (groupMatch) {
+    const id = Number(groupMatch[1])
+    const index = nodeGroups.findIndex((item) => item.id === id)
+    if (index < 0) throw new ApiError('Node group not found', 20305, 404)
+    if (method === 'PUT') {
+      nodeGroups[index] = { ...nodeGroups[index], name: String(body.name || ''), description: String(body.description || ''), updated_at: now }
+      return clone(nodeGroups[index]) as T
+    }
+    if (method === 'DELETE') {
+      nodeGroups.splice(index, 1)
+      nodes.forEach((node) => { node.group_ids = node.group_ids.filter((groupID) => groupID !== id) })
+      syncNodeGroupCounts()
+      return { id } as T
+    }
+    return clone(nodeGroups[index]) as T
+  }
   if (pathname === '/nodes' && method === 'GET') return clone(nodes) as T
-  if (pathname === '/nodes' && method === 'POST') return clone(nodes[0]) as T
-  if (/^\/nodes\/[^/]+(?:\/test)?$/.test(pathname) && method !== 'GET') return clone(nodes.find((item) => pathname.includes(item.id)) ?? nodes[0]) as T
+  if (pathname === '/nodes' && method === 'POST') {
+    const id = `${String(body.name || 'node').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${nodes.length + 1}`
+    const node: DockerNode = { id, name: String(body.name || id), connection_type: body.connection_type === 'tcp' ? 'tcp' : 'unix', endpoint: String(body.endpoint || 'unix:///var/run/docker.sock'), tls_mode: body.tls_mode === 'required' ? 'required' : 'disabled', tls_credential_id: typeof body.tls_credential_id === 'number' ? body.tls_credential_id : undefined, enabled: body.enabled !== false, status: 'online', last_latency_ms: 18, last_checked_at: now, created_at: now, updated_at: now, group_ids: Array.isArray(body.group_ids) ? body.group_ids.filter((id): id is number => typeof id === 'number') : [] }
+    nodes.push(node)
+    syncNodeGroupCounts()
+    return clone(node) as T
+  }
+  const nodeRecordMatch = pathname.match(/^\/nodes\/([^/]+)(\/test)?$/)
+  if (nodeRecordMatch) {
+    const index = nodes.findIndex((item) => item.id === nodeRecordMatch[1])
+    if (index < 0) throw new ApiError('Docker node not found', 20004, 404)
+    if (nodeRecordMatch[2]) return clone(nodes[index]) as T
+    if (method === 'PUT') {
+      nodes[index] = { ...nodes[index], ...body, id: nodes[index].id, group_ids: Array.isArray(body.group_ids) ? body.group_ids.filter((id): id is number => typeof id === 'number') : nodes[index].group_ids, updated_at: now } as DockerNode
+      syncNodeGroupCounts()
+      return clone(nodes[index]) as T
+    }
+    if (method === 'DELETE') {
+      const [removed] = nodes.splice(index, 1)
+      syncNodeGroupCounts()
+      return { id: removed.id } as T
+    }
+    return clone(nodes[index]) as T
+  }
 
   if (pathname === '/fleet/overview') {
     const refreshTick = fleetOverviewTick++
@@ -147,7 +199,9 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
       'edge-hk': { cpus: 4, memory: 8 * 1024 ** 3 },
       'nas-prod': { cpus: 12, memory: 32 * 1024 ** 3 },
     }
-    const fleetNodes = nodes.map((node, index) => {
+    const groupID = Number(url.searchParams.get('group_id'))
+    const fleetSource = groupID > 0 ? nodes.filter((node) => node.group_ids.includes(groupID)) : nodes
+    const fleetNodes = fleetSource.map((node, index) => {
       const containers = nodeContainers(node.id)
       const metricContainers = containers
         .filter((item) => item.state === 'running')

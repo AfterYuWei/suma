@@ -24,7 +24,7 @@ func TestOpenMigratesDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !db.Migrator().HasTable(&User{}) || !db.Migrator().HasTable(&Task{}) {
+	if !db.Migrator().HasTable(&User{}) || !db.Migrator().HasTable(&Task{}) || !db.Migrator().HasTable(&NodeGroup{}) || !db.Migrator().HasTable(&NodeGroupNode{}) {
 		t.Fatal("expected core tables to be migrated")
 	}
 }
@@ -64,6 +64,49 @@ func TestOpenMigratesLegacyUserProfileColumns(t *testing.T) {
 	}
 	if user.Username != "admin" || user.Email != "" || user.Nickname != "" {
 		t.Fatalf("legacy user changed during migration: %#v", user)
+	}
+}
+
+func TestOpenBackfillsNodeGroupsOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-nodes.db")
+	legacy, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.AutoMigrate(&Node{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Create(&Node{ID: "edge", Name: "Edge", ConnectionType: "unix", Endpoint: "unix:///edge.sock", TLSMode: "disabled", AllowedBindRootsJSON: "[]", Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := legacy.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var group NodeGroup
+	if err := db.Where("is_default = ?", true).First(&group).Error; err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	if err := db.Model(&NodeGroupNode{}).Where("group_id = ? AND node_id = ?", group.ID, "edge").Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("default membership count = %d, err = %v", count, err)
+	}
+	if err := db.Delete(&group).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateNodeGroups(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&NodeGroup{}).Count(&count).Error; err != nil || count != 0 {
+		t.Fatalf("one-time migration recreated deleted default group: count=%d err=%v", count, err)
 	}
 }
 

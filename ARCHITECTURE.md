@@ -62,7 +62,7 @@ Approval and rejection are explicit release state transitions; approval alone do
 
 ## Web application
 
-TanStack Router defines route ownership and TanStack Query caches server data. Every Docker-resource key includes `node_id`. Zustand persists the selected node and local display preferences. CD and Authentication Center queries remain global.
+TanStack Router defines route ownership and TanStack Query caches server data. Every Docker-resource key includes `node_id`. Zustand persists the selected node, the independent Node Group filter, and local display preferences. Changing the Group filter never changes the selected node or Docker runtime context; only an explicit Node selection does. CD and Authentication Center queries remain global, while their node candidate controls honor the Group filter without dropping already selected out-of-filter nodes.
 
 Semantic tokens (`background`, `surface`, `surface-hover`, `border`, `muted`, `text`, `text-muted`) support dark, light, and system themes. The shell uses a compact sidebar, contextual header, and global command palette rather than a conventional admin dashboard.
 

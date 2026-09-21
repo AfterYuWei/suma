@@ -7,11 +7,14 @@ All REST responses use `{ "code": 0, "message": "success", "data": ... }`. Error
 Node-aware clients use these routes:
 
 - `GET|POST /nodes`, `GET|PUT|DELETE /nodes/:nodeID`, `POST /nodes/:nodeID/test`
+- `GET|POST /node-groups`, `GET|PUT|DELETE /node-groups/:groupID`
 - `GET /nodes/:nodeID/{overview,docker/info}`
 - `GET|POST|PUT|PATCH|DELETE /nodes/:nodeID/{containers,images,networks,volumes,projects}/...`
 - `POST /nodes/:nodeID/system/prune`
 - `GET /nodes/:nodeID/tasks`, `GET /nodes/:nodeID/tasks/:taskID`, `GET /nodes/:nodeID/tasks/:taskID/{logs|steps}`, `POST /nodes/:nodeID/tasks/:taskID/cancel`
 - `GET /nodes/:nodeID/audit-logs`
+
+Node Groups are organizational filters, never Docker execution or authorization scopes. A node may belong to multiple Groups or have no Group. Node create/update accepts optional `group_ids`; omitting it on update preserves memberships, while an explicit empty array clears them. Deleting a Group only removes memberships. `GET /fleet/overview` accepts an optional `group_id=<id>` and probes only matching nodes; omitting it returns all nodes, including nodes without a Group.
 
 `POST /nodes/:nodeID/containers/batch` accepts 1–100 IDs and a lifecycle `action`. Batch `start` and `stop` are idempotent: containers already in the requested state count as successful. Batch `restart` uses Docker's restart behavior for running and stopped containers. Batch `remove` may set `force: true` after destructive confirmation to remove running containers; `remove_volumes` remains independent and defaults to `false`. Every result includes `id`, `success`, and an optional Docker error for failed rows.
 

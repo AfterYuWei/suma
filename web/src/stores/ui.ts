@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { NodeGroupFilter } from '../lib/nodes'
 
 export type Theme = 'dark' | 'light' | 'system'
 export type Language = 'zh-CN' | 'en-US'
@@ -15,6 +16,7 @@ interface UIState {
   commandOpen: boolean
   sidebarOpen: boolean
   currentNodeID: string
+	currentGroupFilter: NodeGroupFilter
   logTail: LogTail
   listPageSize: ListPageSize
   overviewNodeCardSizes: Record<string, NodeCardSize>
@@ -24,6 +26,7 @@ interface UIState {
   setCommandOpen: (open: boolean) => void
   toggleSidebar: () => void
   setCurrentNodeID: (nodeID: string) => void
+	setCurrentGroupFilter: (filter: NodeGroupFilter) => void
   setLogTail: (tail: LogTail) => void
   setListPageSize: (pageSize: ListPageSize) => void
   setOverviewNodeCardSize: (nodeID: string, size: NodeCardSize) => void
@@ -84,6 +87,7 @@ export const useUIStore = create<UIState>((set) => ({
   commandOpen: false,
   sidebarOpen: matchMedia('(min-width: 1024px)').matches,
   currentNodeID: localStorage.getItem('suma-node') || 'local',
+	currentGroupFilter: (localStorage.getItem('suma-node-group') as NodeGroupFilter | null) || 'default',
   logTail: storedLogTail,
   listPageSize: storedListPageSize,
   overviewNodeCardSizes: storedNodeCardSizes,
@@ -101,6 +105,7 @@ export const useUIStore = create<UIState>((set) => ({
   setCommandOpen: (commandOpen) => set({ commandOpen }),
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
   setCurrentNodeID: (currentNodeID) => { localStorage.setItem('suma-node', currentNodeID); set({ currentNodeID }) },
+	setCurrentGroupFilter: (currentGroupFilter) => { localStorage.setItem('suma-node-group', currentGroupFilter); set({ currentGroupFilter }) },
   setLogTail: (logTail) => { localStorage.setItem('suma-log-tail', String(logTail)); set({ logTail }) },
   setListPageSize: (listPageSize) => { localStorage.setItem('suma-list-page-size', String(listPageSize)); set({ listPageSize }) },
   setOverviewNodeCardSize: (nodeID, size) => set((state) => {

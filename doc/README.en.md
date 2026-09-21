@@ -11,6 +11,7 @@ SUMA is a single monolithic control plane for multi-node Docker management: mana
 - Agentless: attach mounted Unix sockets to reach local/host engines, or add remote Docker TCP endpoints
 - TCP connections enforce mutual TLS by default; plaintext TCP is limited to loopback, private-network, or Tailscale IP addresses and requires re-entering the target IP before saving
 - Global node switcher: flip the active node from the header; resources, Compose, and tasks all follow
+- Multi-membership Node Groups: nodes may belong to several Groups or no Group; Groups filter fleet and node choices, while only an explicit Node selection changes Docker context
 - Automatic probing: node status and latency refresh every 30 seconds with graceful degradation
 - Remote bind validation: Compose mount sources on TCP nodes must use non-interpolated absolute paths
 
@@ -141,6 +142,7 @@ Quality checks: `make check` (backend `go test ./...` + `go build ./...`; fronte
 ## Adding nodes
 
 1. Open the Nodes page and add a node:
+   - You may first create one or more Node Groups and select multiple memberships in the node form. Groups organize and filter nodes; they are not clusters or batch execution targets.
    - **Unix Socket**: mount the target machine's `/var/run/docker.sock` into the SUMA container at any path, then register that path;
    - **Docker TCP**: enter the remote endpoint such as `tcp://192.168.1.99:2376`, choose mTLS, and attach a Docker TLS credential.
 2. Use Test Connection to verify reachability and latency.

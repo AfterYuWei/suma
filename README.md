@@ -11,6 +11,7 @@ SUMA 是一个面向多节点 Docker 管理的单体控制平面：通过一个 
 - 无 Agent 接入：挂载 Unix socket 直连本机/宿主机引擎，或添加远程 Docker TCP 端点
 - TCP 默认强制双向 TLS（mTLS）；明文 TCP 仅允许回环、私有内网或 Tailscale IP，且保存时必须再次输入目标 IP 确认风险
 - 全局节点选择器：Header 一键切换当前操作节点，资源、Projects、任务全部跟随
+- 多归属节点 Group：节点可加入多个 Group 或不属于任何 Group；Group 统一筛选概览和节点候选，但只有显式选择节点才会切换 Docker 上下文
 - 自动状态探测：每 30 秒探测所有节点在线状态与延迟，异常自动降级显示
 - 远端 bind 安全校验：TCP 节点上的 Compose 挂载源必须使用不可插值的绝对路径
 
@@ -154,6 +155,7 @@ npm run build:demo
 ## 接入更多节点
 
 1. 进入「节点」页面，点击添加节点：
+   - 可先创建一个或多个节点 Group，并在节点表单中多选归属；Group 只用于组织和筛选，不代表集群或批量执行目标；
    - **Unix Socket**：把目标机的 `/var/run/docker.sock` 挂载进 SUMA 容器的某个路径后填入该路径；
    - **Docker TCP**：填写远端端点，例如 `tcp://192.168.1.99:2376`，选择 mTLS 并绑定 Docker TLS 凭据。
 2. 点击「测试连接」验证连通性与延迟。

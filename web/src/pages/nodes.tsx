@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { FolderTree, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { LoadingState } from '../components/ui/loading-state'
 import { Alert, AlertDescription } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Checkbox } from '../components/ui/checkbox'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog'
 import { ListShell } from '../components/ui/list-shell'
 import { ListPagination } from '../components/ui/list-pagination'
 import { useListPagination } from '../components/ui/use-list-pagination'
@@ -17,18 +18,20 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '
 import { Spinner } from '../components/ui/spinner'
 import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
+import { Textarea } from '../components/ui/textarea'
 import { TooltipHint } from '../components/ui/tooltip-hint'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
-import type { DockerNode } from '../lib/nodes'
+import { filterNodesByGroup, groupFilterID, type DockerNode, type NodeGroup } from '../lib/nodes'
 import { confirmDialog, promptDialog } from '../stores/dialog'
+import { useUIStore } from '../stores/ui'
 import { ResourceFrame } from './images'
 
 interface TLSCredential { id: number; name: string; fingerprint: string; authorized_node_ids: string[] }
-interface NodeFormValues { name: string; connection_type: 'unix' | 'tcp'; endpoint: string; tls_mode: 'required' | 'disabled'; tls_credential_id?: number; enabled: boolean }
+interface NodeFormValues { name: string; connection_type: 'unix' | 'tcp'; endpoint: string; tls_mode: 'required' | 'disabled'; tls_credential_id?: number; enabled: boolean; group_ids: number[] }
 interface NodeInput extends NodeFormValues { plaintext_confirmation?: string }
 
-const blank = (): NodeFormValues => ({ name: '', connection_type: 'unix', endpoint: 'unix:///var/run/docker.sock', tls_mode: 'disabled', enabled: true })
+const blank = (groupID?: number): NodeFormValues => ({ name: '', connection_type: 'unix', endpoint: 'unix:///var/run/docker.sock', tls_mode: 'disabled', enabled: true, group_ids: groupID ? [groupID] : [] })
 
 const connectionLabels: Record<string, string> = { unix: 'Unix Socket', tcp: 'Docker TCP' }
 
@@ -36,14 +39,21 @@ export function NodesPage() {
   const { language } = useI18n()
   const zh = language === 'zh-CN'
   const client = useQueryClient()
+  const currentGroupFilter = useUIStore((state) => state.currentGroupFilter)
+  const setCurrentGroupFilter = useUIStore((state) => state.setCurrentGroupFilter)
   const query = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes'), refetchInterval: 15_000 })
+  const groups = useQuery({ queryKey: ['node-groups'], queryFn: () => api<NodeGroup[]>('/node-groups') })
   const credentials = useQuery({ queryKey: ['docker-tls-credentials'], queryFn: () => api<TLSCredential[]>('/credentials/docker-tls') })
   const [editing, setEditing] = useState<DockerNode | null>(null)
-  const [values, setValues] = useState<NodeFormValues>(blank)
+  const [values, setValues] = useState<NodeFormValues>(() => blank())
   const [open, setOpen] = useState(false)
-  const save = useMutation({ mutationFn: (input: NodeInput) => api<DockerNode>(editing ? `/nodes/${editing.id}` : '/nodes', { method: editing ? 'PUT' : 'POST', body: JSON.stringify(input) }), onSuccess: async () => { setOpen(false); await client.invalidateQueries({ queryKey: ['nodes'] }) } })
+  const [groupOpen, setGroupOpen] = useState(false)
+  const [editingGroup, setEditingGroup] = useState<NodeGroup | null>(null)
+  const [groupValues, setGroupValues] = useState({ name: '', description: '' })
+  const save = useMutation({ mutationFn: (input: NodeInput) => api<DockerNode>(editing ? `/nodes/${editing.id}` : '/nodes', { method: editing ? 'PUT' : 'POST', body: JSON.stringify(input) }), onSuccess: async () => { setOpen(false); await Promise.all([client.invalidateQueries({ queryKey: ['nodes'] }), client.invalidateQueries({ queryKey: ['node-groups'] })]) } })
+  const saveGroup = useMutation({ mutationFn: (input: { name: string; description: string }) => api<NodeGroup>(editingGroup ? `/node-groups/${editingGroup.id}` : '/node-groups', { method: editingGroup ? 'PUT' : 'POST', body: JSON.stringify(input) }), onSuccess: async () => { setGroupOpen(false); await Promise.all([client.invalidateQueries({ queryKey: ['node-groups'] }), client.invalidateQueries({ queryKey: ['nodes'] })]) } })
   const test = useMutation({ mutationFn: (id: string) => api(`/nodes/${id}/test`, { method: 'POST' }), onSuccess: () => client.invalidateQueries({ queryKey: ['nodes'] }) })
-  const edit = (node: DockerNode) => { setEditing(node); setValues({ name: node.name, connection_type: node.connection_type, endpoint: node.endpoint, tls_mode: node.tls_mode, tls_credential_id: node.tls_credential_id, enabled: node.enabled }); setOpen(true) }
+  const edit = (node: DockerNode) => { setEditing(node); setValues({ name: node.name, connection_type: node.connection_type, endpoint: node.endpoint, tls_mode: node.tls_mode, tls_credential_id: node.tls_credential_id, enabled: node.enabled, group_ids: node.group_ids }); setOpen(true) }
   const remove = async (node: DockerNode) => { if (!await confirmDialog({ title: zh ? `删除节点 ${node.name}？` : `Delete node ${node.name}?`, description: zh ? '必须先解绑 Compose、CD 和全部凭据授权。历史任务和审计记录会保留。' : 'Compose, CD, and credential grants must be detached first. Historical tasks and audits remain.', confirmLabel: zh ? '删除节点' : 'Delete node', danger: true })) return; await api(`/nodes/${node.id}`, { method: 'DELETE' }); await client.invalidateQueries({ queryKey: ['nodes'] }) }
   const submitNode = async () => {
     if (values.connection_type !== 'tcp' || values.tls_mode !== 'disabled') {
@@ -67,12 +77,38 @@ export function NodesPage() {
     })
     if (confirmation === host) save.mutate({ ...values, plaintext_confirmation: host })
   }
-  const createNode = () => { setEditing(null); setValues(blank()); setOpen(true) }
+  const createNode = () => { setEditing(null); setValues(blank(groupFilterID(currentGroupFilter) ?? undefined)); setOpen(true) }
+  const createGroup = () => { saveGroup.reset(); setEditingGroup(null); setGroupValues({ name: '', description: '' }); setGroupOpen(true) }
+  const editGroup = (group: NodeGroup) => { saveGroup.reset(); setEditingGroup(group); setGroupValues({ name: group.name, description: group.description }); setGroupOpen(true) }
+  const removeGroup = async (group: NodeGroup) => {
+    if (!await confirmDialog({ title: zh ? `删除 Group ${group.name}？` : `Delete group ${group.name}?`, description: zh ? `只会解除 ${group.node_count} 个节点的归属，不会删除节点或改变当前 Docker 上下文。` : `This only detaches ${group.node_count} nodes. It does not delete nodes or change the current Docker context.`, confirmLabel: zh ? '删除 Group' : 'Delete group', danger: true })) return
+    await api(`/node-groups/${group.id}`, { method: 'DELETE' })
+    if (currentGroupFilter === `group:${group.id}`) setCurrentGroupFilter('all')
+    await Promise.all([client.invalidateQueries({ queryKey: ['node-groups'] }), client.invalidateQueries({ queryKey: ['nodes'] })])
+  }
   const update = (patch: Partial<NodeFormValues>) => setValues((previous) => ({ ...previous, ...patch }))
   const tcp = values.connection_type === 'tcp'
-  const pagination = useListPagination(query.data ?? [])
+  const filteredNodes = filterNodesByGroup(query.data ?? [], currentGroupFilter)
+  const pagination = useListPagination(filteredNodes)
 
-  return <ResourceFrame title={zh ? 'Docker 节点' : 'Docker nodes'} detail={zh ? '通过本地 Unix Socket 或受保护的 Docker TCP API 管理多个 Engine。' : 'Manage Docker Engines through local Unix sockets or protected Docker TCP APIs.'} action={<Button onClick={createNode}><Plus />{zh ? '添加节点' : 'Add node'}</Button>}>
+  return <ResourceFrame title={zh ? 'Docker 节点' : 'Docker nodes'} detail={zh ? '通过 Group 组织节点；Docker 操作仍始终绑定明确的单个节点。' : 'Organize nodes with groups while every Docker operation remains bound to one explicit node.'} action={<Button onClick={createNode}><Plus />{zh ? '添加节点' : 'Add node'}</Button>}>
+    <section className="mb-4 flex flex-col gap-3 rounded-xl border p-3" aria-labelledby="node-groups-heading">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="mr-auto flex min-w-0 items-center gap-2">
+          <FolderTree className="size-4 text-muted-foreground" />
+          <div><h2 id="node-groups-heading" className="text-sm font-medium">{zh ? '节点 Group' : 'Node groups'}</h2><p className="text-xs text-muted-foreground">{zh ? 'Group 只筛选节点，不会切换当前 Docker 上下文。' : 'Groups filter nodes without switching the current Docker context.'}</p></div>
+        </div>
+        <Button variant="outline" size="sm" onClick={createGroup}><Plus />{zh ? '新建 Group' : 'New group'}</Button>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        <Button variant={currentGroupFilter === 'all' ? 'secondary' : 'ghost'} size="sm" onClick={() => setCurrentGroupFilter('all')}>{zh ? '全部' : 'All'} · {(query.data ?? []).length}</Button>
+        {(groups.data ?? []).map((group) => <div key={group.id} className="flex items-center rounded-lg border bg-muted/20">
+          <Button variant={currentGroupFilter === `group:${group.id}` ? 'secondary' : 'ghost'} size="sm" className="rounded-r-none" onClick={() => setCurrentGroupFilter(`group:${group.id}`)}>{group.name} · {group.node_count}</Button>
+          <TooltipHint content={zh ? '编辑 Group' : 'Edit group'}><Button variant="ghost" size="icon-sm" className="rounded-none" aria-label={zh ? '编辑 Group' : 'Edit group'} onClick={() => editGroup(group)}><Pencil /></Button></TooltipHint>
+          <TooltipHint content={zh ? '删除 Group' : 'Delete group'}><Button variant="ghost" size="icon-sm" className="rounded-l-none text-destructive" aria-label={zh ? '删除 Group' : 'Delete group'} onClick={() => void removeGroup(group)}><Trash2 /></Button></TooltipHint>
+        </div>)}
+      </div>
+    </section>
     {query.isPending
       ? <LoadingState compact rows={4} label={zh ? '正在加载节点' : 'Loading nodes'} />
       : (
@@ -81,13 +117,14 @@ export function NodesPage() {
               <TableRow>
                 <TableHead>{zh ? '节点' : 'Node'}</TableHead>
                 <TableHead className="w-44">{zh ? '连接' : 'Connection'}</TableHead>
+                <TableHead className="min-w-40">Group</TableHead>
                 <TableHead className="w-28">{zh ? '状态' : 'Status'}</TableHead>
                 <TableHead className="w-28 text-right">{zh ? '操作' : 'Actions'}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(query.data ?? []).length === 0 && (
-                <TableRow><TableCell colSpan={4} className="h-24 text-center text-muted-foreground">{zh ? '暂无节点' : 'No nodes'}</TableCell></TableRow>
+              {filteredNodes.length === 0 && (
+                <TableRow><TableCell colSpan={5} className="h-24 text-center text-muted-foreground">{zh ? '当前 Group 筛选下暂无节点' : 'No nodes match the current group filter'}</TableCell></TableRow>
               )}
               {pagination.items.map((node) => (
                 <TableRow key={node.id}>
@@ -102,6 +139,7 @@ export function NodesPage() {
                       <Badge variant="outline" className="text-xs">{node.tls_mode === 'required' ? 'mTLS' : 'PLAIN'}</Badge>
                     </div>
                   </TableCell>
+                  <TableCell><div className="flex flex-wrap gap-1">{node.group_ids.length === 0 ? <span className="text-xs text-muted-foreground">{zh ? '无 Group' : 'No group'}</span> : node.group_ids.map((id) => { const group = groups.data?.find((item) => item.id === id); return <Badge key={id} variant="secondary" className="text-xs">{group?.name ?? `#${id}`}</Badge> })}</div></TableCell>
                   <TableCell><StatusBadge tone={node.status === 'online' ? 'success' : 'neutral'}>{node.status}</StatusBadge></TableCell>
                   <TableCell>
                     <div className="flex items-center justify-end gap-0.5">
@@ -127,6 +165,18 @@ export function NodesPage() {
             </TableBody>
           </Table></ListShell><ListPagination {...pagination} zh={zh} /></>
         )}
+
+    <Dialog open={groupOpen} onOpenChange={setGroupOpen}>
+      {groupOpen && <DialogContent className="sm:max-w-md">
+        <DialogHeader><DialogTitle>{editingGroup ? (zh ? '编辑 Group' : 'Edit group') : (zh ? '新建 Group' : 'New group')}</DialogTitle></DialogHeader>
+        <form onSubmit={(event) => { event.preventDefault(); saveGroup.mutate(groupValues) }} className="flex flex-col gap-4">
+          <div className="grid gap-1.5"><Label htmlFor="group-name">{zh ? '名称' : 'Name'}</Label><Input id="group-name" required maxLength={128} value={groupValues.name} onChange={(event) => setGroupValues((current) => ({ ...current, name: event.target.value }))} /></div>
+          <div className="grid gap-1.5"><Label htmlFor="group-description">{zh ? '描述（可选）' : 'Description (optional)'}</Label><Textarea id="group-description" maxLength={512} rows={4} value={groupValues.description} onChange={(event) => setGroupValues((current) => ({ ...current, description: event.target.value }))} /></div>
+          {saveGroup.isError && <Alert variant="destructive"><AlertDescription>{saveGroup.error.message}</AlertDescription></Alert>}
+          <DialogFooter><Button type="button" variant="outline" onClick={() => setGroupOpen(false)}>{zh ? '取消' : 'Cancel'}</Button><Button type="submit" disabled={saveGroup.isPending}>{saveGroup.isPending && <Spinner />}{zh ? '保存 Group' : 'Save group'}</Button></DialogFooter>
+        </form>
+      </DialogContent>}
+    </Dialog>
 
     <Sheet open={open} onOpenChange={(next) => setOpen(next)} disablePointerDismissal>
       <SheetContent side="right" className="w-full sm:max-w-[520px]">
@@ -178,6 +228,15 @@ export function NodesPage() {
               </div>
             )}
           </>}
+          <div className="grid gap-2">
+            <Label>{zh ? '所属 Group（可多选）' : 'Groups (multiple allowed)'}</Label>
+            <div className="flex max-h-40 flex-col gap-2 overflow-y-auto rounded-lg border p-3">
+              {(groups.data ?? []).length === 0 ? <p className="text-xs text-muted-foreground">{zh ? '暂无 Group；节点将不属于任何 Group。' : 'No groups exist; the node will not belong to a Group.'}</p> : (groups.data ?? []).map((group) => <label key={group.id} className="flex cursor-pointer items-start gap-2">
+                <Checkbox checked={values.group_ids.includes(group.id)} onCheckedChange={(checked) => update({ group_ids: checked ? [...values.group_ids, group.id] : values.group_ids.filter((id) => id !== group.id) })} className="mt-0.5" />
+                <span className="min-w-0"><span className="block truncate text-sm">{group.name}</span>{group.description && <span className="block truncate text-xs text-muted-foreground">{group.description}</span>}</span>
+              </label>)}
+            </div>
+          </div>
           <label className="flex items-center gap-2 text-sm">
             <Checkbox checked={values.enabled} onCheckedChange={(checked) => update({ enabled: Boolean(checked) })} />
             {zh ? '启用节点' : 'Enable node'}

@@ -14,6 +14,7 @@ import { StatusBadge } from '../components/ui/status-badge'
 import { TooltipHint } from '../components/ui/tooltip-hint'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
+import { fleetGroupQuery, type DockerNode } from '../lib/nodes'
 import { useUIStore } from '../stores/ui'
 
 interface FleetOverview { nodes: FleetNode[] }
@@ -39,17 +40,19 @@ export function OverviewPage() {
   const nodeCardOrder = useUIStore((state) => state.overviewNodeCardOrder)
   const setNodeCardSize = useUIStore((state) => state.setOverviewNodeCardSize)
   const setNodeCardOrder = useUIStore((state) => state.setOverviewNodeCardOrder)
+  const currentGroupFilter = useUIStore((state) => state.currentGroupFilter)
   const [draggingNodeID, setDraggingNodeID] = useState<string | null>(null)
   const [dragOrder, setDragOrder] = useState<string[] | null>(null)
   const dragOrderRef = useRef<string[] | null>(null)
 
   const fleet = useQuery({
-    queryKey: ['fleet-overview'],
-    queryFn: () => api<FleetOverview>('/fleet/overview'),
+    queryKey: ['fleet-overview', currentGroupFilter],
+    queryFn: () => api<FleetOverview>(`/fleet/overview${fleetGroupQuery(currentGroupFilter)}`),
     refetchInterval: fleetRefreshInterval,
     refetchOnWindowFocus: 'always',
     refetchOnReconnect: 'always',
   })
+  const allNodes = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes') })
   const cd = useQuery({ queryKey: ['cd-overview'], queryFn: () => api<CDOverview>('/cd/overview'), refetchInterval: 10_000 })
 
   const nodes = fleet.data?.nodes ?? []
@@ -60,7 +63,7 @@ export function OverviewPage() {
   const nodeByID = new Map(nodes.map((node) => [node.id, node]))
   const orderedNodes = renderedNodeIDs.map((nodeID) => nodeByID.get(nodeID)).filter((node): node is FleetNode => node != null)
   const cdTotals = cd.data?.totals
-  const nodeNames = new Map(nodes.map((node) => [node.id, node.name]))
+  const nodeNames = new Map((allNodes.data ?? []).map((node) => [node.id, node.name]))
   const layoutTransition = reduceMotion ? { duration: 0 } : { layout: { duration: 0.3, ease: 'linear' as const } }
   const fleetUpdatedAt = fleet.dataUpdatedAt > 0
     ? new Date(fleet.dataUpdatedAt).toLocaleTimeString(language, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
