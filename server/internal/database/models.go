@@ -3,16 +3,22 @@ package database
 import "time"
 
 type User struct {
-	ID              uint   `gorm:"primaryKey"`
-	Username        string `gorm:"uniqueIndex;size:64;not null"`
-	Nickname        string `gorm:"size:64;not null;default:''"`
-	Email           string `gorm:"uniqueIndex;collate:nocase;size:254;not null;default:''"`
-	PasswordHash    string `gorm:"not null"`
-	AvatarData      []byte
-	AvatarMIME      string `gorm:"size:32;not null;default:''"`
-	AvatarUpdatedAt *time.Time
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID                 uint   `gorm:"primaryKey"`
+	Username           string `gorm:"uniqueIndex;size:64;not null"`
+	Nickname           string `gorm:"size:64;not null;default:''"`
+	Email              string `gorm:"uniqueIndex;collate:nocase;size:254;not null;default:''"`
+	PasswordHash       string `gorm:"not null"`
+	AvatarData         []byte
+	AvatarMIME         string `gorm:"size:32;not null;default:''"`
+	AvatarUpdatedAt    *time.Time
+	TOTPEnabled        bool       `gorm:"not null;default:false"`
+	TOTPSecret         []byte     `json:"-"`
+	TOTPLastCounter    int64      `gorm:"not null;default:0"`
+	TOTPFailedAttempts int        `gorm:"not null;default:0"`
+	TOTPLockedUntil    *time.Time `gorm:"index"`
+	PasskeyUserHandle  []byte     `gorm:"uniqueIndex" json:"-"`
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 type Session struct {
@@ -22,6 +28,56 @@ type Session struct {
 	User      User      `gorm:"constraint:OnDelete:CASCADE"`
 	ExpiresAt time.Time `gorm:"index;not null"`
 	CreatedAt time.Time
+}
+
+type LoginChallenge struct {
+	ID        uint      `gorm:"primaryKey"`
+	TokenHash string    `gorm:"uniqueIndex;size:64;not null"`
+	UserID    uint      `gorm:"index;not null"`
+	Username  string    `gorm:"size:254;not null"`
+	IP        string    `gorm:"size:64"`
+	Attempts  int       `gorm:"not null;default:0"`
+	ExpiresAt time.Time `gorm:"index;not null"`
+	CreatedAt time.Time
+}
+
+type TwoFactorEnrollment struct {
+	UserID       uint      `gorm:"primaryKey"`
+	SecretCipher []byte    `json:"-"`
+	ExpiresAt    time.Time `gorm:"index;not null"`
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+type TwoFactorRecoveryCode struct {
+	ID        uint   `gorm:"primaryKey"`
+	UserID    uint   `gorm:"index;not null"`
+	CodeHash  string `gorm:"not null" json:"-"`
+	CreatedAt time.Time
+}
+
+type PasskeyCredential struct {
+	ID             uint   `gorm:"primaryKey"`
+	UserID         uint   `gorm:"index;not null"`
+	CredentialID   []byte `gorm:"uniqueIndex;not null" json:"-"`
+	Name           string `gorm:"size:64;not null"`
+	CredentialJSON []byte `gorm:"not null" json:"-"`
+	LastUsedAt     *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type WebAuthnCeremony struct {
+	ID          uint      `gorm:"primaryKey"`
+	TokenHash   string    `gorm:"uniqueIndex;size:64;not null"`
+	UserID      uint      `gorm:"index;not null;default:0"`
+	Kind        string    `gorm:"size:16;not null"`
+	Name        string    `gorm:"size:64;not null;default:''"`
+	SessionJSON []byte    `gorm:"not null" json:"-"`
+	RPID        string    `gorm:"size:253;not null"`
+	Origin      string    `gorm:"size:512;not null"`
+	ExpiresAt   time.Time `gorm:"index;not null"`
+	CreatedAt   time.Time
 }
 
 type Setting struct {

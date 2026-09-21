@@ -57,7 +57,7 @@ func New(logger *slog.Logger) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	authService := auth.NewService(db, cfg.SessionMaxAge)
+	authService := auth.NewService(db, cfg.SessionMaxAge, secretStore)
 	auditService := audit.NewService(db)
 	taskService := task.NewService(db)
 	images := imageService.NewService(engine, taskService)

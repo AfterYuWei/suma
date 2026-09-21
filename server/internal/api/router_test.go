@@ -3,6 +3,10 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base32"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -71,6 +75,28 @@ func TestDockerInfoRequiresAuthentication(t *testing.T) {
 	testRouter(t, &fakeEngine{}).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/docker/info", nil))
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", response.Code)
+	}
+}
+
+func TestPasskeyLoginOptionsRequireSecureSameOrigin(t *testing.T) {
+	router := testRouter(t, &fakeEngine{})
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/passkey/options", nil)
+	request.Header.Set("Origin", "https://example.com")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"userVerification":"required"`) {
+		t.Fatalf("secure passkey options: %d %s", response.Code, response.Body.String())
+	}
+
+	for _, origin := range []string{"", "http://example.com", "https://attacker.example"} {
+		request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/passkey/options", nil)
+		request.Header.Set("Origin", origin)
+		response = httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("origin %q returned %d: %s", origin, response.Code, response.Body.String())
+		}
 	}
 }
 
@@ -385,6 +411,104 @@ func TestAuthenticationLifecycle(t *testing.T) {
 	if invalid.Code != http.StatusUnauthorized {
 		t.Fatalf("expected invalidated session, got %d", invalid.Code)
 	}
+}
+
+func TestTwoFactorAuthenticationHTTP(t *testing.T) {
+	root := t.TempDir()
+	db, err := database.Open(filepath.Join(root, "two-factor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := secret.Open(filepath.Join(root, "secret.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	authService := auth.NewService(db, time.Hour, store)
+	user, err := authService.Initialize(context.Background(), "admin", "admin@example.test", "Operator", "long-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := authService.Login(context.Background(), "admin", "long-password", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouter(Dependencies{Engine: &fakeEngine{}, Auth: authService, Audit: audit.NewService(db), Tasks: task.NewService(db)})
+	authenticatedRequest := func(method, path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		return response
+	}
+	status := authenticatedRequest(http.MethodGet, "/api/v1/account/two-factor", "")
+	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"enabled":false`) {
+		t.Fatalf("initial status = %d %s", status.Code, status.Body.String())
+	}
+	wrongSetup := authenticatedRequest(http.MethodPost, "/api/v1/account/two-factor/setup", `{"current_password":"wrong-password"}`)
+	if wrongSetup.Code != http.StatusForbidden {
+		t.Fatalf("wrong setup password = %d %s", wrongSetup.Code, wrongSetup.Body.String())
+	}
+	setupResponse := authenticatedRequest(http.MethodPost, "/api/v1/account/two-factor/setup", `{"current_password":"long-password"}`)
+	if setupResponse.Code != http.StatusOK || strings.Contains(setupResponse.Body.String(), "secret_cipher") {
+		t.Fatalf("setup = %d %s", setupResponse.Code, setupResponse.Body.String())
+	}
+	var setupEnvelope struct {
+		Data struct {
+			Secret string `json:"secret"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(setupResponse.Body.Bytes(), &setupEnvelope); err != nil || setupEnvelope.Data.Secret == "" {
+		t.Fatalf("decode setup: %v", err)
+	}
+	confirmationCode := testTOTPCode(t, setupEnvelope.Data.Secret, time.Now().Add(-30*time.Second))
+	enabled := authenticatedRequest(http.MethodPost, "/api/v1/account/two-factor/enable", fmt.Sprintf(`{"code":%q}`, confirmationCode))
+	if enabled.Code != http.StatusOK || !strings.Contains(enabled.Body.String(), "recovery_codes") || strings.Count(enabled.Body.String(), "-") < 10 {
+		t.Fatalf("enable = %d %s", enabled.Code, enabled.Body.String())
+	}
+	login := httptest.NewRecorder()
+	loginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"long-password"}`))
+	loginRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(login, loginRequest)
+	if login.Code != http.StatusOK || len(login.Result().Cookies()) != 0 || !strings.Contains(login.Body.String(), `"requires_two_factor":true`) {
+		t.Fatalf("password challenge = %d %s cookies=%v", login.Code, login.Body.String(), login.Result().Cookies())
+	}
+	var loginEnvelope struct {
+		Data struct {
+			ChallengeToken string `json:"challenge_token"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(login.Body.Bytes(), &loginEnvelope); err != nil || loginEnvelope.Data.ChallengeToken == "" {
+		t.Fatalf("decode login challenge: %v", err)
+	}
+	verificationCode := testTOTPCode(t, setupEnvelope.Data.Secret, time.Now())
+	verify := httptest.NewRecorder()
+	verifyRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/two-factor", strings.NewReader(fmt.Sprintf(`{"challenge_token":%q,"code":%q}`, loginEnvelope.Data.ChallengeToken, verificationCode)))
+	verifyRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(verify, verifyRequest)
+	if verify.Code != http.StatusOK || len(verify.Result().Cookies()) != 1 || !strings.Contains(verify.Body.String(), `"two_factor_enabled":true`) {
+		t.Fatalf("verify = %d %s cookies=%v", verify.Code, verify.Body.String(), verify.Result().Cookies())
+	}
+	var auditCount int64
+	if err := db.Model(&database.AuditLog{}).Where("user_id = ? AND action IN ?", user.ID, []string{"account.two_factor.setup", "account.two_factor.enable", "login"}).Count(&auditCount).Error; err != nil || auditCount < 3 {
+		t.Fatalf("2FA audit count = %d, %v", auditCount, err)
+	}
+}
+
+func testTOTPCode(t *testing.T, encodedSecret string, at time.Time) string {
+	t.Helper()
+	secretBytes, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(encodedSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := make([]byte, 8)
+	binary.BigEndian.PutUint64(message, uint64(at.Unix()/30))
+	mac := hmac.New(sha1.New, secretBytes)
+	_, _ = mac.Write(message)
+	digest := mac.Sum(nil)
+	offset := digest[len(digest)-1] & 0x0f
+	value := (uint32(digest[offset])&0x7f)<<24 | uint32(digest[offset+1])<<16 | uint32(digest[offset+2])<<8 | uint32(digest[offset+3])
+	return fmt.Sprintf("%06d", value%1_000_000)
 }
 
 func TestAccountProfilePasswordAndAvatarHTTP(t *testing.T) {

@@ -77,6 +77,17 @@ type passwordRequest struct {
 	NewPassword     string `json:"new_password" binding:"required"`
 	ConfirmPassword string `json:"confirm_password" binding:"required"`
 }
+type twoFactorLoginRequest struct {
+	ChallengeToken string `json:"challenge_token" binding:"required"`
+	Code           string `json:"code" binding:"required"`
+}
+type twoFactorPasswordRequest struct {
+	CurrentPassword string `json:"current_password" binding:"required"`
+}
+type twoFactorVerifyRequest struct {
+	CurrentPassword string `json:"current_password"`
+	Code            string `json:"code" binding:"required"`
+}
 
 func NewRouter(deps Dependencies) *gin.Engine {
 	router := gin.New()
@@ -113,14 +124,39 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		c.JSON(http.StatusCreated, envelope{Code: 0, Message: "success", Data: user})
 	})
 	v1.POST("/auth/login", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
 		var input credentials
 		if c.ShouldBindJSON(&input) != nil {
 			failure(c, http.StatusBadRequest, 11001, "Username and password are required")
 			return
 		}
-		token, user, err := deps.Auth.Login(c.Request.Context(), input.Username, input.Password, c.ClientIP())
+		result, err := deps.Auth.StartLogin(c.Request.Context(), input.Username, input.Password, c.ClientIP())
 		if err != nil {
 			failure(c, http.StatusUnauthorized, 11004, "Invalid username or password")
+			return
+		}
+		if result.RequiresTwoFactor {
+			success(c, gin.H{"requires_two_factor": true, "challenge_token": result.ChallengeToken})
+			return
+		}
+		setSessionCookie(c, result.Token, deps.CookieSecure)
+		_ = deps.Audit.Record(c.Request.Context(), &result.User.ID, "login", "session", result.User.Username, c.ClientIP(), "success")
+		success(c, gin.H{"requires_two_factor": false, "user": result.User})
+	})
+	v1.POST("/auth/two-factor", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		var input twoFactorLoginRequest
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, http.StatusBadRequest, 11007, "Challenge token and verification code are required")
+			return
+		}
+		token, user, err := deps.Auth.CompleteTwoFactorLogin(c.Request.Context(), input.ChallengeToken, input.Code, c.ClientIP())
+		if err != nil {
+			status := http.StatusUnauthorized
+			if errors.Is(err, auth.ErrTwoFactorStore) {
+				status = http.StatusInternalServerError
+			}
+			failure(c, status, 11008, "Invalid or expired verification code")
 			return
 		}
 		setSessionCookie(c, token, deps.CookieSecure)
@@ -139,6 +175,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	v1.GET("/auth/session", requireAuth(deps.Auth), func(c *gin.Context) { user, _ := c.Get("user"); success(c, user) })
 
 	account := v1.Group("/account", requireAuth(deps.Auth))
+	registerPasskeyRoutes(v1, account, deps)
 	account.PUT("/profile", func(c *gin.Context) {
 		user := currentUser(c)
 		var input profileRequest
@@ -187,6 +224,114 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			return
 		}
 		recordAccountAudit(deps.Audit, c, user, "account.password.change", "success")
+		success(c, gin.H{})
+	})
+	account.GET("/two-factor", func(c *gin.Context) {
+		status, err := deps.Auth.TwoFactorStatus(c.Request.Context(), currentUser(c).ID)
+		if err != nil {
+			failure(c, http.StatusInternalServerError, 11111, "Unable to read two-factor status")
+			return
+		}
+		success(c, status)
+	})
+	account.POST("/two-factor/setup", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		user := currentUser(c)
+		var input twoFactorPasswordRequest
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, http.StatusBadRequest, 11112, "Current password is required")
+			recordAccountAudit(deps.Audit, c, user, "account.two_factor.setup", "failed")
+			return
+		}
+		setup, err := deps.Auth.BeginTwoFactorSetup(c.Request.Context(), user.ID, input.CurrentPassword)
+		if err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, auth.ErrCurrentPassword) {
+				status = http.StatusForbidden
+			} else if errors.Is(err, auth.ErrTwoFactorEnabled) {
+				status = http.StatusConflict
+			} else if errors.Is(err, auth.ErrTwoFactorStore) {
+				status = http.StatusInternalServerError
+			}
+			failure(c, status, 11113, err.Error())
+			recordAccountAudit(deps.Audit, c, user, "account.two_factor.setup", "failed")
+			return
+		}
+		recordAccountAudit(deps.Audit, c, user, "account.two_factor.setup", "success")
+		success(c, setup)
+	})
+	account.POST("/two-factor/enable", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		user := currentUser(c)
+		var input twoFactorVerifyRequest
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, http.StatusBadRequest, 11114, "Verification code is required")
+			recordAccountAudit(deps.Audit, c, user, "account.two_factor.enable", "failed")
+			return
+		}
+		token, _ := c.Cookie(sessionCookie)
+		codes, err := deps.Auth.ConfirmTwoFactorSetup(c.Request.Context(), user.ID, token, input.Code)
+		if err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, auth.ErrTwoFactorEnabled) {
+				status = http.StatusConflict
+			} else if errors.Is(err, auth.ErrTwoFactorStore) {
+				status = http.StatusInternalServerError
+			}
+			failure(c, status, 11115, err.Error())
+			recordAccountAudit(deps.Audit, c, user, "account.two_factor.enable", "failed")
+			return
+		}
+		recordAccountAudit(deps.Audit, c, user, "account.two_factor.enable", "success")
+		success(c, codes)
+	})
+	account.POST("/two-factor/recovery-codes", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		user := currentUser(c)
+		var input twoFactorVerifyRequest
+		if c.ShouldBindJSON(&input) != nil || input.CurrentPassword == "" {
+			failure(c, http.StatusBadRequest, 11116, "Current password and verification code are required")
+			recordAccountAudit(deps.Audit, c, user, "account.two_factor.recovery_codes", "failed")
+			return
+		}
+		token, _ := c.Cookie(sessionCookie)
+		codes, err := deps.Auth.RegenerateRecoveryCodes(c.Request.Context(), user.ID, token, input.CurrentPassword, input.Code)
+		if err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, auth.ErrCurrentPassword) || errors.Is(err, auth.ErrInvalidTwoFactor) {
+				status = http.StatusForbidden
+			} else if errors.Is(err, auth.ErrTwoFactorStore) {
+				status = http.StatusInternalServerError
+			}
+			failure(c, status, 11117, err.Error())
+			recordAccountAudit(deps.Audit, c, user, "account.two_factor.recovery_codes", "failed")
+			return
+		}
+		recordAccountAudit(deps.Audit, c, user, "account.two_factor.recovery_codes", "success")
+		success(c, codes)
+	})
+	account.DELETE("/two-factor", func(c *gin.Context) {
+		user := currentUser(c)
+		var input twoFactorVerifyRequest
+		if c.ShouldBindJSON(&input) != nil || input.CurrentPassword == "" {
+			failure(c, http.StatusBadRequest, 11118, "Current password and verification code are required")
+			recordAccountAudit(deps.Audit, c, user, "account.two_factor.disable", "failed")
+			return
+		}
+		token, _ := c.Cookie(sessionCookie)
+		err := deps.Auth.DisableTwoFactor(c.Request.Context(), user.ID, token, input.CurrentPassword, input.Code)
+		if err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, auth.ErrCurrentPassword) || errors.Is(err, auth.ErrInvalidTwoFactor) {
+				status = http.StatusForbidden
+			} else if errors.Is(err, auth.ErrTwoFactorStore) {
+				status = http.StatusInternalServerError
+			}
+			failure(c, status, 11119, err.Error())
+			recordAccountAudit(deps.Audit, c, user, "account.two_factor.disable", "failed")
+			return
+		}
+		recordAccountAudit(deps.Audit, c, user, "account.two_factor.disable", "success")
 		success(c, gin.H{})
 	})
 	account.PUT("/avatar", func(c *gin.Context) {

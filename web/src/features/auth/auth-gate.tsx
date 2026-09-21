@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Fingerprint, ShieldCheck } from 'lucide-react'
 import { type FormEvent, type ReactNode, useEffect, useState } from 'react'
 import { Alert, AlertDescription } from '../../components/ui/alert'
 import { Button } from '../../components/ui/button'
@@ -11,10 +11,13 @@ import { Spinner } from '../../components/ui/spinner'
 import { ThemeToggle } from '../../components/ui/theme-toggle'
 import { api, ApiError, demoMode, getDemoCredentials, type DemoCredentials } from '../../lib/api'
 import { useI18n } from '../../lib/i18n'
+import { getPasskey, passkeysAvailable } from '../../lib/passkeys'
 import type { User } from './types'
 
 interface Status { needs_setup: boolean }
 interface AuthValues { username: string; password: string; email?: string; nickname?: string; confirm_password?: string }
+interface LoginResponse { requires_two_factor: boolean; challenge_token?: string; user?: User }
+interface PasskeyOptions { ceremony_token: string; options: unknown }
 
 function AuthFrame({ title, description, children }: { title: string; description: string; children: ReactNode }) {
   return <main className="grid min-h-screen place-items-center p-6">
@@ -86,16 +89,56 @@ function AuthForm({ setup, pending, error, initialValues, onSubmit }: { setup: b
   </form>
 }
 
+function TwoFactorForm({ pending, error, onBack, onSubmit }: { pending: boolean; error: string; onBack: () => void; onSubmit: (code: string) => void }) {
+  const { language } = useI18n()
+  const zh = language === 'zh-CN'
+  const [code, setCode] = useState('')
+  return <form className="flex w-full flex-col gap-4" onSubmit={(event) => { event.preventDefault(); if (!pending) onSubmit(code) }}>
+    <div className="flex size-10 items-center justify-center rounded-lg bg-muted text-muted-foreground"><ShieldCheck className="size-5" /></div>
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor="auth-two-factor">{zh ? '验证码或恢复码' : 'Verification or recovery code'}</Label>
+      <Input id="auth-two-factor" name="one-time-code" autoFocus required autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value)} placeholder={zh ? '输入 6 位验证码' : 'Enter the 6-digit code'} />
+      <p className="text-xs leading-relaxed text-muted-foreground">{zh ? '打开认证器 App 获取验证码；无法访问认证器时可使用一枚恢复码。' : 'Use the code from your authenticator app, or enter one recovery code if the app is unavailable.'}</p>
+    </div>
+    {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+    <Button type="submit" size="lg" disabled={pending}>{pending && <Spinner />}<span>{zh ? '验证并登录' : 'Verify and sign in'}</span><ArrowRight /></Button>
+    <Button type="button" variant="ghost" onClick={onBack}><ArrowLeft />{zh ? '返回密码登录' : 'Back to password sign-in'}</Button>
+  </form>
+}
+
 export function AuthGate({ children }: { children: ReactNode }) {
   const client = useQueryClient()
   const [error, setError] = useState('')
+  const [challengeToken, setChallengeToken] = useState('')
   const { language, t } = useI18n()
   const zh = language === 'zh-CN'
   const credentials = useQuery({ queryKey: ['demo-credentials'], queryFn: getDemoCredentials, enabled: demoMode, staleTime: Infinity })
   const status = useQuery({ queryKey: ['auth-status'], queryFn: () => api<Status>('/auth/status') })
   const session = useQuery({ queryKey: ['session'], queryFn: () => api<User>('/auth/session'), enabled: status.isSuccess && !status.data.needs_setup, retry: false })
   const initialize = useMutation({ mutationFn: (body: AuthValues) => api<User>('/auth/initialize', { method: 'POST', body: JSON.stringify(body) }), onSuccess: async () => { setError(''); await client.invalidateQueries({ queryKey: ['auth-status'] }) }, onError: (value) => setError(value instanceof ApiError ? value.message : 'Unable to create administrator') })
-  const login = useMutation({ mutationFn: (body: AuthValues) => api<User>('/auth/login', { method: 'POST', body: JSON.stringify(body) }), onSuccess: (user) => { setError(''); client.setQueryData(['session'], user) }, onError: (value) => setError(value instanceof ApiError ? value.message : 'Unable to sign in') })
+  const login = useMutation({
+    mutationFn: (body: AuthValues) => api<LoginResponse>('/auth/login', { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: (result) => {
+      setError('')
+      if (result.requires_two_factor && result.challenge_token) setChallengeToken(result.challenge_token)
+      else if (result.user) client.setQueryData(['session'], result.user)
+    },
+    onError: (value) => setError(value instanceof ApiError ? value.message : 'Unable to sign in'),
+  })
+  const verifyTwoFactor = useMutation({
+    mutationFn: (code: string) => api<User>('/auth/two-factor', { method: 'POST', body: JSON.stringify({ challenge_token: challengeToken, code }) }),
+    onSuccess: (user) => { setError(''); setChallengeToken(''); client.setQueryData(['session'], user) },
+    onError: (value) => setError(value instanceof ApiError ? value.message : 'Unable to verify the code'),
+  })
+  const passkeyLogin = useMutation({
+    mutationFn: async () => {
+      const begin = await api<PasskeyOptions>('/auth/passkey/options', { method: 'POST' })
+      const credential = await getPasskey(begin.options)
+      return api<User>('/auth/passkey', { method: 'POST', headers: { 'X-WebAuthn-Ceremony': begin.ceremony_token }, body: JSON.stringify(credential) })
+    },
+    onSuccess: (user) => { setError(''); client.setQueryData(['session'], user) },
+    onError: (value) => setError(value instanceof ApiError ? value.message : (zh ? '无法使用 Passkey 登录，请重试。' : 'Unable to sign in with a passkey. Try again.')),
+  })
 
   if (status.isPending || (!status.data?.needs_setup && session.isPending)) {
     return <main className="grid min-h-screen place-items-center"><div className="flex flex-col items-center gap-2"><Spinner className="size-6 text-muted-foreground" /><p className="text-sm text-muted-foreground">{t('loading')}</p></div></main>
@@ -111,8 +154,17 @@ export function AuthGate({ children }: { children: ReactNode }) {
     </AuthFrame>
   }
   if (!session.data) {
+    if (challengeToken) {
+      return <AuthFrame title={zh ? '两步验证' : 'Two-factor authentication'} description={zh ? '密码验证成功。请完成第二步身份验证。' : 'Your password was accepted. Complete the second verification step.'}>
+        <TwoFactorForm pending={verifyTwoFactor.isPending} error={error} onBack={() => { setChallengeToken(''); setError(''); verifyTwoFactor.reset() }} onSubmit={(code) => verifyTwoFactor.mutate(code)} />
+      </AuthFrame>
+    }
     return <AuthFrame title={zh ? '登录 SUMA' : 'Sign in to SUMA'} description={zh ? '使用本地管理员账户管理此 Docker 主机。' : 'Manage this Docker host with your local administrator account.'}>
       <AuthForm setup={false} pending={login.isPending} error={error} initialValues={credentials.data} onSubmit={(values) => login.mutate(values)} />
+      {!demoMode && passkeysAvailable() && <div className="flex w-full flex-col gap-4">
+        <div className="flex items-center gap-3 text-xs text-muted-foreground"><span className="h-px flex-1 bg-border" /><span>{zh ? '或' : 'or'}</span><span className="h-px flex-1 bg-border" /></div>
+        <Button type="button" variant="outline" size="lg" className="w-full" disabled={passkeyLogin.isPending || login.isPending} onClick={() => passkeyLogin.mutate()}>{passkeyLogin.isPending ? <Spinner /> : <Fingerprint />}{zh ? '使用 Passkey 登录' : 'Sign in with a passkey'}</Button>
+      </div>}
     </AuthFrame>
   }
   return children

@@ -13,7 +13,8 @@ const sessionKey = 'suma-demo-session'
 const fleetOverviewRefreshSeconds = 10
 let fleetOverviewTick = 0
 
-const user: User = { id: 1, username: 'admin', nickname: 'Demo Admin', email: 'admin@suma.demo', has_avatar: false }
+const user: User = { id: 1, username: 'admin', nickname: 'Demo Admin', email: 'admin@suma.demo', has_avatar: false, two_factor_enabled: false }
+let demoRecoveryCodesRemaining = 0
 
 const nodes: DockerNode[] = [
   { id: 'local', name: 'homelab-01', connection_type: 'unix', endpoint: 'unix:///var/run/docker.sock', tls_mode: 'disabled', enabled: true, engine_id: 'engine-homelab', engine_version: '28.3.3', status: 'online', last_latency_ms: 12, last_checked_at: now, created_at: earlier, updated_at: now, group_ids: [1, 2] },
@@ -133,6 +134,12 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
   if (pathname === '/auth/status') return clone({ needs_setup: false }) as T
   if (pathname === '/auth/login' && method === 'POST') {
     if (body.username !== demoCredentials.username || body.password !== demoCredentials.password) throw new ApiError('用户名或密码错误', 40102, 401)
+    if (user.two_factor_enabled) return clone({ requires_two_factor: true, challenge_token: 'demo-two-factor-challenge' }) as T
+    sessionStorage.setItem(sessionKey, '1')
+    return clone({ requires_two_factor: false, user }) as T
+  }
+  if (pathname === '/auth/two-factor' && method === 'POST') {
+    if (body.challenge_token !== 'demo-two-factor-challenge' || body.code !== '123456') throw new ApiError('验证码无效或已过期', 11008, 401)
     sessionStorage.setItem(sessionKey, '1')
     return clone(user) as T
   }
@@ -142,6 +149,29 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
   requireSession()
 
   if (pathname === '/account/profile' && method === 'PUT') return clone({ ...user, ...body }) as T
+  if (pathname === '/account/passkeys' && method === 'GET') return [] as T
+  if (pathname === '/account/two-factor' && method === 'GET') return clone({ enabled: user.two_factor_enabled, recovery_codes_remaining: demoRecoveryCodesRemaining }) as T
+  if (pathname === '/account/two-factor/setup' && method === 'POST') {
+    if (body.current_password !== demoCredentials.password) throw new ApiError('当前密码无效', 11113, 403)
+    return clone({ secret: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP', otpauth_uri: 'otpauth://totp/SUMA:admin@suma.demo?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=SUMA', qr_code_data_url: '' }) as T
+  }
+  if (pathname === '/account/two-factor/enable' && method === 'POST') {
+    if (body.code !== '123456') throw new ApiError('验证码无效或已过期', 11115, 400)
+    user.two_factor_enabled = true
+    demoRecoveryCodesRemaining = 10
+    return clone({ recovery_codes: ['DEMO-1111-AAAA', 'DEMO-2222-BBBB', 'DEMO-3333-CCCC', 'DEMO-4444-DDDD', 'DEMO-5555-EEEE', 'DEMO-6666-FFFF', 'DEMO-7777-GGGG', 'DEMO-8888-HHHH', 'DEMO-9999-JJJJ', 'DEMO-0000-KKKK'] }) as T
+  }
+  if (pathname === '/account/two-factor/recovery-codes' && method === 'POST') {
+    if (body.current_password !== demoCredentials.password || body.code !== '123456') throw new ApiError('密码或验证码无效', 11117, 403)
+    demoRecoveryCodesRemaining = 10
+    return clone({ recovery_codes: ['NEW1-1111-AAAA', 'NEW2-2222-BBBB', 'NEW3-3333-CCCC', 'NEW4-4444-DDDD', 'NEW5-5555-EEEE', 'NEW6-6666-FFFF', 'NEW7-7777-GGGG', 'NEW8-8888-HHHH', 'NEW9-9999-JJJJ', 'NEW0-0000-KKKK'] }) as T
+  }
+  if (pathname === '/account/two-factor' && method === 'DELETE') {
+    if (body.current_password !== demoCredentials.password || body.code !== '123456') throw new ApiError('密码或验证码无效', 11119, 403)
+    user.two_factor_enabled = false
+    demoRecoveryCodesRemaining = 0
+    return {} as T
+  }
   if (pathname.startsWith('/account/')) return clone(user) as T
   if (pathname === '/node-groups' && method === 'GET') return clone(nodeGroups) as T
   if (pathname === '/node-groups' && method === 'POST') {

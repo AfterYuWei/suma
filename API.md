@@ -25,8 +25,10 @@ Compose requests containing a `/var/run/docker.sock` bind are rejected by defaul
 The resource routes listed below remain deprecated aliases for the migrated default node. `GET /health` reports only control-plane/database health; a disconnected Docker node does not make it fail. Legacy `node_id` filters validate that the node exists. Global `GET /tasks` and `GET /audit-logs` accept `scope=control_plane|all` and default to `control_plane`.
 
 - `GET /health`, `GET /docker/info`
-- `GET /auth/status`, `POST /auth/initialize`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/session`
+- `GET /auth/status`, `POST /auth/initialize`, `POST /auth/login`, `POST /auth/two-factor`, `POST /auth/passkey/options`, `POST /auth/passkey`, `POST /auth/logout`, `GET /auth/session`
 - `PUT /account/profile`, `PUT /account/password`, `GET|PUT|DELETE /account/avatar`
+- `GET|DELETE /account/two-factor`, `POST /account/two-factor/{setup|enable|recovery-codes}`
+- `GET /account/passkeys`, `POST /account/passkeys/options`, `POST /account/passkeys`, `PATCH|DELETE /account/passkeys/:id`
 - `GET /containers`, `GET /containers/:id`, `POST /containers/:id/{start|stop|restart|pause|unpause|kill}`, `PATCH /containers/:id`, `DELETE /containers/:id`
 - `GET /images`, `GET /images/:id`, `POST /images/pull`, `POST /images/:id/tag`, `DELETE /images/:id`
 - `GET|POST /networks`, `GET|DELETE /networks/:id`
@@ -39,11 +41,15 @@ The resource routes listed below remain deprecated aliases for the migrated defa
 
 ### Local account
 
-SUMA currently has one local administrator and no role or permission model. First-run initialization requires `username`, `email`, `password`, and `confirm_password`; `nickname` is optional. Login keeps the compatible `{ "username": "...", "password": "..." }` shape, but `username` may contain either the username or email address.
+SUMA currently has one local administrator and no role or permission model. First-run initialization requires `username`, `email`, `password`, and `confirm_password`; `nickname` is optional. Login accepts `{ "username": "...", "password": "..." }`, where `username` may contain either the username or email address. A login without two-factor authentication returns `requires_two_factor: false` and the authenticated user. When TOTP is enabled it returns a five-minute `challenge_token` without creating a session; `POST /auth/two-factor` exchanges that challenge plus an authenticator or recovery code for the session cookie. Challenges permit at most five attempts, and repeated failures temporarily lock second-factor verification for the account.
 
 `PUT /account/profile` accepts `username`, `nickname`, `email`, and `current_password`. The current password is required only when the username or email changes. `PUT /account/password` accepts `current_password`, `new_password`, and `confirm_password`; it preserves the requesting session and revokes the user's other sessions.
 
 Avatar upload uses a multipart field named `avatar`. The web client accepts JPEG, PNG, or WebP sources up to 2 MB, crops them locally, and uploads a 512×512 WebP. The server validates the actual encoding and dimensions. `GET /account/avatar` is authenticated and returns the image body directly with an ETag rather than the JSON envelope.
+
+TOTP enrollment starts with `POST /account/two-factor/setup` and the current password. The response contains a locally generated QR code, manual secret, and `otpauth://` URI and is marked `Cache-Control: no-store`. `POST /account/two-factor/enable` confirms a six-digit code and returns ten one-time recovery codes, which are never returned again. `POST /account/two-factor/recovery-codes` invalidates the old set and creates a new set after password and second-factor verification. `DELETE /account/two-factor` requires the same verification. Enabling, disabling, or regenerating recovery codes revokes every other session.
+
+Passkeys use discoverable WebAuthn credentials with user verification required. `POST /auth/passkey/options` starts a passwordless login and `POST /auth/passkey` completes it. Registration starts at `POST /account/passkeys/options` with a display name, current password, and—when TOTP is enabled—a second-factor code; `POST /account/passkeys` completes the ceremony. Finish requests send the opaque one-time token returned by the options endpoint in `X-WebAuthn-Ceremony` and place the browser credential in the JSON body. Ceremonies expire after five minutes, are stored only as token hashes, and are bound to the exact HTTPS origin and RP ID (`http://localhost` is permitted for local development). Adding or deleting a Passkey revokes other sessions.
 
 ### Projects
 

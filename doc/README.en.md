@@ -58,6 +58,7 @@ SUMA is a single monolithic control plane for multi-node Docker management: mana
 - Audit log: every critical change records actor, action, target, and time
 - System prune: disk usage preview plus double confirmation
 - First-run administrator setup; bcrypt password hashing and HttpOnly SameSite session cookies
+- Account center for avatar, profile, and password management, with username/email sign-in, authenticator-app TOTP, one-time recovery codes, and passwordless WebAuthn Passkeys
 - Chinese/English interface, dark/light/system themes, and the `Ctrl/Cmd+K` command palette
 
 ## Quick start

@@ -1,13 +1,16 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/secret"
 )
 
 func testService(t *testing.T) *Service {
@@ -17,6 +20,150 @@ func testService(t *testing.T) *Service {
 		t.Fatal(err)
 	}
 	return NewService(db, time.Hour)
+}
+
+func TestTOTPMatchesRFC6238SHA1Vector(t *testing.T) {
+	encoded := base32NoPadding.EncodeToString([]byte("12345678901234567890"))
+	if code := totpCode(encoded, time.Unix(59, 0)); code != "287082" {
+		t.Fatalf("TOTP code = %s, want 287082", code)
+	}
+}
+
+func TestTwoFactorSetupLoginRecoveryAndDisable(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	db, err := database.Open(filepath.Join(root, "auth.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := secret.Open(filepath.Join(root, "secret.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(db, time.Hour, store)
+	user, err := service.Initialize(ctx, "admin", "admin@example.test", "Administrator", "long-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentToken, _, err := service.Login(ctx, "admin", "long-password", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.BeginTwoFactorSetup(ctx, user.ID, "wrong-password"); !errors.Is(err, ErrCurrentPassword) {
+		t.Fatalf("setup without current password = %v", err)
+	}
+	setup, err := service.BeginTwoFactorSetup(ctx, user.ID, "long-password")
+	if err != nil || setup.Secret == "" || !strings.HasPrefix(setup.OTPAuthURI, "otpauth://totp/") || !strings.HasPrefix(setup.QRCodeDataURL, "data:image/png;base64,") {
+		t.Fatalf("setup = %#v, %v", setup, err)
+	}
+	var enrollment database.TwoFactorEnrollment
+	if err := db.First(&enrollment, "user_id = ?", user.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(enrollment.SecretCipher, []byte(setup.Secret)) {
+		t.Fatal("TOTP secret was stored in plaintext")
+	}
+	confirmationCode := totpCode(setup.Secret, time.Now().Add(-totpPeriod))
+	recovery, err := service.ConfirmTwoFactorSetup(ctx, user.ID, currentToken, confirmationCode)
+	if err != nil || len(recovery.Codes) != recoveryCodeCount {
+		t.Fatalf("confirm = %#v, %v", recovery, err)
+	}
+	status, err := service.TwoFactorStatus(ctx, user.ID)
+	if err != nil || !status.Enabled || status.RecoveryCodesRemaining != recoveryCodeCount {
+		t.Fatalf("status = %#v, %v", status, err)
+	}
+	var stored database.User
+	if err := db.Select("totp_secret", "totp_enabled").First(&stored, user.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !stored.TOTPEnabled || bytes.Contains(stored.TOTPSecret, []byte(setup.Secret)) {
+		t.Fatal("enabled TOTP secret was not encrypted")
+	}
+	var storedRecovery database.TwoFactorRecoveryCode
+	if err := db.Where("user_id = ?", user.ID).First(&storedRecovery).Error; err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(storedRecovery.CodeHash, normalizeRecoveryCode(recovery.Codes[0])) {
+		t.Fatal("recovery code was stored in plaintext")
+	}
+	for attempt := 0; attempt < maxTwoFactorAttempts; attempt++ {
+		failedChallenge, err := service.StartLogin(ctx, "admin", "long-password", "127.0.0.9")
+		if err != nil {
+			t.Fatalf("start failed challenge %d: %v", attempt, err)
+		}
+		if _, _, err := service.CompleteTwoFactorLogin(ctx, failedChallenge.ChallengeToken, "invalid", "127.0.0.9"); !errors.Is(err, ErrInvalidTwoFactor) {
+			t.Fatalf("invalid factor attempt %d = %v", attempt, err)
+		}
+	}
+	if _, err := service.StartLogin(ctx, "admin", "long-password", "127.0.0.9"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("2FA account was not temporarily locked: %v", err)
+	}
+	if err := db.Model(&database.User{}).Where("id = ?", user.ID).Updates(map[string]any{"totp_failed_attempts": 0, "totp_locked_until": nil}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.Login(ctx, "admin", "long-password", "127.0.0.2"); !errors.Is(err, ErrTwoFactorRequired) {
+		t.Fatalf("password-only login bypassed 2FA: %v", err)
+	}
+	challenge, err := service.StartLogin(ctx, "admin@example.test", "long-password", "127.0.0.2")
+	if err != nil || !challenge.RequiresTwoFactor || challenge.ChallengeToken == "" || challenge.Token != "" {
+		t.Fatalf("challenge = %#v, %v", challenge, err)
+	}
+	loginCode := totpCode(setup.Secret, time.Now())
+	token, loggedIn, err := service.CompleteTwoFactorLogin(ctx, challenge.ChallengeToken, loginCode, "127.0.0.2")
+	if err != nil || token == "" || !loggedIn.TwoFactorEnabled {
+		t.Fatalf("complete login = %#v, %v", loggedIn, err)
+	}
+	if _, err := service.Authenticate(ctx, token); err != nil {
+		t.Fatalf("2FA session = %v", err)
+	}
+	replay, err := service.StartLogin(ctx, "admin", "long-password", "127.0.0.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.CompleteTwoFactorLogin(ctx, replay.ChallengeToken, loginCode, "127.0.0.3"); !errors.Is(err, ErrInvalidTwoFactor) {
+		t.Fatalf("replayed TOTP code = %v", err)
+	}
+	recoveryLogin, err := service.StartLogin(ctx, "admin", "long-password", "127.0.0.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryToken, _, err := service.CompleteTwoFactorLogin(ctx, recoveryLogin.ChallengeToken, recovery.Codes[0], "127.0.0.4")
+	if err != nil {
+		t.Fatalf("recovery login = %v", err)
+	}
+	status, err = service.TwoFactorStatus(ctx, user.ID)
+	if err != nil || status.RecoveryCodesRemaining != recoveryCodeCount-1 {
+		t.Fatalf("recovery status = %#v, %v", status, err)
+	}
+	regenerated, err := service.RegenerateRecoveryCodes(ctx, user.ID, recoveryToken, "long-password", recovery.Codes[1])
+	if err != nil || len(regenerated.Codes) != recoveryCodeCount {
+		t.Fatalf("regenerate recovery codes = %#v, %v", regenerated, err)
+	}
+	oldRecoveryLogin, err := service.StartLogin(ctx, "admin", "long-password", "127.0.0.5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.CompleteTwoFactorLogin(ctx, oldRecoveryLogin.ChallengeToken, recovery.Codes[2], "127.0.0.5"); !errors.Is(err, ErrInvalidTwoFactor) {
+		t.Fatalf("old recovery code survived regeneration: %v", err)
+	}
+	newRecoveryLogin, err := service.StartLogin(ctx, "admin", "long-password", "127.0.0.6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newRecoveryToken, _, err := service.CompleteTwoFactorLogin(ctx, newRecoveryLogin.ChallengeToken, regenerated.Codes[0], "127.0.0.6")
+	if err != nil {
+		t.Fatalf("new recovery login = %v", err)
+	}
+	if err := service.DisableTwoFactor(ctx, user.ID, newRecoveryToken, "long-password", regenerated.Codes[1]); err != nil {
+		t.Fatalf("disable = %v", err)
+	}
+	status, err = service.TwoFactorStatus(ctx, user.ID)
+	if err != nil || status.Enabled || status.RecoveryCodesRemaining != 0 {
+		t.Fatalf("disabled status = %#v, %v", status, err)
+	}
+	if _, _, err := service.Login(ctx, "admin", "long-password", "127.0.0.7"); err != nil {
+		t.Fatalf("password login after disable = %v", err)
+	}
 }
 
 func TestInitializeLoginSessionLogout(t *testing.T) {

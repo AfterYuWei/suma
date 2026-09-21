@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/secret"
 	"golang.org/x/crypto/bcrypt"
 	_ "golang.org/x/image/webp"
 	"gorm.io/gorm"
@@ -29,6 +30,11 @@ var (
 	ErrCurrentPassword    = errors.New("current password is invalid")
 	ErrIdentityConflict   = errors.New("username or email is already in use")
 	ErrAvatarNotFound     = errors.New("avatar not found")
+	ErrTwoFactorRequired  = errors.New("two-factor authentication required")
+	ErrInvalidTwoFactor   = errors.New("invalid or expired two-factor code")
+	ErrTwoFactorEnabled   = errors.New("two-factor authentication is already enabled")
+	ErrTwoFactorDisabled  = errors.New("two-factor authentication is not enabled")
+	ErrTwoFactorStore     = errors.New("two-factor secret store is unavailable")
 )
 
 const MaxAvatarBytes = 2 << 20
@@ -36,14 +42,16 @@ const MaxAvatarBytes = 2 << 20
 type Service struct {
 	db         *gorm.DB
 	sessionTTL time.Duration
+	secrets    *secret.Store
 }
 type User struct {
-	ID        uint   `json:"id"`
-	Username  string `json:"username"`
-	Nickname  string `json:"nickname"`
-	Email     string `json:"email"`
-	HasAvatar bool   `json:"has_avatar"`
-	AvatarURL string `json:"avatar_url,omitempty"`
+	ID               uint   `json:"id"`
+	Username         string `json:"username"`
+	Nickname         string `json:"nickname"`
+	Email            string `json:"email"`
+	HasAvatar        bool   `json:"has_avatar"`
+	AvatarURL        string `json:"avatar_url,omitempty"`
+	TwoFactorEnabled bool   `json:"two_factor_enabled"`
 }
 
 type ProfileInput struct{ Username, Nickname, Email, CurrentPassword string }
@@ -53,8 +61,12 @@ type Avatar struct {
 	MIME, ETag string
 }
 
-func NewService(db *gorm.DB, sessionTTL time.Duration) *Service {
-	return &Service{db: db, sessionTTL: sessionTTL}
+func NewService(db *gorm.DB, sessionTTL time.Duration, stores ...*secret.Store) *Service {
+	service := &Service{db: db, sessionTTL: sessionTTL}
+	if len(stores) > 0 {
+		service.secrets = stores[0]
+	}
+	return service
 }
 
 func (s *Service) NeedsSetup(ctx context.Context) (bool, error) {
@@ -93,22 +105,55 @@ func (s *Service) Initialize(ctx context.Context, username, email, nickname, pas
 }
 
 func (s *Service) Login(ctx context.Context, username, password, ip string) (string, User, error) {
+	result, err := s.StartLogin(ctx, username, password, ip)
+	if err != nil {
+		return "", User{}, err
+	}
+	if result.RequiresTwoFactor {
+		return "", User{}, ErrTwoFactorRequired
+	}
+	return result.Token, result.User, nil
+}
+
+func (s *Service) StartLogin(ctx context.Context, username, password, ip string) (LoginResult, error) {
 	username = strings.TrimSpace(username)
 	var row database.User
 	err := s.db.WithContext(ctx).Select(userColumns).Where("username = ? OR lower(email) = ?", username, strings.ToLower(username)).First(&row).Error
 	success := err == nil && bcrypt.CompareHashAndPassword([]byte(row.PasswordHash), []byte(password)) == nil
-	_ = s.db.WithContext(ctx).Create(&database.LoginLog{Username: username, IP: ip, Success: success}).Error
 	if !success {
-		return "", User{}, ErrInvalidCredentials
+		_ = s.db.WithContext(ctx).Create(&database.LoginLog{Username: username, IP: ip, Success: false}).Error
+		return LoginResult{}, ErrInvalidCredentials
+	}
+	if row.TOTPEnabled {
+		if row.TOTPLockedUntil != nil && row.TOTPLockedUntil.After(time.Now()) {
+			_ = s.db.WithContext(ctx).Create(&database.LoginLog{Username: username, IP: ip, Success: false}).Error
+			return LoginResult{}, ErrInvalidCredentials
+		}
+		challenge, hash, tokenErr := newToken()
+		if tokenErr != nil {
+			return LoginResult{}, tokenErr
+		}
+		expires := time.Now().Add(twoFactorChallengeTTL)
+		err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Where("user_id = ?", row.ID).Delete(&database.LoginChallenge{}).Error; err != nil {
+				return err
+			}
+			return tx.Create(&database.LoginChallenge{TokenHash: hash, UserID: row.ID, Username: username, IP: ip, ExpiresAt: expires}).Error
+		})
+		if err != nil {
+			return LoginResult{}, err
+		}
+		return LoginResult{RequiresTwoFactor: true, ChallengeToken: challenge}, nil
 	}
 	token, hash, err := newToken()
 	if err != nil {
-		return "", User{}, err
+		return LoginResult{}, err
 	}
 	if err := s.db.WithContext(ctx).Create(&database.Session{TokenHash: hash, UserID: row.ID, ExpiresAt: time.Now().Add(s.sessionTTL)}).Error; err != nil {
-		return "", User{}, err
+		return LoginResult{}, err
 	}
-	return token, userView(row), nil
+	_ = s.db.WithContext(ctx).Create(&database.LoginLog{Username: username, IP: ip, Success: true}).Error
+	return LoginResult{Token: token, User: userView(row)}, nil
 }
 
 func (s *Service) Authenticate(ctx context.Context, token string) (User, error) {
@@ -242,7 +287,7 @@ func tokenHash(token string) string {
 }
 
 func userView(row database.User) User {
-	view := User{ID: row.ID, Username: row.Username, Nickname: row.Nickname, Email: row.Email, HasAvatar: row.AvatarMIME != ""}
+	view := User{ID: row.ID, Username: row.Username, Nickname: row.Nickname, Email: row.Email, HasAvatar: row.AvatarMIME != "", TwoFactorEnabled: row.TOTPEnabled}
 	if view.HasAvatar && row.AvatarUpdatedAt != nil {
 		view.AvatarURL = fmt.Sprintf("/api/v1/account/avatar?v=%d", row.AvatarUpdatedAt.UnixNano())
 	}
@@ -303,7 +348,7 @@ func validateAvatar(data []byte) (string, error) {
 	return "image/webp", nil
 }
 
-var userColumns = []string{"id", "username", "nickname", "email", "password_hash", "avatar_mime", "avatar_updated_at"}
+var userColumns = []string{"id", "username", "nickname", "email", "password_hash", "avatar_mime", "avatar_updated_at", "totp_enabled", "totp_failed_attempts", "totp_locked_until"}
 
 func animatedWebP(data []byte) bool {
 	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WEBP" {

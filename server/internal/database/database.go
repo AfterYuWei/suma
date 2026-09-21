@@ -22,7 +22,7 @@ func Open(path string) (*gorm.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	if err := db.AutoMigrate(&User{}, &Session{}, &Setting{}, &SchemaMigration{}, &Node{}, &NodeGroup{}, &NodeGroupNode{}, &DockerTLSCredential{}, &DockerTLSCredentialNode{}, &GitCredentialNode{}, &RegistryCredentialNode{}, &DeliveryProject{}, &DeliveryProjectNode{}, &DeliveryProjectRegistryCredential{}, &DeliveryTargetState{}, &GitCredential{}, &DeliveryProjectGitCredential{}, &RegistryCredential{}, &DeliveryRelease{}, &DeliveryReleaseDeployment{}, &DeliveryDeploymentAttempt{}, &GitWebhookDelivery{}, &Task{}, &TaskLog{}, &TaskStep{}, &AuditLog{}, &LoginLog{}); err != nil {
+	if err := db.AutoMigrate(&User{}, &Session{}, &LoginChallenge{}, &TwoFactorEnrollment{}, &TwoFactorRecoveryCode{}, &PasskeyCredential{}, &WebAuthnCeremony{}, &Setting{}, &SchemaMigration{}, &Node{}, &NodeGroup{}, &NodeGroupNode{}, &DockerTLSCredential{}, &DockerTLSCredentialNode{}, &GitCredentialNode{}, &RegistryCredentialNode{}, &DeliveryProject{}, &DeliveryProjectNode{}, &DeliveryProjectRegistryCredential{}, &DeliveryTargetState{}, &GitCredential{}, &DeliveryProjectGitCredential{}, &RegistryCredential{}, &DeliveryRelease{}, &DeliveryReleaseDeployment{}, &DeliveryDeploymentAttempt{}, &GitWebhookDelivery{}, &Task{}, &TaskLog{}, &TaskStep{}, &AuditLog{}, &LoginLog{}); err != nil {
 		return nil, fmt.Errorf("migrate sqlite: %w", err)
 	}
 	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_node_groups_name_nocase ON node_groups(name COLLATE NOCASE)").Error; err != nil {
