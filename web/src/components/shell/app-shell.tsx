@@ -23,7 +23,7 @@ import { Badge } from '../ui/badge'
 import { ThemeToggle } from '../ui/theme-toggle'
 import { TooltipHint } from '../ui/tooltip-hint'
 import { UserAvatar } from '../ui/user-avatar'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/dropdown-menu'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { CommandPalette } from './command-palette'
 
@@ -232,13 +232,15 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <span className="hidden max-w-32 truncate text-sm font-medium sm:inline">{session.data.nickname || session.data.username}</span>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuLabel className="flex flex-col gap-0.5">
-                  <span className="truncate text-sm text-foreground">{session.data.nickname || session.data.username}</span>
-                  <span className="truncate font-normal">{session.data.email || session.data.username}</span>
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => void navigate({ to: '/account' })}><UserRound />{zh ? '账户设置' : 'Account settings'}</DropdownMenuItem>
-                <DropdownMenuItem onClick={() => void logout()}><LogOut />{t('signOut')}</DropdownMenuItem>
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel className="flex flex-col gap-0.5">
+                    <span className="truncate text-sm text-foreground">{session.data.nickname || session.data.username}</span>
+                    <span className="truncate font-normal">{session.data.email || session.data.username}</span>
+                  </DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => void navigate({ to: '/account' })}><UserRound />{zh ? '账户设置' : 'Account settings'}</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => void logout()}><LogOut />{t('signOut')}</DropdownMenuItem>
+                </DropdownMenuGroup>
               </DropdownMenuContent>
             </DropdownMenu>}
           </div>

@@ -1,9 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Camera, Save, Trash2, UserRound } from 'lucide-react'
+import { Camera, Save, ShieldCheck, Trash2, UserRound } from 'lucide-react'
 import { type FormEvent, type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
 import { Alert, AlertDescription } from '../components/ui/alert'
 import { Button } from '../components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog'
 import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
@@ -94,50 +93,69 @@ export function AccountPage() {
   const user = session.data
 
   return <ResourceFrame title={zh ? '账户设置' : 'Account settings'} detail={zh ? '管理本地管理员资料、头像和登录密码。' : 'Manage the local administrator profile, avatar, and password.'}>
-    {!user ? <div className="flex min-h-48 items-center justify-center"><Spinner /></div> : <div className="grid w-full max-w-4xl gap-5 lg:grid-cols-2">
-      <Card className="lg:col-span-2">
-        <CardHeader><CardTitle>{zh ? '头像' : 'Avatar'}</CardTitle></CardHeader>
-        <CardContent className="flex flex-wrap items-center gap-5">
-          <UserAvatar user={user} className="size-20 text-xl" />
-          <div className="flex min-w-0 flex-1 flex-col gap-2">
-            <p className="text-sm text-muted-foreground">{zh ? '支持 JPEG、PNG、WebP，最大 2 MB。上传后裁剪为正方形。' : 'JPEG, PNG, or WebP up to 2 MB. Images are cropped to a square.'}</p>
-            <div className="flex flex-wrap gap-2">
-              <Button variant="outline" render={<label />}><Camera />{user.has_avatar ? (zh ? '更换头像' : 'Replace avatar') : (zh ? '上传头像' : 'Upload avatar')}<input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { void selectAvatar(event.target.files?.[0]); event.target.value = '' }} /></Button>
-              {user.has_avatar && <Button variant="ghost" disabled={deleteAvatar.isPending} onClick={() => void removeAvatar()}>{deleteAvatar.isPending ? <Spinner /> : <Trash2 />}{zh ? '删除' : 'Remove'}</Button>}
-            </div>
-            {fileError && <InlineError message={fileError} />}
-            {deleteAvatar.isError && <InlineError message={deleteAvatar.error.message} />}
+    {!user ? <div className="flex min-h-48 items-center justify-center"><Spinner /></div> : <div className="mx-auto w-full max-w-5xl overflow-hidden rounded-xl border border-border/80 bg-card/40">
+      <section className="flex flex-col gap-5 px-5 py-6 sm:px-7 lg:flex-row lg:flex-wrap lg:items-center">
+        <UserAvatar user={user} className="size-18 shrink-0 text-xl ring-1 ring-foreground/10" />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            <h3 className="cn-font-heading truncate text-lg font-semibold">{user.nickname || user.username}</h3>
+            <span className="text-sm text-muted-foreground">@{user.username}</span>
           </div>
-        </CardContent>
-      </Card>
+          <p className="mt-1 truncate text-sm text-muted-foreground">{user.email || (zh ? '尚未设置邮箱' : 'No email address')}</p>
+          <p className="mt-2 text-xs text-muted-foreground">{zh ? 'JPEG、PNG 或 WebP，最大 2 MB；上传后可裁剪。' : 'JPEG, PNG, or WebP up to 2 MB; crop after upload.'}</p>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Button variant="outline" render={<label />}><Camera />{user.has_avatar ? (zh ? '更换头像' : 'Replace avatar') : (zh ? '上传头像' : 'Upload avatar')}<input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { void selectAvatar(event.target.files?.[0]); event.target.value = '' }} /></Button>
+          {user.has_avatar && <Button variant="ghost" className="text-muted-foreground hover:text-destructive" disabled={deleteAvatar.isPending} onClick={() => void removeAvatar()}>{deleteAvatar.isPending ? <Spinner /> : <Trash2 />}{zh ? '移除' : 'Remove'}</Button>}
+        </div>
+        {(fileError || deleteAvatar.isError) && <div className="w-full space-y-2 lg:basis-full">{fileError && <InlineError message={fileError} />}{deleteAvatar.isError && <InlineError message={deleteAvatar.error.message} />}</div>}
+      </section>
 
-      <Card>
-        <CardHeader><CardTitle>{zh ? '个人资料' : 'Profile'}</CardTitle></CardHeader>
-        <CardContent><form className="flex flex-col gap-4" onSubmit={submitProfile}>
-          <Field label={zh ? '昵称' : 'Nickname'} htmlFor="account-nickname"><Input id="account-nickname" maxLength={64} autoComplete="name" value={profile.nickname} onChange={(event) => setProfile({ ...profile, nickname: event.target.value })} /></Field>
-          <Field label={zh ? '用户名' : 'Username'} htmlFor="account-username"><Input id="account-username" required minLength={3} maxLength={64} autoComplete="username" value={profile.username} onChange={(event) => setProfile({ ...profile, username: event.target.value })} /></Field>
-          <Field label={zh ? '邮箱' : 'Email'} htmlFor="account-email"><Input id="account-email" required type="email" maxLength={254} autoComplete="email" value={profile.email} onChange={(event) => setProfile({ ...profile, email: event.target.value })} /></Field>
-          {identityChanged && <Field label={zh ? '当前密码' : 'Current password'} htmlFor="profile-password" hint={zh ? '修改用户名或邮箱时必须验证。' : 'Required when changing username or email.'}><Input id="profile-password" required type="password" autoComplete="current-password" value={profile.current_password} onChange={(event) => setProfile({ ...profile, current_password: event.target.value })} /></Field>}
+      <section className="grid gap-6 border-t border-border/70 px-5 py-7 sm:px-7 lg:grid-cols-[220px_minmax(0,1fr)] lg:gap-10">
+        <SectionHeading icon={<UserRound />} title={zh ? '个人资料' : 'Profile'} description={zh ? '用于识别当前管理员，并作为登录凭据。' : 'Identify this administrator and manage sign-in details.'} />
+        <form className="flex min-w-0 max-w-2xl flex-col gap-5" onSubmit={submitProfile}>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label={zh ? '昵称' : 'Nickname'} htmlFor="account-nickname"><Input id="account-nickname" maxLength={64} autoComplete="name" value={profile.nickname} onChange={(event) => setProfile({ ...profile, nickname: event.target.value })} /></Field>
+            <Field label={zh ? '用户名' : 'Username'} htmlFor="account-username"><Input id="account-username" required minLength={3} maxLength={64} autoComplete="username" value={profile.username} onChange={(event) => setProfile({ ...profile, username: event.target.value })} /></Field>
+            <div className="sm:col-span-2"><Field label={zh ? '邮箱' : 'Email'} htmlFor="account-email"><Input id="account-email" required type="email" maxLength={254} autoComplete="email" value={profile.email} onChange={(event) => setProfile({ ...profile, email: event.target.value })} /></Field></div>
+            {identityChanged && <div className="sm:col-span-2"><Field label={zh ? '验证当前密码' : 'Verify current password'} htmlFor="profile-password" hint={zh ? '用户名或邮箱发生变更' : 'Username or email changed'}><Input id="profile-password" required type="password" autoComplete="current-password" value={profile.current_password} onChange={(event) => setProfile({ ...profile, current_password: event.target.value })} /></Field></div>}
+          </div>
           {updateProfile.isError && <InlineError message={updateProfile.error.message} />}
-          {updateProfile.isSuccess && <Success message={zh ? '个人资料已保存。' : 'Profile saved.'} />}
-          <Button type="submit" disabled={!profileChanged || updateProfile.isPending}>{updateProfile.isPending ? <Spinner /> : <Save />}{zh ? '保存资料' : 'Save profile'}</Button>
-        </form></CardContent>
-      </Card>
+          <div className="flex min-h-8 flex-wrap items-center justify-end gap-3">
+            {updateProfile.isSuccess && <Success message={zh ? '个人资料已保存。' : 'Profile saved.'} />}
+            <Button type="submit" disabled={!profileChanged || updateProfile.isPending}>{updateProfile.isPending ? <Spinner /> : <Save />}{zh ? '保存更改' : 'Save changes'}</Button>
+          </div>
+        </form>
+      </section>
 
-      <Card>
-        <CardHeader><CardTitle>{zh ? '修改密码' : 'Change password'}</CardTitle></CardHeader>
-        <CardContent><form className="flex flex-col gap-4" onSubmit={submitPassword}>
-          <Field label={zh ? '当前密码' : 'Current password'} htmlFor="password-current"><Input id="password-current" required type="password" autoComplete="current-password" value={passwords.current_password} onChange={(event) => setPasswords({ ...passwords, current_password: event.target.value })} /></Field>
-          <Field label={zh ? '新密码' : 'New password'} htmlFor="password-new" hint={zh ? '8–128 个字符' : '8–128 characters'}><Input id="password-new" required minLength={8} maxLength={128} type="password" autoComplete="new-password" value={passwords.new_password} onChange={(event) => setPasswords({ ...passwords, new_password: event.target.value })} /></Field>
-          <Field label={zh ? '确认新密码' : 'Confirm new password'} htmlFor="password-confirm"><Input id="password-confirm" required minLength={8} maxLength={128} type="password" autoComplete="new-password" value={passwords.confirm_password} onChange={(event) => setPasswords({ ...passwords, confirm_password: event.target.value })} /></Field>
+      <section className="grid gap-6 border-t border-border/70 px-5 py-7 sm:px-7 lg:grid-cols-[220px_minmax(0,1fr)] lg:gap-10">
+        <SectionHeading icon={<ShieldCheck />} title={zh ? '登录安全' : 'Sign-in security'} description={zh ? '更新密码后，除当前设备外的其他会话将退出。' : 'Updating your password signs out every session except this device.'} />
+        <form className="flex min-w-0 max-w-2xl flex-col gap-5" onSubmit={submitPassword}>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="sm:col-span-2"><Field label={zh ? '当前密码' : 'Current password'} htmlFor="password-current"><Input id="password-current" required type="password" autoComplete="current-password" value={passwords.current_password} onChange={(event) => setPasswords({ ...passwords, current_password: event.target.value })} /></Field></div>
+            <Field label={zh ? '新密码' : 'New password'} htmlFor="password-new" hint={zh ? '8–128 个字符' : '8–128 characters'}><Input id="password-new" required minLength={8} maxLength={128} type="password" autoComplete="new-password" value={passwords.new_password} onChange={(event) => setPasswords({ ...passwords, new_password: event.target.value })} /></Field>
+            <Field label={zh ? '确认新密码' : 'Confirm new password'} htmlFor="password-confirm"><Input id="password-confirm" required minLength={8} maxLength={128} type="password" autoComplete="new-password" value={passwords.confirm_password} onChange={(event) => setPasswords({ ...passwords, confirm_password: event.target.value })} /></Field>
+          </div>
           {changePassword.isError && <InlineError message={changePassword.error.message} />}
-          {changePassword.isSuccess && <Success message={zh ? '密码已更新，其他登录会话已退出。' : 'Password updated and other sessions signed out.'} />}
-          <Button type="submit" disabled={changePassword.isPending}>{changePassword.isPending ? <Spinner /> : <Save />}{zh ? '更新密码' : 'Update password'}</Button>
-        </form></CardContent>
-      </Card>
+          <div className="flex min-h-8 flex-wrap items-center justify-end gap-3">
+            {changePassword.isSuccess && <Success message={zh ? '密码已更新，其他登录会话已退出。' : 'Password updated and other sessions signed out.'} />}
+            <Button type="submit" disabled={changePassword.isPending}>{changePassword.isPending ? <Spinner /> : <Save />}{zh ? '更新密码' : 'Update password'}</Button>
+          </div>
+        </form>
+      </section>
     </div>}
     <AvatarCropDialog source={crop} zh={zh} pending={uploadAvatar.isPending} error={uploadAvatar.error?.message} onClose={closeCrop} onSave={(blob) => uploadAvatar.mutate(blob)} />
   </ResourceFrame>
+}
+
+function SectionHeading({ icon, title, description }: { icon: React.ReactNode; title: string; description: string }) {
+  return <div className="flex gap-3 lg:block">
+    <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground [&_svg]:size-4">{icon}</div>
+    <div className="lg:mt-3">
+      <h3 className="cn-font-heading text-sm font-semibold">{title}</h3>
+      <p className="mt-1 max-w-xs text-sm leading-5 text-muted-foreground">{description}</p>
+    </div>
+  </div>
 }
 
 function Field({ label, htmlFor, hint, children }: { label: string; htmlFor: string; hint?: string; children: React.ReactNode }) {
