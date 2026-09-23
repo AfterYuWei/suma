@@ -138,11 +138,12 @@ func TestShadowPreviewUsesTemporaryProjectAndCleanupTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &shadowRunner{started: make(chan struct{}), cleaned: make(chan struct{})}
+	taskService := task.NewService(db)
 	containers := observableContainers{
 		staticContainers: staticContainers{rows: []containerdomain.Summary{{ID: "web", Labels: map[string]string{ProjectLabel: "shop"}}}},
 		snapshot:         RuntimeProjectSnapshot{ProjectName: "shop", Containers: []RuntimeContainer{{ID: "web", Service: "web", ImageInspectOK: true, Config: RuntimeConfig{Image: "nginx:alpine"}}}},
 	}
-	service := &Service{root: filepath.Join(root, "compose"), runner: runner, tasks: task.NewService(db), containers: containers, nodeID: "tcp-node", nodeName: "TCP", instanceID: "test", projectLocks: &sync.Map{}}
+	service := &Service{root: filepath.Join(root, "compose"), runner: runner, tasks: taskService, containers: containers, nodeID: "tcp-node", nodeName: "TCP", instanceID: "test", projectLocks: &sync.Map{}}
 	draft, err := service.BuildTakeoverDraft(context.Background(), "shop")
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +164,8 @@ func TestShadowPreviewUsesTemporaryProjectAndCleanupTask(t *testing.T) {
 	if err != nil || !strings.Contains(status.Containers, "running") || !strings.Contains(status.Logs, "ready") {
 		t.Fatalf("status = %#v, err = %v", status, err)
 	}
-	if _, err := service.StopShadowPreview(session.SessionID); err != nil {
+	cleanupTask, err := service.StopShadowPreview(session.SessionID)
+	if err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -179,6 +181,16 @@ func TestShadowPreviewUsesTemporaryProjectAndCleanupTask(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("preview directory remains: %v", statErr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	for {
+		logs, logsErr := taskService.Logs(context.Background(), cleanupTask.ID)
+		if logsErr == nil && len(logs) > 0 && logs[len(logs)-1].Message == "Completed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("cleanup task did not finish persisting logs: %v", logsErr)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

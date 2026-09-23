@@ -8,7 +8,7 @@ interface Point { time: string; cpu: number; memory: number; rx: number; tx: num
 
 export function StatsView({ nodeID, containerId }: { nodeID: string; containerId: string }) {
   const [points, setPoints] = useState<Point[]>([])
-  useUIStore((state) => state.theme)
+  useUIStore((state) => state.resolvedDark)
   useEffect(() => {
     const consume = (payload: string) => {
       const value = JSON.parse(payload)

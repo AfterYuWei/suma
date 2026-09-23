@@ -110,9 +110,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     queryClient.setQueryData(['session'], null)
   }
 
-  const NavLink = ({ entry }: { entry: NavEntry }) => {
+  const NavLink = ({ entry, collapsed }: { entry: NavEntry; collapsed: boolean }) => {
     const Icon = entry.icon
-    const collapsed = !sidebarOpen
     const active = selectedPath === entry.key
     return (
       <Button
@@ -126,6 +125,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         data-active={active}
         aria-current={active ? 'page' : undefined}
         onClick={() => setMobileNavOpen(false)}
+        nativeButton={false}
         render={<Link to={entry.key as never} />}
       >
         <Icon />
@@ -154,7 +154,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <div className="h-1" />
               )}
               <div className="flex flex-col gap-0.5">
-                {section.items.map((entry) => <NavLink key={entry.key} entry={{ ...entry, icon: entry.icon as unknown as typeof Container }} />)}
+                {section.items.map((entry) => <NavLink key={entry.key} collapsed={collapsed} entry={{ ...entry, icon: entry.icon as unknown as typeof Container }} />)}
               </div>
             </div>
           ))}

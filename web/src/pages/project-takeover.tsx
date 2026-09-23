@@ -30,7 +30,7 @@ import { confirmDialog } from '../stores/dialog'
 import { useUIStore } from '../stores/ui'
 import { ResourceFrame } from './images'
 
-const Monaco = lazy(() => import('@monaco-editor/react'))
+const Monaco = lazy(() => import('../lib/monaco-editor'))
 type TakeoverMode = 'draft' | 'manual'
 type TakeoverStep = 'analysis' | 'environment' | 'editor' | 'confirm'
 const takeoverFlows: Record<TakeoverMode, TakeoverStep[]> = { draft: ['analysis', 'environment', 'editor', 'confirm'], manual: ['analysis', 'editor', 'confirm'] }
@@ -205,7 +205,7 @@ function takeoverMessage(message: string | undefined, zh: boolean): string {
 export function ProjectTakeoverPage() {
   const { backend, projectName } = useParams({ from: '/projects/$backend/$projectName/takeover' })
   const nodeID = useUIStore((state) => state.currentNodeID)
-  const theme = useUIStore((state) => state.theme)
+  const dark = useUIStore((state) => state.resolvedDark)
   const logTail = useUIStore((state) => state.logTail)
   const { language } = useI18n()
   const zh = language === 'zh-CN'
@@ -223,7 +223,6 @@ export function ProjectTakeoverPage() {
   const [confirmation, setConfirmation] = useState('')
   const [shadowSession, setShadowSession] = useState<ShadowPreviewSession | null>(null)
   const shadowSessionRef = useRef<ShadowPreviewSession | null>(null)
-  const dark = theme === 'dark' || (theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
   const preview = useQuery({ queryKey: ['project-takeover', nodeID, projectName], queryFn: () => api<ProjectTakeoverDraft>(nodePath(nodeID, `/projects/compose/${encoded}/takeover/preview`), { method: 'POST' }), select: normalizeTakeoverDraft, enabled: backend === 'compose', retry: false })
   const contentSignature = useMemo(() => `${compose}\u0000${environment}`, [compose, environment])
   const tasks = useQuery({ queryKey: ['tasks', 'current', nodeID], queryFn: () => api<TaskRow[]>(nodePath(nodeID, '/tasks')), enabled: shadowSession !== null, refetchInterval: 1_000 })

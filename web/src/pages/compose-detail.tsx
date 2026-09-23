@@ -32,7 +32,7 @@ import { confirmDialog } from '../stores/dialog'
 import { useUIStore } from '../stores/ui'
 import { ResourceFrame } from './images'
 
-const Monaco = lazy(() => import('@monaco-editor/react'))
+const Monaco = lazy(() => import('../lib/monaco-editor'))
 type View = 'Files' | 'Services' | 'Logs'
 interface ComposeTask { id: string; type: string; name: string; status: string; progress: number; message: string }
 interface TaskLog { id: number; level: string; message: string; created_at: string }
@@ -47,10 +47,9 @@ export function ComposeDetailPage() {
   const client = useQueryClient()
   const { t, language } = useI18n()
   const zh = language === 'zh-CN'
-  const theme = useUIStore((state) => state.theme)
+  const dark = useUIStore((state) => state.resolvedDark)
   const nodeID = useUIStore((state) => state.currentNodeID)
   const logTail = useUIStore((state) => state.logTail)
-  const dark = theme === 'dark' || (theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
   const query = useQuery({ queryKey: ['project', nodeID, backend, projectName], queryFn: () => api<Project>(nodePath(nodeID, `/projects/${encodeURIComponent(backend)}/${encodedName}`)), enabled: backend === 'compose' })
   const [view, setView] = useState<View>('Files')
   const [file, setFile] = useState('compose')

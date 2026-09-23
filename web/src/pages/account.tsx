@@ -111,7 +111,7 @@ export function AccountPage() {
           <p className="mt-2 text-xs text-muted-foreground">{zh ? 'JPEG、PNG 或 WebP，最大 2 MB；上传后可裁剪。' : 'JPEG, PNG, or WebP up to 2 MB; crop after upload.'}</p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
-          <Button variant="outline" render={<label />}><Camera />{user.has_avatar ? (zh ? '更换头像' : 'Replace avatar') : (zh ? '上传头像' : 'Upload avatar')}<input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { void selectAvatar(event.target.files?.[0]); event.target.value = '' }} /></Button>
+          <Button variant="outline" nativeButton={false} render={<label />}><Camera />{user.has_avatar ? (zh ? '更换头像' : 'Replace avatar') : (zh ? '上传头像' : 'Upload avatar')}<input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { void selectAvatar(event.target.files?.[0]); event.target.value = '' }} /></Button>
           {user.has_avatar && <Button variant="ghost" className="text-muted-foreground hover:text-destructive" disabled={deleteAvatar.isPending} onClick={() => void removeAvatar()}>{deleteAvatar.isPending ? <Spinner /> : <Trash2 />}{zh ? '移除' : 'Remove'}</Button>}
         </div>
         {(fileError || deleteAvatar.isError) && <div className="w-full space-y-2 lg:basis-full">{fileError && <InlineError message={fileError} />}{deleteAvatar.isError && <InlineError message={deleteAvatar.error.message} />}</div>}
@@ -261,7 +261,7 @@ function TwoFactorSettings({ zh }: { zh: boolean }) {
               <code className="block break-all rounded-lg bg-muted px-3 py-2 font-mono text-xs tracking-wider">{setupData.secret}</code>
               <div className="flex flex-wrap gap-2">
                 <Button type="button" variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(setupData.secret)}><Copy />{zh ? '复制密钥' : 'Copy key'}</Button>
-                <Button variant="ghost" size="sm" render={<a href={setupData.otpauth_uri} />}>{zh ? '在认证器中打开' : 'Open authenticator'}</Button>
+                <Button variant="ghost" size="sm" nativeButton={false} render={<a href={setupData.otpauth_uri} />}>{zh ? '在认证器中打开' : 'Open authenticator'}</Button>
               </div>
             </div>
           </div>

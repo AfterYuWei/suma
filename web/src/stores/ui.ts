@@ -12,6 +12,7 @@ export type NodeCardSize = (typeof nodeCardSizeOptions)[number]
 
 interface UIState {
   theme: Theme
+  resolvedDark: boolean
   language: Language
   commandOpen: boolean
   sidebarOpen: boolean
@@ -39,17 +40,10 @@ function applyTheme(theme: Theme) {
   document.documentElement.dataset.theme = theme
   const background = getComputedStyle(document.documentElement).getPropertyValue('--background').trim()
   if (background) document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute('content', background)
+  return dark
 }
 
 const colorSchemeQuery = matchMedia('(prefers-color-scheme: dark)')
-const syncSystemTheme = () => {
-  if (localStorage.getItem('suma-theme') === 'system') applyTheme('system')
-}
-colorSchemeQuery.addEventListener('change', syncSystemTheme)
-if (import.meta.hot) {
-  import.meta.hot.dispose(() => colorSchemeQuery.removeEventListener('change', syncSystemTheme))
-}
-
 const storedTheme = (localStorage.getItem('suma-theme') as Theme | null) ?? 'dark'
 const storedLanguage = (localStorage.getItem('suma-language') as Language | null) ?? (navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US')
 const storedLogTailValue = Number(localStorage.getItem('suma-log-tail'))
@@ -78,11 +72,12 @@ const readNodeCardOrder = (): string[] => {
   }
 }
 const storedNodeCardOrder = readNodeCardOrder()
-applyTheme(storedTheme)
+const storedResolvedDark = applyTheme(storedTheme)
 document.documentElement.lang = storedLanguage
 
 export const useUIStore = create<UIState>((set) => ({
   theme: storedTheme,
+  resolvedDark: storedResolvedDark,
   language: storedLanguage,
   commandOpen: false,
   sidebarOpen: matchMedia('(min-width: 1024px)').matches,
@@ -94,8 +89,8 @@ export const useUIStore = create<UIState>((set) => ({
   overviewNodeCardOrder: storedNodeCardOrder,
   setTheme: (theme) => {
     localStorage.setItem('suma-theme', theme)
-    applyTheme(theme)
-    set({ theme })
+    const resolvedDark = applyTheme(theme)
+    set({ theme, resolvedDark })
   },
   setLanguage: (language) => {
     localStorage.setItem('suma-language', language)
@@ -118,3 +113,13 @@ export const useUIStore = create<UIState>((set) => ({
     set({ overviewNodeCardOrder })
   },
 }))
+
+const syncSystemTheme = () => {
+  if (useUIStore.getState().theme !== 'system') return
+  const resolvedDark = applyTheme('system')
+  useUIStore.setState({ resolvedDark })
+}
+colorSchemeQuery.addEventListener('change', syncSystemTheme)
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => colorSchemeQuery.removeEventListener('change', syncSystemTheme))
+}

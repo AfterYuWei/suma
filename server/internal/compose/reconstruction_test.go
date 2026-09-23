@@ -373,6 +373,32 @@ func TestBuildTakeoverDraftSubtractsImageAndEngineDefaults(t *testing.T) {
 	}
 }
 
+func TestBuildTakeoverDraftSubtractsGeneratedHostnameFromAnyReplica(t *testing.T) {
+	firstID := strings.Repeat("b", 64)
+	secondID := strings.Repeat("a", 64)
+	containers := observableContainers{
+		staticContainers: staticContainers{rows: []containerdomain.Summary{
+			{ID: secondID, Labels: map[string]string{ProjectLabel: "shop"}},
+			{ID: firstID, Labels: map[string]string{ProjectLabel: "shop"}},
+		}},
+		snapshot: RuntimeProjectSnapshot{
+			ProjectName: "shop",
+			Containers: []RuntimeContainer{
+				{ID: secondID, Name: "shop-web-2", Service: "web", ContainerNumber: 2, ImageInspectOK: true, Config: RuntimeConfig{Image: "busybox:latest", Hostname: secondID[:12]}},
+				{ID: firstID, Name: "shop-web-1", Service: "web", ContainerNumber: 1, ImageInspectOK: true, Config: RuntimeConfig{Image: "busybox:latest", Hostname: firstID[:12]}},
+			},
+		},
+	}
+	service := &Service{root: t.TempDir(), containers: containers, nodeID: "tcp-node"}
+	draft, err := service.BuildTakeoverDraft(context.Background(), "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(draft.Compose, "hostname:") {
+		t.Fatalf("generated hostname from a non-representative replica survived:\n%s", draft.Compose)
+	}
+}
+
 func TestBuildTakeoverDraftKeepsNamedVolumeAtImageVolumeTarget(t *testing.T) {
 	id := strings.Repeat("c", 64)
 	config := RuntimeConfig{

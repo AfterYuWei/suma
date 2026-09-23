@@ -227,10 +227,18 @@ func runtimeComposeModel(name string, snapshot RuntimeProjectSnapshot, observati
 		if len(observed.ConfigVariants) == 0 {
 			continue
 		}
-		config := observed.ConfigVariants[0].Config
+		variant := observed.ConfigVariants[0]
+		config := variant.Config
+		// Generated hostnames are ignored when grouping scaled replicas, so the
+		// variant config may have come from a different instance than the one
+		// selected below for image-default subtraction. Compare against every
+		// instance in the variant before choosing that representative container.
+		if isGeneratedVariantHostname(config.Hostname, variant.Instances) {
+			config.Hostname = ""
+		}
 		var container RuntimeContainer
-		if len(observed.ConfigVariants[0].Instances) > 0 {
-			container = byContainer[observed.ConfigVariants[0].Instances[0]]
+		if len(variant.Instances) > 0 {
+			container = byContainer[variant.Instances[0]]
 			config = subtractRuntimeDefaults(config, container, anonymousVolumes)
 		}
 		service := runtimeServiceModel(config, observed.DesiredReplicas)
@@ -317,6 +325,15 @@ func subtractImageVolumeMounts(mounts []RuntimeMount, targets []string, anonymou
 
 func isGeneratedContainerHostname(hostname, id string) bool {
 	return len(id) >= 12 && isHexString(id) && hostname == id[:12]
+}
+
+func isGeneratedVariantHostname(hostname string, instanceIDs []string) bool {
+	for _, id := range instanceIDs {
+		if isGeneratedContainerHostname(hostname, id) {
+			return true
+		}
+	}
+	return false
 }
 
 func isAnonymousVolumeName(name string) bool {

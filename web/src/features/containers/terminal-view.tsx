@@ -6,7 +6,7 @@ import { demoMode, subscribeDemoStream } from '../../lib/api'
 
 export function TerminalView({ nodeID, containerId }: { nodeID: string; containerId: string }) {
   const host = useRef<HTMLDivElement>(null)
-  const theme = useUIStore((state) => state.theme)
+  const dark = useUIStore((state) => state.resolvedDark)
   useEffect(() => {
     if (!host.current) return
     const styles = getComputedStyle(document.documentElement)
@@ -39,6 +39,6 @@ export function TerminalView({ nodeID, containerId }: { nodeID: string; containe
     socket.onclose = () => terminal.write('\r\n\x1b[90mSession disconnected\x1b[0m')
     const input = terminal.onData((data) => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'input', data })) })
     return () => { resize.disconnect(); input.dispose(); socket.close(); terminal.dispose() }
-  }, [nodeID, containerId, theme])
+  }, [nodeID, containerId, dark])
   return <div ref={host} className="h-[56vh] overflow-hidden" />
 }

@@ -1,4 +1,22 @@
-# SUMA（原 DockPort）v1.0 上线报告
+# SUMA 上线与验收报告
+
+## 当前 V2 验收结论（2026-09-23）
+
+**PLANS.md 中的五项待验收工作已完成；本节取代下方 2026-08-27 历史快照中的待办和风险判断。** 功能边界仍以 AGENTS.md 和 PLANS.md 为准，Future 中的远程 agent、SSH、Swarm、Kubernetes、SSO 等不属于本次验收范围。
+
+| 验收项 | 结果 |
+| --- | --- |
+| 后端 `go test ./...`、`go build ./...` | 通过 |
+| 前端 lint、typecheck、生产与 demo 构建 | 通过；保留 4 个非阻断 lint 警告及构建体积/CSS 提示 |
+| 真实 Docker | Unix 全套冒烟及双节点 Unix+mTLS 冒烟通过，覆盖 Compose 接管与 CD 交付、失败节点重试、回滚 |
+| Chromium 界面 | 22 项 demo 检查及 7 项全新数据的真实账户检查通过，零页面/控制台错误 |
+| 文档 | README、ARCHITECTURE、API 的 V2 范围、部署和安全约束已核对；PLANS.md 验收记录已更新 |
+
+浏览器验收覆盖全部主要桌面路由、移动端导航、节点及 Group 筛选、浅色/深色/跟随系统、实时 OS 色彩切换、中英语言、命令面板、弹层、Monaco、xterm 和 ECharts。对照 [shadcn/ui 官方 Base UI/Nova 主题约定](https://ui.shadcn.com/docs/theming) 与 [Command 组合约定](https://ui.shadcn.com/docs/components/base/command) 检查组件表现；演示构建未发出外部运行时请求。账户验收覆盖初始化、用户名/邮箱登录、资料验证修改、头像裁剪上传、改密撤销其他会话及新密码登录。验收中发现的问题均已修复，详见 PLANS.md 的 V2 final acceptance 记录。
+
+以下是保留供追溯的 v1.0 历史报告。其“待办”“未完成”及旧风险表只反映 2026-08-27 当时状态，不代表当前结论。
+
+## 历史 v1.0 报告（2026-08-27）
 
 - 报告日期：2026-08-27（第二轮验证已补充，见文末「复查补充」）
 - 检查范围：server/（Go 后端）、web/（React 前端）、部署配置、文档
