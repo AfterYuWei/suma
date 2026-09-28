@@ -75,6 +75,7 @@ type Detail struct {
 	Entrypoint       []string          `json:"entrypoint"`
 	WorkingDirectory string            `json:"working_directory"`
 	RestartPolicy    string            `json:"restart_policy"`
+	ReadOnlyRootFS   bool              `json:"read_only_rootfs"`
 	Environment      []Environment     `json:"environment"`
 	Ports            []Port            `json:"ports"`
 	Mounts           []Mount           `json:"mounts"`

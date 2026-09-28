@@ -568,6 +568,7 @@ func (a *Adapter) Get(ctx context.Context, id string) (domain.Detail, error) {
 	}
 	if row.HostConfig != nil {
 		detail.RestartPolicy = string(row.HostConfig.RestartPolicy.Name)
+		detail.ReadOnlyRootFS = row.HostConfig.ReadonlyRootfs
 	}
 	if row.State != nil {
 		detail.PID = row.State.Pid

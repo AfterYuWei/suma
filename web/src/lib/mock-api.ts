@@ -353,12 +353,12 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     const fileMatch = suffix.match(/^\/containers\/([^/]+)\/files(?:\/(content|history|history\/\d+|restore|actions))?$/)
     if (fileMatch) {
       const treeKey = `${nodeID}:${fileMatch[1]}`
-      if (!demoFileTrees.has(treeKey)) demoFileTrees.set(treeKey, new Map([['/', { type: 'directory', content: '' }], ['/data', { type: 'directory', content: '' }], ['/data/config.yaml', { type: 'file', content: 'server:\n  port: 8080\n  mode: production\n' }], ['/data/notes.md', { type: 'file', content: '# Persistent files\n\nEdit this file to preview version history.\n' }]]))
+      if (!demoFileTrees.has(treeKey)) demoFileTrees.set(treeKey, new Map([['/', { type: 'directory', content: '' }], ['/data', { type: 'directory', content: '' }], ['/data/config.yaml', { type: 'file', content: 'server:\n  port: 8080\n  mode: production\n' }], ['/data/notes.md', { type: 'file', content: '# Persistent files\n\nEdit this file to preview version history.\n' }], ['/etc', { type: 'directory', content: '' }], ['/etc/suma-demo.conf', { type: 'file', content: 'mode=container-layer\n' }]]))
       const tree = demoFileTrees.get(treeKey)!
       const section = fileMatch[2] || ''
       const filePath = String(url.searchParams.get('path') || body.path || '/')
       const mount = { type: 'volume', name: 'gateway-prod_data', source: '/var/lib/docker/volumes/gateway-prod_data/_data', destination: '/data', read_write: true, is_directory: true }
-      const contentView = (name: string) => ({ path: name, content: tree.get(name)?.content ?? '', etag: demoFileHash(tree.get(name)?.content ?? ''), persistent: name.startsWith('/data/'), read_only: !name.startsWith('/data/'), single_file_bind: false })
+      const contentView = (name: string) => ({ path: name, content: tree.get(name)?.content ?? '', etag: demoFileHash(tree.get(name)?.content ?? ''), persistent: name.startsWith('/data/'), read_only: false, single_file_bind: false })
       if (!section && method === 'GET') {
         const folder = filePath.replace(/\/$/, '') || '/'
         const entries = [...tree.entries()].filter(([name]) => name !== folder && (name.slice(0, name.lastIndexOf('/')) || '/') === folder).map(([name, value]) => ({ name: name.split('/').pop(), path: name, type: value.type, size: value.content.length, modified_at: 1780020000, mount: name.startsWith('/data') ? mount : undefined }))
@@ -411,7 +411,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
       const action = containerMatch[2]
       if (action) { row.state = action === 'stop' ? 'exited' : action === 'pause' ? 'paused' : 'running'; row.status = row.state === 'running' ? 'Up a few seconds' : row.state }
       if (method === 'PATCH' && typeof body.name === 'string') row.name = body.name
-      const detail: ContainerDetail = { ...row, pid: row.state === 'running' ? 12984 : 0, entrypoint: ['/docker-entrypoint.sh'], working_directory: '/app', restart_policy: 'unless-stopped', environment: [{ key: 'APP_ENV', value: 'production', sensitive: false }, { key: 'DATABASE_PASSWORD', sensitive: true }], mounts: [{ type: 'volume', name: 'gateway-prod_data', source: '/var/lib/docker/volumes/gateway-prod_data/_data', destination: '/data', read_write: true }], networks: [{ name: 'gateway-prod_default', ip_address: '172.22.0.3', gateway: '172.22.0.1', mac_address: '02:42:ac:16:00:03' }] }
+      const detail: ContainerDetail = { ...row, pid: row.state === 'running' ? 12984 : 0, entrypoint: ['/docker-entrypoint.sh'], working_directory: '/app', restart_policy: 'unless-stopped', read_only_rootfs: false, environment: [{ key: 'APP_ENV', value: 'production', sensitive: false }, { key: 'DATABASE_PASSWORD', sensitive: true }], mounts: [{ type: 'volume', name: 'gateway-prod_data', source: '/var/lib/docker/volumes/gateway-prod_data/_data', destination: '/data', read_write: true }], networks: [{ name: 'gateway-prod_default', ip_address: '172.22.0.3', gateway: '172.22.0.1', mac_address: '02:42:ac:16:00:03' }] }
       return clone(detail) as T
     }
 

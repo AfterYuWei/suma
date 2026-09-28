@@ -98,6 +98,43 @@ func TestContainerFileEditingRealDocker(t *testing.T) {
 	if _, err := service.Restore(ctx, adapter, "local", created.ID, opened.Path, history[1].ID, saved.ETag, nil); err != nil {
 		t.Fatal(err)
 	}
+	layerPath := "/tmp/suma-layer-smoke.yaml"
+	if err := service.Apply(ctx, adapter, created.ID, containerfiles.Action{Action: "create_file", Path: layerPath}); err != nil {
+		t.Fatal(err)
+	}
+	layer, err := service.Read(ctx, adapter, created.ID, layerPath)
+	if err != nil || layer.Persistent || layer.ReadOnly {
+		t.Fatalf("writable container layer: %+v, %v", layer, err)
+	}
+	layer, err = service.Save(ctx, adapter, "local", created.ID, layerPath, layer.ETag, "layer: saved\n", nil)
+	if err != nil || layer.Content != "layer: saved\n" || layer.Persistent || layer.ReadOnly {
+		t.Fatalf("container layer save: %+v, %v", layer, err)
+	}
+	layerHistory, err := service.History(ctx, adapter, "local", created.ID, layerPath)
+	if err != nil || len(layerHistory) != 2 {
+		t.Fatalf("container layer history: %+v, %v", layerHistory, err)
+	}
+	if _, err := service.Restore(ctx, adapter, "local", created.ID, layerPath, layerHistory[1].ID, layer.ETag, nil); err != nil {
+		t.Fatal(err)
+	}
+	readOnlyContainer, err := cli.ContainerCreate(ctx, &dockercontainer.Config{Image: "alpine:3.24", Cmd: []string{"sleep", "120"}}, &dockercontainer.HostConfig{ReadonlyRootfs: true}, nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.ContainerRemove(context.Background(), readOnlyContainer.ID, dockercontainer.RemoveOptions{Force: true})
+	if err := cli.ContainerStart(ctx, readOnlyContainer.ID, dockercontainer.StartOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	readOnlyFile, err := service.Read(ctx, adapter, readOnlyContainer.ID, "/etc/alpine-release")
+	if err != nil || !readOnlyFile.ReadOnly {
+		t.Fatalf("read-only container layer: %+v, %v", readOnlyFile, err)
+	}
+	if _, err := service.Save(ctx, adapter, "local", readOnlyContainer.ID, readOnlyFile.Path, readOnlyFile.ETag, "blocked", nil); err != containerfiles.ErrUnsupported {
+		t.Fatalf("read-only container layer save: %v", err)
+	}
+	if err := service.Apply(ctx, adapter, readOnlyContainer.ID, containerfiles.Action{Action: "create_file", Path: "/tmp/blocked"}); err != containerfiles.ErrUnsupported {
+		t.Fatalf("read-only container layer create: %v", err)
+	}
 	if err := service.Apply(ctx, adapter, created.ID, containerfiles.Action{Action: "copy", Path: opened.Path, Target: "/data/copy.yaml"}); err != nil {
 		t.Fatal(err)
 	}
@@ -164,6 +201,23 @@ func TestContainerFileEditingRealDocker(t *testing.T) {
 	goodBody, _ := json.Marshal(map[string]string{"path": "/data/app.yaml", "content": "via API\n", "etag": envelope.Data.ETag})
 	if response := request(http.MethodPut, base+"/content", goodBody); response.Code != http.StatusOK {
 		t.Fatalf("HTTP save: %d %s", response.Code, response.Body.String())
+	}
+	layerResponse := request(http.MethodGet, base+"/content?path="+layerPath, nil)
+	if layerResponse.Code != http.StatusOK {
+		t.Fatalf("HTTP container layer read: %d %s", layerResponse.Code, layerResponse.Body.String())
+	}
+	var layerEnvelope struct {
+		Data containerfiles.Content `json:"data"`
+	}
+	if err := json.Unmarshal(layerResponse.Body.Bytes(), &layerEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	if layerEnvelope.Data.ReadOnly || layerEnvelope.Data.Persistent {
+		t.Fatalf("HTTP container layer flags: %+v", layerEnvelope.Data)
+	}
+	layerBody, _ := json.Marshal(map[string]string{"path": layerPath, "content": "layer: via API\n", "etag": layerEnvelope.Data.ETag})
+	if response := request(http.MethodPut, base+"/content", layerBody); response.Code != http.StatusOK {
+		t.Fatalf("HTTP container layer save: %d %s", response.Code, response.Body.String())
 	}
 	if response := request(http.MethodGet, "/api/v1/nodes/missing/containers/"+created.ID+"/files?path=/", nil); response.Code != http.StatusNotFound {
 		t.Fatalf("wrong node: %d %s", response.Code, response.Body.String())

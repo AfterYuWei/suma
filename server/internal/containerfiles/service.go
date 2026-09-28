@@ -219,7 +219,10 @@ func (s *Service) Read(ctx context.Context, runtime Runtime, id, file string) (C
 	value := string(data)
 	mount := effectiveMount(mounts(row), name)
 	persistent := mount != nil && (mount.Type == "bind" || mount.Type == "volume")
-	readOnly := !persistent || !mount.ReadWrite
+	readOnly := row.ReadOnlyRootFS
+	if mount != nil {
+		readOnly = !mount.ReadWrite
+	}
 	singleFile := mount != nil && mount.Type == "bind" && mount.Destination == name
 	return Content{Path: name, Content: value, ETag: hash(value), Persistent: persistent, ReadOnly: readOnly, SingleFileBind: singleFile}, nil
 }
@@ -589,7 +592,7 @@ func (s *Service) apply(ctx context.Context, runtime Runtime, id string, input A
 			return errors.New("cannot operate on a mount point or its parent")
 		}
 	}
-	if mount := effectiveMount(all, name); mount != nil && !mount.ReadWrite {
+	if mount := effectiveMount(all, name); (mount != nil && !mount.ReadWrite) || (mount == nil && row.ReadOnlyRootFS) {
 		return ErrUnsupported
 	}
 	var script string
@@ -621,7 +624,7 @@ func (s *Service) apply(ctx context.Context, runtime Runtime, id string, input A
 		if err := guardPath(ctx, runtime, id, path.Dir(target)); err != nil {
 			return err
 		}
-		if mount := effectiveMount(all, target); mount != nil && !mount.ReadWrite {
+		if mount := effectiveMount(all, target); (mount != nil && !mount.ReadWrite) || (mount == nil && row.ReadOnlyRootFS) {
 			return ErrUnsupported
 		}
 		args = append(args, target)

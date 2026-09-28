@@ -19,6 +19,7 @@ type fakeRuntime struct {
 	files                         map[string]string
 	mount                         container.Mount
 	state                         string
+	readOnlyRootFS                bool
 	failWrite                     bool
 	failOncePartial               bool
 	externalChangeBeforeReplace   bool
@@ -27,7 +28,7 @@ type fakeRuntime struct {
 }
 
 func (r *fakeRuntime) Get(_ context.Context, _ string) (container.Detail, error) {
-	return container.Detail{State: r.state, Mounts: []container.Mount{r.mount}}, nil
+	return container.Detail{State: r.state, Mounts: []container.Mount{r.mount}, ReadOnlyRootFS: r.readOnlyRootFS}, nil
 }
 
 func (r *fakeRuntime) RunFileCommand(_ context.Context, _ string, script string, args []string, input []byte, _ int) ([]byte, error) {
@@ -164,6 +165,44 @@ func TestReadOnlyAndFailedWritePreserveContents(t *testing.T) {
 	}
 	if runtime.files["/data/app.yaml"] != opened.Content {
 		t.Fatal("failed write changed source")
+	}
+}
+
+func TestContainerLayerCanSaveAndRestoreUnlessRootFSIsReadOnly(t *testing.T) {
+	s, runtime := newHarness(t)
+	runtime.mount = container.Mount{}
+	ctx := context.Background()
+	opened, err := s.Read(ctx, runtime, "container", "/data/app.yaml")
+	if err != nil || opened.Persistent || opened.ReadOnly {
+		t.Fatalf("container layer read: %+v, %v", opened, err)
+	}
+	saved, err := s.Save(ctx, runtime, "node-a", "container", opened.Path, opened.ETag, "layer: changed\n", nil)
+	if err != nil || saved.Persistent || saved.ReadOnly || saved.Content != "layer: changed\n" {
+		t.Fatalf("container layer save: %+v, %v", saved, err)
+	}
+	history, err := s.History(ctx, runtime, "node-a", "container", opened.Path)
+	if err != nil || len(history) != 2 {
+		t.Fatalf("container layer history: %+v, %v", history, err)
+	}
+	restored, err := s.Restore(ctx, runtime, "node-a", "container", opened.Path, history[1].ID, saved.ETag, nil)
+	if err != nil || restored.Content != opened.Content {
+		t.Fatalf("container layer restore: %+v, %v", restored, err)
+	}
+	runtime.readOnlyRootFS = true
+	opened, err = s.Read(ctx, runtime, "container", opened.Path)
+	if err != nil || !opened.ReadOnly {
+		t.Fatalf("read-only rootfs read: %+v, %v", opened, err)
+	}
+	if _, err := s.Save(ctx, runtime, "node-a", "container", opened.Path, opened.ETag, "blocked", nil); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("read-only rootfs save: %v", err)
+	}
+	if err := s.Apply(ctx, runtime, "container", Action{Action: "create_file", Path: "/data/new.yaml"}); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("read-only rootfs create: %v", err)
+	}
+	runtime.mount = container.Mount{Type: "tmpfs", Destination: "/data", ReadWrite: true}
+	opened, err = s.Read(ctx, runtime, "container", opened.Path)
+	if err != nil || opened.ReadOnly || opened.Persistent {
+		t.Fatalf("writable tmpfs over read-only rootfs: %+v, %v", opened, err)
 	}
 }
 
