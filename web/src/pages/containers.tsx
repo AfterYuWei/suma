@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CircleAlert, FileText, MoreHorizontal, OctagonX, Pause, Pencil, Play, RefreshCw, Search, Square, SquareTerminal, Trash2, X } from 'lucide-react'
+import { CircleAlert, FileText, FolderOpen, MoreHorizontal, OctagonX, Pause, Pencil, Play, RefreshCw, Search, Square, SquareTerminal, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 import { Alert, AlertAction, AlertDescription } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
@@ -137,7 +137,7 @@ export function ContainersPage() {
                 <TableHead className="min-w-[140px]">{zh ? '状态 / 运行时间' : 'State / uptime'}</TableHead>
                 <TableHead className="min-w-[130px]">{zh ? '资源' : 'Resources'}</TableHead>
                 <TableHead className="min-w-[160px]">{zh ? '端口' : 'Ports'}</TableHead>
-                <TableHead className="min-w-[180px] text-right">{zh ? '操作' : 'Actions'}</TableHead>
+                <TableHead className="min-w-[220px] text-right">{zh ? '操作' : 'Actions'}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -190,6 +190,7 @@ function ContainerActions({ row, zh, pending, run, rename, kill, remove }: { row
   const primaryLabel = row.state === 'running' ? (zh ? '停止' : 'Stop') : row.state === 'paused' ? (zh ? '恢复' : 'Unpause') : (zh ? '启动' : 'Start')
   return <div className="flex items-center justify-end gap-1">
     <TooltipHint content={zh ? '日志' : 'Logs'}><Button variant="ghost" size="icon-sm" aria-label={zh ? '日志' : 'Logs'} onClick={() => location.assign(`/containers/${row.id}#logs`)}><FileText /></Button></TooltipHint>
+    <TooltipHint content={zh ? '文件' : 'Files'}><Button variant="ghost" size="icon-sm" disabled={row.state !== 'running'} aria-label={zh ? '文件' : 'Files'} onClick={() => location.assign(`/containers/${row.id}#files`)}><FolderOpen /></Button></TooltipHint>
     <TooltipHint content={zh ? '终端' : 'Terminal'}><Button variant="ghost" size="icon-sm" disabled={row.state !== 'running'} aria-label={zh ? '终端' : 'Terminal'} onClick={() => location.assign(`/containers/${row.id}#terminal`)}><SquareTerminal /></Button></TooltipHint>
     <TooltipHint content={primaryLabel}><Button variant={primary === 'stop' ? 'outline' : 'secondary'} size="icon-sm" disabled={pending} aria-label={primaryLabel} onClick={() => run(primary)}>{pending ? <Spinner /> : primary === 'stop' ? <Square /> : <Play />}</Button></TooltipHint>
     <TooltipHint content={zh ? '重启' : 'Restart'}><Button variant="ghost" size="icon-sm" disabled={pending} aria-label={zh ? '重启' : 'Restart'} onClick={() => run('restart')}><RefreshCw /></Button></TooltipHint>
