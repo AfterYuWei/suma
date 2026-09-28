@@ -24,7 +24,8 @@ import { ResourceFrame } from './images'
 const LogViewer = lazy(() => import('../features/containers/log-viewer').then((module) => ({ default: module.LogViewer })))
 const StatsView = lazy(() => import('../features/containers/stats-view').then((module) => ({ default: module.StatsView })))
 const TerminalView = lazy(() => import('../features/containers/terminal-view').then((module) => ({ default: module.TerminalView })))
-const tabs = ['Overview', 'Logs', 'Terminal', 'Stats', 'Inspect'] as const
+const FileManager = lazy(() => import('../features/containers/file-manager').then((module) => ({ default: module.ContainerFileManager })))
+const tabs = ['Overview', 'Files', 'Logs', 'Terminal', 'Stats', 'Inspect'] as const
 
 export function ContainerDetailPage() {
   const nodeID = useUIStore((state) => state.currentNodeID)
@@ -36,6 +37,7 @@ export function ContainerDetailPage() {
   const hash = location.hash.slice(1)
   const initial = tabs.find((name) => name.toLowerCase() === hash) ?? 'Overview'
   const [tab, setTab] = useState<(typeof tabs)[number]>(initial)
+  const [filesDirty, setFilesDirty] = useState(false)
   const query = useQuery({ queryKey: ['container', nodeID, containerId], queryFn: () => api<ContainerDetail>(nodePath(nodeID, `/containers/${containerId}`)) })
   const environmentPagination = useListPagination(query.data?.environment ?? [])
   const action = useMutation({ mutationFn: (name: string) => api(nodePath(nodeID, `/containers/${containerId}/${name}`), { method: 'POST' }), onSuccess: () => { client.invalidateQueries({ queryKey: ['container', nodeID, containerId] }); client.invalidateQueries({ queryKey: ['containers', nodeID] }) } })
@@ -45,7 +47,7 @@ export function ContainerDetailPage() {
   if (query.isPending) return <LoadingState label={zh ? '正在加载容器详情' : 'Loading container details'} rows={6} />
   if (!query.data) return <ErrorState description={zh ? '未找到容器。' : 'Container not found.'} />
   const row = query.data
-  const label = (name: (typeof tabs)[number]) => zh ? ({ Overview: '概览', Logs: '日志', Terminal: '终端', Stats: '统计', Inspect: '检查' } as const)[name] : name
+  const label = (name: (typeof tabs)[number]) => zh ? ({ Overview: '概览', Files: '文件', Logs: '日志', Terminal: '终端', Stats: '统计', Inspect: '检查' } as const)[name] : name
 
   const actions = <div className="flex flex-wrap items-center gap-2">
     <StatusBadge tone={row.state === 'running' ? 'success' : row.state === 'paused' || row.state === 'restarting' ? 'warning' : row.state === 'dead' ? 'critical' : 'neutral'}>{row.state}</StatusBadge>
@@ -67,11 +69,11 @@ export function ContainerDetailPage() {
 
   return <div className="flex w-full flex-col items-start gap-5">
     <div className="-mb-1">
-      <Button variant="ghost" size="sm" className="-ml-1 text-muted-foreground hover:text-foreground" onClick={() => void navigate({ to: '/containers' })}><ChevronLeft />{t('containers')}</Button>
+      <Button variant="ghost" size="sm" className="-ml-1 text-muted-foreground hover:text-foreground" onClick={async () => { if (filesDirty && !await confirmDialog({ title: zh ? '放弃未保存的更改？' : 'Discard unsaved changes?', confirmLabel: zh ? '放弃' : 'Discard', danger: true })) return; void navigate({ to: '/containers' }) }}><ChevronLeft />{t('containers')}</Button>
     </div>
     <ResourceFrame title={row.name} detail={`${row.image} · ${row.status}`} action={actions}>
-    <Tabs value={tab} onValueChange={(name) => { const next = String(name); setTab(next as (typeof tabs)[number]); location.hash = next.toLowerCase() }}>
-      <TabsList variant="line" className="w-full justify-start gap-4 border-b pb-2">
+    <Tabs value={tab} onValueChange={(name) => { const next = String(name); void (async () => { if (tab === 'Files' && next !== 'Files' && filesDirty && !await confirmDialog({ title: zh ? '放弃未保存的更改？' : 'Discard unsaved changes?', confirmLabel: zh ? '放弃' : 'Discard', danger: true })) return; setTab(next as (typeof tabs)[number]); location.hash = next.toLowerCase() })() }}>
+      <TabsList variant="line" className="max-w-full justify-start gap-4 overflow-x-auto border-b pb-2">
         {tabs.map((name) => <TabsTrigger key={name} value={name} className="flex-none px-1">{label(name)}</TabsTrigger>)}
       </TabsList>
     </Tabs>
@@ -117,6 +119,7 @@ export function ContainerDetailPage() {
         </Card>
       </div>}
       {tab === 'Logs' && <LogViewer nodeID={nodeID} containerId={containerId} />}
+      {tab === 'Files' && <FileManager nodeID={nodeID} container={row} onDirtyChange={setFilesDirty} />}
       {tab === 'Terminal' && <TerminalView nodeID={nodeID} containerId={containerId} />}
       {tab === 'Stats' && <StatsView nodeID={nodeID} containerId={containerId} />}
       {tab === 'Inspect' && (

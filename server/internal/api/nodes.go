@@ -354,6 +354,7 @@ func registerNodeRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps Dependenci
 		success(c, gin.H{"host": host, "containers": containersAggregate, "docker": info, "docker_disk_usage_bytes": diskUsage})
 	})
 	registerNodeContainerRoutes(resources, router, deps)
+	registerNodeFileRoutes(resources, deps)
 	registerNodeImageRoutes(resources, deps)
 	registerNodeNetworkRoutes(resources, deps)
 	registerNodeVolumeRoutes(resources, deps)

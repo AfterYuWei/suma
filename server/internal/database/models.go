@@ -394,6 +394,20 @@ type AuditLog struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+// FileRevision contains SUMA-owned encrypted editor history, never Docker state.
+type FileRevision struct {
+	ID          uint   `gorm:"primaryKey"`
+	NodeID      string `gorm:"size:64;not null;index:idx_file_revision"`
+	ContainerID string `gorm:"size:128;not null;index:idx_file_revision"`
+	Path        string `gorm:"not null;index:idx_file_revision"`
+	Hash        string `gorm:"size:64;not null"`
+	Ciphertext  []byte `gorm:"not null"`
+	UserID      *uint
+	Baseline    bool
+	State       string    `gorm:"size:16;not null;index"`
+	CreatedAt   time.Time `gorm:"index"`
+}
+
 type LoginLog struct {
 	ID        uint   `gorm:"primaryKey"`
 	Username  string `gorm:"size:64;not null"`

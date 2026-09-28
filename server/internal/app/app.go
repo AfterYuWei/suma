@@ -14,6 +14,7 @@ import (
 	cdService "github.com/suma/suma/server/internal/cd"
 	composeService "github.com/suma/suma/server/internal/compose"
 	"github.com/suma/suma/server/internal/config"
+	"github.com/suma/suma/server/internal/containerfiles"
 	credentialService "github.com/suma/suma/server/internal/credential"
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/docker"
@@ -84,7 +85,22 @@ func New(logger *slog.Logger) (*App, error) {
 	nodes.Start()
 	continuousDelivery.Start()
 	recoveryContext, recoveryCancel := context.WithCancel(context.Background())
-	application := &App{logger: logger, engine: engine, nodes: nodes, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{Engine: engine, Containers: engine, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: settingsService.NewService(db, cfg), Monitor: monitorService.NewService(engine, cfg.DatabasePath), System: systemService.NewService(engine, taskService), Nodes: nodes, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
+	fileService := containerfiles.NewService(db, secretStore)
+	application := &App{logger: logger, engine: engine, nodes: nodes, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{Engine: engine, Containers: engine, Files: fileService, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: settingsService.NewService(db, cfg), Monitor: monitorService.NewService(engine, cfg.DatabasePath), System: systemService.NewService(engine, taskService), Nodes: nodes, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
+	application.recoveryWG.Add(1)
+	go func() {
+		defer application.recoveryWG.Done()
+		if err := fileService.PruneAll(recoveryContext); err != nil { logger.Warn("prune container file history", "error", err) }
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-recoveryContext.Done(): return
+			case <-ticker.C:
+				if err := fileService.PruneAll(recoveryContext); err != nil { logger.Warn("prune container file history", "error", err) }
+			}
+		}
+	}()
 	application.recoveryWG.Add(1)
 	go func() {
 		defer application.recoveryWG.Done()

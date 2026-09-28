@@ -12,6 +12,9 @@ const earlier = '2026-08-29T07:42:00.000Z'
 const sessionKey = 'suma-demo-session'
 const fleetOverviewRefreshSeconds = 10
 let fleetOverviewTick = 0
+const demoFileTrees = new Map<string, Map<string, { type: 'file' | 'directory'; content: string }>>()
+const demoFileHistory = new Map<string, { id: number; content: string; created_at: string; baseline: boolean }[]>()
+const demoFileHash = (value: string) => `demo-${value.length}-${value.split('').reduce((sum, char) => (sum * 31 + char.charCodeAt(0)) >>> 0, 0)}`
 
 const user: User = { id: 1, username: 'admin', nickname: 'Demo Admin', email: 'admin@suma.demo', has_avatar: false, two_factor_enabled: false }
 let demoRecoveryCodesRemaining = 0
@@ -347,6 +350,61 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     if (suffix === '/containers' && method === 'GET') return clone(containers) as T
     if (suffix === '/containers/metrics') return clone(containers.map(({ id, cpu_percent, memory_bytes, uptime_seconds }) => ({ id, cpu_percent, memory_bytes, uptime_seconds } satisfies ContainerMetrics))) as T
     if (suffix === '/containers/batch') return clone({ results: (body.ids as string[] || []).map((id) => ({ id, success: true })) }) as T
+    const fileMatch = suffix.match(/^\/containers\/([^/]+)\/files(?:\/(content|history|history\/\d+|restore|actions))?$/)
+    if (fileMatch) {
+      const treeKey = `${nodeID}:${fileMatch[1]}`
+      if (!demoFileTrees.has(treeKey)) demoFileTrees.set(treeKey, new Map([['/', { type: 'directory', content: '' }], ['/data', { type: 'directory', content: '' }], ['/data/config.yaml', { type: 'file', content: 'server:\n  port: 8080\n  mode: production\n' }], ['/data/notes.md', { type: 'file', content: '# Persistent files\n\nEdit this file to preview version history.\n' }]]))
+      const tree = demoFileTrees.get(treeKey)!
+      const section = fileMatch[2] || ''
+      const filePath = String(url.searchParams.get('path') || body.path || '/')
+      const mount = { type: 'volume', name: 'gateway-prod_data', source: '/var/lib/docker/volumes/gateway-prod_data/_data', destination: '/data', read_write: true, is_directory: true }
+      const contentView = (name: string) => ({ path: name, content: tree.get(name)?.content ?? '', etag: demoFileHash(tree.get(name)?.content ?? ''), persistent: name.startsWith('/data/'), read_only: !name.startsWith('/data/'), single_file_bind: false })
+      if (!section && method === 'GET') {
+        const folder = filePath.replace(/\/$/, '') || '/'
+        const entries = [...tree.entries()].filter(([name]) => name !== folder && (name.slice(0, name.lastIndexOf('/')) || '/') === folder).map(([name, value]) => ({ name: name.split('/').pop(), path: name, type: value.type, size: value.content.length, modified_at: 1780020000, mount: name.startsWith('/data') ? mount : undefined }))
+        return clone({ path: folder, entries, mounts: [mount], current_mount: folder.startsWith('/data') ? mount : undefined }) as T
+      }
+      if (section === 'content' && method === 'GET') return clone(contentView(filePath)) as T
+      if (section === 'content' && method === 'PUT') {
+        const name = String(body.path)
+        const before = tree.get(name)?.content ?? ''
+        if (body.etag !== demoFileHash(before)) throw new ApiError('File changed since it was opened', 20400, 409)
+        const key = `${treeKey}:${name}`
+        const rows = demoFileHistory.get(key) ?? []
+        if (!rows.length) rows.push({ id: 1, content: before, created_at: earlier, baseline: true })
+        rows.push({ id: rows.length + 1, content: String(body.content ?? ''), created_at: new Date().toISOString(), baseline: false })
+        demoFileHistory.set(key, rows)
+        tree.set(name, { type: 'file', content: String(body.content ?? '') })
+        return clone(contentView(name)) as T
+      }
+      if (section === 'history') return clone((demoFileHistory.get(`${treeKey}:${filePath}`) ?? []).slice().reverse().map((item) => ({ id: item.id, hash: demoFileHash(item.content), created_at: item.created_at, baseline: item.baseline }))) as T
+      if (section.startsWith('history/')) {
+        const item = (demoFileHistory.get(`${treeKey}:${filePath}`) ?? []).find((row) => row.id === Number(section.split('/')[1]))
+        return clone({ path: filePath, content: item?.content ?? '', etag: demoFileHash(item?.content ?? ''), persistent: true }) as T
+      }
+      if (section === 'restore') {
+        const name = String(body.path)
+        const item = (demoFileHistory.get(`${treeKey}:${name}`) ?? []).find((row) => row.id === Number(body.revision_id))
+        if (!item) throw new ApiError('Revision not found', 20400, 404)
+        const before = tree.get(name)?.content ?? ''
+        if (body.etag !== demoFileHash(before)) throw new ApiError('File changed since it was opened', 20400, 409)
+        const rows = demoFileHistory.get(`${treeKey}:${name}`) ?? []
+        rows.push({ id: rows.length + 1, content: item.content, created_at: new Date().toISOString(), baseline: false })
+        demoFileHistory.set(`${treeKey}:${name}`, rows)
+        tree.set(name, { type: 'file', content: item.content })
+        return clone(contentView(name)) as T
+      }
+      if (section === 'actions') {
+        const name = String(body.path)
+        const target = String(body.target || '')
+        if (body.action === 'create_file' || body.action === 'create_directory') tree.set(name, { type: body.action === 'create_file' ? 'file' : 'directory', content: '' })
+        if (body.action === 'delete') for (const key of tree.keys()) if (key === name || key.startsWith(`${name}/`)) tree.delete(key)
+        if (body.action === 'copy' || body.action === 'move' || body.action === 'rename') {
+          for (const [key, value] of [...tree.entries()]) if (key === name || key.startsWith(`${name}/`)) { tree.set(target + key.slice(name.length), { ...value }); if (body.action !== 'copy') tree.delete(key) }
+        }
+        return clone(['copy', 'move', 'delete'].includes(String(body.action)) ? { id: `task-file-${Date.now()}`, status: 'success', progress: 100, message: 'Completed' } : { path: name, target }) as T
+      }
+    }
     const containerMatch = suffix.match(/^\/containers\/([^/]+)(?:\/(start|stop|restart|pause|unpause))?$/)
     if (containerMatch) {
       const row = containers.find((item) => item.id === containerMatch[1]) ?? containers[0]

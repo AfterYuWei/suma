@@ -18,6 +18,7 @@ import (
 	cdService "github.com/suma/suma/server/internal/cd"
 	composeService "github.com/suma/suma/server/internal/compose"
 	containerdomain "github.com/suma/suma/server/internal/container"
+	"github.com/suma/suma/server/internal/containerfiles"
 	credentialService "github.com/suma/suma/server/internal/credential"
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/docker"
@@ -38,6 +39,7 @@ const sessionCookie = "suma_session"
 type Dependencies struct {
 	Engine              docker.Engine
 	Containers          containerdomain.Service
+	Files               *containerfiles.Service
 	Auth                *auth.Service
 	Audit               *audit.Service
 	Tasks               *task.Service

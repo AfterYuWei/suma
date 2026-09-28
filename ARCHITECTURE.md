@@ -25,6 +25,8 @@ Runtime Docker resources and Project inventory are not mirrored into SQLite. SQL
 
 All asynchronous work is represented by a task with pending, running, success, failed, or canceled state. Tasks and audits carry an explicit `control_plane` or `node` scope; node scope requires the resolved node ID/name, and canonical node routes reject cross-node IDs before reading logs, steps, cancellation, or upgrading WebSockets. A bounded in-memory event broker streams fresh task output while SQLite retains task history. The same cancellation rule applies to container logs, stats, and terminal connections: closing the browser connection cancels the Docker operation and closes its stream.
 
+Container file management follows the same handler → `containerfiles` service → Docker adapter boundary. The adapter executes fixed scripts inside the selected running container as its configured user and bounds command output; it never invokes a host shell or reads a host bind source. The service validates absolute paths, rejects symlink traversal and mount-point deletion, classifies the effective nested mount, and limits text editing to writable bind mounts and Docker volumes. It checks a SHA-256 read token before each save, stages regular-file replacement in the same directory, and verifies the result. A single-file bind mount instead receives a guarded in-place write with best-effort restoration on failure. SQLite stores only AES-GCM-encrypted SUMA editor revisions and pending-save markers, not a mirror of container files. Daily pruning enforces age, per-file count, and total capacity limits.
+
 ## Compose and delivery domain boundaries
 
 Compose and continuous delivery are separate aggregates with independent lifecycles:
@@ -63,6 +65,8 @@ Approval and rejection are explicit release state transitions; approval alone do
 ## Web application
 
 TanStack Router defines route ownership and TanStack Query caches server data. Every Docker-resource key includes `node_id`. Zustand persists the selected node, the independent Node Group filter, and local display preferences. Changing the Group filter never changes the selected node or Docker runtime context; only an explicit Node selection does. CD and Authentication Center queries remain global, while their node candidate controls honor the Group filter without dropping already selected out-of-filter nodes.
+
+The container Files tab uses mount destinations as shortcuts, a cursor-paged directory list, and a lazy Monaco editor with local undo/redo, language help, and version diffs. TanStack Query refreshes the visible directory every five seconds and invalidates it after mutations. The edit buffer stays in component memory; save conflicts leave it intact for review. Likely secrets are hidden until explicitly revealed in the editor.
 
 Semantic tokens (`background`, `surface`, `surface-hover`, `border`, `muted`, `text`, `text-muted`) support dark, light, and system themes. The shell uses a compact sidebar, contextual header, and global command palette rather than a conventional admin dashboard.
 

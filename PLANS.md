@@ -2,6 +2,10 @@
 
 This file records the completed MVP implementation. Every checked phase was verified by automated tests, production builds, or the real-Docker smoke tests recorded in the pre-launch verification log below.
 
+## Current work
+
+- [ ] Container Files: node-scoped file browsing and writable operations, mount shortcuts, Monaco editing, optimistic saves, encrypted bounded history, version rollback, task/audit integration, and responsive bilingual UI. Service/API tests, `go test ./...`, `go build ./...`, `npm run lint`, `npm run typecheck`, production/demo builds, and real-Docker named-volume/cross-volume/single-file-bind/authenticated-HTTP smoke passed on 2026-09-28. Desktop/mobile browser acceptance remains pending because this workspace has no browser executable or browser automation tool; keep unchecked until that check passes.
+
 ## Completed phases
 
 - [x] Foundation: React 19 TypeScript frontend, layered Go/Gin backend, GORM/SQLite, Docker adapter, health APIs, compact application shell, and themes.

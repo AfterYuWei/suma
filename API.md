@@ -18,6 +18,18 @@ Node Groups are organizational filters, never Docker execution or authorization 
 
 `POST /nodes/:nodeID/containers/batch` accepts 1–100 IDs and a lifecycle `action`. Batch `start` and `stop` are idempotent: containers already in the requested state count as successful. Batch `restart` uses Docker's restart behavior for running and stopped containers. Batch `remove` may set `force: true` after destructive confirmation to remove running containers; `remove_volumes` remains independent and defaults to `false`. Every result includes `id`, `success`, and an optional Docker error for failed rows.
 
+### Container files
+
+All file routes require authentication and an explicit node and container ID. Their base is `/nodes/:nodeID/containers/:id/files`; no default-node alias exists. The container must be running and have `sh`, `stat`, `cat`, `sha256sum` for saves, and the standard file utilities used by the requested action. Operations run as the container's configured user through its Docker runtime, including TCP nodes; SUMA never opens bind source paths on its own host.
+
+- `GET /files?path=/absolute/path&cursor=name` lists one directory page (200 entries), mount shortcuts, effective mount, and `next_cursor`. Entries identify regular files, directories, links, and special files. Mounts report `type`, `source`/`name`, container `destination`, `read_write`, and `is_directory`.
+- `GET /files/content?path=/absolute/file` reads UTF-8 regular text up to 2 MiB and returns `content`, SHA-256 `etag`, `persistent`, `read_only`, and `single_file_bind`. Editing is available only below a writable bind or Docker volume; other paths are preview only.
+- `PUT /files/content` accepts `{ "path": "/absolute/file", "content": "...", "etag": "<previous hash>" }`. A mismatched hash returns HTTP 409. Saves verify the resulting content. Single-file bind mounts use a guarded in-place write and have a brief non-atomic window.
+- `POST /files/actions` accepts `{ "action": "create_file|create_directory|rename|copy|move|delete", "path": "/absolute/path", "target": "/absolute/destination" }`. `target` is required for rename/copy/move; rename stays in the same parent directory. Existing targets are never overwritten. Copy, move, and delete return a node-scoped Task to poll through `/nodes/:nodeID/tasks/:taskID`; other actions return the resulting paths.
+- `GET /files/history?path=/absolute/file` lists encrypted editor revision metadata. `GET /files/history/:revision?path=...` returns one revision's content. `POST /files/restore` accepts `{ "path": "...", "revision_id": 123, "etag": "<current hash>" }` and creates a new revision on success.
+
+Paths must be normalized container-absolute paths. Symlink traversal and editing nonregular files are rejected. Destructive operations require UI confirmation. The history database keeps at most 20 revisions per file for 30 days and 512 MiB total, with daily pruning; content is AES-GCM encrypted and excluded from audit records.
+
 Compose Project names and managed directories must match Docker Compose's lowercase native `[a-z0-9][a-z0-9_-]*` identity. Mixed-case input is rejected instead of silently rewritten, and runtime ownership is matched by exact native name.
 
 Compose requests containing a `/var/run/docker.sock` bind are rejected by default. After two explicit UI warnings, the confirmed request carries `X-SUMA-Allow-Docker-Socket: true`; this authorizes only that request. TCP-node binds must still use non-interpolated absolute source paths.
