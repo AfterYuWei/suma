@@ -12,6 +12,7 @@ import (
 	"image"
 	"net/http"
 	"net/mail"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -113,6 +114,22 @@ func (s *Service) Login(ctx context.Context, username, password, ip string) (str
 		return "", User{}, ErrTwoFactorRequired
 	}
 	return result.Token, result.User, nil
+}
+
+// LoginPrincipalKey maps username and email aliases to one rate-limit identity.
+// Unknown names get a stable opaque key so they are limited without disclosure.
+func (s *Service) LoginPrincipalKey(ctx context.Context, username string) (string, error) {
+	username = strings.TrimSpace(username)
+	var row database.User
+	err := s.db.WithContext(ctx).Select("id").Where("username = ? OR lower(email) = ?", username, strings.ToLower(username)).First(&row).Error
+	if err == nil {
+		return "user:" + strconv.FormatUint(uint64(row.ID), 10), nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(strings.ToLower(username)))
+	return "unknown:" + hex.EncodeToString(sum[:]), nil
 }
 
 func (s *Service) StartLogin(ctx context.Context, username, password, ip string) (LoginResult, error) {

@@ -56,13 +56,13 @@ func registerPasskeyRoutes(v1, account *gin.RouterGroup, deps Dependencies) {
 			return
 		}
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 128<<10)
-		token, user, err := deps.Auth.FinishPasskeyLogin(c.Request.Context(), ceremonyToken, c.ClientIP(), c.Request)
+		token, user, err := deps.Auth.FinishPasskeyLogin(c.Request.Context(), ceremonyToken, requestClientIP(c), c.Request)
 		if err != nil {
 			failure(c, http.StatusUnauthorized, 11204, "Passkey verification failed")
 			return
 		}
 		setSessionCookie(c, token, deps.CookieSecure)
-		_ = deps.Audit.Record(c.Request.Context(), &user.ID, "login", "passkey", user.Username, c.ClientIP(), "success")
+		_ = deps.Audit.Record(c.Request.Context(), &user.ID, "login", "passkey", user.Username, requestClientIP(c), "success")
 		success(c, user)
 	})
 

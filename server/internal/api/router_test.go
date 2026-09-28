@@ -167,6 +167,7 @@ func TestAuthenticationCenterCredentialHTTP(t *testing.T) {
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+		req.Header.Set("Origin", "http://"+req.Host)
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, req)
 		return response
@@ -262,6 +263,7 @@ func TestTaskAndAuditNodeScopesAreIsolated(t *testing.T) {
 	request := func(path string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+		req.Header.Set("Origin", "http://"+req.Host)
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, req)
 		return response
@@ -323,6 +325,7 @@ func TestNodeGroupHTTPAndFleetFiltering(t *testing.T) {
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+		req.Header.Set("Origin", "http://"+req.Host)
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, req)
 		return response
@@ -379,7 +382,9 @@ func TestAuthenticationLifecycle(t *testing.T) {
 	}
 
 	login := httptest.NewRecorder()
-	router.ServeHTTP(login, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"admin","password":"long-password"}`)))
+	loginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"admin","password":"long-password"}`))
+	loginRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(login, loginRequest)
 	if login.Code != http.StatusOK {
 		t.Fatalf("login: %d %s", login.Code, login.Body.String())
 	}
@@ -398,6 +403,7 @@ func TestAuthenticationLifecycle(t *testing.T) {
 
 	logoutRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
 	logoutRequest.AddCookie(cookies[0])
+	logoutRequest.Header.Set("Origin", "http://"+logoutRequest.Host)
 	logout := httptest.NewRecorder()
 	router.ServeHTTP(logout, logoutRequest)
 	if logout.Code != http.StatusOK {
@@ -437,6 +443,7 @@ func TestTwoFactorAuthenticationHTTP(t *testing.T) {
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+		req.Header.Set("Origin", "http://"+req.Host)
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, req)
 		return response
@@ -469,6 +476,7 @@ func TestTwoFactorAuthenticationHTTP(t *testing.T) {
 	login := httptest.NewRecorder()
 	loginRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"long-password"}`))
 	loginRequest.Header.Set("Content-Type", "application/json")
+	loginRequest.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(login, loginRequest)
 	if login.Code != http.StatusOK || len(login.Result().Cookies()) != 0 || !strings.Contains(login.Body.String(), `"requires_two_factor":true`) {
 		t.Fatalf("password challenge = %d %s cookies=%v", login.Code, login.Body.String(), login.Result().Cookies())
@@ -484,6 +492,7 @@ func TestTwoFactorAuthenticationHTTP(t *testing.T) {
 	verificationCode := testTOTPCode(t, setupEnvelope.Data.Secret, time.Now())
 	verify := httptest.NewRecorder()
 	verifyRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/two-factor", strings.NewReader(fmt.Sprintf(`{"challenge_token":%q,"code":%q}`, loginEnvelope.Data.ChallengeToken, verificationCode)))
+	verifyRequest.Header.Set("Content-Type", "application/json")
 	verifyRequest.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(verify, verifyRequest)
 	if verify.Code != http.StatusOK || len(verify.Result().Cookies()) != 1 || !strings.Contains(verify.Body.String(), `"two_factor_enabled":true`) {
@@ -538,6 +547,7 @@ func TestAccountProfilePasswordAndAvatarHTTP(t *testing.T) {
 		}
 		if token != "" {
 			req.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+			req.Header.Set("Origin", "http://"+req.Host)
 		}
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, req)
@@ -580,6 +590,7 @@ func TestAccountProfilePasswordAndAvatarHTTP(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/account/avatar", &multipartBody)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: currentToken})
+	req.Header.Set("Origin", "http://"+req.Host)
 	avatarResponse := httptest.NewRecorder()
 	router.ServeHTTP(avatarResponse, req)
 	if avatarResponse.Code != http.StatusBadRequest || strings.Contains(avatarResponse.Body.String(), "<svg") {
@@ -735,6 +746,7 @@ func (h projectHTTPHarness) requestWithHeaders(method, path string, body []byte,
 		request.Header.Set(name, value)
 	}
 	request.AddCookie(h.cookie)
+	request.Header.Set("Origin", "http://"+request.Host)
 	response := httptest.NewRecorder()
 	h.router.ServeHTTP(response, request)
 	return response

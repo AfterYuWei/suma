@@ -2,6 +2,8 @@
 
 All REST responses use `{ "code": 0, "message": "success", "data": ... }`. Errors use a nonzero code and an appropriate HTTP status. Authentication uses the `suma_session` HttpOnly cookie.
 
+Cookie-authenticated `POST`, `PUT`, `PATCH`, and `DELETE` requests require an `Origin` matching the request host and port. When `security.browser_origin` is configured, the scheme must also match. JSON request bodies require `Content-Type: application/json` except on the unchanged administrator-initialization route; avatar upload remains multipart, and signed Git webhooks use their own verification. Password login returns `429` with `Retry-After` when its short-term IP or account limit is reached. WebSocket handshakes require the same allowed `Origin`.
+
 ## REST `/api/v1`
 
 Node-aware clients use these routes:
@@ -13,6 +15,8 @@ Node-aware clients use these routes:
 - `POST /nodes/:nodeID/system/prune`
 - `GET /nodes/:nodeID/tasks`, `GET /nodes/:nodeID/tasks/:taskID`, `GET /nodes/:nodeID/tasks/:taskID/{logs|steps}`, `POST /nodes/:nodeID/tasks/:taskID/cancel`
 - `GET /nodes/:nodeID/audit-logs`
+
+`GET|PUT /settings` includes optional `security.browser_origin` and `security.trusted_proxies` strings. Empty browser origin uses exact host and port matching; a nonempty value must match the current page origin. Empty trusted proxies ignores forwarded client IP headers; otherwise use a comma-separated list of proxy IPs/CIDRs. Both values apply immediately after a successful `PUT`. The matching environment variables `SUMA_BROWSER_ORIGIN` and `SUMA_TRUSTED_PROXIES` supply initial values until a setting is saved.
 
 Node Groups are organizational filters, never Docker execution or authorization scopes. A node may belong to multiple Groups or have no Group. Node create/update accepts optional `group_ids`; omitting it on update preserves memberships, while an explicit empty array clears them. Deleting a Group only removes memberships. `GET /fleet/overview` accepts an optional `group_id=<id>` and probes only matching nodes; omitting it returns all nodes, including nodes without a Group.
 

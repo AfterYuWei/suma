@@ -82,22 +82,31 @@ func New(logger *slog.Logger) (*App, error) {
 	if err := continuousDelivery.Recover(context.Background()); err != nil {
 		return nil, err
 	}
+	applicationSettings := settingsService.NewService(db, cfg)
+	if err := applicationSettings.LoadSecurity(context.Background()); err != nil {
+		return nil, fmt.Errorf("load security settings: %w", err)
+	}
 	nodes.Start()
 	continuousDelivery.Start()
 	recoveryContext, recoveryCancel := context.WithCancel(context.Background())
 	fileService := containerfiles.NewService(db, secretStore)
-	application := &App{logger: logger, engine: engine, nodes: nodes, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{Engine: engine, Containers: engine, Files: fileService, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: settingsService.NewService(db, cfg), Monitor: monitorService.NewService(engine, cfg.DatabasePath), System: systemService.NewService(engine, taskService), Nodes: nodes, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
+	application := &App{logger: logger, engine: engine, nodes: nodes, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{Engine: engine, Containers: engine, Files: fileService, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: applicationSettings, Monitor: monitorService.NewService(engine, cfg.DatabasePath), System: systemService.NewService(engine, taskService), Nodes: nodes, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
 	application.recoveryWG.Add(1)
 	go func() {
 		defer application.recoveryWG.Done()
-		if err := fileService.PruneAll(recoveryContext); err != nil { logger.Warn("prune container file history", "error", err) }
+		if err := fileService.PruneAll(recoveryContext); err != nil {
+			logger.Warn("prune container file history", "error", err)
+		}
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-recoveryContext.Done(): return
+			case <-recoveryContext.Done():
+				return
 			case <-ticker.C:
-				if err := fileService.PruneAll(recoveryContext); err != nil { logger.Warn("prune container file history", "error", err) }
+				if err := fileService.PruneAll(recoveryContext); err != nil {
+					logger.Warn("prune container file history", "error", err)
+				}
 			}
 		}
 	}()

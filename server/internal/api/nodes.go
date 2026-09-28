@@ -1604,5 +1604,5 @@ func recordNodeAudit(c *gin.Context, deps Dependencies, nodeID, nodeName, action
 		user := value.(auth.User)
 		userID = &user.ID
 	}
-	_ = deps.Audit.RecordForNode(c.Request.Context(), nodeID, nodeName, userID, action, resourceType, resourceName, c.ClientIP(), result)
+	_ = deps.Audit.RecordForNode(c.Request.Context(), nodeID, nodeName, userID, action, resourceType, resourceName, requestClientIP(c), result)
 }

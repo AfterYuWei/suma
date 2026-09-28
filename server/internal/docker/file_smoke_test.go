@@ -179,6 +179,7 @@ func TestContainerFileEditingRealDocker(t *testing.T) {
 		req := httptest.NewRequest(method, url, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.AddCookie(&http.Cookie{Name: "suma_session", Value: token})
+		req.Header.Set("Origin", "http://"+req.Host)
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, req)
 		return response

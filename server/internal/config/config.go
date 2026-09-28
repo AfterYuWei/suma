@@ -17,6 +17,8 @@ type Config struct {
 	GitRoot        string
 	SecretKeyFile  string
 	CookieSecure   bool
+	BrowserOrigin  string
+	TrustedProxies string
 	SessionMaxAge  time.Duration
 }
 
@@ -33,6 +35,8 @@ func Load() Config {
 		GitRoot:        env("SUMA_GIT_ROOT", filepath.Join(dataRoot, "gitops")),
 		SecretKeyFile:  env("SUMA_SECRET_KEY_FILE", filepath.Join(dataRoot, "secret.key")),
 		CookieSecure:   env("SUMA_COOKIE_SECURE", "false") == "true",
+		BrowserOrigin:  env("SUMA_BROWSER_ORIGIN", ""),
+		TrustedProxies: env("SUMA_TRUSTED_PROXIES", ""),
 		SessionMaxAge:  24 * time.Hour,
 	}
 }

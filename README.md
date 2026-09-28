@@ -116,7 +116,11 @@ docker run -d --name suma \
 | `SUMA_DATA_ROOT` | `/Data`（生产镜像内置；裸机运行默认 `./data`） | 数据与凭据根目录，其余路径默认派生 |
 | `SUMA_ADDRESS` | `:8080` | 服务监听地址（改端口需同步映射宿主端口） |
 | `SUMA_COOKIE_SECURE` | `false` | HTTPS 部署时设为 `true` |
+| `SUMA_BROWSER_ORIGIN` | 空 | 可选的浏览器来源初值（如 `https://suma.example.com`）；设置页保存后立即覆盖此初值 |
+| `SUMA_TRUSTED_PROXIES` | 空 | 可选的可信代理 IP/CIDR 初值，逗号分隔；设置页保存后立即覆盖此初值 |
 | `SUMA_DOCKER_HOST` | `unix:///var/run/docker.sock` | 首次引导默认节点的引擎地址 |
+
+安全设置中的“浏览器来源”留空时，HTTP 写操作和 WebSocket 握手要求来源的主机及端口与请求一致；填写后还要求协议一致。填写值须与当前设置页的来源一致。可信代理留空时，SUMA 忽略 `X-Forwarded-For` 并使用直连 IP；填写时只信任列出的代理，并由右向左解析代理链。两项均可在设置页清空，保存后立即生效。代理应保留原始 `Host` 并正确追加或覆盖 `X-Forwarded-For`。
 
 **镜像标签约定**
 

@@ -59,6 +59,8 @@ func TestGetMergesDefaultsWithConfig(t *testing.T) {
 		{"storage.data_root", "/var/lib/suma"},
 		{"storage.backup_root", "/srv/backups"},
 		{"security.cookie_secure", "true"},
+		{"security.browser_origin", ""},
+		{"security.trusted_proxies", ""},
 		{"appearance.theme", "system"},
 		{"registry.default", ""},
 	}

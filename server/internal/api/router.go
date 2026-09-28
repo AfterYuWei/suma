@@ -93,7 +93,9 @@ type twoFactorVerifyRequest struct {
 
 func NewRouter(deps Dependencies) *gin.Engine {
 	router := gin.New()
-	router.Use(gin.Recovery(), requestID(), securityHeaders())
+	_ = router.SetTrustedProxies(nil)
+	router.Use(gin.Recovery(), requestID(), securityHeaders(), securityBoundary(deps.Settings))
+	loginAttempts := newLoginLimiter()
 	v1 := router.Group("/api/v1")
 
 	v1.GET("/auth/status", func(c *gin.Context) {
@@ -127,12 +129,29 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	})
 	v1.POST("/auth/login", func(c *gin.Context) {
 		c.Header("Cache-Control", "no-store")
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
 		var input credentials
 		if c.ShouldBindJSON(&input) != nil {
 			failure(c, http.StatusBadRequest, 11001, "Username and password are required")
 			return
 		}
-		result, err := deps.Auth.StartLogin(c.Request.Context(), input.Username, input.Password, c.ClientIP())
+		ip := requestClientIP(c)
+		if delay := loginAttempts.admitIP(ip); delay > 0 {
+			c.Header("Retry-After", retryAfter(delay))
+			failure(c, http.StatusTooManyRequests, 11009, "Too many login attempts")
+			return
+		}
+		principal, err := deps.Auth.LoginPrincipalKey(c.Request.Context(), input.Username)
+		if err != nil {
+			failure(c, http.StatusServiceUnavailable, 11010, "Unable to verify login")
+			return
+		}
+		if delay := loginAttempts.admitAccount(principal); delay > 0 {
+			c.Header("Retry-After", retryAfter(delay))
+			failure(c, http.StatusTooManyRequests, 11009, "Too many login attempts")
+			return
+		}
+		result, err := deps.Auth.StartLogin(c.Request.Context(), input.Username, input.Password, ip)
 		if err != nil {
 			failure(c, http.StatusUnauthorized, 11004, "Invalid username or password")
 			return
@@ -142,7 +161,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			return
 		}
 		setSessionCookie(c, result.Token, deps.CookieSecure)
-		_ = deps.Audit.Record(c.Request.Context(), &result.User.ID, "login", "session", result.User.Username, c.ClientIP(), "success")
+		_ = deps.Audit.Record(c.Request.Context(), &result.User.ID, "login", "session", result.User.Username, requestClientIP(c), "success")
 		success(c, gin.H{"requires_two_factor": false, "user": result.User})
 	})
 	v1.POST("/auth/two-factor", func(c *gin.Context) {
@@ -152,7 +171,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			failure(c, http.StatusBadRequest, 11007, "Challenge token and verification code are required")
 			return
 		}
-		token, user, err := deps.Auth.CompleteTwoFactorLogin(c.Request.Context(), input.ChallengeToken, input.Code, c.ClientIP())
+		token, user, err := deps.Auth.CompleteTwoFactorLogin(c.Request.Context(), input.ChallengeToken, input.Code, requestClientIP(c))
 		if err != nil {
 			status := http.StatusUnauthorized
 			if errors.Is(err, auth.ErrTwoFactorStore) {
@@ -162,7 +181,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			return
 		}
 		setSessionCookie(c, token, deps.CookieSecure)
-		_ = deps.Audit.Record(c.Request.Context(), &user.ID, "login", "session", user.Username, c.ClientIP(), "success")
+		_ = deps.Audit.Record(c.Request.Context(), &user.ID, "login", "session", user.Username, requestClientIP(c), "success")
 		success(c, user)
 	})
 	v1.POST("/auth/logout", func(c *gin.Context) {
@@ -1346,6 +1365,13 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			failure(c, http.StatusBadRequest, 19002, "Invalid settings")
 			return
 		}
+		if value := strings.TrimSpace(input["security.browser_origin"]); value != "" {
+			origin, err := settingsService.ParseOrigin(value)
+			if err != nil || origin != c.GetHeader("Origin") {
+				failure(c, http.StatusBadRequest, 19004, "Browser origin must match the current page origin")
+				return
+			}
+		}
 		values, err := deps.Settings.Update(c.Request.Context(), input)
 		if err != nil {
 			failure(c, http.StatusBadRequest, 19003, err.Error())
@@ -1511,8 +1537,7 @@ func streamTask(c *gin.Context, service *task.Service) {
 }
 
 var upgrader = websocket.Upgrader{ReadBufferSize: 1024, WriteBufferSize: 4096, CheckOrigin: func(r *http.Request) bool {
-	origin := r.Header.Get("Origin")
-	return origin == "" || strings.Contains(origin, r.Host)
+	return policyFromRequest(r).AllowsOrigin(r)
 }}
 
 func streamLogs(c *gin.Context, service containerdomain.Service) {
@@ -1688,11 +1713,11 @@ func recordAudit(c *gin.Context, service *audit.Service, action, resourceType, r
 	}
 	for _, prefix := range []string{"container.", "image.", "network.", "volume.", "compose.", "project.", "system."} {
 		if strings.HasPrefix(action, prefix) {
-			_ = service.RecordForNode(c.Request.Context(), "local", "Local", userID, action, resourceType, resourceName, c.ClientIP(), result)
+			_ = service.RecordForNode(c.Request.Context(), "local", "Local", userID, action, resourceType, resourceName, requestClientIP(c), result)
 			return
 		}
 	}
-	_ = service.RecordControlPlane(c.Request.Context(), userID, action, resourceType, resourceName, c.ClientIP(), result)
+	_ = service.RecordControlPlane(c.Request.Context(), userID, action, resourceType, resourceName, requestClientIP(c), result)
 }
 
 func currentUser(c *gin.Context) auth.User {
@@ -1704,11 +1729,11 @@ func recordAccountAudit(service *audit.Service, c *gin.Context, user auth.User, 
 	if service == nil {
 		return
 	}
-	_ = service.Record(c.Request.Context(), &user.ID, action, "account", fmt.Sprint(user.ID), c.ClientIP(), result)
+	_ = service.Record(c.Request.Context(), &user.ID, action, "account", fmt.Sprint(user.ID), requestClientIP(c), result)
 }
 
 func requestActor(c *gin.Context) cdService.Actor {
-	actor := cdService.Actor{IP: c.ClientIP()}
+	actor := cdService.Actor{IP: requestClientIP(c)}
 	if value, exists := c.Get("user"); exists {
 		user := value.(auth.User)
 		actor.UserID = &user.ID

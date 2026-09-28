@@ -115,7 +115,7 @@ const gitCredentials: GitCredential[] = [{ id: 1, name: 'GitHub Demo', auth_type
 const registryCredentials = [{ id: 1, name: 'GHCR Demo', server_address: 'ghcr.io', auth_type: 'token', username: 'suma-demo', fingerprint: 'sha256:8d14…2f09', created_at: earlier, updated_at: now, last_used_at: now, authorized_node_ids: ['local', 'edge-hk', 'nas-prod'] }]
 const tlsCredentials = [{ id: 1, name: 'Edge Docker mTLS', fingerprint: 'SHA256:91:42:7A:DE:MO', authorized_node_ids: ['edge-hk'], created_at: earlier, updated_at: now }]
 
-const settings = { 'general.server_name': 'SUMA Demo', 'general.timezone': 'Asia/Shanghai', 'docker.compose_command': 'docker compose', 'storage.compose_root': '/data/compose', 'storage.data_root': '/data', 'storage.backup_root': '/data/backups', 'security.cookie_secure': 'true', 'registry.default': 'ghcr.io' }
+const settings = { 'general.server_name': 'SUMA Demo', 'general.timezone': 'Asia/Shanghai', 'docker.compose_command': 'docker compose', 'storage.compose_root': '/data/compose', 'storage.data_root': '/data', 'storage.backup_root': '/data/backups', 'security.cookie_secure': 'true', 'security.browser_origin': '', 'security.trusted_proxies': '', 'registry.default': 'ghcr.io' }
 
 const clone = <T,>(value: T): T => structuredClone(value)
 const parseBody = (init?: RequestInit): Record<string, unknown> => {
@@ -316,7 +316,12 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
   if (pathname.startsWith('/credentials/registries')) return clone(registryCredentials[0]) as T
   if (pathname.startsWith('/credentials/docker-tls')) return clone(tlsCredentials[0]) as T
   if (pathname === '/settings' && method === 'GET') return clone(settings) as T
-  if (pathname === '/settings' && method === 'PUT') return clone(body) as T
+  if (pathname === '/settings' && method === 'PUT') {
+    for (const [key, value] of Object.entries(body)) {
+      if (key in settings && typeof value === 'string') (settings as Record<string, string>)[key] = value
+    }
+    return clone(settings) as T
+  }
 
   if (pathname === '/delivery-projects' && method === 'GET') return clone(deliveryProjects) as T
   if (pathname === '/delivery-projects' && method === 'POST') return clone(deliveryProjects[0]) as T

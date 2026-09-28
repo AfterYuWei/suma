@@ -12,6 +12,7 @@ var configEnvKeys = []string{
 	"SUMA_ADDRESS", "SUMA_DATABASE", "SUMA_DOCKER_HOST", "SUMA_COMPOSE_ROOT",
 	"SUMA_BACKUP_ROOT", "SUMA_COMPOSE_COMMAND", "SUMA_GIT_COMMAND",
 	"SUMA_GIT_ROOT", "SUMA_SECRET_KEY_FILE", "SUMA_COOKIE_SECURE", dataRootKey,
+	"SUMA_BROWSER_ORIGIN", "SUMA_TRUSTED_PROXIES",
 }
 
 func clearConfigEnv(t *testing.T) {
@@ -37,6 +38,8 @@ func TestLoadDefaults(t *testing.T) {
 		{"git command", cfg.GitCommand, "git"},
 		{"git root", cfg.GitRoot, filepath.Join(dataRoot, "gitops")},
 		{"secret key file", cfg.SecretKeyFile, filepath.Join(dataRoot, "secret.key")},
+		{"browser origin", cfg.BrowserOrigin, ""},
+		{"trusted proxies", cfg.TrustedProxies, ""},
 	}
 	for _, row := range rows {
 		if row.got != row.want {
@@ -66,6 +69,8 @@ func TestLoadEnvironmentOverrides(t *testing.T) {
 		{"git command", "SUMA_GIT_COMMAND", "git --no-pager", func(c Config) string { return c.GitCommand }, "git --no-pager"},
 		{"git root", "SUMA_GIT_ROOT", "/srv/gitops", func(c Config) string { return c.GitRoot }, "/srv/gitops"},
 		{"secret key file", "SUMA_SECRET_KEY_FILE", "/etc/suma/secret.key", func(c Config) string { return c.SecretKeyFile }, "/etc/suma/secret.key"},
+		{"browser origin", "SUMA_BROWSER_ORIGIN", "https://suma.example.test", func(c Config) string { return c.BrowserOrigin }, "https://suma.example.test"},
+		{"trusted proxies", "SUMA_TRUSTED_PROXIES", "192.0.2.10,10.0.0.0/8", func(c Config) string { return c.TrustedProxies }, "192.0.2.10,10.0.0.0/8"},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {

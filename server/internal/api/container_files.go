@@ -184,7 +184,7 @@ func registerNodeFileRoutes(group *gin.RouterGroup, deps Dependencies) {
 		}
 		id := c.Param("id")
 		if input.Action == "copy" || input.Action == "move" || input.Action == "delete" {
-			userID, ip := fileUser(c), c.ClientIP()
+			userID, ip := fileUser(c), requestClientIP(c)
 			taskRow, err := deps.Tasks.StartForNode(view.ID, view.Name, "container.file."+input.Action, fmt.Sprintf("%s %s", input.Action, input.Path), func(ctx context.Context, report task.Reporter) error {
 				report(10, "Applying container file operation")
 				err := deps.Files.ApplyForNode(ctx, adapter, view.ID, id, input)
