@@ -50,8 +50,8 @@ export function CommandPalette({ open, close }: { open: boolean; close: () => vo
 
     containers.data?.forEach((row) => {
       push({ id: `container-${row.id}`, label: row.name, detail: `${row.state} · ${row.image}`, type: zh ? '容器' : 'Containers', run: () => { close(); void navigate({ to: '/containers/$containerId', params: { containerId: row.id } }) } })
-      push({ id: `logs-${row.id}`, label: zh ? `打开 ${row.name} 日志` : `Open ${row.name} logs`, detail: row.image, type: zh ? '容器操作' : 'Container actions', run: () => { close(); location.assign(`/containers/${row.id}#logs`) } })
-      push({ id: `terminal-${row.id}`, label: zh ? `打开 ${row.name} 终端` : `Open ${row.name} terminal`, detail: row.image, type: zh ? '容器操作' : 'Container actions', run: () => { close(); location.assign(`/containers/${row.id}#terminal`) } })
+      push({ id: `logs-${row.id}`, label: zh ? `打开 ${row.name} 日志` : `Open ${row.name} logs`, detail: row.image, type: zh ? '容器操作' : 'Container actions', run: () => { close(); void navigate({ to: '/containers/$containerId', params: { containerId: row.id }, hash: 'logs' }) } })
+      push({ id: `terminal-${row.id}`, label: zh ? `打开 ${row.name} 终端` : `Open ${row.name} terminal`, detail: row.image, type: zh ? '容器操作' : 'Container actions', run: () => { close(); void navigate({ to: '/containers/$containerId', params: { containerId: row.id }, hash: 'terminal' }) } })
       push({ id: `restart-${row.id}`, label: zh ? `重启 ${row.name}` : `Restart ${row.name}`, detail: zh ? '容器操作' : 'Container action', type: zh ? '容器操作' : 'Container actions', run: () => { close(); void api(nodePath(nodeID, `/containers/${row.id}/restart`), { method: 'POST' }) } })
       if (row.state === 'running') {
         push({

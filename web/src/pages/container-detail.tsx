@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate, useParams } from '@tanstack/react-router'
+import { useBlocker, useNavigate, useParams, useRouterState } from '@tanstack/react-router'
 import { ChevronLeft, MoreHorizontal, OctagonX, Pause, Pencil, Play, RefreshCw, Square, Trash2 } from 'lucide-react'
-import { lazy, useState } from 'react'
+import { lazy, useRef, useState } from 'react'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '../components/ui/dropdown-menu'
@@ -34,15 +34,20 @@ export function ContainerDetailPage() {
   const client = useQueryClient()
   const { t, language } = useI18n()
   const zh = language === 'zh-CN'
-  const hash = location.hash.slice(1)
-  const initial = tabs.find((name) => name.toLowerCase() === hash) ?? 'Overview'
-  const [tab, setTab] = useState<(typeof tabs)[number]>(initial)
+  const hash = useRouterState({ select: (state) => state.location.hash })
+  const tab = tabs.find((name) => name.toLowerCase() === hash.toLowerCase()) ?? 'Overview'
   const [filesDirty, setFilesDirty] = useState(false)
+  const bypassNavigationPrompt = useRef(false)
+  useBlocker({
+    disabled: !filesDirty,
+    enableBeforeUnload: filesDirty,
+    shouldBlockFn: async () => bypassNavigationPrompt.current ? false : !await confirmDialog({ title: zh ? '放弃未保存的更改？' : 'Discard unsaved changes?', confirmLabel: zh ? '放弃' : 'Discard', danger: true }),
+  })
   const query = useQuery({ queryKey: ['container', nodeID, containerId], queryFn: () => api<ContainerDetail>(nodePath(nodeID, `/containers/${containerId}`)) })
   const environmentPagination = useListPagination(query.data?.environment ?? [])
   const action = useMutation({ mutationFn: (name: string) => api(nodePath(nodeID, `/containers/${containerId}/${name}`), { method: 'POST' }), onSuccess: () => { client.invalidateQueries({ queryKey: ['container', nodeID, containerId] }); client.invalidateQueries({ queryKey: ['containers', nodeID] }) } })
-  const rename = async () => { const name = await promptDialog({ title: t('renameContainer'), confirmLabel: t('save'), input: { label: t('newContainerName'), initialValue: query.data?.name } }); if (!name) return; await api(nodePath(nodeID, `/containers/${containerId}`), { method: 'PATCH', body: JSON.stringify({ name }) }); await client.invalidateQueries({ queryKey: ['container', nodeID, containerId] }) }
-  const remove = async () => { const name = query.data?.name ?? containerId; if (!await confirmDialog({ title: t('removeContainer'), description: t('removeContainerDescription', { name }), confirmLabel: t('remove'), danger: true })) return; await api(nodePath(nodeID, `/containers/${containerId}`), { method: 'DELETE' }); void navigate({ to: '/containers' }) }
+  const rename = async () => { const name = await promptDialog({ title: t('renameContainer'), confirmLabel: t('save'), input: { label: t('newContainerName'), initialValue: query.data?.name } }); if (!name) return; await api(nodePath(nodeID, `/containers/${containerId}`), { method: 'PATCH', body: JSON.stringify({ name }) }); await Promise.all([client.invalidateQueries({ queryKey: ['container', nodeID, containerId] }), client.invalidateQueries({ queryKey: ['containers', nodeID] })]) }
+  const remove = async () => { const name = query.data?.name ?? containerId; if (!await confirmDialog({ title: t('removeContainer'), description: t('removeContainerDescription', { name }), confirmLabel: t('remove'), danger: true })) return; await api(nodePath(nodeID, `/containers/${containerId}`), { method: 'DELETE' }); await Promise.all([client.invalidateQueries({ queryKey: ['containers', nodeID] }), client.invalidateQueries({ queryKey: ['container-metrics', nodeID] })]); bypassNavigationPrompt.current = true; void navigate({ to: '/containers' }) }
   const kill = async () => { const name = query.data?.name ?? containerId; if (await confirmDialog({ title: t('killContainer'), description: t('killContainerDescription', { name }), confirmLabel: zh ? '强制终止' : 'Force kill', danger: true })) action.mutate('kill') }
   if (query.isPending) return <LoadingState label={zh ? '正在加载容器详情' : 'Loading container details'} rows={6} />
   if (!query.data) return <ErrorState description={zh ? '未找到容器。' : 'Container not found.'} />
@@ -69,10 +74,10 @@ export function ContainerDetailPage() {
 
   return <div className="flex w-full flex-col items-start gap-5">
     <div className="-mb-1">
-      <Button variant="ghost" size="sm" className="-ml-1 text-muted-foreground hover:text-foreground" onClick={async () => { if (filesDirty && !await confirmDialog({ title: zh ? '放弃未保存的更改？' : 'Discard unsaved changes?', confirmLabel: zh ? '放弃' : 'Discard', danger: true })) return; void navigate({ to: '/containers' }) }}><ChevronLeft />{t('containers')}</Button>
+      <Button variant="ghost" size="sm" className="-ml-1 text-muted-foreground hover:text-foreground" onClick={() => void navigate({ to: '/containers' })}><ChevronLeft />{t('containers')}</Button>
     </div>
     <ResourceFrame title={row.name} detail={`${row.image} · ${row.status}`} action={actions}>
-    <Tabs value={tab} onValueChange={(name) => { const next = String(name); void (async () => { if (tab === 'Files' && next !== 'Files' && filesDirty && !await confirmDialog({ title: zh ? '放弃未保存的更改？' : 'Discard unsaved changes?', confirmLabel: zh ? '放弃' : 'Discard', danger: true })) return; setTab(next as (typeof tabs)[number]); location.hash = next.toLowerCase() })() }}>
+    <Tabs value={tab} onValueChange={(name) => { const next = String(name).toLowerCase(); if (next !== hash.toLowerCase()) void navigate({ to: '/containers/$containerId', params: { containerId }, hash: next, resetScroll: false, hashScrollIntoView: false }) }}>
       <TabsList variant="line" className="max-w-full justify-start gap-4 overflow-x-auto border-b pb-2">
         {tabs.map((name) => <TabsTrigger key={name} value={name} className="flex-none px-1">{label(name)}</TabsTrigger>)}
       </TabsList>

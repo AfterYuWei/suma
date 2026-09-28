@@ -29,7 +29,7 @@ const deferred = (Component: ComponentType) => () => <Suspense fallback={<div ro
 const rootRoute = createRootRoute({ component: () => <AuthGate><AppShell><Outlet /></AppShell></AuthGate> })
 const overviewRoute = createRoute({ getParentRoute: () => rootRoute, path: '/', component: OverviewPage })
 const containersRoute = createRoute({ getParentRoute: () => rootRoute, path: '/containers', component: ContainersPage })
-const containerDetailRoute = createRoute({ getParentRoute: () => rootRoute, path: '/containers/$containerId', component: deferred(ContainerDetailPage) })
+const containerDetailRoute = createRoute({ getParentRoute: () => rootRoute, path: '/containers/$containerId', component: deferred(ContainerDetailPage), remountDeps: ({ params }) => params.containerId })
 const imagesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/images', component: ImagesPage })
 const networksRoute = createRoute({ getParentRoute: () => rootRoute, path: '/networks', component: NetworksPage })
 const volumesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/volumes', component: VolumesPage })

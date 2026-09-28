@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate, useParams } from '@tanstack/react-router'
+import { Link, useBlocker, useNavigate, useParams } from '@tanstack/react-router'
 import { CheckCircle2, ChevronLeft, CircleAlert, CircleStop, Download, FileCheck2, Hammer, ListTodo, PanelTopClose, Play, PowerOff, RefreshCw, Rocket, Save, Square, Trash2 } from 'lucide-react'
-import { lazy, type ReactNode, Suspense, useEffect, useState } from 'react'
+import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from 'react'
 import { Button } from '../components/ui/button'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '../components/ui/alert'
 import { Card, CardContent } from '../components/ui/card'
@@ -59,6 +59,13 @@ export function ComposeDetailPage() {
   const [takeoverOpen, setTakeoverOpen] = useState(false)
   const [operation, setOperation] = useState<ComposeOperation | null>(null)
   const [operationOpen, setOperationOpen] = useState(false)
+  const bypassNavigationPrompt = useRef(false)
+  const dirty = !!query.data && (compose !== query.data.compose || environment !== query.data.environment)
+  useBlocker({
+    disabled: !dirty,
+    enableBeforeUnload: dirty,
+    shouldBlockFn: async () => bypassNavigationPrompt.current ? false : !await confirmDialog({ title: zh ? '放弃未保存的项目配置？' : 'Discard unsaved project configuration?', confirmLabel: zh ? '放弃' : 'Discard', danger: true }),
+  })
 
   useEffect(() => {
     if (!query.data) return
@@ -138,6 +145,7 @@ export function ComposeDetailPage() {
       client.setQueryData(['compose-action-task', nodeID, task.id], task)
       void client.invalidateQueries({ queryKey: ['projects', nodeID] })
       void client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] })
+      bypassNavigationPrompt.current = true
       void navigate({ to: '/tasks' })
     },
     onError: (error) => setNotice(error.message),
@@ -189,6 +197,7 @@ export function ComposeDetailPage() {
     const result = await confirmManagedProjectRemoval(projectName, zh)
     if (!result) return
     await api(nodePath(nodeID, `/projects/compose/${encodedName}?confirm=${encodedName}&force=true&preserve_volumes=${!result.checked}`), { method: 'DELETE' })
+    bypassNavigationPrompt.current = true
     void navigate({ to: '/projects' })
   }
   const cleanupExternal = async () => {
@@ -212,7 +221,6 @@ export function ComposeDetailPage() {
   if (query.isError || !query.data) return <ErrorState title={zh ? '无法加载 Compose 项目' : 'Unable to load Compose project'} description={query.error?.message || (zh ? '服务端没有返回项目数据。' : 'The server did not return project data.')} />
 
   const project = query.data
-  const dirty = compose !== project.compose || environment !== project.environment
   const operationActive = action.isPending || taskRunning
   const actionButton = (name: string, icon: ReactNode) => <Button key={name} variant={name === 'down' ? 'destructive' : 'outline'} disabled={operationActive} onClick={() => void run(name)}>{operationActive && operation?.action === name ? <Spinner className="size-4" /> : icon}{composeActionLabel(name, zh)}</Button>
   const headerActions = <div className="flex flex-wrap items-center gap-2">
@@ -375,7 +383,7 @@ function Services({ rows, loading, error, zh }: { rows?: ContainerSummary[]; loa
       {(rows ?? []).length === 0 && <TableRow><TableCell colSpan={6} className="h-24 text-center text-muted-foreground">{zh ? '项目尚未创建容器，请先启动项目。' : 'No containers have been created. Start the project first.'}</TableCell></TableRow>}
       {pagination.items.map((row) => (
         <TableRow key={row.id}>
-          <TableCell><div className="flex flex-col gap-0.5"><span className="font-medium">{row.labels['com.docker.compose.service'] || row.name}</span><a href={`/containers/${row.id}`} className="text-xs text-muted-foreground hover:text-foreground hover:underline">{row.name}</a><span className="font-mono text-[11px] text-muted-foreground">{row.id.slice(0, 12)}{row.labels['com.docker.compose.container-number'] ? ` · #${row.labels['com.docker.compose.container-number']}` : ''}</span></div></TableCell>
+          <TableCell><div className="flex flex-col gap-0.5"><span className="font-medium">{row.labels['com.docker.compose.service'] || row.name}</span><Link to="/containers/$containerId" params={{ containerId: row.id }} className="text-xs text-muted-foreground hover:text-foreground hover:underline">{row.name}</Link><span className="font-mono text-[11px] text-muted-foreground">{row.id.slice(0, 12)}{row.labels['com.docker.compose.container-number'] ? ` · #${row.labels['com.docker.compose.container-number']}` : ''}</span></div></TableCell>
           <TableCell><TooltipHint content={row.image}><span className="block max-w-72 truncate text-muted-foreground">{row.image}</span></TooltipHint></TableCell>
           <TableCell><div className="flex flex-col items-start gap-1"><StatusBadge tone={stateTone(row.state)}>{serviceState(row.state, zh)}</StatusBadge><TooltipHint content={row.status}><span className="max-w-40 truncate text-xs text-muted-foreground">{serviceUptime(row.uptime_seconds, zh)}</span></TooltipHint></div></TableCell>
           <TableCell>{row.state === 'running' ? <div className="flex flex-col"><span className="tabular-nums">CPU {row.cpu_percent.toFixed(1)}%</span><span className="text-xs text-muted-foreground tabular-nums">{serviceMemory(row.memory_bytes)}</span></div> : '—'}</TableCell>

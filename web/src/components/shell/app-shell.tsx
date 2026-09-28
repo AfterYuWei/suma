@@ -54,6 +54,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { t } = useI18n()
   const zh = language === 'zh-CN'
   const pathname = useRouterState({ select: (state) => state.location.pathname })
+  useEffect(() => { setMobileNavOpen(false) }, [pathname])
   const nodes = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes'), refetchInterval: 30_000 })
   const groups = useQuery({ queryKey: ['node-groups'], queryFn: () => api<NodeGroup[]>('/node-groups') })
   const session = useQuery({ queryKey: ['session'], queryFn: () => api<User>('/auth/session') })
@@ -124,7 +125,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         )}
         data-active={active}
         aria-current={active ? 'page' : undefined}
-        onClick={() => setMobileNavOpen(false)}
+        onClick={() => { if (pathname === entry.key) setMobileNavOpen(false) }}
         nativeButton={false}
         render={<Link to={entry.key as never} />}
       >

@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { CircleAlert, FileText, FolderOpen, MoreHorizontal, OctagonX, Pause, Pencil, Play, RefreshCw, Search, Square, SquareTerminal, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 import { Alert, AlertAction, AlertDescription } from '../components/ui/alert'
@@ -30,6 +31,7 @@ const uptime = (seconds: number) => !seconds ? '—' : seconds >= 86400 ? `${Mat
 const stateLabel = (state: string, zh: boolean) => zh ? ({ running: '运行中', paused: '已暂停', restarting: '重启中', exited: '已停止', dead: '异常', created: '已创建' }[state] ?? state) : state
 
 export function ContainersPage() {
+  const navigate = useNavigate()
   const nodeID = useUIStore((state) => state.currentNodeID)
   const [filter, setFilter] = useState('')
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
@@ -148,7 +150,7 @@ export function ContainersPage() {
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-col">
-                      <a href={`/containers/${row.id}`} className="font-medium hover:underline">{row.name}</a>
+                      <Link to="/containers/$containerId" params={{ containerId: row.id }} className="font-medium hover:underline">{row.name}</Link>
                       <span className="font-mono text-xs text-muted-foreground">{row.id.slice(0, 12)}</span>
                     </div>
                   </TableCell>
@@ -175,7 +177,7 @@ export function ContainersPage() {
                   </TableCell>
                   <TableCell className="font-mono text-xs">{ports(row)}</TableCell>
                   <TableCell>
-                    <ContainerActions row={row} zh={zh} pending={action.isPending && action.variables?.id === row.id} run={(name) => action.mutate({ id: row.id, name })} rename={() => void renameContainer(row)} kill={() => void killContainer(row)} remove={() => void removeContainer(row)} />
+                    <ContainerActions row={row} zh={zh} pending={action.isPending && action.variables?.id === row.id} open={(tab) => void navigate({ to: '/containers/$containerId', params: { containerId: row.id }, hash: tab })} run={(name) => action.mutate({ id: row.id, name })} rename={() => void renameContainer(row)} kill={() => void killContainer(row)} remove={() => void removeContainer(row)} />
                   </TableCell>
                 </TableRow>
               ))}
@@ -185,13 +187,13 @@ export function ContainersPage() {
   </ResourceFrame>
 }
 
-function ContainerActions({ row, zh, pending, run, rename, kill, remove }: { row: ContainerSummary; zh: boolean; pending: boolean; run: (name: string) => void; rename: () => void; kill: () => void; remove: () => void }) {
+function ContainerActions({ row, zh, pending, open, run, rename, kill, remove }: { row: ContainerSummary; zh: boolean; pending: boolean; open: (tab: 'logs' | 'files' | 'terminal') => void; run: (name: string) => void; rename: () => void; kill: () => void; remove: () => void }) {
   const primary = row.state === 'running' ? 'stop' : row.state === 'paused' ? 'unpause' : 'start'
   const primaryLabel = row.state === 'running' ? (zh ? '停止' : 'Stop') : row.state === 'paused' ? (zh ? '恢复' : 'Unpause') : (zh ? '启动' : 'Start')
   return <div className="flex items-center justify-end gap-1">
-    <TooltipHint content={zh ? '日志' : 'Logs'}><Button variant="ghost" size="icon-sm" aria-label={zh ? '日志' : 'Logs'} onClick={() => location.assign(`/containers/${row.id}#logs`)}><FileText /></Button></TooltipHint>
-    <TooltipHint content={zh ? '文件' : 'Files'}><Button variant="ghost" size="icon-sm" disabled={row.state !== 'running'} aria-label={zh ? '文件' : 'Files'} onClick={() => location.assign(`/containers/${row.id}#files`)}><FolderOpen /></Button></TooltipHint>
-    <TooltipHint content={zh ? '终端' : 'Terminal'}><Button variant="ghost" size="icon-sm" disabled={row.state !== 'running'} aria-label={zh ? '终端' : 'Terminal'} onClick={() => location.assign(`/containers/${row.id}#terminal`)}><SquareTerminal /></Button></TooltipHint>
+    <TooltipHint content={zh ? '日志' : 'Logs'}><Button variant="ghost" size="icon-sm" aria-label={zh ? '日志' : 'Logs'} onClick={() => open('logs')}><FileText /></Button></TooltipHint>
+    <TooltipHint content={zh ? '文件' : 'Files'}><Button variant="ghost" size="icon-sm" disabled={row.state !== 'running'} aria-label={zh ? '文件' : 'Files'} onClick={() => open('files')}><FolderOpen /></Button></TooltipHint>
+    <TooltipHint content={zh ? '终端' : 'Terminal'}><Button variant="ghost" size="icon-sm" disabled={row.state !== 'running'} aria-label={zh ? '终端' : 'Terminal'} onClick={() => open('terminal')}><SquareTerminal /></Button></TooltipHint>
     <TooltipHint content={primaryLabel}><Button variant={primary === 'stop' ? 'outline' : 'secondary'} size="icon-sm" disabled={pending} aria-label={primaryLabel} onClick={() => run(primary)}>{pending ? <Spinner /> : primary === 'stop' ? <Square /> : <Play />}</Button></TooltipHint>
     <TooltipHint content={zh ? '重启' : 'Restart'}><Button variant="ghost" size="icon-sm" disabled={pending} aria-label={zh ? '重启' : 'Restart'} onClick={() => run('restart')}><RefreshCw /></Button></TooltipHint>
     <DropdownMenu>

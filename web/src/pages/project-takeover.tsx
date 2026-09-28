@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate, useParams } from '@tanstack/react-router'
+import { useBlocker, useNavigate, useParams } from '@tanstack/react-router'
 import { AlertTriangle, Check, ChevronDown, ChevronLeft, ChevronRight, CirclePause, Eye, EyeOff, FileCheck2, FlaskConical, PencilLine, ShieldAlert, Trash2 } from 'lucide-react'
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert'
@@ -223,6 +223,12 @@ export function ProjectTakeoverPage() {
   const [confirmation, setConfirmation] = useState('')
   const [shadowSession, setShadowSession] = useState<ShadowPreviewSession | null>(null)
   const shadowSessionRef = useRef<ShadowPreviewSession | null>(null)
+  const bypassNavigationPrompt = useRef(false)
+  useBlocker({
+    disabled: step === 'analysis',
+    enableBeforeUnload: step !== 'analysis',
+    shouldBlockFn: async () => bypassNavigationPrompt.current ? false : !await confirmDialog({ title: zh ? '放弃接管草稿？' : 'Discard takeover draft?', description: zh ? '未保存的变量选择和配置编辑将丢失。' : 'Unsaved variable choices and configuration edits will be lost.', confirmLabel: zh ? '放弃' : 'Discard', danger: true }),
+  })
   const preview = useQuery({ queryKey: ['project-takeover', nodeID, projectName], queryFn: () => api<ProjectTakeoverDraft>(nodePath(nodeID, `/projects/compose/${encoded}/takeover/preview`), { method: 'POST' }), select: normalizeTakeoverDraft, enabled: backend === 'compose', retry: false })
   const contentSignature = useMemo(() => `${compose}\u0000${environment}`, [compose, environment])
   const tasks = useQuery({ queryKey: ['tasks', 'current', nodeID], queryFn: () => api<TaskRow[]>(nodePath(nodeID, '/tasks')), enabled: shadowSession !== null, refetchInterval: 1_000 })
@@ -233,12 +239,6 @@ export function ProjectTakeoverPage() {
     if (!preview.data) return
     setChoices(Object.fromEntries(preview.data.variables.map((variable) => [variable.id, variable.source === 'image_default' ? 'exclude' : variable.destination])))
   }, [preview.data])
-  useEffect(() => {
-    if (step === 'analysis') return
-    const listener = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
-    window.addEventListener('beforeunload', listener)
-    return () => window.removeEventListener('beforeunload', listener)
-  }, [step])
   useEffect(() => { shadowSessionRef.current = shadowSession }, [shadowSession])
   useEffect(() => () => {
     const current = shadowSessionRef.current
@@ -269,22 +269,25 @@ export function ProjectTakeoverPage() {
         client.invalidateQueries({ queryKey: ['projects', nodeID] }),
         client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] }),
       ])
+      bypassNavigationPrompt.current = true
       void navigate({ to: '/tasks' })
     },
   })
   const takeover = useMutation({
     mutationFn: () => api<Project>(nodePath(nodeID, `/projects/compose/${encoded}/takeover`), { method: 'POST', headers: dockerSocketHeaders(composeMountsDockerSocket(compose)), body: JSON.stringify({ mode, fingerprint: preview.data?.fingerprint, confirmation_name: confirmation, compose, environment }) }),
-    onSuccess: async () => { if (shadowSession) await cleanupShadow.mutateAsync(shadowSession); await client.invalidateQueries({ queryKey: ['projects', nodeID] }); void navigate({ to: '/projects/$backend/$projectName', params: { backend: 'compose', projectName } }) },
+    onSuccess: async () => { if (shadowSession) await cleanupShadow.mutateAsync(shadowSession); await client.invalidateQueries({ queryKey: ['projects', nodeID] }); bypassNavigationPrompt.current = true; void navigate({ to: '/projects/$backend/$projectName', params: { backend: 'compose', projectName } }) },
   })
   const leave = async () => {
     if (step !== 'analysis' && !await confirmDialog({ title: zh ? '放弃接管草稿？' : 'Discard takeover draft?', description: zh ? '未保存的变量选择和配置编辑将丢失。' : 'Unsaved variable choices and configuration edits will be lost.', confirmLabel: zh ? '放弃' : 'Discard', danger: true })) return
     if (shadowSession) await cleanupShadow.mutateAsync(shadowSession)
+    bypassNavigationPrompt.current = true
     void navigate({ to: '/projects/$backend/$projectName', params: { backend: 'compose', projectName } })
   }
   const postpone = async () => {
     if (shadowSession && shadowTask?.status !== 'failed' && shadowTask?.status !== 'canceled') await cleanupShadow.mutateAsync(shadowSession)
     shadowSessionRef.current = null
     setShadowSession(null)
+    bypassNavigationPrompt.current = true
     void navigate({ to: '/projects/$backend/$projectName', params: { backend: 'compose', projectName } })
   }
   const confirmCleanup = async () => {

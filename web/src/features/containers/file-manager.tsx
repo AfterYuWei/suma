@@ -63,7 +63,6 @@ export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nod
 
   useEffect(() => { if (content.data && draft === null) setDraft(content.data.content) }, [content.data, draft])
   useEffect(() => { onDirtyChange?.(!!dirty); return () => onDirtyChange?.(false) }, [dirty, onDirtyChange])
-  useEffect(() => { const warn = (event: BeforeUnloadEvent) => { if (dirty) event.preventDefault() }; window.addEventListener('beforeunload', warn); return () => window.removeEventListener('beforeunload', warn) }, [dirty])
   useEffect(() => {
     if (!task.data || !['success', 'failed', 'canceled'].includes(task.data.status)) return
     setNotice(task.data.status === 'success' ? tx('文件操作已完成。', 'File operation completed.') : tx(`文件操作失败：${task.data.message}`, `File operation failed: ${task.data.message}`))

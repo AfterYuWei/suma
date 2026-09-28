@@ -4,6 +4,7 @@ This file records the completed MVP implementation. Every checked phase was veri
 
 ## Current work
 
+- [ ] Component-level navigation continuity: use TanStack Router for every internal list/action/palette link, keep the shell mounted while the main workspace changes, drive container detail tabs from URL hashes, and confirm navigation away from unsaved container files, Compose configuration, and takeover drafts. `npm run lint`, `npm run typecheck`, `npm run build`, `npm run build:demo`, `go test ./...`, `go build ./...`, static navigation audit, and the real-Docker container-file smoke test passed on 2026-09-28. Browser navigation acceptance remains pending because this workspace has no browser executable or automation tool; keep unchecked until it passes.
 - [ ] Container Files: node-scoped file browsing and writable operations, mount shortcuts, Monaco editing, optimistic saves, encrypted bounded history, version rollback, task/audit integration, and responsive bilingual UI. Service/API tests, `go test ./...`, `go build ./...`, `npm run lint`, `npm run typecheck`, production/demo builds, and real-Docker named-volume/cross-volume/single-file-bind/authenticated-HTTP smoke passed on 2026-09-28. Desktop/mobile browser acceptance remains pending because this workspace has no browser executable or browser automation tool; keep unchecked until that check passes.
 
 ## Completed phases

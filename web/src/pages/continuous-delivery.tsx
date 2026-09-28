@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { GitPullRequest, Plus } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '../components/ui/button'
@@ -78,7 +78,7 @@ export function ContinuousDeliveryPage() {
             const state = deliveryState(project)
             return <TableRow key={project.id}>
               <TableCell className="whitespace-normal">
-                <a href={`/continuous-delivery/${encodeURIComponent(project.name)}`} className="font-medium text-primary underline-offset-4 hover:underline">{project.name}</a>
+                <Link to="/continuous-delivery/$projectName" params={{ projectName: project.name }} className="font-medium text-primary underline-offset-4 hover:underline">{project.name}</Link>
                 <p className="mt-0.5 max-w-xs truncate text-xs text-muted-foreground">{project.configured ? project.repository_url || (zh ? '已连接 Git 仓库' : 'Git repository connected') : (zh ? '尚未连接 Git 仓库' : 'Git repository not configured')}</p>
               </TableCell>
               <TableCell><StateBadge state={state} zh={zh} /></TableCell>
