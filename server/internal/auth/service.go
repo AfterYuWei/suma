@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -14,6 +16,7 @@ import (
 	"net/mail"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -25,25 +28,34 @@ import (
 )
 
 var (
-	ErrAlreadyInitialized = errors.New("administrator already exists")
-	ErrInvalidCredentials = errors.New("invalid credentials")
-	ErrUnauthorized       = errors.New("unauthorized")
-	ErrCurrentPassword    = errors.New("current password is invalid")
-	ErrIdentityConflict   = errors.New("username or email is already in use")
-	ErrAvatarNotFound     = errors.New("avatar not found")
-	ErrTwoFactorRequired  = errors.New("two-factor authentication required")
-	ErrInvalidTwoFactor   = errors.New("invalid or expired two-factor code")
-	ErrTwoFactorEnabled   = errors.New("two-factor authentication is already enabled")
-	ErrTwoFactorDisabled  = errors.New("two-factor authentication is not enabled")
-	ErrTwoFactorStore     = errors.New("two-factor secret store is unavailable")
+	ErrAlreadyInitialized  = errors.New("administrator already exists")
+	ErrSetupKeyInvalid     = errors.New("initialization key is invalid")
+	ErrSetupKeyExpired     = errors.New("initialization key has expired")
+	ErrSetupKeyUnavailable = errors.New("initialization key is unavailable")
+	ErrInvalidCredentials  = errors.New("invalid credentials")
+	ErrUnauthorized        = errors.New("unauthorized")
+	ErrCurrentPassword     = errors.New("current password is invalid")
+	ErrIdentityConflict    = errors.New("username or email is already in use")
+	ErrAvatarNotFound      = errors.New("avatar not found")
+	ErrTwoFactorRequired   = errors.New("two-factor authentication required")
+	ErrInvalidTwoFactor    = errors.New("invalid or expired two-factor code")
+	ErrTwoFactorEnabled    = errors.New("two-factor authentication is already enabled")
+	ErrTwoFactorDisabled   = errors.New("two-factor authentication is not enabled")
+	ErrTwoFactorStore      = errors.New("two-factor secret store is unavailable")
 )
 
 const MaxAvatarBytes = 2 << 20
+const setupKeyTTL = 30 * time.Minute
 
 type Service struct {
-	db         *gorm.DB
-	sessionTTL time.Duration
-	secrets    *secret.Store
+	db           *gorm.DB
+	sessionTTL   time.Duration
+	secrets      *secret.Store
+	setupMu      sync.Mutex
+	setupHash    [sha256.Size]byte
+	setupExpires time.Time
+	setupReady   bool
+	setupNow     func() time.Time
 }
 type User struct {
 	ID               uint   `json:"id"`
@@ -63,11 +75,61 @@ type Avatar struct {
 }
 
 func NewService(db *gorm.DB, sessionTTL time.Duration, stores ...*secret.Store) *Service {
-	service := &Service{db: db, sessionTTL: sessionTTL}
+	service := &Service{db: db, sessionTTL: sessionTTL, setupNow: time.Now}
 	if len(stores) > 0 {
 		service.secrets = stores[0]
 	}
 	return service
+}
+
+// PrepareSetup creates a process-local key only while no administrator exists.
+// The caller must show the returned key to the deployer exactly once.
+func (s *Service) PrepareSetup(ctx context.Context) (string, time.Time, error) {
+	s.setupMu.Lock()
+	defer s.setupMu.Unlock()
+	needsSetup, err := s.NeedsSetup(ctx)
+	if err != nil || !needsSetup {
+		return "", time.Time{}, err
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return "", time.Time{}, fmt.Errorf("generate initialization key: %w", err)
+	}
+	token := base64.RawURLEncoding.EncodeToString(key)
+	s.setupHash = sha256.Sum256([]byte(token))
+	s.setupExpires = s.setupNow().Add(setupKeyTTL)
+	s.setupReady = true
+	return token, s.setupExpires, nil
+}
+
+func (s *Service) InitializeWithToken(ctx context.Context, token, username, email, nickname, password string) (User, error) {
+	s.setupMu.Lock()
+	defer s.setupMu.Unlock()
+	needsSetup, err := s.NeedsSetup(ctx)
+	if err != nil {
+		return User{}, err
+	}
+	if !needsSetup {
+		return User{}, ErrAlreadyInitialized
+	}
+	if !s.setupReady {
+		return User{}, ErrSetupKeyUnavailable
+	}
+	if !s.setupNow().Before(s.setupExpires) {
+		return User{}, ErrSetupKeyExpired
+	}
+	decoded, decodeErr := base64.RawURLEncoding.DecodeString(token)
+	hash := sha256.Sum256([]byte(token))
+	if decodeErr != nil || len(decoded) != 32 || subtle.ConstantTimeCompare(hash[:], s.setupHash[:]) != 1 {
+		return User{}, ErrSetupKeyInvalid
+	}
+	user, err := s.Initialize(ctx, username, email, nickname, password)
+	if err == nil {
+		s.setupHash = [sha256.Size]byte{}
+		s.setupExpires = time.Time{}
+		s.setupReady = false
+	}
+	return user, err
 }
 
 func (s *Service) NeedsSetup(ctx context.Context) (bool, error) {

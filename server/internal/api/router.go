@@ -62,6 +62,7 @@ type credentials struct {
 	Password string `json:"password" binding:"required"`
 }
 type initializeRequest struct {
+	SetupToken      string `json:"setup_token" binding:"required"`
 	Username        string `json:"username" binding:"required"`
 	Nickname        string `json:"nickname"`
 	Email           string `json:"email" binding:"required"`
@@ -96,6 +97,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	_ = router.SetTrustedProxies(nil)
 	router.Use(gin.Recovery(), requestID(), securityHeaders(), securityBoundary(deps.Settings))
 	loginAttempts := newLoginLimiter()
+	setupAttempts := newLoginLimiter()
 	v1 := router.Group("/api/v1")
 
 	v1.GET("/auth/status", func(c *gin.Context) {
@@ -107,22 +109,39 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		success(c, gin.H{"needs_setup": needsSetup})
 	})
 	v1.POST("/auth/initialize", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
+		if delay := setupAttempts.admit("setup:"+requestClientIP(c), 10, 5*time.Minute); delay > 0 {
+			c.Header("Retry-After", retryAfter(delay))
+			failure(c, http.StatusTooManyRequests, 11011, "Too many initialization attempts")
+			return
+		}
 		var input initializeRequest
 		if c.ShouldBindJSON(&input) != nil {
-			failure(c, http.StatusBadRequest, 11001, "Username and password are required")
+			failure(c, http.StatusBadRequest, 11001, "Initialization key, username, email, and password are required")
 			return
 		}
 		if input.Password != input.ConfirmPassword {
 			failure(c, http.StatusBadRequest, 11002, "Passwords do not match")
 			return
 		}
-		user, err := deps.Auth.Initialize(c.Request.Context(), input.Username, input.Email, input.Nickname, input.Password)
+		user, err := deps.Auth.InitializeWithToken(c.Request.Context(), input.SetupToken, input.Username, input.Email, input.Nickname, input.Password)
 		if err != nil {
 			status := http.StatusBadRequest
 			if errors.Is(err, auth.ErrAlreadyInitialized) {
 				status = http.StatusConflict
+			} else if errors.Is(err, auth.ErrSetupKeyInvalid) {
+				status = http.StatusForbidden
+			} else if errors.Is(err, auth.ErrSetupKeyExpired) {
+				status = http.StatusGone
+			} else if errors.Is(err, auth.ErrSetupKeyUnavailable) {
+				status = http.StatusServiceUnavailable
 			}
-			failure(c, status, 11003, err.Error())
+			if status == http.StatusBadRequest {
+				failure(c, status, 11003, err.Error())
+			} else {
+				failure(c, status, 11003, "Unable to initialize administrator: "+err.Error())
+			}
 			return
 		}
 		c.JSON(http.StatusCreated, envelope{Code: 0, Message: "success", Data: user})

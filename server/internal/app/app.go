@@ -59,6 +59,10 @@ func New(logger *slog.Logger) (*App, error) {
 		return nil, err
 	}
 	authService := auth.NewService(db, cfg.SessionMaxAge, secretStore)
+	setupToken, setupExpires, err := authService.PrepareSetup(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("prepare administrator initialization: %w", err)
+	}
 	auditService := audit.NewService(db)
 	taskService := task.NewService(db)
 	images := imageService.NewService(engine, taskService)
@@ -85,6 +89,9 @@ func New(logger *slog.Logger) (*App, error) {
 	applicationSettings := settingsService.NewService(db, cfg)
 	if err := applicationSettings.LoadSecurity(context.Background()); err != nil {
 		return nil, fmt.Errorf("load security settings: %w", err)
+	}
+	if setupToken != "" {
+		logger.Info("SUMA initialization key", "setup_token", setupToken, "expires_at", setupExpires.UTC().Format(time.RFC3339))
 	}
 	nodes.Start()
 	continuousDelivery.Start()

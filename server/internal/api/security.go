@@ -37,11 +37,13 @@ func securityBoundary(service *settings.Service) gin.HandlerFunc {
 			}
 		}
 		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), securityContextKey{}, policy))
-		if !unsafeMethod(c.Request.Method) || strings.HasPrefix(c.Request.URL.Path, "/api/v1/webhooks/git/") || c.Request.URL.Path == "/api/v1/auth/initialize" {
+		initialize := c.Request.URL.Path == "/api/v1/auth/initialize"
+		if !unsafeMethod(c.Request.Method) || strings.HasPrefix(c.Request.URL.Path, "/api/v1/webhooks/git/") {
 			c.Next()
 			return
 		}
-		if _, err := c.Cookie(sessionCookie); err == nil {
+		_, cookieErr := c.Cookie(sessionCookie)
+		if initialize || cookieErr == nil {
 			if !policy.AllowsOrigin(c.Request) {
 				failure(c, http.StatusForbidden, 10007, "Request origin is not allowed")
 				c.Abort()

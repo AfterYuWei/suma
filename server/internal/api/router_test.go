@@ -374,9 +374,21 @@ func TestNodeGroupHTTPAndFleetFiltering(t *testing.T) {
 }
 
 func TestAuthenticationLifecycle(t *testing.T) {
-	router := testRouter(t, &fakeEngine{})
+	db, err := database.Open(filepath.Join(t.TempDir(), "auth-lifecycle.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	authService := auth.NewService(db, time.Hour)
+	setupToken, _, err := authService.PrepareSetup(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouter(Dependencies{Engine: &fakeEngine{}, Auth: authService, Audit: audit.NewService(db), Tasks: task.NewService(db)})
 	initialize := httptest.NewRecorder()
-	router.ServeHTTP(initialize, httptest.NewRequest(http.MethodPost, "/api/v1/auth/initialize", bytes.NewBufferString(`{"username":"admin","email":"admin@example.test","password":"long-password","confirm_password":"long-password"}`)))
+	initializeRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/initialize", bytes.NewBufferString(fmt.Sprintf(`{"setup_token":%q,"username":"admin","email":"admin@example.test","password":"long-password","confirm_password":"long-password"}`, setupToken)))
+	initializeRequest.Header.Set("Origin", "http://example.com")
+	initializeRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(initialize, initializeRequest)
 	if initialize.Code != http.StatusCreated {
 		t.Fatalf("initialize: %d %s", initialize.Code, initialize.Body.String())
 	}

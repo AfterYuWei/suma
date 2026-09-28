@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, ArrowRight, Fingerprint, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Copy, Fingerprint, ShieldCheck } from 'lucide-react'
 import { type FormEvent, type ReactNode, useEffect, useState } from 'react'
 import { Alert, AlertDescription } from '../../components/ui/alert'
 import { Button } from '../../components/ui/button'
@@ -15,9 +15,11 @@ import { getPasskey, passkeysAvailable } from '../../lib/passkeys'
 import type { User } from './types'
 
 interface Status { needs_setup: boolean }
-interface AuthValues { username: string; password: string; email?: string; nickname?: string; confirm_password?: string }
+interface AuthValues { username: string; password: string; email?: string; nickname?: string; confirm_password?: string; setup_token?: string }
 interface LoginResponse { requires_two_factor: boolean; challenge_token?: string; user?: User }
 interface PasskeyOptions { ceremony_token: string; options: unknown }
+
+const setupKeyCommand = String.raw`docker logs suma 2>&1 | sed -n 's/.*"msg":"SUMA initialization key".*"setup_token":"\([^"]*\)".*/\1/p' | tail -n 1`
 
 function AuthFrame({ title, description, children }: { title: string; description: string; children: ReactNode }) {
   return <main className="grid min-h-screen place-items-center p-6">
@@ -46,6 +48,8 @@ function AuthForm({ setup, pending, error, initialValues, onSubmit }: { setup: b
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [setupToken, setSetupToken] = useState('')
+  const [commandCopied, setCommandCopied] = useState(false)
   useEffect(() => {
     if (!setup && initialValues) {
       setUsername(initialValues.username)
@@ -55,9 +59,14 @@ function AuthForm({ setup, pending, error, initialValues, onSubmit }: { setup: b
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (pending) return
-    onSubmit({ username, password, ...(setup ? { nickname, email, confirm_password: confirmPassword } : {}) })
+    onSubmit({ username, password, ...(setup ? { nickname, email, confirm_password: confirmPassword, setup_token: setupToken.trim() } : {}) })
   }
   return <form onSubmit={submit} autoComplete="on" className="flex w-full flex-col gap-4">
+    {setup && <div className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-3 text-xs">
+      <p className="text-muted-foreground">{zh ? '在部署主机的终端运行下面的指令，直接取得最新初始化密钥。自定义容器名时请替换 suma。密钥 30 分钟后过期；过期后重启尚未初始化的容器，再运行指令。' : 'Run this command on the deployment host to print the latest initialization key. Replace suma if you use a different container name. The key expires after 30 minutes; restart the uninitialized container and run the command again.'}</p>
+      <code className="select-all whitespace-pre-wrap break-all rounded bg-background p-2 font-mono text-[11px]">{setupKeyCommand}</code>
+      <Button type="button" variant="outline" size="sm" className="self-start" onClick={async () => { try { await navigator.clipboard.writeText(setupKeyCommand); setCommandCopied(true) } catch { setCommandCopied(false) } }}><Copy />{commandCopied ? (zh ? '已复制指令' : 'Command copied') : (zh ? '复制指令' : 'Copy command')}</Button>
+    </div>}
     {!setup && initialValues && <div className="flex items-center justify-between gap-4 rounded-lg border bg-muted/40 px-3 py-2 text-xs">
       <span className="text-muted-foreground">{zh ? '演示账号已填入' : 'Demo credentials filled'}</span>
       <code className="font-mono">{initialValues.username} / {initialValues.password}</code>
@@ -67,6 +76,10 @@ function AuthForm({ setup, pending, error, initialValues, onSubmit }: { setup: b
       <Input id="auth-username" name="username" required autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} />
     </div>
     {setup && <>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="auth-setup-token">{zh ? '初始化密钥' : 'Initialization key'}</Label>
+        <Input id="auth-setup-token" name="setup_token" type="password" required autoComplete="off" spellCheck={false} autoCapitalize="off" value={setupToken} onChange={(event) => setSetupToken(event.target.value)} />
+      </div>
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="auth-nickname">{zh ? '昵称（可选）' : 'Nickname (optional)'}</Label>
         <Input id="auth-nickname" name="nickname" maxLength={64} autoComplete="name" value={nickname} onChange={(event) => setNickname(event.target.value)} />
@@ -115,7 +128,22 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const credentials = useQuery({ queryKey: ['demo-credentials'], queryFn: getDemoCredentials, enabled: demoMode, staleTime: Infinity })
   const status = useQuery({ queryKey: ['auth-status'], queryFn: () => api<Status>('/auth/status') })
   const session = useQuery({ queryKey: ['session'], queryFn: () => api<User>('/auth/session'), enabled: status.isSuccess && !status.data.needs_setup, retry: false })
-  const initialize = useMutation({ mutationFn: (body: AuthValues) => api<User>('/auth/initialize', { method: 'POST', body: JSON.stringify(body) }), onSuccess: async () => { setError(''); await client.invalidateQueries({ queryKey: ['auth-status'] }) }, onError: (value) => setError(value instanceof ApiError ? value.message : 'Unable to create administrator') })
+  const initialize = useMutation({
+    mutationFn: (body: AuthValues) => api<User>('/auth/initialize', { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: async () => { setError(''); await client.invalidateQueries({ queryKey: ['auth-status'] }) },
+    onError: (value) => {
+      if (value instanceof ApiError) {
+        if (value.status === 409) void client.invalidateQueries({ queryKey: ['auth-status'] })
+        const messages: Record<number, [string, string]> = {
+          403: ['初始化密钥无效，请重新核对。', 'Invalid initialization key. Check it and try again.'],
+          410: ['初始化密钥已过期。请重启尚未初始化的容器，再运行上方指令。', 'The initialization key has expired. Restart the uninitialized container, then run the command again.'],
+          429: ['尝试次数过多，请稍后重试。', 'Too many attempts. Try again later.'],
+          409: ['管理员已创建，正在切换到登录页。', 'Administrator already exists. Switching to sign in.'],
+        }
+        setError(messages[value.status]?.[zh ? 0 : 1] ?? value.message)
+      } else setError(zh ? '无法创建管理员，请重试。' : 'Unable to create administrator. Try again.')
+    },
+  })
   const login = useMutation({
     mutationFn: (body: AuthValues) => api<LoginResponse>('/auth/login', { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: (result) => {
