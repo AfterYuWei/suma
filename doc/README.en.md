@@ -116,7 +116,9 @@ Open `http://<host-ip>:8080`, create the administrator account, and sign in.
 | --- | --- | --- |
 | `SUMA_DATA_ROOT` | `/Data` (baked into the production image; bare-metal runs default to `./data`) | Root for data and credentials; all other paths derive from it by default |
 | `SUMA_ADDRESS` | `:8080` | Listen address (map the host port accordingly) |
-| `SUMA_COOKIE_SECURE` | `false` | Set `true` when deployed behind HTTPS |
+| `SUMA_COOKIE_SECURE` | `false` | Optional force-on override; HTTPS browser access automatically uses Secure cookies |
+| `SUMA_BROWSER_ORIGIN` | empty | Optional advanced origin restriction; normally the request host and port are checked automatically |
+| `SUMA_TRUSTED_PROXIES` | empty | Trusted proxy IPs/CIDRs if client IPs behind a reverse proxy are needed; cannot be safely inferred |
 | `SUMA_DOCKER_HOST` | `unix:///var/run/docker.sock` | Engine address used only for first-run node bootstrap |
 | `SUMA_AGENT_PUBLIC_URL` | empty | Required before Agent pairing; HTTPS origin reachable by Agents |
 
@@ -173,7 +175,7 @@ volumes:
 
 Run `docker compose up -d`, verify the node is online, then empty the host token file but keep the empty file for container restarts. The named volume stores the reconnect credential. After revocation, write a new token into the file and restart the Agent; it exchanges the new token when its old credential is rejected. Compose files and the CLI remain on the SUMA control plane, so remote bind sources must be explicit absolute paths on the Agent host.
 
-> Security: never expose an unauthenticated Docker API on a network. Direct TCP uses mTLS, while Agents use verified HTTPS/WSS. A Docker socket mounted `:ro` still grants full Docker control. Put public SUMA deployments behind HTTPS and enable `SUMA_COOKIE_SECURE=true`.
+> Security: never expose an unauthenticated Docker API on a network. Direct TCP uses mTLS, while Agents use verified HTTPS/WSS. A Docker socket mounted `:ro` still grants full Docker control. Put public SUMA deployments behind HTTPS; browser access over HTTPS automatically uses Secure cookies.
 
 ## Data and backups
 

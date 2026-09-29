@@ -22,7 +22,7 @@ const zh = {
   composeDown: '停止并移除项目资源', composeDownDescription: 'Compose down 将删除 {name} 的容器和网络。',
   general: '常规', storage: '存储', security: '安全', registry: '镜像仓库', serverName: '服务器名称', timezone: '时区',
   dockerSocket: 'Docker Socket', composeCommand: 'Compose 命令', composeRoot: 'Compose 根目录', dataRoot: '数据目录', backupRoot: '备份目录',
-  secureCookies: '安全 Cookie', browserOrigin: '浏览器来源', trustedProxies: '可信代理', browserOriginHint: '可留空。留空时精确匹配主机和端口；填写时必须与当前页面来源一致。保存后立即生效。', trustedProxiesHint: '可留空。填写代理 IP 或 CIDR，多个值用逗号分隔；留空时忽略转发的客户端 IP。保存后立即生效。', browserOriginInvalid: '浏览器来源必须留空或与当前页面来源完全一致。', trustedProxiesInvalid: '可信代理必须是有效的 IP 或 CIDR，且不能信任所有地址。', defaultRegistry: '默认镜像仓库', localConfiguration: 'SUMA 本地配置', saveChanges: '保存更改', settingsSaved: '设置已保存',
+  secureCookies: '安全 Cookie', browserOrigin: '浏览器来源', trustedProxies: '可信代理', automaticSecurity: '默认按当前访问地址自动处理安全 Cookie 和浏览器来源。需要识别反向代理后的客户端 IP 时，可在部署环境设置可信代理。', defaultRegistry: '默认镜像仓库', localConfiguration: 'SUMA 本地配置', saveChanges: '保存更改', settingsSaved: '设置已保存',
 } as const
 
 export type TranslationKey = keyof typeof zh
@@ -55,7 +55,7 @@ const english: Record<TranslationKey, string> = {
   composeDown: 'Stop and remove project resources', composeDownDescription: 'Compose down will remove containers and networks for {name}.',
   general: 'General', storage: 'Storage', security: 'Security', registry: 'Registry', serverName: 'Server name', timezone: 'Timezone',
   dockerSocket: 'Docker socket', composeCommand: 'Compose command', composeRoot: 'Compose root', dataRoot: 'Data root', backupRoot: 'Backup root',
-  secureCookies: 'Secure cookies', browserOrigin: 'Browser origin', trustedProxies: 'Trusted proxies', browserOriginHint: 'Optional. When blank, the exact host and port must match. If set, use this page’s origin. Changes apply immediately.', trustedProxiesHint: 'Optional. Enter proxy IPs or CIDRs separated by commas. When blank, forwarded client IPs are ignored. Changes apply immediately.', browserOriginInvalid: 'Browser origin must be blank or match this page’s origin exactly.', trustedProxiesInvalid: 'Trusted proxies must be valid IPs or CIDRs and cannot include every address.', defaultRegistry: 'Default registry', localConfiguration: 'Local SUMA configuration', saveChanges: 'Save changes', settingsSaved: 'Settings saved',
+  secureCookies: 'Secure cookies', browserOrigin: 'Browser origin', trustedProxies: 'Trusted proxies', automaticSecurity: 'By default, secure cookies and browser origin follow the current access address automatically. Configure trusted proxies at deployment when client IPs behind a reverse proxy are needed.', defaultRegistry: 'Default registry', localConfiguration: 'Local SUMA configuration', saveChanges: 'Save changes', settingsSaved: 'Settings saved',
 }
 
 export function useI18n() {

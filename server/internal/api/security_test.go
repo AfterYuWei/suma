@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/tls"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/auth"
@@ -91,6 +93,37 @@ func TestSecurityBoundarySettingsApplyImmediately(t *testing.T) {
 	var latest database.AuditLog
 	if err := db.Order("id DESC").First(&latest).Error; err != nil || latest.IP != "203.0.113.1" {
 		t.Fatalf("trusted proxy did not update audit IP immediately: %#v, %v", latest, err)
+	}
+}
+
+func TestSessionCookieSecureFollowsBrowserConnection(t *testing.T) {
+	for _, row := range []struct {
+		name, origin        string
+		tls, forced, secure bool
+	}{
+		{"direct HTTP", "http://example.com", false, false, false},
+		{"direct HTTPS", "https://example.com", true, false, true},
+		{"HTTPS reverse proxy", "https://example.com", false, false, true},
+		{"cross-host origin", "https://other.example.com", false, false, false},
+		{"spoofed forwarded proto", "http://example.com", false, false, false},
+		{"forced secure", "http://example.com", false, true, true},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			context, _ := gin.CreateTestContext(recorder)
+			request := httptest.NewRequest(http.MethodPost, "http://example.com/api/v1/auth/login", nil)
+			request.Header.Set("Origin", row.origin)
+			request.Header.Set("X-Forwarded-Proto", "https")
+			if row.tls {
+				request.TLS = &tls.ConnectionState{}
+			}
+			context.Request = request
+			setSessionCookie(context, "test-token", row.forced)
+			cookies := recorder.Result().Cookies()
+			if len(cookies) != 1 || cookies[0].Secure != row.secure || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteLaxMode {
+				t.Fatalf("session cookie = %#v, want Secure=%t, HttpOnly and SameSite=Lax", cookies, row.secure)
+			}
+		})
 	}
 }
 

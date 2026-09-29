@@ -115,7 +115,7 @@ const gitCredentials: GitCredential[] = [{ id: 1, name: 'GitHub Demo', auth_type
 const registryCredentials = [{ id: 1, name: 'GHCR Demo', server_address: 'ghcr.io', auth_type: 'token', username: 'suma-demo', fingerprint: 'sha256:8d14…2f09', created_at: earlier, updated_at: now, last_used_at: now, authorized_node_ids: ['local', 'edge-hk', 'nas-prod'] }]
 const tlsCredentials = [{ id: 1, name: 'Edge Docker mTLS', fingerprint: 'SHA256:91:42:7A:DE:MO', authorized_node_ids: ['edge-hk'], created_at: earlier, updated_at: now }]
 
-const settings = { 'general.server_name': 'SUMA Demo', 'general.timezone': 'Asia/Shanghai', 'docker.compose_command': 'docker compose', 'storage.compose_root': '/data/compose', 'storage.data_root': '/data', 'storage.backup_root': '/data/backups', 'security.cookie_secure': 'true', 'security.browser_origin': '', 'security.trusted_proxies': '', 'registry.default': 'ghcr.io' }
+const settings = { 'general.server_name': 'SUMA Demo', 'general.timezone': 'Asia/Shanghai', 'docker.compose_command': 'docker compose', 'storage.compose_root': '/data/compose', 'storage.data_root': '/data', 'storage.backup_root': '/data/backups', 'security.browser_origin': '', 'security.trusted_proxies': '', 'registry.default': 'ghcr.io' }
 
 const clone = <T,>(value: T): T => structuredClone(value)
 const parseBody = (init?: RequestInit): Record<string, unknown> => {

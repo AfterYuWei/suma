@@ -1781,13 +1781,24 @@ func requireAuth(service *auth.Service) gin.HandlerFunc {
 	}
 }
 
-func setSessionCookie(c *gin.Context, token string, secure bool) {
-	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(sessionCookie, token, 86400, "/", "", secure, true)
+func sessionCookieSecure(c *gin.Context, forceSecure bool) bool {
+	if forceSecure || c.Request.TLS != nil {
+		return true
+	}
+	origin, err := settingsService.ParseOrigin(c.GetHeader("Origin"))
+	if err != nil || !strings.HasPrefix(origin, "https://") {
+		return false
+	}
+	return strings.EqualFold(strings.TrimPrefix(origin, "https://"), c.Request.Host)
 }
-func clearSessionCookie(c *gin.Context, secure bool) {
+
+func setSessionCookie(c *gin.Context, token string, forceSecure bool) {
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(sessionCookie, "", -1, "/", "", secure, true)
+	c.SetCookie(sessionCookie, token, 86400, "/", "", sessionCookieSecure(c, forceSecure), true)
+}
+func clearSessionCookie(c *gin.Context, forceSecure bool) {
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(sessionCookie, "", -1, "/", "", sessionCookieSecure(c, forceSecure), true)
 }
 
 func requestID() gin.HandlerFunc {

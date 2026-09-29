@@ -9,7 +9,7 @@ import { Label } from '../components/ui/label'
 import { RadioGroup, RadioGroupItem } from '../components/ui/radio-group'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Spinner } from '../components/ui/spinner'
-import { api, ApiError } from '../lib/api'
+import { api } from '../lib/api'
 import { useI18n, type TranslationKey } from '../lib/i18n'
 import { type Language, type Theme, useUIStore } from '../stores/ui'
 import { ResourceFrame } from './images'
@@ -18,7 +18,6 @@ const sections: [TranslationKey, [string, TranslationKey][]][] = [
   ['general', [['general.server_name', 'serverName'], ['general.timezone', 'timezone']]],
   ['compose', [['docker.compose_command', 'composeCommand']]],
   ['storage', [['storage.compose_root', 'composeRoot'], ['storage.data_root', 'dataRoot'], ['storage.backup_root', 'backupRoot']]],
-  ['security', [['security.cookie_secure', 'secureCookies'], ['security.browser_origin', 'browserOrigin'], ['security.trusted_proxies', 'trustedProxies']]],
   ['registry', [['registry.default', 'defaultRegistry']]],
 ]
 
@@ -30,7 +29,6 @@ export function SettingsPage() {
   const query = useQuery({ queryKey: ['settings'], queryFn: () => api<Record<string, string>>('/settings') })
   const save = useMutation({ mutationFn: (values: Record<string, string>) => api('/settings', { method: 'PUT', body: JSON.stringify(values) }), onSuccess: () => client.invalidateQueries({ queryKey: ['settings'] }) })
   const [values, setValues] = useState<Record<string, string> | null>(null)
-  const [validationError, setValidationError] = useState('')
   const initializedRef = useRef(false)
   useEffect(() => {
     // 只在首次拿到数据时初始化草稿，后续刷新不覆盖用户正在编辑的内容（与原 Semi Form initValues 行为一致）。
@@ -40,13 +38,8 @@ export function SettingsPage() {
     }
   }, [query.data])
   if (!values) return <LoadingState label={t('loading')} rows={6} />
-  const update = (key: string, value: string) => { setValidationError(''); setValues((previous) => previous ? { ...previous, [key]: value } : previous) }
-  const submit = () => {
-    const origin = (values['security.browser_origin'] ?? '').trim()
-    if (origin && origin !== location.origin) { setValidationError(t('browserOriginInvalid')); return }
-    save.mutate(values)
-  }
-  const errorMessage = save.error instanceof ApiError && save.error.message.startsWith('trusted proxies') ? t('trustedProxiesInvalid') : save.error instanceof ApiError && (save.error.code === 19004 || save.error.message.startsWith('browser origin')) ? t('browserOriginInvalid') : (zh ? '保存失败' : 'Save failed')
+  const update = (key: string, value: string) => setValues((previous) => previous ? { ...previous, [key]: value } : previous)
+  const submit = () => save.mutate(Object.fromEntries(Object.entries(values).filter(([key]) => !key.startsWith('security.'))))
 
   return <ResourceFrame title={t('settings')} detail={t('localConfiguration')}>
     <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-8">
@@ -82,6 +75,11 @@ export function SettingsPage() {
         </div>
       </section>
 
+      <section className="flex w-full flex-col gap-2">
+        <h3 className="text-sm font-medium">{t('security')}</h3>
+        <p className="text-sm text-muted-foreground">{t('automaticSecurity')}</p>
+      </section>
+
       <form onSubmit={(event) => { event.preventDefault(); submit() }} className="flex w-full flex-col gap-8">
         {sections.map(([section, fields]) => (
           <section key={section} className="flex w-full flex-col gap-4">
@@ -91,8 +89,6 @@ export function SettingsPage() {
                 <div key={key} className="grid gap-1.5">
                   <Label htmlFor={`settings-${key}`}>{t(label)}</Label>
                   <Input id={`settings-${key}`} value={values[key] ?? ''} onChange={(event) => update(key, event.target.value)} />
-                  {key === 'security.browser_origin' && <p className="text-xs text-muted-foreground">{t('browserOriginHint')}</p>}
-                  {key === 'security.trusted_proxies' && <p className="text-xs text-muted-foreground">{t('trustedProxiesHint')}</p>}
                 </div>
               ))}
             </div>
@@ -101,7 +97,7 @@ export function SettingsPage() {
         <div className="flex flex-wrap items-center gap-3">
           <Button type="submit" disabled={save.isPending}>{save.isPending ? <Spinner className="size-4" /> : <Save className="size-4" />}{t('saveChanges')}</Button>
           {save.isSuccess && <span className="text-sm text-emerald-600 dark:text-emerald-400">{t('settingsSaved')}</span>}
-          {(validationError || save.isError) && <span className="text-sm text-destructive">{validationError || errorMessage}</span>}
+          {save.isError && <span className="text-sm text-destructive">{zh ? '保存失败' : 'Save failed'}</span>}
         </div>
       </form>
     </div>

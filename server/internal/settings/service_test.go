@@ -58,7 +58,6 @@ func TestGetMergesDefaultsWithConfig(t *testing.T) {
 		{"storage.compose_root", "/srv/compose"},
 		{"storage.data_root", "/var/lib/suma"},
 		{"storage.backup_root", "/srv/backups"},
-		{"security.cookie_secure", "true"},
 		{"security.browser_origin", ""},
 		{"security.trusted_proxies", ""},
 		{"appearance.theme", "system"},
@@ -84,7 +83,6 @@ func TestDefaultsFromZeroConfig(t *testing.T) {
 		{"storage.compose_root", ""},
 		{"storage.data_root", ""},
 		{"storage.backup_root", ""},
-		{"security.cookie_secure", "false"},
 	}
 	for _, row := range rows {
 		requireSetting(t, values, row.key, row.want)
@@ -137,6 +135,7 @@ func TestUpdateRejectsUnsupportedKeysWithoutStoringThem(t *testing.T) {
 		name string
 		key  string
 	}{
+		{"legacy cookie toggle", "security.cookie_secure"},
 		{"unknown namespace", "networking.proxy"},
 		{"injection attempt", "general.server_name'; DROP TABLE settings; --"},
 		{"empty key", ""},
