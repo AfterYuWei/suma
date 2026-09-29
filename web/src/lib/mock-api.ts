@@ -201,15 +201,22 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (pathname === '/nodes' && method === 'GET') return clone(nodes) as T
   if (pathname === '/agent-enrollments' && method === 'POST') {
+    const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString()
     const existing = nodes.find((item) => item.id === body.node_id)
     const id = existing?.id ?? `${String(body.name || 'agent').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${nodes.length + 1}`
-    if (existing) existing.agent_enrollment = { node_id: id, expires_at: now }
-    else nodes.push({ id, name: String(body.name || id), connection_type: 'agent', endpoint: `agent://${id}`, tls_mode: 'disabled', enabled: false, status: 'pairing', created_at: now, updated_at: now, group_ids: Array.isArray(body.group_ids) ? body.group_ids.filter((value): value is number => typeof value === 'number') : [], agent_enrollment: { node_id: id, expires_at: now } })
+    if (existing) existing.agent_enrollment = { node_id: id, expires_at: expiresAt }
+    else nodes.push({ id, name: String(body.name || id), connection_type: 'agent', endpoint: `agent://${id}`, tls_mode: 'disabled', enabled: false, status: 'pairing', created_at: now, updated_at: now, group_ids: Array.isArray(body.group_ids) ? body.group_ids.filter((value): value is number => typeof value === 'number') : [], agent_enrollment: { node_id: id, expires_at: expiresAt } })
     syncNodeGroupCounts()
-    return clone({ node_id: id, token: 'a'.repeat(64), expires_at: now, public_url: 'https://suma.example.com' }) as T
+    return clone({ node_id: id, token: 'a'.repeat(64), expires_at: expiresAt, public_url: 'https://suma.example.com' }) as T
   }
   const agentEnrollmentMatch = pathname.match(/^\/agent-enrollments\/([^/]+)(\/reissue)?$/)
-  if (agentEnrollmentMatch && method === 'POST' && agentEnrollmentMatch[2]) return clone({ node_id: agentEnrollmentMatch[1], token: 'b'.repeat(64), expires_at: now, public_url: 'https://suma.example.com' }) as T
+  if (agentEnrollmentMatch && method === 'POST' && agentEnrollmentMatch[2]) {
+    const node = nodes.find((item) => item.id === agentEnrollmentMatch[1])
+    if (!node) throw new ApiError('Docker node not found', 20004, 404)
+    const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString()
+    node.agent_enrollment = { node_id: node.id, expires_at: expiresAt }
+    return clone({ node_id: node.id, token: 'b'.repeat(64), expires_at: expiresAt, public_url: 'https://suma.example.com' }) as T
+  }
   const agentRevokeMatch = pathname.match(/^\/nodes\/([^/]+)\/agent\/revoke$/)
   if (agentRevokeMatch && method === 'POST') {
     const node = nodes.find((item) => item.id === agentRevokeMatch[1])
