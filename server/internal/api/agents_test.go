@@ -259,10 +259,12 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer oldControl.Close()
+			oldControlClosed := make(chan error, 1)
 			go func() {
 				for {
 					_, payload, err := oldControl.ReadMessage()
 					if err != nil {
+						oldControlClosed <- err
 						return
 					}
 					var message struct {
@@ -300,6 +302,14 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 			old, _ := nodes.Get(context.Background(), mismatch.ID)
 			if old.AgentEnrollment == nil || old.AgentEnrollment.LastError == "" {
 				t.Fatal("Engine ID mismatch was not reported")
+			}
+			select {
+			case err := <-oldControlClosed:
+				if !websocket.IsCloseError(err, websocket.CloseInternalServerErr) {
+					t.Fatalf("Agent activation failed without a WebSocket close reason: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("Agent activation did not close the control connection")
 			}
 			duplicate, err := nodes.IssueAgentEnrollment(context.Background(), node.AgentEnrollmentInput{Name: "Duplicate Engine"})
 			if err != nil {

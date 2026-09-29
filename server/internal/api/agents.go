@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -167,6 +168,8 @@ func registerAgentTransport(router *gin.Engine, v1 *gin.RouterGroup, deps Depend
 			return
 		}
 		if err := deps.Nodes.ActivateAgent(c.Request.Context(), id, c.GetHeader("X-SUMA-Agent-Version"), done); err != nil {
+			slog.Warn("agent activation failed", "node_id", id, "error", err)
+			_ = ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "Agent activation failed; check the node error in SUMA"), time.Now().Add(time.Second))
 			deps.Agents.Detach(id, done)
 			return
 		}

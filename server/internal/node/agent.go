@@ -263,7 +263,9 @@ func (s *Service) ActivateAgent(ctx context.Context, id, version string, session
 		return err
 	}
 	defer client.Close()
-	probe, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// Each Docker request opens a separate Agent stream across the public WSS
+	// route. Allow enough time for both round trips on remote hosts.
+	probe, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	started := time.Now()
 	if err := client.Ping(probe); err != nil {
