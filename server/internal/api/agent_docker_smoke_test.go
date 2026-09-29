@@ -107,10 +107,14 @@ func TestRealDockerAgentInPlaceComposeReconnectAndRevoke(t *testing.T) {
 	}
 	name := fmt.Sprintf("suma-agent-smoke-%d", time.Now().UnixNano())
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
-	docker("run", "-d", "--name", name, "--add-host", "host.docker.internal:host-gateway", "--env-file", environmentFile, "-e", "SUMA_AGENT_SERVER_URL="+publicURL,
-		"-e", "SUMA_AGENT_CA_FILE=/run/secrets/ca.pem",
-		"-v", "/var/run/docker.sock:/var/run/docker.sock:ro", "-v", certFile+":/run/secrets/ca.pem:ro",
-		"-v", identityDir+":/var/lib/suma-agent", image)
+	startAgent := func() {
+		t.Helper()
+		docker("run", "-d", "--name", name, "--add-host", "host.docker.internal:host-gateway", "--env-file", environmentFile, "-e", "SUMA_AGENT_SERVER_URL="+publicURL,
+			"-e", "SUMA_AGENT_CA_FILE=/run/secrets/ca.pem",
+			"-v", "/var/run/docker.sock:/var/run/docker.sock:ro", "-v", certFile+":/run/secrets/ca.pem:ro",
+			"-v", identityDir+":/var/lib/suma-agent", image)
+	}
+	startAgent()
 	await := func(nodeID, want string) {
 		t.Helper()
 		deadline := time.Now().Add(20 * time.Second)
@@ -143,15 +147,11 @@ func TestRealDockerAgentInPlaceComposeReconnectAndRevoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tokenFile := filepath.Join(root, "token")
-	if err := os.WriteFile(tokenFile, []byte(issued.Token), 0o600); err != nil {
+	if err := os.WriteFile(environmentFile, []byte("SUMA_AGENT_TOKEN="+issued.Token+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	docker("rm", "-f", name)
-	docker("run", "-d", "--name", name, "--add-host", "host.docker.internal:host-gateway", "-e", "SUMA_AGENT_SERVER_URL="+publicURL,
-		"-e", "SUMA_AGENT_TOKEN_FILE=/run/secrets/token", "-e", "SUMA_AGENT_CA_FILE=/run/secrets/ca.pem",
-		"-v", "/var/run/docker.sock:/var/run/docker.sock:ro", "-v", tokenFile+":/run/secrets/token:ro", "-v", certFile+":/run/secrets/ca.pem:ro",
-		"-v", identityDir+":/var/lib/suma-agent", image)
+	startAgent()
 	await("local", "online")
 	after, err := nodes.Get(ctx, "local")
 	if err != nil {
@@ -422,10 +422,11 @@ func TestRealDockerAgentInPlaceComposeReconnectAndRevoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(tokenFile, []byte(newEnrollment.Token), 0o600); err != nil {
+	if err := os.WriteFile(environmentFile, []byte("SUMA_AGENT_TOKEN="+newEnrollment.Token+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	docker("restart", name)
+	docker("rm", "-f", name)
+	startAgent()
 	await("local", "online")
 	direct, err := nodes.Update(ctx, "local", node.Input{Name: "Local", ConnectionType: node.ConnectionUnix, Endpoint: "unix:///var/run/docker.sock", TLSMode: node.TLSDisabled, Enabled: true})
 	if err != nil {

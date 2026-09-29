@@ -89,9 +89,9 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	if id.Credential == "" {
-		token, err := enrollmentToken()
-		if err != nil {
-			return err
+		token := enrollmentToken()
+		if token == "" {
+			return errors.New("SUMA_AGENT_TOKEN is required for first pairing")
 		}
 		id, err = enroll(httpClient, base, token)
 		if err != nil {
@@ -112,7 +112,7 @@ func run(logger *slog.Logger) error {
 		}
 		var unauthorized *authError
 		if errors.As(err, &unauthorized) {
-			if token, readErr := enrollmentToken(); readErr == nil && token != "" {
+			if token := enrollmentToken(); token != "" {
 				if replacement, enrollErr := enroll(httpClient, base, token); enrollErr == nil {
 					if saveErr := saveIdentity(credentialPath, replacement); saveErr == nil {
 						id, backoff = replacement, time.Second
@@ -134,15 +134,8 @@ func run(logger *slog.Logger) error {
 	return nil
 }
 
-func enrollmentToken() (string, error) {
-	if token := strings.TrimSpace(os.Getenv("SUMA_AGENT_TOKEN")); token != "" {
-		return token, nil
-	}
-	if path := os.Getenv("SUMA_AGENT_TOKEN_FILE"); path != "" {
-		value, err := os.ReadFile(path)
-		return strings.TrimSpace(string(value)), err
-	}
-	return "", errors.New("SUMA_AGENT_TOKEN or SUMA_AGENT_TOKEN_FILE is required for first pairing")
+func enrollmentToken() string {
+	return strings.TrimSpace(os.Getenv("SUMA_AGENT_TOKEN"))
 }
 
 type authError struct{ status int }

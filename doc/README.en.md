@@ -172,7 +172,7 @@ volumes:
   suma-agent-data:
 ```
 
-Run `docker compose up -d` and verify the node is online. You can then remove `SUMA_AGENT_TOKEN` from Compose and run the command again; the named volume stores the reconnect credential. After revocation, generate a new token, update the environment variable, and redeploy the Agent; it exchanges the new token when its old credential is rejected. Existing `SUMA_AGENT_TOKEN_FILE` deployments remain supported. Compose files and the CLI remain on the SUMA control plane, so remote bind sources must be explicit absolute paths on the Agent host.
+Run `docker compose up -d` and verify the node is online. You can then remove `SUMA_AGENT_TOKEN` from Compose and run the command again; the named volume stores the reconnect credential. After revocation, generate a new token, update the environment variable, and redeploy the Agent; it exchanges the new token when its old credential is rejected. Compose files and the CLI remain on the SUMA control plane, so remote bind sources must be explicit absolute paths on the Agent host.
 
 > Security: never expose an unauthenticated Docker API on a network. Direct TCP uses mTLS, while Agents use verified HTTPS/WSS. A Docker socket mounted `:ro` still grants full Docker control. Put public SUMA deployments behind HTTPS; browser access over HTTPS automatically uses Secure cookies.
 
