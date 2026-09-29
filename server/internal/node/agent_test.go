@@ -39,7 +39,7 @@ func agentTestService(t *testing.T) *Service {
 	return service
 }
 
-func TestAgentEnrollmentReusableUntilExpiryAndRevocable(t *testing.T) {
+func TestAgentEnrollmentIsSingleUseAndRevocable(t *testing.T) {
 	service := agentTestService(t)
 	ctx := context.Background()
 	issued, err := service.IssueAgentEnrollment(ctx, AgentEnrollmentInput{Name: "Edge"})
@@ -88,14 +88,17 @@ func TestAgentEnrollmentReusableUntilExpiryAndRevocable(t *testing.T) {
 	for result := range results {
 		if result.err == nil {
 			successes++
-			if secret != "" && secret != result.credential {
-				t.Fatal("repeat enrollment returned a different credential")
-			}
 			secret = result.credential
 		}
 	}
-	if successes != 2 {
-		t.Fatalf("expected both valid token claims to succeed, got %d", successes)
+	if successes != 1 {
+		t.Fatalf("expected exactly one successful token claim, got %d", successes)
+	}
+	if _, _, err := service.ClaimAgentEnrollment(ctx, issued.Token, agentwire.ProtocolVersion); err == nil {
+		t.Fatal("used token was accepted again")
+	}
+	if view, err := service.GetAgentEnrollment(ctx, issued.NodeID); err != nil || view.ConsumedAt == nil {
+		t.Fatalf("used token was not marked consumed: %+v, %v", view, err)
 	}
 	var credential database.AgentCredential
 	if err := service.db.Where("node_id = ?", issued.NodeID).First(&credential).Error; err != nil {

@@ -195,14 +195,8 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer retryResponse.Body.Close()
-	var repeated struct {
-		Data struct {
-			NodeID     string `json:"node_id"`
-			Credential string `json:"credential"`
-		} `json:"data"`
-	}
-	if retryResponse.StatusCode != http.StatusOK || json.NewDecoder(retryResponse.Body).Decode(&repeated) != nil || repeated.Data.Credential != result.Data.Credential {
-		t.Fatalf("valid token retry did not return the same credential: status=%d", retryResponse.StatusCode)
+	if retryResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("used token was accepted again: status=%d", retryResponse.StatusCode)
 	}
 	address := "ws" + strings.TrimPrefix(server.URL, "http")
 	headers := http.Header{"Authorization": {"Bearer " + result.Data.Credential}, "X-SUMA-Agent-Node-ID": {issued.NodeID}, "X-SUMA-Agent-Protocol": {"1"}, "X-SUMA-Agent-Version": {"test"}}

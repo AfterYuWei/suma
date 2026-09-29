@@ -25,14 +25,15 @@ type AgentEnrollmentInput struct {
 }
 
 type AgentEnrollmentView struct {
-	NodeID    string    `json:"node_id"`
-	Token     string    `json:"token,omitempty"`
-	ExpiresAt time.Time `json:"expires_at"`
-	LastError string    `json:"last_error,omitempty"`
+	NodeID     string     `json:"node_id"`
+	Token      string     `json:"token,omitempty"`
+	ExpiresAt  time.Time  `json:"expires_at"`
+	ConsumedAt *time.Time `json:"consumed_at,omitempty"`
+	LastError  string     `json:"last_error,omitempty"`
 }
 
 func agentEnrollmentView(row database.AgentEnrollment) *AgentEnrollmentView {
-	return &AgentEnrollmentView{NodeID: row.NodeID, ExpiresAt: row.ExpiresAt, LastError: row.LastError}
+	return &AgentEnrollmentView{NodeID: row.NodeID, ExpiresAt: row.ExpiresAt, ConsumedAt: row.ConsumedAt, LastError: row.LastError}
 }
 
 var ErrAgentProtocol = errors.New("Agent protocol version is incompatible")
@@ -143,7 +144,7 @@ func (s *Service) GetAgentEnrollment(ctx context.Context, id string) (AgentEnrol
 	if err := s.db.WithContext(ctx).Where("node_id = ?", id).First(&row).Error; err != nil {
 		return AgentEnrollmentView{}, err
 	}
-	return AgentEnrollmentView{NodeID: id, ExpiresAt: row.ExpiresAt, LastError: row.LastError}, nil
+	return AgentEnrollmentView{NodeID: id, ExpiresAt: row.ExpiresAt, ConsumedAt: row.ConsumedAt, LastError: row.LastError}, nil
 }
 
 func (s *Service) CancelAgentEnrollment(ctx context.Context, id string) error {
@@ -190,37 +191,36 @@ func (s *Service) ClaimAgentEnrollment(ctx context.Context, token string, protoc
 	}
 	if protocol != agentwire.ProtocolVersion {
 		var enrollment database.AgentEnrollment
-		if err := s.db.WithContext(ctx).Where("token_hash = ? AND expires_at > ?", hashSecret(token), time.Now()).First(&enrollment).Error; err == nil {
+		if err := s.db.WithContext(ctx).Where("token_hash = ? AND consumed_at IS NULL AND expires_at > ?", hashSecret(token), time.Now()).First(&enrollment).Error; err == nil {
 			_ = s.db.WithContext(ctx).Model(&database.AgentEnrollment{}).Where("node_id = ?", enrollment.NodeID).Update("last_error", ErrAgentProtocol.Error()).Error
 			_ = s.db.WithContext(ctx).Model(&database.Node{}).Where("id = ? AND connection_type = ?", enrollment.NodeID, ConnectionAgent).UpdateColumns(map[string]any{"status": "incompatible", "last_error": ErrAgentProtocol.Error()}).Error
 		}
 		return "", "", ErrAgentProtocol
 	}
-	// Derive a stable credential from the high-entropy token so a retry after a
-	// lost HTTP response returns the same identity without dropping its session.
-	credential := hashSecret("suma-agent-credential-v1:" + token)
+	credential, err := randomSecret()
+	if err != nil {
+		return "", "", err
+	}
 	s.claimMu.Lock()
 	defer s.claimMu.Unlock()
 	var nodeID string
-	replaceSession := false
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var enrollment database.AgentEnrollment
 		if err := tx.Where("token_hash = ?", hashSecret(token)).First(&enrollment).Error; err != nil {
 			return errors.New("Agent enrollment token is invalid")
 		}
-		if !time.Now().Before(enrollment.ExpiresAt) {
-			return errors.New("Agent enrollment token has expired")
+		if enrollment.ConsumedAt != nil || !time.Now().Before(enrollment.ExpiresAt) {
+			return errors.New("Agent enrollment token has expired or was used")
 		}
 		nodeID = enrollment.NodeID
-		var current database.AgentCredential
-		lookup := tx.Where("node_id = ?", nodeID).First(&current).Error
-		if lookup != nil && !errors.Is(lookup, gorm.ErrRecordNotFound) {
-			return lookup
+		now := time.Now()
+		updated := tx.Model(&database.AgentEnrollment{}).Where("node_id = ? AND consumed_at IS NULL AND expires_at > ?", nodeID, now).Update("consumed_at", now)
+		if updated.Error != nil {
+			return updated.Error
 		}
-		if lookup == nil && current.RevokedAt == nil && current.SecretHash == hashSecret(credential) && current.ExpiresAt.Equal(enrollment.ExpiresAt) {
-			return nil
+		if updated.RowsAffected != 1 {
+			return errors.New("Agent enrollment token was used")
 		}
-		replaceSession = lookup == nil
 		if err := tx.Where("node_id = ?", nodeID).Delete(&database.AgentCredential{}).Error; err != nil {
 			return err
 		}
@@ -229,7 +229,7 @@ func (s *Service) ClaimAgentEnrollment(ctx context.Context, token string, protoc
 		}
 		return nil
 	})
-	if err == nil && replaceSession && s.agents != nil {
+	if err == nil && s.agents != nil {
 		s.agents.Disconnect(nodeID)
 	}
 	return nodeID, credential, err

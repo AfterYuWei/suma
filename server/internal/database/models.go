@@ -120,12 +120,13 @@ type Node struct {
 // AgentEnrollment reserves either a new node or an in-place migration.
 // Only hashes of short-lived enrollment tokens are stored.
 type AgentEnrollment struct {
-	NodeID    string    `gorm:"primaryKey;size:64"`
-	TokenHash string    `gorm:"uniqueIndex;size:64;not null"`
-	ExpiresAt time.Time `gorm:"not null"`
-	LastError string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	NodeID     string    `gorm:"primaryKey;size:64"`
+	TokenHash  string    `gorm:"uniqueIndex;size:64;not null"`
+	ExpiresAt  time.Time `gorm:"not null"`
+	ConsumedAt *time.Time
+	LastError  string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 type AgentCredential struct {

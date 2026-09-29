@@ -169,13 +169,13 @@ npm run build:demo
    - 可先创建一个或多个节点 Group，并在节点表单中多选归属；Group 只用于组织和筛选，不代表集群或批量执行目标；
    - **Unix Socket**：把目标机的 `/var/run/docker.sock` 挂载进 SUMA 容器的某个路径后填入该路径；
    - **Docker TCP**：填写远端端点，例如 `tcp://192.168.1.99:2376`，选择 mTLS 并绑定 Docker TLS 凭据。
-   - **Agent**：通过 HTTPS 打开 SUMA 后，在节点页生成 10 分钟有效的配对令牌；有效期内可重复验证。默认使用当前页面来源作为 Agent 地址。若 Agent 无法访问此地址，再设置 `SUMA_AGENT_PUBLIC_URL`。可选择现有 Unix/TCP 节点原位迁移，节点 ID 与关联保持不变。
+   - **Agent**：通过 HTTPS 打开 SUMA 后，在节点页生成最长 10 分钟有效的配对令牌；首次成功使用后立即失效，不能用于第二次注册。默认使用当前页面来源作为 Agent 地址。若 Agent 无法访问此地址，再设置 `SUMA_AGENT_PUBLIC_URL`。可选择现有 Unix/TCP 节点原位迁移，节点 ID 与关联保持不变。
 2. 点击「测试连接」验证连通性与延迟。
 3. TCP 与 Agent 节点的 Compose bind 源必须是目标宿主机上的不可插值绝对路径。
 
 ### Agent Docker 部署
 
-节点页生成的 Compose 已将配对令牌填入 `SUMA_AGENT_TOKEN` 环境变量，可直接复制到 Agent 主机保存为 `docker-compose.yml`；不要将含令牌的配置提交到代码仓库。Agent 连接成功后会自动更新节点状态。当前连接可继续使用；令牌过期后如需重新连接，应在节点页手动刷新令牌，更新 Agent 主机的 `SUMA_AGENT_TOKEN` 并重建容器。手写配置时替换下方占位符。SUMA 地址必须是 Agent 可访问的 HTTPS 地址；反向代理需支持 WebSocket 升级与长连接。私有 CA 可只读挂载到容器并设置 `SUMA_AGENT_CA_FILE`，不能跳过证书校验。
+节点页生成的 Compose 已将配对令牌填入 `SUMA_AGENT_TOKEN` 环境变量，可直接复制到 Agent 主机保存为 `docker-compose.yml`；不要将含令牌的配置提交到代码仓库。令牌首次成功使用后立即失效，Agent 连接成功后会自动更新节点状态。Agent 保存的连接凭据可在原 10 分钟期限内重连；期限过后如需重新连接，应在节点页手动刷新令牌，更新 Agent 主机的 `SUMA_AGENT_TOKEN` 并重建容器。手写配置时替换下方占位符。SUMA 地址必须是 Agent 可访问的 HTTPS 地址；反向代理需支持 WebSocket 升级与长连接。私有 CA 可只读挂载到容器并设置 `SUMA_AGENT_CA_FILE`，不能跳过证书校验。
 
 ```yaml
 services:
