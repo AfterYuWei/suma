@@ -84,20 +84,16 @@ func run(logger *slog.Logger) error {
 	httpClient := &http.Client{Transport: transport, Timeout: 15 * time.Second}
 	dialer := &websocket.Dialer{TLSClientConfig: tlsConfig, HandshakeTimeout: 15 * time.Second, Proxy: http.ProxyFromEnvironment}
 	credentialPath := filepath.Join(dataDir, "identity.json")
-	tokenPath := os.Getenv("SUMA_AGENT_TOKEN_FILE")
 	id, err := readIdentity(credentialPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	if id.Credential == "" {
-		if tokenPath == "" {
-			return errors.New("SUMA_AGENT_TOKEN_FILE is required for first pairing")
-		}
-		token, err := os.ReadFile(tokenPath)
+		token, err := enrollmentToken()
 		if err != nil {
 			return err
 		}
-		id, err = enroll(httpClient, base, strings.TrimSpace(string(token)))
+		id, err = enroll(httpClient, base, token)
 		if err != nil {
 			return err
 		}
@@ -115,9 +111,9 @@ func run(logger *slog.Logger) error {
 			break
 		}
 		var unauthorized *authError
-		if errors.As(err, &unauthorized) && tokenPath != "" {
-			if value, readErr := os.ReadFile(tokenPath); readErr == nil {
-				if replacement, enrollErr := enroll(httpClient, base, strings.TrimSpace(string(value))); enrollErr == nil {
+		if errors.As(err, &unauthorized) {
+			if token, readErr := enrollmentToken(); readErr == nil && token != "" {
+				if replacement, enrollErr := enroll(httpClient, base, token); enrollErr == nil {
 					if saveErr := saveIdentity(credentialPath, replacement); saveErr == nil {
 						id, backoff = replacement, time.Second
 						logger.Info("agent paired again", "node_id", id.NodeID)
@@ -136,6 +132,17 @@ func run(logger *slog.Logger) error {
 		}
 	}
 	return nil
+}
+
+func enrollmentToken() (string, error) {
+	if token := strings.TrimSpace(os.Getenv("SUMA_AGENT_TOKEN")); token != "" {
+		return token, nil
+	}
+	if path := os.Getenv("SUMA_AGENT_TOKEN_FILE"); path != "" {
+		value, err := os.ReadFile(path)
+		return strings.TrimSpace(string(value)), err
+	}
+	return "", errors.New("SUMA_AGENT_TOKEN or SUMA_AGENT_TOKEN_FILE is required for first pairing")
 }
 
 type authError struct{ status int }

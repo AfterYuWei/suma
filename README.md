@@ -175,7 +175,7 @@ npm run build:demo
 
 ### Agent Docker 部署
 
-在 Agent 主机创建权限为 `0700` 的 `/etc/suma-agent` 目录，把节点页显示的一次性令牌写入权限为 `0600` 的 `/etc/suma-agent/enrollment-token` 文件（不要放进代码仓库），并把下列 Compose 配置保存为 `docker-compose.yml`。将 SUMA 地址换成实际可访问的 HTTPS 地址；反向代理需支持 WebSocket 升级与长连接。私有 CA 可只读挂载到容器并设置 `SUMA_AGENT_CA_FILE`，不能跳过证书校验。
+节点页生成的 Compose 已将一次性令牌填入 `SUMA_AGENT_TOKEN` 环境变量，可直接复制到 Agent 主机保存为 `docker-compose.yml`；不要将含令牌的配置提交到代码仓库。手写配置时替换下方占位符。SUMA 地址必须是 Agent 可访问的 HTTPS 地址；反向代理需支持 WebSocket 升级与长连接。私有 CA 可只读挂载到容器并设置 `SUMA_AGENT_CA_FILE`，不能跳过证书校验。
 
 ```yaml
 services:
@@ -184,16 +184,15 @@ services:
     restart: unless-stopped
     environment:
       SUMA_AGENT_SERVER_URL: https://suma.example.com
-      SUMA_AGENT_TOKEN_FILE: /run/secrets/enrollment_token
+      SUMA_AGENT_TOKEN: PASTE_ONE_TIME_TOKEN_HERE
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /etc/suma-agent/enrollment-token:/run/secrets/enrollment_token:ro
       - suma-agent-data:/var/lib/suma-agent
 volumes:
   suma-agent-data:
 ```
 
-运行 `docker compose up -d`，确认节点在线后清空宿主机令牌文件的内容，但保留空文件供容器重启时挂载；持久卷保存后续重连凭据。撤销凭据后，如需重新配对，将新令牌写入该文件并重启 Agent，旧身份认证失败时会自动用新令牌注册。Agent 只转发 Docker API；Compose 文件与 CLI 仍在 SUMA 控制端，远端 bind 源必须是目标主机上的明确绝对路径。
+运行 `docker compose up -d`，确认节点在线后可从 Compose 删除 `SUMA_AGENT_TOKEN` 并再次运行该命令；持久卷保存后续重连凭据。撤销凭据后，如需重新配对，生成新令牌、更新环境变量并重新部署 Agent，旧身份认证失败时会自动用新令牌注册。已有部署的 `SUMA_AGENT_TOKEN_FILE` 文件方式继续受支持。Agent 只转发 Docker API；Compose 文件与 CLI 仍在 SUMA 控制端，远端 bind 源必须是目标主机上的明确绝对路径。
 
 > 重要安全提醒：永远不要在网络上暴露无认证的 Docker API（明文 2375）。TCP 远程接入使用 mTLS；Agent 接入使用经验证的 HTTPS/WSS。Docker socket 即使以 `:ro` 挂载，仍授予 Agent 完整的 Docker 管理权限。公网 SUMA 请置于 HTTPS 反向代理之后；浏览器通过 HTTPS 访问时会自动使用 Secure Cookie。
 

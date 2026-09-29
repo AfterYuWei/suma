@@ -97,19 +97,19 @@ func TestRealDockerAgentInPlaceComposeReconnectAndRevoke(t *testing.T) {
 	server := &http.Server{Handler: router}
 	go func() { _ = server.ServeTLS(listener, certFile, keyFile) }()
 	defer server.Shutdown(context.Background())
-	tokenFile := filepath.Join(root, "token")
-	if err := os.WriteFile(tokenFile, []byte(issued.Token), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	identityDir := filepath.Join(root, "identity")
 	if err := os.Mkdir(identityDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	environmentFile := filepath.Join(root, "agent.env")
+	if err := os.WriteFile(environmentFile, []byte("SUMA_AGENT_TOKEN="+issued.Token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	name := fmt.Sprintf("suma-agent-smoke-%d", time.Now().UnixNano())
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
-	docker("run", "-d", "--name", name, "--add-host", "host.docker.internal:host-gateway", "-e", "SUMA_AGENT_SERVER_URL="+publicURL,
-		"-e", "SUMA_AGENT_TOKEN_FILE=/run/secrets/token", "-e", "SUMA_AGENT_CA_FILE=/run/secrets/ca.pem",
-		"-v", "/var/run/docker.sock:/var/run/docker.sock:ro", "-v", tokenFile+":/run/secrets/token:ro", "-v", certFile+":/run/secrets/ca.pem:ro",
+	docker("run", "-d", "--name", name, "--add-host", "host.docker.internal:host-gateway", "--env-file", environmentFile, "-e", "SUMA_AGENT_SERVER_URL="+publicURL,
+		"-e", "SUMA_AGENT_CA_FILE=/run/secrets/ca.pem",
+		"-v", "/var/run/docker.sock:/var/run/docker.sock:ro", "-v", certFile+":/run/secrets/ca.pem:ro",
 		"-v", identityDir+":/var/lib/suma-agent", image)
 	await := func(nodeID, want string) {
 		t.Helper()
@@ -143,9 +143,15 @@ func TestRealDockerAgentInPlaceComposeReconnectAndRevoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	tokenFile := filepath.Join(root, "token")
 	if err := os.WriteFile(tokenFile, []byte(issued.Token), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	docker("rm", "-f", name)
+	docker("run", "-d", "--name", name, "--add-host", "host.docker.internal:host-gateway", "-e", "SUMA_AGENT_SERVER_URL="+publicURL,
+		"-e", "SUMA_AGENT_TOKEN_FILE=/run/secrets/token", "-e", "SUMA_AGENT_CA_FILE=/run/secrets/ca.pem",
+		"-v", "/var/run/docker.sock:/var/run/docker.sock:ro", "-v", tokenFile+":/run/secrets/token:ro", "-v", certFile+":/run/secrets/ca.pem:ro",
+		"-v", identityDir+":/var/lib/suma-agent", image)
 	await("local", "online")
 	after, err := nodes.Get(ctx, "local")
 	if err != nil {

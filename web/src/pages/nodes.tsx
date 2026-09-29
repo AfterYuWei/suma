@@ -36,7 +36,7 @@ const blank = (groupID?: number): NodeFormValues => ({ name: '', connection_type
 
 const connectionLabels: Record<string, string> = { unix: 'Unix Socket', tcp: 'Docker TCP', agent: 'Agent (WSS)' }
 
-const agentCompose = (publicURL: string) => `services:\n  suma-agent:\n    image: ghcr.io/afteryuwei/suma-agent:stable\n    restart: unless-stopped\n    environment:\n      SUMA_AGENT_SERVER_URL: ${publicURL}\n      SUMA_AGENT_TOKEN_FILE: /run/secrets/enrollment_token\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock:ro\n      - /etc/suma-agent/enrollment-token:/run/secrets/enrollment_token:ro\n      - suma-agent-data:/var/lib/suma-agent\nvolumes:\n  suma-agent-data:\n`
+const agentCompose = (publicURL: string, token: string) => `services:\n  suma-agent:\n    image: ghcr.io/afteryuwei/suma-agent:stable\n    restart: unless-stopped\n    environment:\n      SUMA_AGENT_SERVER_URL: ${publicURL}\n      SUMA_AGENT_TOKEN: ${token}\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock:ro\n      - suma-agent-data:/var/lib/suma-agent\nvolumes:\n  suma-agent-data:\n`
 
 export function NodesPage() {
   const { language } = useI18n()
@@ -270,12 +270,12 @@ export function NodesPage() {
     </Sheet>
     <Sheet open={pairing !== null} onOpenChange={(next) => { if (!next) setPairing(null) }}>
       <SheetContent side="right" className="w-full sm:max-w-[620px]">
-        <SheetHeader><SheetTitle>{zh ? 'Agent 配对' : 'Agent pairing'}</SheetTitle><SheetDescription>{zh ? '令牌只显示一次，有效期 10 分钟。先在 Agent 主机创建权限为 0600 的 /etc/suma-agent/enrollment-token，写入令牌，再运行 Compose。配对成功后清空文件内容，保留文件供容器重启挂载。' : 'The token is shown once and expires in 10 minutes. Put it in /etc/suma-agent/enrollment-token with mode 0600 on the Agent host, then run Compose. After pairing, empty the file but keep it for container restarts.'}</SheetDescription></SheetHeader>
+        <SheetHeader><SheetTitle>{zh ? 'Agent 配对' : 'Agent pairing'}</SheetTitle><SheetDescription>{zh ? '令牌只显示一次，有效期 10 分钟。下方 Compose 已填入令牌；请勿将其提交到仓库。配对成功后可删除 SUMA_AGENT_TOKEN 并重新部署，数据卷会保留重连凭据。' : 'The token is shown once and expires in 10 minutes. The Compose file below includes it; do not commit it to a repository. After pairing, you can remove SUMA_AGENT_TOKEN and redeploy; the volume retains the reconnect credential.'}</SheetDescription></SheetHeader>
         {pairing && <div className="flex flex-col gap-4 overflow-y-auto px-4 pb-4">
           <p className="text-xs text-muted-foreground">{zh ? `Agent 将连接 ${pairing.public_url}。请确认远端主机能访问此地址且信任其 HTTPS 证书。` : `The Agent will connect to ${pairing.public_url}. Check that the remote host can reach it and trusts its HTTPS certificate.`}</p>
           <div className="grid gap-1.5"><Label>{zh ? '节点 ID' : 'Node ID'}</Label><Input readOnly value={pairing.node_id} /></div>
           <div className="grid gap-1.5"><Label>{zh ? '一次性令牌' : 'One-time token'}</Label><div className="flex gap-2"><Input readOnly value={pairing.token} className="font-mono" /><Button type="button" variant="outline" onClick={() => void navigator.clipboard.writeText(pairing.token)}><Copy />{zh ? '复制' : 'Copy'}</Button></div></div>
-          <div className="grid gap-1.5"><Label>docker-compose.yml</Label><pre className="overflow-x-auto rounded-lg border bg-muted/30 p-3 text-xs">{agentCompose(pairing.public_url)}</pre><Button type="button" variant="outline" onClick={() => void navigator.clipboard.writeText(agentCompose(pairing.public_url))}><Copy />{zh ? '复制 Compose' : 'Copy Compose'}</Button></div>
+          <div className="grid gap-1.5"><Label>docker-compose.yml</Label><pre className="overflow-x-auto rounded-lg border bg-muted/30 p-3 text-xs">{agentCompose(pairing.public_url, pairing.token)}</pre><Button type="button" variant="outline" onClick={() => void navigator.clipboard.writeText(agentCompose(pairing.public_url, pairing.token))}><Copy />{zh ? '复制 Compose' : 'Copy Compose'}</Button></div>
           <p className="text-xs text-muted-foreground">{zh ? 'Docker socket 即使只读挂载，Agent 仍拥有 Docker 管理权限。生产环境请固定镜像版本，并确保 SUMA 的 HTTPS 证书受信任。' : 'A read-only Docker socket mount still grants Docker control. Pin the image version and use a trusted HTTPS certificate in production.'}</p>
         </div>}
       </SheetContent>
