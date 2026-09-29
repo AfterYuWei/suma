@@ -200,6 +200,23 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     return clone(nodeGroups[index]) as T
   }
   if (pathname === '/nodes' && method === 'GET') return clone(nodes) as T
+  if (pathname === '/agent-enrollments' && method === 'POST') {
+    const existing = nodes.find((item) => item.id === body.node_id)
+    const id = existing?.id ?? `${String(body.name || 'agent').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${nodes.length + 1}`
+    if (existing) existing.agent_enrollment = { node_id: id, expires_at: now }
+    else nodes.push({ id, name: String(body.name || id), connection_type: 'agent', endpoint: `agent://${id}`, tls_mode: 'disabled', enabled: false, status: 'pairing', created_at: now, updated_at: now, group_ids: Array.isArray(body.group_ids) ? body.group_ids.filter((value): value is number => typeof value === 'number') : [], agent_enrollment: { node_id: id, expires_at: now } })
+    syncNodeGroupCounts()
+    return clone({ node_id: id, token: 'a'.repeat(64), expires_at: now, public_url: 'https://suma.example.com' }) as T
+  }
+  const agentEnrollmentMatch = pathname.match(/^\/agent-enrollments\/([^/]+)(\/reissue)?$/)
+  if (agentEnrollmentMatch && method === 'POST' && agentEnrollmentMatch[2]) return clone({ node_id: agentEnrollmentMatch[1], token: 'b'.repeat(64), expires_at: now, public_url: 'https://suma.example.com' }) as T
+  const agentRevokeMatch = pathname.match(/^\/nodes\/([^/]+)\/agent\/revoke$/)
+  if (agentRevokeMatch && method === 'POST') {
+    const node = nodes.find((item) => item.id === agentRevokeMatch[1])
+    if (!node) throw new ApiError('Docker node not found', 20004, 404)
+    node.status = 'offline'
+    return clone({ node_id: node.id }) as T
+  }
   if (pathname === '/nodes' && method === 'POST') {
     const id = `${String(body.name || 'node').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${nodes.length + 1}`
     const node: DockerNode = { id, name: String(body.name || id), connection_type: body.connection_type === 'tcp' ? 'tcp' : 'unix', endpoint: String(body.endpoint || 'unix:///var/run/docker.sock'), tls_mode: body.tls_mode === 'required' ? 'required' : 'disabled', tls_credential_id: typeof body.tls_credential_id === 'number' ? body.tls_credential_id : undefined, enabled: body.enabled !== false, status: 'online', last_latency_ms: 18, last_checked_at: now, created_at: now, updated_at: now, group_ids: Array.isArray(body.group_ids) ? body.group_ids.filter((id): id is number => typeof id === 'number') : [] }

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/suma/suma/server/internal/agenthub"
 	"github.com/suma/suma/server/internal/api"
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/auth"
@@ -35,6 +36,7 @@ type App struct {
 	server         *http.Server
 	engine         docker.Engine
 	nodes          *nodeService.Service
+	agents         *agenthub.Hub
 	cd             *cdService.Service
 	recoveryCancel context.CancelFunc
 	recoveryWG     sync.WaitGroup
@@ -54,6 +56,11 @@ func New(logger *slog.Logger) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	agents, err := agenthub.New()
+	if err != nil {
+		return nil, err
+	}
+	nodes.SetAgentHub(agents)
 	engine, err := docker.New(cfg.DockerHost)
 	if err != nil {
 		return nil, err
@@ -97,7 +104,7 @@ func New(logger *slog.Logger) (*App, error) {
 	continuousDelivery.Start()
 	recoveryContext, recoveryCancel := context.WithCancel(context.Background())
 	fileService := containerfiles.NewService(db, secretStore)
-	application := &App{logger: logger, engine: engine, nodes: nodes, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{Engine: engine, Containers: engine, Files: fileService, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: applicationSettings, Monitor: monitorService.NewService(engine, cfg.DatabasePath), System: systemService.NewService(engine, taskService), Nodes: nodes, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
+	application := &App{logger: logger, engine: engine, nodes: nodes, agents: agents, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{Engine: engine, Containers: engine, Files: fileService, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: applicationSettings, Monitor: monitorService.NewService(engine, cfg.DatabasePath), System: systemService.NewService(engine, taskService), Nodes: nodes, Agents: agents, AgentPublicURL: cfg.AgentPublicURL, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
 	application.recoveryWG.Add(1)
 	go func() {
 		defer application.recoveryWG.Done()
@@ -168,6 +175,9 @@ func (a *App) Shutdown(ctx context.Context) error {
 	}
 	serverErr := a.server.Shutdown(ctx)
 	engineErr := a.engine.Close()
+	if a.agents != nil {
+		_ = a.agents.Close()
+	}
 	if a.nodes != nil {
 		_ = a.nodes.Close()
 	}

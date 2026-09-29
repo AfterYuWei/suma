@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { FolderTree, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { Copy, FolderTree, Link2Off, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { LoadingState } from '../components/ui/loading-state'
 import { Alert, AlertDescription } from '../components/ui/alert'
@@ -28,12 +28,15 @@ import { useUIStore } from '../stores/ui'
 import { ResourceFrame } from './images'
 
 interface TLSCredential { id: number; name: string; fingerprint: string; authorized_node_ids: string[] }
-interface NodeFormValues { name: string; connection_type: 'unix' | 'tcp'; endpoint: string; tls_mode: 'required' | 'disabled'; tls_credential_id?: number; enabled: boolean; group_ids: number[] }
+interface NodeFormValues { name: string; connection_type: 'unix' | 'tcp' | 'agent'; endpoint: string; tls_mode: 'required' | 'disabled'; tls_credential_id?: number; enabled: boolean; group_ids: number[] }
 interface NodeInput extends NodeFormValues { plaintext_confirmation?: string }
+interface AgentEnrollment { node_id: string; token: string; expires_at: string; public_url: string }
 
 const blank = (groupID?: number): NodeFormValues => ({ name: '', connection_type: 'unix', endpoint: 'unix:///var/run/docker.sock', tls_mode: 'disabled', enabled: true, group_ids: groupID ? [groupID] : [] })
 
-const connectionLabels: Record<string, string> = { unix: 'Unix Socket', tcp: 'Docker TCP' }
+const connectionLabels: Record<string, string> = { unix: 'Unix Socket', tcp: 'Docker TCP', agent: 'Agent (WSS)' }
+
+const agentCompose = (publicURL: string) => `services:\n  suma-agent:\n    image: ghcr.io/afteryuwei/suma-agent:stable\n    restart: unless-stopped\n    environment:\n      SUMA_AGENT_SERVER_URL: ${publicURL}\n      SUMA_AGENT_TOKEN_FILE: /run/secrets/enrollment_token\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock:ro\n      - /etc/suma-agent/enrollment-token:/run/secrets/enrollment_token:ro\n      - suma-agent-data:/var/lib/suma-agent\nvolumes:\n  suma-agent-data:\n`
 
 export function NodesPage() {
   const { language } = useI18n()
@@ -50,12 +53,21 @@ export function NodesPage() {
   const [groupOpen, setGroupOpen] = useState(false)
   const [editingGroup, setEditingGroup] = useState<NodeGroup | null>(null)
   const [groupValues, setGroupValues] = useState({ name: '', description: '' })
+  const [pairing, setPairing] = useState<AgentEnrollment | null>(null)
+  const [agentActionError, setAgentActionError] = useState('')
   const save = useMutation({ mutationFn: (input: NodeInput) => api<DockerNode>(editing ? `/nodes/${editing.id}` : '/nodes', { method: editing ? 'PUT' : 'POST', body: JSON.stringify(input) }), onSuccess: async () => { setOpen(false); await Promise.all([client.invalidateQueries({ queryKey: ['nodes'] }), client.invalidateQueries({ queryKey: ['node-groups'] })]) } })
+  const enroll = useMutation({ mutationFn: (input: { name: string; group_ids?: number[]; node_id?: string }) => api<AgentEnrollment>('/agent-enrollments', { method: 'POST', body: JSON.stringify(input) }), onSuccess: async (value) => { setOpen(false); setPairing(value); await client.invalidateQueries({ queryKey: ['nodes'] }) } })
   const saveGroup = useMutation({ mutationFn: (input: { name: string; description: string }) => api<NodeGroup>(editingGroup ? `/node-groups/${editingGroup.id}` : '/node-groups', { method: editingGroup ? 'PUT' : 'POST', body: JSON.stringify(input) }), onSuccess: async () => { setGroupOpen(false); await Promise.all([client.invalidateQueries({ queryKey: ['node-groups'] }), client.invalidateQueries({ queryKey: ['nodes'] })]) } })
   const test = useMutation({ mutationFn: (id: string) => api(`/nodes/${id}/test`, { method: 'POST' }), onSuccess: () => client.invalidateQueries({ queryKey: ['nodes'] }) })
   const edit = (node: DockerNode) => { setEditing(node); setValues({ name: node.name, connection_type: node.connection_type, endpoint: node.endpoint, tls_mode: node.tls_mode, tls_credential_id: node.tls_credential_id, enabled: node.enabled, group_ids: node.group_ids }); setOpen(true) }
   const remove = async (node: DockerNode) => { if (!await confirmDialog({ title: zh ? `删除节点 ${node.name}？` : `Delete node ${node.name}?`, description: zh ? '必须先解绑 Compose、CD 和全部凭据授权。历史任务和审计记录会保留。' : 'Compose, CD, and credential grants must be detached first. Historical tasks and audits remain.', confirmLabel: zh ? '删除节点' : 'Delete node', danger: true })) return; await api(`/nodes/${node.id}`, { method: 'DELETE' }); await client.invalidateQueries({ queryKey: ['nodes'] }) }
+  const reissue = async (node: DockerNode) => { try { setAgentActionError(''); const value = await api<AgentEnrollment>(`/agent-enrollments/${node.id}/reissue`, { method: 'POST' }); setPairing(value) } catch (error) { setAgentActionError(error instanceof Error ? error.message : String(error)) } }
+  const revoke = async (node: DockerNode) => { if (!await confirmDialog({ title: zh ? `撤销 ${node.name} 的 Agent 凭据？` : `Revoke Agent for ${node.name}?`, description: zh ? 'Agent 会立即断开。重新接入需要生成新的配对令牌。' : 'The Agent disconnects immediately. A new token is required to pair again.', confirmLabel: zh ? '撤销凭据' : 'Revoke credential', danger: true })) return; try { setAgentActionError(''); await api(`/nodes/${node.id}/agent/revoke`, { method: 'POST' }); await client.invalidateQueries({ queryKey: ['nodes'] }) } catch (error) { setAgentActionError(error instanceof Error ? error.message : String(error)) } }
   const submitNode = async () => {
+    if (values.connection_type === 'agent' && editing?.connection_type !== 'agent') {
+      enroll.mutate(editing ? { name: editing.name, node_id: editing.id } : { name: values.name, group_ids: values.group_ids })
+      return
+    }
     if (values.connection_type !== 'tcp' || values.tls_mode !== 'disabled') {
       save.mutate(values)
       return
@@ -109,6 +121,7 @@ export function NodesPage() {
         </div>)}
       </div>
     </section>
+    {agentActionError && <Alert variant="destructive" className="mb-4"><AlertDescription>{agentActionError}</AlertDescription></Alert>}
     {query.isPending
       ? <LoadingState compact rows={4} label={zh ? '正在加载节点' : 'Loading nodes'} />
       : (
@@ -130,17 +143,19 @@ export function NodesPage() {
                 <TableRow key={node.id}>
                   <TableCell className="max-w-80 whitespace-normal">
                     <div className="font-medium">{node.name}</div>
-                    <TooltipHint content={node.endpoint}><span className="block truncate text-xs text-muted-foreground">{node.endpoint}</span></TooltipHint>
+                    <TooltipHint content={node.endpoint}><span className="block truncate text-xs text-muted-foreground">{node.connection_type === 'agent' ? (zh ? '主动连接到 SUMA' : 'Outbound connection to SUMA') : node.endpoint}{node.agent_version ? ` · ${node.agent_version}` : ''}</span></TooltipHint>
                     {node.last_error && <div className="mt-0.5 text-xs break-all text-destructive">{node.last_error}</div>}
+                    {node.agent_enrollment && !node.agent_enrollment.consumed_at && <div className="mt-0.5 text-xs text-muted-foreground">{zh ? '等待 Agent 配对' : 'Waiting for Agent pairing'}</div>}
+                    {node.agent_enrollment?.last_error && <div className="mt-0.5 text-xs break-all text-destructive">{node.agent_enrollment.last_error}</div>}
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1.5">
                       <Badge variant="outline" className="font-mono text-xs">{node.connection_type.toUpperCase()}</Badge>
-                      <Badge variant="outline" className="text-xs">{node.tls_mode === 'required' ? 'mTLS' : 'PLAIN'}</Badge>
+                      <Badge variant="outline" className="text-xs">{node.connection_type === 'agent' ? 'WSS' : node.tls_mode === 'required' ? 'mTLS' : 'PLAIN'}</Badge>
                     </div>
                   </TableCell>
                   <TableCell><div className="flex flex-wrap gap-1">{node.group_ids.length === 0 ? <span className="text-xs text-muted-foreground">{zh ? '无 Group' : 'No group'}</span> : node.group_ids.map((id) => { const group = groups.data?.find((item) => item.id === id); return <Badge key={id} variant="secondary" className="text-xs">{group?.name ?? `#${id}`}</Badge> })}</div></TableCell>
-                  <TableCell><StatusBadge tone={node.status === 'online' ? 'success' : 'neutral'}>{node.status}</StatusBadge></TableCell>
+                  <TableCell><StatusBadge tone={node.status === 'online' ? 'success' : node.status === 'incompatible' || node.agent_enrollment?.last_error?.includes('protocol version is incompatible') ? 'critical' : node.status === 'pairing' ? 'warning' : 'neutral'}>{node.status === 'incompatible' || node.agent_enrollment?.last_error?.includes('protocol version is incompatible') ? (zh ? '版本不兼容' : 'Incompatible') : node.status === 'pairing' ? (zh ? '配对中' : 'Pairing') : node.status === 'online' ? (zh ? '在线' : 'Online') : node.status === 'offline' ? (zh ? '离线' : 'Offline') : node.status}</StatusBadge></TableCell>
                   <TableCell>
                     <div className="flex items-center justify-end gap-0.5">
                       <TooltipHint content={zh ? '测试连接' : 'Test connection'}><Button
@@ -150,6 +165,7 @@ export function NodesPage() {
                         disabled={test.isPending && test.variables === node.id}
                         onClick={() => test.mutate(node.id)}
                       ><RefreshCw className={cn(test.isPending && test.variables === node.id && 'animate-spin')} /></Button></TooltipHint>
+                      {(node.connection_type === 'agent' || node.agent_enrollment) && <><TooltipHint content={zh ? '重新配对' : 'Pair again'}><Button variant="ghost" size="icon-sm" aria-label={zh ? '重新配对' : 'Pair again'} onClick={() => void reissue(node)}><Copy /></Button></TooltipHint>{node.connection_type === 'agent' && <TooltipHint content={zh ? '撤销 Agent' : 'Revoke Agent'}><Button variant="ghost" size="icon-sm" aria-label={zh ? '撤销 Agent' : 'Revoke Agent'} onClick={() => void revoke(node)}><Link2Off /></Button></TooltipHint>}</>}
                       <TooltipHint content={zh ? '编辑' : 'Edit'}><Button variant="ghost" size="icon-sm" aria-label={zh ? '编辑' : 'Edit'} onClick={() => edit(node)}><Pencil /></Button></TooltipHint>
                       <TooltipHint content={zh ? '删除' : 'Delete'}><Button
                         variant="destructive"
@@ -182,7 +198,7 @@ export function NodesPage() {
       <SheetContent side="right" className="w-full sm:max-w-[520px]">
         <SheetHeader>
           <SheetTitle>{editing ? (zh ? '编辑节点' : 'Edit node') : (zh ? '添加节点' : 'Add node')}</SheetTitle>
-          <SheetDescription>{zh ? '保存前会连接 Engine 并校验身份。' : 'The Engine identity is verified before saving.'}</SheetDescription>
+          <SheetDescription>{values.connection_type === 'agent' ? (zh ? '配对成功后校验 Engine 身份。' : 'Engine identity is verified when the Agent pairs.') : (zh ? '保存前会连接 Engine 并校验身份。' : 'The Engine identity is verified before saving.')}</SheetDescription>
         </SheetHeader>
         <form onSubmit={(event) => { event.preventDefault(); void submitNode() }} className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 pb-4">
           <div className="grid gap-1.5">
@@ -191,18 +207,20 @@ export function NodesPage() {
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="node-connection">{zh ? '连接方式' : 'Connection type'}</Label>
-            <Select<'unix' | 'tcp'> value={values.connection_type} onValueChange={(next) => { if (next === null) return; const isTCP = next === 'tcp'; update({ connection_type: next, endpoint: isTCP ? 'tcp://docker.example.com:2376' : 'unix:///var/run/docker.sock', tls_mode: isTCP ? 'required' : 'disabled', tls_credential_id: undefined }) }}>
+            <Select<'unix' | 'tcp' | 'agent'> value={values.connection_type} onValueChange={(next) => { if (next === null) return; const isTCP = next === 'tcp'; update({ connection_type: next, endpoint: next === 'agent' ? (editing?.connection_type === 'agent' ? editing.endpoint : '') : isTCP ? 'tcp://docker.example.com:2376' : 'unix:///var/run/docker.sock', tls_mode: isTCP ? 'required' : 'disabled', tls_credential_id: undefined }) }}>
               <SelectTrigger id="node-connection" aria-label={zh ? '连接方式' : 'Connection type'} className="w-full"><SelectValue>{connectionLabels[values.connection_type]}</SelectValue></SelectTrigger>
               <SelectContent>
                 <SelectItem value="unix">Unix Socket</SelectItem>
                 <SelectItem value="tcp">Docker TCP</SelectItem>
+                <SelectItem value="agent">Agent (WSS)</SelectItem>
               </SelectContent>
             </Select>
           </div>
-          <div className="grid gap-1.5">
+          {values.connection_type !== 'agent' && <div className="grid gap-1.5">
             <Label htmlFor="node-endpoint">Endpoint</Label>
             <Input id="node-endpoint" required value={values.endpoint} onChange={(event) => update({ endpoint: event.target.value })} />
-          </div>
+          </div>}
+          {values.connection_type === 'agent' && <p className="text-sm text-muted-foreground">{zh ? 'Agent 主动通过 HTTPS/WSS 连接；保存后生成一次性配对令牌。' : 'The Agent connects outbound over HTTPS/WSS. Saving generates a one-time pairing token.'}</p>}
           {tcp && <>
             <div className="grid gap-1.5">
               <Label>TLS</Label>
@@ -241,12 +259,23 @@ export function NodesPage() {
             <Checkbox checked={values.enabled} onCheckedChange={(checked) => update({ enabled: Boolean(checked) })} />
             {zh ? '启用节点' : 'Enable node'}
           </label>
-          {save.isError && <Alert variant="destructive"><AlertDescription>{save.error.message}</AlertDescription></Alert>}
+          {(save.isError || enroll.isError) && <Alert variant="destructive"><AlertDescription>{save.error?.message ?? enroll.error?.message}</AlertDescription></Alert>}
           <div className="mt-auto flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>{zh ? '取消' : 'Cancel'}</Button>
-            <Button type="submit" disabled={save.isPending}>{save.isPending && <Spinner className="size-4" />}{zh ? '保存节点' : 'Save node'}</Button>
+            <Button type="submit" disabled={save.isPending || enroll.isPending}>{(save.isPending || enroll.isPending) && <Spinner className="size-4" />}{values.connection_type === 'agent' && editing?.connection_type !== 'agent' ? (zh ? '生成配对令牌' : 'Create pairing token') : (zh ? '保存节点' : 'Save node')}</Button>
           </div>
         </form>
+      </SheetContent>
+    </Sheet>
+    <Sheet open={pairing !== null} onOpenChange={(next) => { if (!next) setPairing(null) }}>
+      <SheetContent side="right" className="w-full sm:max-w-[620px]">
+        <SheetHeader><SheetTitle>{zh ? 'Agent 配对' : 'Agent pairing'}</SheetTitle><SheetDescription>{zh ? '令牌只显示一次，有效期 10 分钟。先在 Agent 主机创建权限为 0600 的 /etc/suma-agent/enrollment-token，写入令牌，再运行 Compose。配对成功后清空文件内容，保留文件供容器重启挂载。' : 'The token is shown once and expires in 10 minutes. Put it in /etc/suma-agent/enrollment-token with mode 0600 on the Agent host, then run Compose. After pairing, empty the file but keep it for container restarts.'}</SheetDescription></SheetHeader>
+        {pairing && <div className="flex flex-col gap-4 overflow-y-auto px-4 pb-4">
+          <div className="grid gap-1.5"><Label>{zh ? '节点 ID' : 'Node ID'}</Label><Input readOnly value={pairing.node_id} /></div>
+          <div className="grid gap-1.5"><Label>{zh ? '一次性令牌' : 'One-time token'}</Label><div className="flex gap-2"><Input readOnly value={pairing.token} className="font-mono" /><Button type="button" variant="outline" onClick={() => void navigator.clipboard.writeText(pairing.token)}><Copy />{zh ? '复制' : 'Copy'}</Button></div></div>
+          <div className="grid gap-1.5"><Label>docker-compose.yml</Label><pre className="overflow-x-auto rounded-lg border bg-muted/30 p-3 text-xs">{agentCompose(pairing.public_url)}</pre><Button type="button" variant="outline" onClick={() => void navigator.clipboard.writeText(agentCompose(pairing.public_url))}><Copy />{zh ? '复制 Compose' : 'Copy Compose'}</Button></div>
+          <p className="text-xs text-muted-foreground">{zh ? 'Docker socket 即使只读挂载，Agent 仍拥有 Docker 管理权限。生产环境请固定镜像版本，并确保 SUMA 的 HTTPS 证书受信任。' : 'A read-only Docker socket mount still grants Docker control. Pin the image version and use a trusted HTTPS certificate in production.'}</p>
+        </div>}
       </SheetContent>
     </Sheet>
   </ResourceFrame>

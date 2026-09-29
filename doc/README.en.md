@@ -2,18 +2,18 @@
 
 **Language: [简体中文](../README.md) | [English](README.en.md)**
 
-SUMA is a single monolithic control plane for multi-node Docker management: manage all your Docker Engines from one web UI — no agents on your servers, no SSH sessions, no Swarm or Kubernetes. Built for personal servers, HomeLabs, NAS devices, VPS hosts, and small teams.
+SUMA is a single control plane for multi-node Docker management. Manage Engines from one web UI through direct Docker connections or an outbound Agent container, without SSH, Swarm, or Kubernetes. Built for personal servers, HomeLabs, NAS devices, VPS hosts, and small teams.
 
 ## Features
 
 ### Multi-node engine access
 
-- Agentless: attach mounted Unix sockets to reach local/host engines, or add remote Docker TCP endpoints
+- Three connection types: mounted Unix sockets, direct Docker TCP, or an Agent that connects outbound over HTTPS/WSS
 - TCP connections enforce mutual TLS by default; plaintext TCP is limited to loopback, private-network, or Tailscale IP addresses and requires re-entering the target IP before saving
 - Global node switcher: flip the active node from the header; resources, Compose, and tasks all follow
 - Multi-membership Node Groups: nodes may belong to several Groups or no Group; Groups filter fleet and node choices, while only an explicit Node selection changes Docker context
 - Automatic probing: node status and latency refresh every 30 seconds with graceful degradation
-- Remote bind validation: Compose mount sources on TCP nodes must use non-interpolated absolute paths
+- Remote bind validation: Compose mount sources on TCP and Agent nodes must use non-interpolated absolute paths
 
 ### Fleet overview
 
@@ -118,6 +118,7 @@ Open `http://<host-ip>:8080`, create the administrator account, and sign in.
 | `SUMA_ADDRESS` | `:8080` | Listen address (map the host port accordingly) |
 | `SUMA_COOKIE_SECURE` | `false` | Set `true` when deployed behind HTTPS |
 | `SUMA_DOCKER_HOST` | `unix:///var/run/docker.sock` | Engine address used only for first-run node bootstrap |
+| `SUMA_AGENT_PUBLIC_URL` | empty | Required before Agent pairing; HTTPS origin reachable by Agents |
 
 **Image tags**
 
@@ -146,10 +147,33 @@ Quality checks: `make check` (backend `go test ./...` + `go build ./...`; fronte
    - You may first create one or more Node Groups and select multiple memberships in the node form. Groups organize and filter nodes; they are not clusters or batch execution targets.
    - **Unix Socket**: mount the target machine's `/var/run/docker.sock` into the SUMA container at any path, then register that path;
    - **Docker TCP**: enter the remote endpoint such as `tcp://192.168.1.99:2376`, choose mTLS, and attach a Docker TLS credential.
+   - **Agent**: set `SUMA_AGENT_PUBLIC_URL`, then generate a one-time token valid for 10 minutes. You can select an existing Unix/TCP node for an in-place migration that preserves its ID and references.
 2. Use Test Connection to verify reachability and latency.
 3. Use explicit absolute host paths for bind mounts on TCP nodes; interpolated and relative sources are rejected.
 
-> Security note: never expose an unauthenticated Docker API (plaintext 2375) on a network. Always use mTLS for remote access. For public deployments, put SUMA behind an HTTPS reverse proxy and enable `SUMA_COOKIE_SECURE=true`.
+### Deploy the Agent with Docker
+
+On the Agent host, create `/etc/suma-agent` with mode `0700` and put the one-time token shown in the Nodes page in `/etc/suma-agent/enrollment-token` with mode `0600` (outside any source repository). Save this Compose file as `docker-compose.yml`, replacing the SUMA address. Your reverse proxy must allow WebSocket upgrades and long-lived connections. For a private CA, mount its PEM file read-only and set `SUMA_AGENT_CA_FILE`; TLS verification cannot be disabled.
+
+```yaml
+services:
+  suma-agent:
+    image: ghcr.io/afteryuwei/suma-agent:stable # pin the same release as SUMA in production
+    restart: unless-stopped
+    environment:
+      SUMA_AGENT_SERVER_URL: https://suma.example.com
+      SUMA_AGENT_TOKEN_FILE: /run/secrets/enrollment_token
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /etc/suma-agent/enrollment-token:/run/secrets/enrollment_token:ro
+      - suma-agent-data:/var/lib/suma-agent
+volumes:
+  suma-agent-data:
+```
+
+Run `docker compose up -d`, verify the node is online, then empty the host token file but keep the empty file for container restarts. The named volume stores the reconnect credential. After revocation, write a new token into the file and restart the Agent; it exchanges the new token when its old credential is rejected. Compose files and the CLI remain on the SUMA control plane, so remote bind sources must be explicit absolute paths on the Agent host.
+
+> Security: never expose an unauthenticated Docker API on a network. Direct TCP uses mTLS, while Agents use verified HTTPS/WSS. A Docker socket mounted `:ro` still grants full Docker control. Put public SUMA deployments behind HTTPS and enable `SUMA_COOKIE_SECURE=true`.
 
 ## Data and backups
 

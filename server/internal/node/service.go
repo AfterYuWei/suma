@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/suma/suma/server/internal/agenthub"
 	"github.com/suma/suma/server/internal/compose"
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/docker"
@@ -25,10 +26,11 @@ import (
 )
 
 const (
-	ConnectionUnix = "unix"
-	ConnectionTCP  = "tcp"
-	TLSRequired    = "required"
-	TLSDisabled    = "disabled"
+	ConnectionUnix  = "unix"
+	ConnectionTCP   = "tcp"
+	ConnectionAgent = "agent"
+	TLSRequired     = "required"
+	TLSDisabled     = "disabled"
 )
 
 var validID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
@@ -50,22 +52,25 @@ type Input struct {
 }
 
 type View struct {
-	ID              string     `json:"id"`
-	Name            string     `json:"name"`
-	ConnectionType  string     `json:"connection_type"`
-	Endpoint        string     `json:"endpoint"`
-	TLSMode         string     `json:"tls_mode"`
-	TLSCredentialID *uint      `json:"tls_credential_id,omitempty"`
-	Enabled         bool       `json:"enabled"`
-	EngineID        string     `json:"engine_id,omitempty"`
-	EngineVersion   string     `json:"engine_version,omitempty"`
-	Status          string     `json:"status"`
-	LastError       string     `json:"last_error,omitempty"`
-	LastLatencyMS   int64      `json:"last_latency_ms,omitempty"`
-	LastCheckedAt   *time.Time `json:"last_checked_at,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
-	GroupIDs        []uint     `json:"group_ids"`
+	ID               string               `json:"id"`
+	Name             string               `json:"name"`
+	ConnectionType   string               `json:"connection_type"`
+	Endpoint         string               `json:"endpoint"`
+	TLSMode          string               `json:"tls_mode"`
+	TLSCredentialID  *uint                `json:"tls_credential_id,omitempty"`
+	Enabled          bool                 `json:"enabled"`
+	EngineID         string               `json:"engine_id,omitempty"`
+	EngineVersion    string               `json:"engine_version,omitempty"`
+	Status           string               `json:"status"`
+	LastError        string               `json:"last_error,omitempty"`
+	LastLatencyMS    int64                `json:"last_latency_ms,omitempty"`
+	LastCheckedAt    *time.Time           `json:"last_checked_at,omitempty"`
+	AgentVersion     string               `json:"agent_version,omitempty"`
+	AgentConnectedAt *time.Time           `json:"agent_connected_at,omitempty"`
+	AgentEnrollment  *AgentEnrollmentView `json:"agent_enrollment,omitempty"`
+	CreatedAt        time.Time            `json:"created_at"`
+	UpdatedAt        time.Time            `json:"updated_at"`
+	GroupIDs         []uint               `json:"group_ids"`
 }
 
 type TLSCredentialInput struct {
@@ -95,10 +100,12 @@ type Service struct {
 	db          *gorm.DB
 	secrets     *secret.Store
 	mu          sync.Mutex
+	engineMu    sync.Mutex
 	clients     map[string]cachedClient
 	retired     []*docker.Adapter
 	probeCancel context.CancelFunc
 	probeWG     sync.WaitGroup
+	agents      *agenthub.Hub
 }
 
 func (s *Service) Start() {
@@ -220,7 +227,15 @@ func (s *Service) Get(ctx context.Context, id string) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
-	return view(row, groupIDs), nil
+	result := view(row, groupIDs)
+	var enrollment []database.AgentEnrollment
+	if err := s.db.WithContext(ctx).Where("node_id = ?", row.ID).Limit(1).Find(&enrollment).Error; err != nil {
+		return View{}, err
+	}
+	if len(enrollment) > 0 {
+		result.AgentEnrollment = agentEnrollmentView(enrollment[0])
+	}
+	return result, nil
 }
 
 func (s *Service) Create(ctx context.Context, input Input) (View, error) {
@@ -248,6 +263,8 @@ func (s *Service) Create(ctx context.Context, input Input) (View, error) {
 	row.EngineID, row.EngineVersion, row.Status, row.LastLatencyMS = info.ID, info.ServerVersion, "online", latency
 	now := time.Now()
 	row.LastCheckedAt = &now
+	s.engineMu.Lock()
+	defer s.engineMu.Unlock()
 	if err := s.ensureUniqueEngine(ctx, "", info.ID); err != nil {
 		return View{}, err
 	}
@@ -285,23 +302,52 @@ func (s *Service) Update(ctx context.Context, id string, input Input) (View, err
 		}
 	}
 	row.ID, row.CreatedAt = current.ID, current.CreatedAt
+	if current.ConnectionType == ConnectionAgent && input.ConnectionType == ConnectionAgent {
+		if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Model(&database.Node{}).Where("id = ?", id).Updates(map[string]any{"name": row.Name, "enabled": row.Enabled}).Error; err != nil {
+				return err
+			}
+			if input.GroupIDs != nil {
+				return replaceNodeGroups(tx, id, groupIDs)
+			}
+			return nil
+		}); err != nil {
+			return View{}, err
+		}
+		if !row.Enabled && s.agents != nil {
+			s.agents.Disconnect(id)
+		}
+		return s.Get(ctx, id)
+	}
 	client, info, latency, err := s.connect(ctx, row)
 	if err != nil {
 		return View{}, err
 	}
 	defer client.Close()
+	s.engineMu.Lock()
+	defer s.engineMu.Unlock()
 	if err := s.ensureUniqueEngine(ctx, id, info.ID); err != nil {
 		return View{}, err
 	}
 	now := time.Now()
 	row.EngineID, row.EngineVersion, row.Status, row.LastLatencyMS, row.LastCheckedAt, row.LastError = info.ID, info.ServerVersion, "online", latency, &now, ""
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&database.Node{}).Where("id = ?", id).Updates(map[string]any{
+		updates := map[string]any{
 			"name": row.Name, "connection_type": row.ConnectionType, "endpoint": row.Endpoint, "tls_mode": row.TLSMode,
 			"tls_credential_id": row.TLSCredentialID, "enabled": row.Enabled,
 			"engine_id": row.EngineID, "engine_version": row.EngineVersion, "status": row.Status, "last_error": "",
 			"last_latency_ms": latency, "last_checked_at": now,
-		}).Error; err != nil {
+		}
+		if current.ConnectionType == ConnectionAgent && row.ConnectionType != ConnectionAgent {
+			updates["agent_version"], updates["agent_connected_at"] = "", nil
+			if err := tx.Model(&database.AgentCredential{}).Where("node_id = ?", id).Update("revoked_at", now).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("node_id = ?", id).Delete(&database.AgentEnrollment{}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Model(&database.Node{}).Where("id = ?", id).Updates(updates).Error; err != nil {
 			return err
 		}
 		if input.GroupIDs != nil {
@@ -317,6 +363,11 @@ func (s *Service) Update(ctx context.Context, id string, input Input) (View, err
 		return View{}, err
 	}
 	s.invalidate(id)
+	if current.ConnectionType == ConnectionAgent && row.ConnectionType != ConnectionAgent {
+		if s.agents != nil {
+			s.agents.Remove(id)
+		}
+	}
 	return s.Get(ctx, id)
 }
 
@@ -341,6 +392,12 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 		}
 	}
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("node_id = ?", id).Delete(&database.AgentEnrollment{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("node_id = ?", id).Delete(&database.AgentCredential{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("node_id = ?", id).Delete(&database.NodeGroupNode{}).Error; err != nil {
 			return err
 		}
@@ -356,6 +413,9 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 		return err
 	}
 	s.invalidate(id)
+	if s.agents != nil {
+		s.agents.Remove(id)
+	}
 	return nil
 }
 
@@ -367,6 +427,11 @@ func (s *Service) Test(ctx context.Context, id string) (docker.Info, error) {
 		return docker.Info{}, err
 	}
 	info, err := client.Info(ctx)
+	if err == nil {
+		s.engineMu.Lock()
+		defer s.engineMu.Unlock()
+		err = s.ensureUniqueEngine(ctx, id, info.ID)
+	}
 	s.recordProbe(id, started, info, err)
 	return info, err
 }
@@ -410,7 +475,17 @@ func (s *Service) ComposeTarget(ctx context.Context, id string) (compose.Target,
 	if !row.Enabled {
 		return compose.Target{}, nodeView, errors.New("Docker node is disabled")
 	}
-	target := compose.Target{NodeID: row.ID, NodeName: row.Name, Host: row.Endpoint, TLSRequired: row.ConnectionType == ConnectionTCP && row.TLSMode == TLSRequired}
+	host := row.Endpoint
+	if row.ConnectionType == ConnectionAgent {
+		if s.agents == nil {
+			return compose.Target{}, nodeView, errors.New("Agent hub is unavailable")
+		}
+		host, err = s.agents.Endpoint(row.ID)
+		if err != nil {
+			return compose.Target{}, nodeView, err
+		}
+	}
+	target := compose.Target{NodeID: row.ID, NodeName: row.Name, Host: host, TLSRequired: row.ConnectionType == ConnectionTCP && row.TLSMode == TLSRequired}
 	if target.TLSRequired {
 		if row.TLSCredentialID == nil {
 			return compose.Target{}, nodeView, errors.New("Docker TLS credential is required")
@@ -491,6 +566,15 @@ func (s *Service) row(ctx context.Context, id string) (database.Node, error) {
 
 func (s *Service) prepare(ctx context.Context, id string, input Input) (database.Node, error) {
 	input.Name, input.Endpoint = strings.TrimSpace(input.Name), strings.TrimSpace(input.Endpoint)
+	if input.ConnectionType == ConnectionAgent {
+		if input.Endpoint != "agent://"+id || input.TLSMode != TLSDisabled || input.TLSCredentialID != nil {
+			return database.Node{}, errors.New("Agent endpoint is managed by SUMA")
+		}
+		var current database.Node
+		if err := s.db.WithContext(ctx).Where("id = ? AND connection_type = ?", id, ConnectionAgent).First(&current).Error; err != nil {
+			return database.Node{}, errors.New("use Agent enrollment to create or migrate an Agent node")
+		}
+	}
 	if input.Name == "" || len(input.Name) > 128 {
 		return database.Node{}, errors.New("node name is required and must not exceed 128 characters")
 	}
@@ -551,8 +635,12 @@ func validateEndpoint(connection, endpoint, tlsMode string, credentialID *uint) 
 		} else if tlsMode != TLSRequired {
 			return errors.New("TLS mode must be required or disabled")
 		}
+	case ConnectionAgent:
+		if parsed.Scheme != "agent" || parsed.Host == "" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || tlsMode != TLSDisabled || credentialID != nil {
+			return errors.New("Agent endpoint is managed by SUMA")
+		}
 	default:
-		return errors.New("connection type must be unix or tcp")
+		return errors.New("connection type must be unix, tcp, or agent")
 	}
 	return nil
 }
@@ -560,7 +648,16 @@ func validateEndpoint(connection, endpoint, tlsMode string, credentialID *uint) 
 func (s *Service) connect(ctx context.Context, row database.Node) (*docker.Adapter, docker.Info, int64, error) {
 	var client *docker.Adapter
 	var err error
-	if row.ConnectionType == ConnectionTCP && row.TLSMode == TLSRequired {
+	if row.ConnectionType == ConnectionAgent {
+		if s.agents == nil || !s.agents.Connected(row.ID) {
+			return nil, docker.Info{}, 0, errors.New("Agent is offline")
+		}
+		var endpoint string
+		endpoint, err = s.agents.Endpoint(row.ID)
+		if err == nil {
+			client, err = docker.New(endpoint)
+		}
+	} else if row.ConnectionType == ConnectionTCP && row.TLSMode == TLSRequired {
 		if row.TLSCredentialID == nil {
 			return nil, docker.Info{}, 0, errors.New("Docker TLS credential is required")
 		}
@@ -639,7 +736,7 @@ func (s *Service) recordProbe(id string, started time.Time, info docker.Info, pr
 	} else {
 		updates["status"], updates["last_error"], updates["engine_id"], updates["engine_version"] = "online", "", info.ID, info.ServerVersion
 	}
-	_ = s.db.Model(&database.Node{}).Where("id = ?", id).Updates(updates).Error
+	_ = s.db.Model(&database.Node{}).Where("id = ? AND NOT (connection_type = ? AND status = ?)", id, ConnectionAgent, "incompatible").UpdateColumns(updates).Error
 }
 
 func (s *Service) invalidate(id string) {
@@ -655,7 +752,7 @@ func view(row database.Node, groupIDs []uint) View {
 	if groupIDs == nil {
 		groupIDs = []uint{}
 	}
-	return View{ID: row.ID, Name: row.Name, ConnectionType: row.ConnectionType, Endpoint: row.Endpoint, TLSMode: row.TLSMode, TLSCredentialID: row.TLSCredentialID, Enabled: row.Enabled, EngineID: row.EngineID, EngineVersion: row.EngineVersion, Status: row.Status, LastError: row.LastError, LastLatencyMS: row.LastLatencyMS, LastCheckedAt: row.LastCheckedAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, GroupIDs: groupIDs}
+	return View{ID: row.ID, Name: row.Name, ConnectionType: row.ConnectionType, Endpoint: row.Endpoint, TLSMode: row.TLSMode, TLSCredentialID: row.TLSCredentialID, Enabled: row.Enabled, EngineID: row.EngineID, EngineVersion: row.EngineVersion, Status: row.Status, LastError: row.LastError, LastLatencyMS: row.LastLatencyMS, LastCheckedAt: row.LastCheckedAt, AgentVersion: row.AgentVersion, AgentConnectedAt: row.AgentConnectedAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, GroupIDs: groupIDs}
 }
 
 func (s *Service) views(ctx context.Context, rows []database.Node) ([]View, error) {
@@ -673,9 +770,21 @@ func (s *Service) views(ctx context.Context, rows []database.Node) ([]View, erro
 	for _, membership := range memberships {
 		byNode[membership.NodeID] = append(byNode[membership.NodeID], membership.GroupID)
 	}
+	var enrollments []database.AgentEnrollment
+	if len(ids) > 0 {
+		if err := s.db.WithContext(ctx).Where("node_id IN ?", ids).Find(&enrollments).Error; err != nil {
+			return nil, err
+		}
+	}
+	enrollmentByNode := make(map[string]*AgentEnrollmentView, len(enrollments))
+	for _, enrollment := range enrollments {
+		enrollmentByNode[enrollment.NodeID] = agentEnrollmentView(enrollment)
+	}
 	result := make([]View, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, view(row, byNode[row.ID]))
+		item := view(row, byNode[row.ID])
+		item.AgentEnrollment = enrollmentByNode[row.ID]
+		result = append(result, item)
 	}
 	return result, nil
 }

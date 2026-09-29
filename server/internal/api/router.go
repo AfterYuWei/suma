@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/suma/suma/server/internal/agenthub"
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/auth"
 	cdService "github.com/suma/suma/server/internal/cd"
@@ -55,6 +56,8 @@ type Dependencies struct {
 	Monitor             *monitorService.Service
 	System              *systemService.Service
 	Nodes               *nodeService.Service
+	Agents              *agenthub.Hub
+	AgentPublicURL      string
 	CookieSecure        bool
 }
 type credentials struct {
@@ -438,6 +441,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	v1.GET("/health", func(c *gin.Context) { success(c, gin.H{"status": "ok", "control_plane": "available"}) })
 	if deps.Nodes != nil {
 		registerNodeRoutes(router, v1, deps)
+		if deps.Agents != nil {
+			registerAgentRoutes(router, v1, deps)
+		}
 		registerFleetRoutes(v1, deps)
 	}
 	if deps.CD != nil {
@@ -450,7 +456,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			success(c, value)
 		})
 	}
-	v1.GET("/docker/info", requireAuth(deps.Auth), deprecatedDefaultNode(), func(c *gin.Context) {
+	v1.GET("/docker/info", requireAuth(deps.Auth), deprecatedDefaultNodeFor(deps, router), func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 		defer cancel()
 		info, err := deps.Engine.Info(ctx)
@@ -488,7 +494,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		c.JSON(http.StatusAccepted, envelope{Code: 0, Message: "success", Data: row})
 	})
-	v1.GET("/overview", requireAuth(deps.Auth), deprecatedDefaultNode(), func(c *gin.Context) {
+	v1.GET("/overview", requireAuth(deps.Auth), deprecatedDefaultNodeFor(deps, router), func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 		defer cancel()
 		value, err := deps.Monitor.Overview(ctx)
@@ -498,7 +504,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		success(c, value)
 	})
-	containers := v1.Group("/containers", requireAuth(deps.Auth), deprecatedDefaultNode())
+	containers := v1.Group("/containers", requireAuth(deps.Auth), deprecatedDefaultNodeFor(deps, router))
 	containers.GET("", func(c *gin.Context) {
 		rows, err := deps.Containers.List(c.Request.Context())
 		if err != nil {
@@ -649,7 +655,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		recordAudit(c, deps.Audit, "container.remove", "container", c.Param("id"), "success")
 		success(c, gin.H{"id": c.Param("id")})
 	})
-	images := v1.Group("/images", requireAuth(deps.Auth), deprecatedDefaultNode())
+	images := v1.Group("/images", requireAuth(deps.Auth), deprecatedDefaultNodeFor(deps, router))
 	images.GET("", func(c *gin.Context) {
 		rows, err := deps.Images.List(c.Request.Context())
 		if err != nil {
@@ -710,7 +716,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		success(c, gin.H{"id": c.Param("id")})
 	})
-	networks := v1.Group("/networks", requireAuth(deps.Auth), deprecatedDefaultNode())
+	networks := v1.Group("/networks", requireAuth(deps.Auth), deprecatedDefaultNodeFor(deps, router))
 	networks.GET("", func(c *gin.Context) {
 		rows, err := deps.Networks.ListNetworks(c.Request.Context())
 		if err != nil {
@@ -758,7 +764,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		success(c, gin.H{"id": c.Param("id")})
 	})
-	volumes := v1.Group("/volumes", requireAuth(deps.Auth), deprecatedDefaultNode())
+	volumes := v1.Group("/volumes", requireAuth(deps.Auth), deprecatedDefaultNodeFor(deps, router))
 	volumes.GET("", func(c *gin.Context) {
 		rows, err := deps.Volumes.ListVolumes(c.Request.Context())
 		if err != nil {
@@ -977,7 +983,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		success(c, gin.H{"name": c.Param("name")})
 	})
 
-	compose := v1.Group("/compose", requireAuth(deps.Auth), deprecatedDefaultNode())
+	compose := v1.Group("/compose", requireAuth(deps.Auth), deprecatedDefaultNodeFor(deps, router))
 	validateComposePolicy := func(c *gin.Context, content string) bool {
 		confirmed := strings.EqualFold(strings.TrimSpace(c.GetHeader(composeService.DockerSocketConfirmationHeader)), "true")
 		if err := composeService.ValidateComposeBindMounts(content, false, confirmed); err != nil {
@@ -1490,7 +1496,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		success(c, gin.H{"id": c.Param("id")})
 	})
-	v1.POST("/system/prune", requireAuth(deps.Auth), deprecatedDefaultNode(), func(c *gin.Context) {
+	v1.POST("/system/prune", requireAuth(deps.Auth), deprecatedDefaultNodeFor(deps, router), func(c *gin.Context) {
 		var input struct {
 			Confirm string `json:"confirm"`
 		}
@@ -1506,7 +1512,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		recordAudit(c, deps.Audit, "system.prune", "system", "local", "success")
 		c.JSON(http.StatusAccepted, envelope{Code: 0, Message: "success", Data: row})
 	})
-	ws := router.Group("/ws/containers", requireAuth(deps.Auth), deprecatedDefaultNode())
+	ws := router.Group("/ws/containers", requireAuth(deps.Auth), deprecatedDefaultNodeFor(deps, router))
 	ws.GET("/:id/logs", func(c *gin.Context) { streamLogs(c, deps.Containers) })
 	ws.GET("/:id/stats", func(c *gin.Context) { streamStats(c, deps.Containers) })
 	ws.GET("/:id/terminal", func(c *gin.Context) { streamTerminal(c, deps.Containers) })

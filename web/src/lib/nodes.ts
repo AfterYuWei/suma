@@ -3,14 +3,17 @@ import { useUIStore } from '../stores/ui'
 export interface DockerNode {
   id: string
   name: string
-  connection_type: 'unix' | 'tcp'
+  connection_type: 'unix' | 'tcp' | 'agent'
   endpoint: string
   tls_mode: 'required' | 'disabled'
   tls_credential_id?: number
   enabled: boolean
   engine_id?: string
   engine_version?: string
-  status: 'unknown' | 'online' | 'offline'
+  status: 'unknown' | 'pairing' | 'online' | 'offline' | 'incompatible'
+  agent_version?: string
+  agent_connected_at?: string
+  agent_enrollment?: { node_id: string; expires_at: string; consumed_at?: string; last_error?: string }
   last_error?: string
   last_latency_ms?: number
   last_checked_at?: string

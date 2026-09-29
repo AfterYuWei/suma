@@ -2,7 +2,7 @@
 
 ## System
 
-SUMA is a single Go process serving the compiled React application, REST APIs, and WebSockets. Its node runtime registry connects to mounted Unix sockets or direct Docker TCP APIs and keeps only SUMA-owned records in SQLite.
+SUMA is a single Go control-plane process serving the compiled React application, REST APIs, and WebSockets. Its node registry connects to mounted Unix sockets, direct Docker TCP APIs, or outbound Agent connections and keeps only SUMA-owned records in SQLite.
 
 ```text
 Browser -- HTTP / WebSocket --> Go monolith
@@ -14,12 +14,15 @@ Browser -- HTTP / WebSocket --> Go monolith
                                  |-- GORM --> SQLite
                                  `-- node registry --> Docker SDK / compose CLI --> unix:// socket(s)
                                                                    `-----------> tcp:// mTLS endpoint(s)
+                                                                   `-----------> private Unix proxy <-- WSS <-- Agent --> Docker Unix socket
                                               `--> Git CLI --> configured Git remote
 ```
 
 ## Server boundaries
 
 `server/internal/api` wires handlers and transport concerns. Feature services own business policy. `server/internal/docker` is the sole Docker SDK boundary. `server/internal/compose` is the sole Compose process boundary. `server/internal/git` is the sole Git process and Git-credential boundary. `server/internal/cd` owns synchronization, release records with fixed Git/config identity, deployment-source policy, deployment serialization, drift, webhook verification, and rollback policy. Handlers never import Docker SDK types and do not invoke Git or Compose commands directly.
+
+The Agent is a separate minimal Go binary and container. It opens outbound HTTPS/WSS to SUMA, authenticates with a node-specific credential, and forwards raw Docker socket connections. One control WebSocket requests new streams; one data WebSocket carries each Docker connection with bounded frames, half-close, cancellation, and backpressure. The control plane's proxy Unix sockets live in a private temporary directory. Compose and CD still execute on the control plane and use the same proxy as the Docker SDK. Agent nodes follow TCP remote-source and absolute bind-path rules.
 
 Runtime Docker resources and Project inventory are not mirrored into SQLite. SQLite stores node definitions/status summaries, credential grants, global Delivery Projects and target snapshots, per-node deployments, tasks, and audit history. Each Docker Engine remains authoritative for current resources. SUMA's first-level runtime object is a backend/scope-aware `Project`; today `backend=compose` maps to Docker's official Compose Project. Compose Projects are discovered by grouping `com.docker.compose.project`, with Services and Container Instances nested beneath that boundary. SUMA-managed Projects without remaining containers are discovered from directories below the node Compose root. A runtime client is captured when work starts; updating or disabling a node prevents new work without invalidating an in-flight task's client.
 
@@ -31,7 +34,7 @@ Container file management follows the same handler → `containerfiles` service 
 
 Compose and continuous delivery are separate aggregates with independent lifecycles:
 
-- A SUMA-managed `Project backend=compose` owns editable `compose.yml`, `.env`, and non-secret `.suma/project.json` files below the configured Compose root. An external Compose Project is taken over as one Project, never per Container. Local Unix nodes prefer the complete ordered source set only after path, symlink, file, size, and associated-file checks; any failure falls back for the whole Project to Inspect-based reconstruction. TCP nodes never read remote label paths. Takeover atomically saves configuration without deploying or changing existing containers.
+- A SUMA-managed `Project backend=compose` owns editable `compose.yml`, `.env`, and non-secret `.suma/project.json` files below the configured Compose root. An external Compose Project is taken over as one Project, never per Container. Local Unix nodes prefer the complete ordered source set only after path, symlink, file, size, and associated-file checks; any failure falls back for the whole Project to Inspect-based reconstruction. TCP and Agent nodes never read remote label paths. Takeover atomically saves configuration without deploying or changing existing containers.
 - Optional shadow preview is a temporary Compose Project, not a new domain object. A strict eligibility policy permits only isolatable stateless drafts, rewrites owned network names into the temporary namespace, uses Tasks for start/cleanup, and provides TTL/page-leave/restart recovery. It never switches production traffic.
 - A Delivery Project owns repository configuration, synchronization policy, credentials, releases, approvals, deployment history, drift, and rollback state.
 - Creating or deleting either project type never implicitly creates or deletes the other.

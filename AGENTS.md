@@ -2,13 +2,13 @@
 
 ## Scope
 
-SUMA V2 is a monolithic, agentless multi-node Docker management application. Nodes connect only through mounted `unix://` sockets or direct `tcp://` Docker APIs. Do not implement remote agents, SSH execution, clusters, Swarm, Kubernetes, SSO, monitoring platforms, marketplaces, or automated backups. Record other ideas under Future in `PLANS.md`.
+SUMA is a monolithic multi-node Docker management control plane. Nodes connect through mounted `unix://` sockets, direct `tcp://` Docker APIs, or an outbound HTTPS/WSS Agent that forwards the local Docker socket. The Agent does not run Compose or arbitrary host commands. Do not implement SSH execution, clusters, Swarm, Kubernetes, SSO, monitoring platforms, marketplaces, or automated backups. Record other ideas under Future in `PLANS.md`.
 
 ## Required stack
 
 - Web: React 19, TypeScript, Vite, Tailwind CSS v4, shadcn/ui conventions, Base UI, TanStack Router, TanStack Query, Zustand, Lucide React, Motion, Monaco Editor, xterm.js, and ECharts.
 - Server: Go, Gin, GORM, SQLite, Docker Go SDK, WebSocket, and the `docker compose` CLI.
-- Deployment: one monolith container, persistent application data, Compose, and one or more mounted Unix sockets and/or mTLS Docker TCP endpoints.
+- Deployment: one control-plane container with persistent application data, Compose, and optional Agent containers on remote Docker hosts. Unix sockets and mTLS Docker TCP endpoints remain supported.
 - TCP defaults to mutual TLS. Plaintext TCP is permitted only for loopback, private-network, or Tailscale IP endpoints and requires typed endpoint confirmation; never expose an unauthenticated Docker API to a public network. Do not add Redis, message brokers, microservices, Swarm, or Kubernetes.
 
 ## Architecture
@@ -35,7 +35,8 @@ SUMA V2 is a monolithic, agentless multi-node Docker management application. Nod
 - Never log passwords, registry secrets, session tokens, or sensitive environment values. Mask likely secrets by default in the UI.
 - Confirm destructive actions. Volume deletion must explicitly warn about data loss and require the volume name.
 - Validate identifiers and paths. Compose project files must remain below the configured Compose root.
-- TCP-node bind mounts must use non-interpolated absolute sources. TLS and registry material must use short-lived private temporary files and never enter logs.
+- TCP and Agent node bind mounts must use non-interpolated absolute sources. TLS and registry material must use short-lived private temporary files and never enter logs.
+- Agent enrollment tokens expire after ten minutes and are single-use. Store only token and Agent credential hashes in SQLite; never log either secret. Agent transport requires verified HTTPS/WSS. Treat the mounted Docker socket as full Engine control even when mounted read-only.
 
 ## Testing and progress
 

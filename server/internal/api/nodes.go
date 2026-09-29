@@ -440,7 +440,7 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 	}
 	validatePolicy := func(c *gin.Context, view node.View, content string) error {
 		confirmed := strings.EqualFold(strings.TrimSpace(c.GetHeader(composeService.DockerSocketConfirmationHeader)), "true")
-		return composeService.ValidateComposeBindMounts(content, view.ConnectionType == node.ConnectionTCP, confirmed)
+		return composeService.ValidateComposeBindMounts(content, view.ConnectionType != node.ConnectionUnix, confirmed)
 	}
 	routes.GET("", func(c *gin.Context) {
 		current, _, ok := service(c)
@@ -766,7 +766,7 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 	}
 	validatePolicy := func(c *gin.Context, view node.View, content string) error {
 		confirmed := strings.EqualFold(strings.TrimSpace(c.GetHeader(composeService.DockerSocketConfirmationHeader)), "true")
-		return composeService.ValidateComposeBindMounts(content, view.ConnectionType == node.ConnectionTCP, confirmed)
+		return composeService.ValidateComposeBindMounts(content, view.ConnectionType != node.ConnectionUnix, confirmed)
 	}
 	projects.GET("", func(c *gin.Context) {
 		current, _, ok := service(c)
@@ -1569,6 +1569,9 @@ func registerNodeVolumeRoutes(group *gin.RouterGroup, deps Dependencies) {
 func coLocatedNode(view node.View) bool {
 	if view.ConnectionType == node.ConnectionUnix {
 		return true
+	}
+	if view.ConnectionType != node.ConnectionTCP {
+		return false
 	}
 	endpoint, err := url.Parse(view.Endpoint)
 	if err != nil {

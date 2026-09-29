@@ -2,18 +2,18 @@
 
 **语言：[简体中文](README.md) | [English](doc/README.en.md)**
 
-SUMA 是一个面向多节点 Docker 管理的单体控制平面：通过一个 Web 界面统一管理多个 Docker 引擎，无需在服务器上部署任何 Agent，也不依赖 SSH 登录或 Swarm/Kubernetes。适合个人服务器、HomeLab、NAS、VPS 与小型团队。
+SUMA 是一个面向多节点 Docker 管理的单体控制平面：通过一个 Web 界面统一管理多个 Docker 引擎。可直接连接 Docker，也可在远端部署主动回连的 Agent；不依赖 SSH 登录或 Swarm/Kubernetes。适合个人服务器、HomeLab、NAS、VPS 与小型团队。
 
 ## 功能特性
 
 ### 多节点引擎接入
 
-- 无 Agent 接入：挂载 Unix socket 直连本机/宿主机引擎，或添加远程 Docker TCP 端点
+- 三种节点接入：挂载 Unix socket、直连 Docker TCP，或部署主动通过 HTTPS/WSS 回连的 Agent
 - TCP 默认强制双向 TLS（mTLS）；明文 TCP 仅允许回环、私有内网或 Tailscale IP，且保存时必须再次输入目标 IP 确认风险
 - 全局节点选择器：Header 一键切换当前操作节点，资源、Projects、任务全部跟随
 - 多归属节点 Group：节点可加入多个 Group 或不属于任何 Group；Group 统一筛选概览和节点候选，但只有显式选择节点才会切换 Docker 上下文
 - 自动状态探测：每 30 秒探测所有节点在线状态与延迟，异常自动降级显示
-- 远端 bind 安全校验：TCP 节点上的 Compose 挂载源必须使用不可插值的绝对路径
+- 远端 bind 安全校验：TCP 和 Agent 节点上的 Compose 挂载源必须使用不可插值的绝对路径
 
 ### Fleet 总览
 
@@ -31,7 +31,7 @@ SUMA 是一个面向多节点 Docker 管理的单体控制平面：通过一个 
 
 - 统一 Projects 入口：当前一个 SUMA Project 对应一个 Docker Compose Project；通过 backend badge 与 capability 控制操作
 - Project 级发现：按 `com.docker.compose.project` 聚合全部 Service 与 Container Instance，正确识别 scale、drift、one-off 和 orphan，不依赖运行态数据库登记
-- Project 接管：Local 节点优先安全规范化完整的多文件源配置；任一文件失败则整个 Project 回退到运行态重建；TCP 节点始终只使用 Inspect 元数据
+- Project 接管：Local 节点优先安全规范化完整的多文件源配置；任一文件失败则整个 Project 回退到运行态重建；TCP 与 Agent 节点始终只使用 Inspect 元数据
 - 环境变量复核：逐项选择写入 compose.yml、明文 `.env` 或排除；镜像默认 ENV 自动排除，敏感值默认遮罩
 - 接管前可在 Monaco 编辑并校验；完成接管只原子保存配置，不会立即拉取、停止或重建现有容器
 - 可选隔离预演：仅对严格可隔离的无状态草稿创建临时 `suma-preview-*` Project，展示健康、状态和日志，接受或拒绝后清理，不切换生产流量
@@ -125,6 +125,7 @@ docker logs suma 2>&1 | sed -n 's/.*"msg":"SUMA initialization key".*"setup_toke
 | `SUMA_BROWSER_ORIGIN` | 空 | 可选的浏览器来源初值（如 `https://suma.example.com`）；设置页保存后立即覆盖此初值 |
 | `SUMA_TRUSTED_PROXIES` | 空 | 可选的可信代理 IP/CIDR 初值，逗号分隔；设置页保存后立即覆盖此初值 |
 | `SUMA_DOCKER_HOST` | `unix:///var/run/docker.sock` | 首次引导默认节点的引擎地址 |
+| `SUMA_AGENT_PUBLIC_URL` | 空 | Agent 配对前必填；Agent 可访问的 SUMA HTTPS 地址，如 `https://suma.example.com` |
 
 安全设置中的“浏览器来源”留空时，HTTP 写操作和 WebSocket 握手要求来源的主机及端口与请求一致；填写后还要求协议一致。填写值须与当前设置页的来源一致。可信代理留空时，SUMA 忽略 `X-Forwarded-For` 并使用直连 IP；填写时只信任列出的代理，并由右向左解析代理链。两项均可在设置页清空，保存后立即生效。代理应保留原始 `Host` 并正确追加或覆盖 `X-Forwarded-For`。
 
@@ -168,10 +169,33 @@ npm run build:demo
    - 可先创建一个或多个节点 Group，并在节点表单中多选归属；Group 只用于组织和筛选，不代表集群或批量执行目标；
    - **Unix Socket**：把目标机的 `/var/run/docker.sock` 挂载进 SUMA 容器的某个路径后填入该路径；
    - **Docker TCP**：填写远端端点，例如 `tcp://192.168.1.99:2376`，选择 mTLS 并绑定 Docker TLS 凭据。
+   - **Agent**：先设置 `SUMA_AGENT_PUBLIC_URL`，在节点页生成 10 分钟有效的一次性令牌；可选择现有 Unix/TCP 节点原位迁移，节点 ID 与关联保持不变。
 2. 点击「测试连接」验证连通性与延迟。
-3. 为 TCP 节点配置 bind 目录白名单，约束其 Compose 项目能挂载的宿主目录范围。
+3. TCP 与 Agent 节点的 Compose bind 源必须是目标宿主机上的不可插值绝对路径。
 
-> 重要安全提醒：永远不要在网络上暴露无认证的 Docker API（明文 2375）。远程接入一律使用 mTLS。公网部署请务必置于 HTTPS 反向代理之后，并通过设置开启 `SUMA_COOKIE_SECURE=true`。
+### Agent Docker 部署
+
+在 Agent 主机创建权限为 `0700` 的 `/etc/suma-agent` 目录，把节点页显示的一次性令牌写入权限为 `0600` 的 `/etc/suma-agent/enrollment-token` 文件（不要放进代码仓库），并把下列 Compose 配置保存为 `docker-compose.yml`。将 SUMA 地址换成实际可访问的 HTTPS 地址；反向代理需支持 WebSocket 升级与长连接。私有 CA 可只读挂载到容器并设置 `SUMA_AGENT_CA_FILE`，不能跳过证书校验。
+
+```yaml
+services:
+  suma-agent:
+    image: ghcr.io/afteryuwei/suma-agent:stable # 生产环境建议固定与 SUMA 相同的版本标签
+    restart: unless-stopped
+    environment:
+      SUMA_AGENT_SERVER_URL: https://suma.example.com
+      SUMA_AGENT_TOKEN_FILE: /run/secrets/enrollment_token
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /etc/suma-agent/enrollment-token:/run/secrets/enrollment_token:ro
+      - suma-agent-data:/var/lib/suma-agent
+volumes:
+  suma-agent-data:
+```
+
+运行 `docker compose up -d`，确认节点在线后清空宿主机令牌文件的内容，但保留空文件供容器重启时挂载；持久卷保存后续重连凭据。撤销凭据后，如需重新配对，将新令牌写入该文件并重启 Agent，旧身份认证失败时会自动用新令牌注册。Agent 只转发 Docker API；Compose 文件与 CLI 仍在 SUMA 控制端，远端 bind 源必须是目标主机上的明确绝对路径。
+
+> 重要安全提醒：永远不要在网络上暴露无认证的 Docker API（明文 2375）。TCP 远程接入使用 mTLS；Agent 接入使用经验证的 HTTPS/WSS。Docker socket 即使以 `:ro` 挂载，仍授予 Agent 完整的 Docker 管理权限。公网 SUMA 请置于 HTTPS 反向代理之后，并设置 `SUMA_COOKIE_SECURE=true`。
 
 ## 数据与备份
 

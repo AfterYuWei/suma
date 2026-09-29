@@ -20,6 +20,7 @@ type Config struct {
 	BrowserOrigin  string
 	TrustedProxies string
 	SessionMaxAge  time.Duration
+	AgentPublicURL string
 }
 
 func Load() Config {
@@ -38,6 +39,7 @@ func Load() Config {
 		BrowserOrigin:  env("SUMA_BROWSER_ORIGIN", ""),
 		TrustedProxies: env("SUMA_TRUSTED_PROXIES", ""),
 		SessionMaxAge:  24 * time.Hour,
+		AgentPublicURL: env("SUMA_AGENT_PUBLIC_URL", ""),
 	}
 }
 

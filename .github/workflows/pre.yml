@@ -24,7 +24,9 @@ jobs:
 
       # GHCR 要求镜像名全小写；仓库属主若含大写需转换
       - name: Resolve image reference
-        run: echo "ref=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/suma" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "ref=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/suma" >> "$GITHUB_OUTPUT"
+          echo "agent_ref=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/suma-agent" >> "$GITHUB_OUTPUT"
         id: image
 
       - name: Set up Docker Buildx
@@ -53,6 +55,27 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Derive Agent tags
+        id: agent-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.agent_ref }}
+          tags: |
+            type=sha,prefix=,format=short
+            type=raw,value=pre
+
+      - name: Build and push Agent
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.agent
+          push: true
+          tags: ${{ steps.agent-meta.outputs.tags }}
+          labels: ${{ steps.agent-meta.outputs.labels }}
+          build-args: SUMA_AGENT_VERSION=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

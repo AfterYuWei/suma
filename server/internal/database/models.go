@@ -111,8 +111,30 @@ type Node struct {
 	LastError            string     `json:"last_error,omitempty"`
 	LastLatencyMS        int64      `json:"last_latency_ms,omitempty"`
 	LastCheckedAt        *time.Time `json:"last_checked_at,omitempty"`
+	AgentVersion         string     `gorm:"size:64" json:"agent_version,omitempty"`
+	AgentConnectedAt     *time.Time `json:"agent_connected_at,omitempty"`
 	CreatedAt            time.Time  `json:"created_at"`
 	UpdatedAt            time.Time  `json:"updated_at"`
+}
+
+// AgentEnrollment reserves either a new node or an in-place migration.
+// Only hashes of short-lived enrollment tokens are stored.
+type AgentEnrollment struct {
+	NodeID     string    `gorm:"primaryKey;size:64"`
+	TokenHash  string    `gorm:"uniqueIndex;size:64;not null"`
+	ExpiresAt  time.Time `gorm:"not null"`
+	ConsumedAt *time.Time
+	LastError  string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+type AgentCredential struct {
+	NodeID     string `gorm:"primaryKey;size:64"`
+	SecretHash string `gorm:"size:64;not null"`
+	RevokedAt  *time.Time
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // NodeGroup is an organizational layer above Docker nodes. Groups never own

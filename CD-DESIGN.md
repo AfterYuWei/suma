@@ -10,7 +10,7 @@ This capability is CD only. SUMA does not:
 - run unit, integration, end-to-end, or security tests;
 - build, scan, sign, or publish container images;
 - orchestrate GitHub Actions, GitLab pipelines, build runners, or build-status gates;
-- deploy through remote agents, SSH, clusters, Swarm, or Kubernetes.
+- execute Compose on remote Agents or deploy through SSH, clusters, Swarm, or Kubernetes. Agent nodes only forward Docker API traffic; Compose still runs in the SUMA control plane.
 
 An external build system may create the referenced images, but SUMA neither integrates with nor depends on that system. Its contract begins when a repository commit contains valid Compose files that reference pullable images.
 

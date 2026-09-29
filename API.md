@@ -2,7 +2,7 @@
 
 All REST responses use `{ "code": 0, "message": "success", "data": ... }`. Errors use a nonzero code and an appropriate HTTP status. Authentication uses the `suma_session` HttpOnly cookie.
 
-Cookie-authenticated `POST`, `PUT`, `PATCH`, and `DELETE` requests and administrator initialization require an `Origin` matching the request host and port. When `security.browser_origin` is configured, the scheme must also match. JSON request bodies require `Content-Type: application/json`; avatar upload remains multipart, and signed Git webhooks use their own verification. Password login and administrator initialization return `429` with `Retry-After` when their short-term IP limits are reached. WebSocket handshakes require the same allowed `Origin`.
+Cookie-authenticated `POST`, `PUT`, `PATCH`, and `DELETE` requests and administrator initialization require an `Origin` matching the request host and port. When `security.browser_origin` is configured, the scheme must also match. JSON request bodies require `Content-Type: application/json`; avatar upload remains multipart, and signed Git webhooks use their own verification. Password login and administrator initialization return `429` with `Retry-After` when their short-term IP limits are reached. Browser WebSocket handshakes require the same allowed `Origin`; Agent WebSockets use dedicated bearer credentials and reject browser `Origin` headers.
 
 ## REST `/api/v1`
 
@@ -15,6 +15,17 @@ Node-aware clients use these routes:
 - `POST /nodes/:nodeID/system/prune`
 - `GET /nodes/:nodeID/tasks`, `GET /nodes/:nodeID/tasks/:taskID`, `GET /nodes/:nodeID/tasks/:taskID/{logs|steps}`, `POST /nodes/:nodeID/tasks/:taskID/cancel`
 - `GET /nodes/:nodeID/audit-logs`
+
+### Agent pairing and transport
+
+An administrator sets `SUMA_AGENT_PUBLIC_URL` to the externally reachable HTTPS origin before issuing tokens. Agent connections require trusted TLS and do not use browser cookies.
+
+- `POST /agent-enrollments` accepts `{ "name": "edge", "group_ids": [1] }` for a new node or `{ "node_id": "existing-node", "name": "ignored" }` for an in-place migration. It returns the node ID, a one-time 256-bit `token`, `expires_at`, and `public_url`; the token is never returned again.
+- `GET /agent-enrollments/:nodeID` returns non-secret enrollment status; `POST /agent-enrollments/:nodeID/reissue` invalidates the old token and returns a new one; `DELETE /agent-enrollments/:nodeID` cancels pairing.
+- `POST /nodes/:nodeID/agent/revoke` revokes the Agent credential and disconnects its streams. Re-pairing requires a new token.
+- `POST /agents/enroll` accepts Agent protocol/version JSON and the one-time token in `Authorization: Bearer`; it exchanges the token once for a node-specific reconnect credential. `GET /ws/agents/control` and `GET /ws/agents/streams/:streamID` use that credential plus `X-SUMA-Agent-Node-ID`, `X-SUMA-Agent-Protocol`, and `X-SUMA-Agent-Version` headers. The control channel opens per-connection data streams; these routes are not browser APIs.
+
+Agent nodes expose `connection_type: "agent"`, server-managed `agent://<nodeID>` endpoints, `agent_version`, `agent_connected_at`, and optional `agent_enrollment` status. New nodes remain `pairing` until Docker Ping/Info and Engine ID uniqueness pass; an unsupported protocol is reported as `incompatible`. In-place migration changes the original node only after the Agent Engine ID matches; all existing node references remain stable. Agent Compose and takeover follow the same remote-source and bind-path rules as TCP nodes.
 
 `GET|PUT /settings` includes optional `security.browser_origin` and `security.trusted_proxies` strings. Empty browser origin uses exact host and port matching; a nonempty value must match the current page origin. Empty trusted proxies ignores forwarded client IP headers; otherwise use a comma-separated list of proxy IPs/CIDRs. Both values apply immediately after a successful `PUT`. The matching environment variables `SUMA_BROWSER_ORIGIN` and `SUMA_TRUSTED_PROXIES` supply initial values until a setting is saved.
 
@@ -36,7 +47,7 @@ Paths must be normalized container-absolute paths. Symlink traversal and editing
 
 Compose Project names and managed directories must match Docker Compose's lowercase native `[a-z0-9][a-z0-9_-]*` identity. Mixed-case input is rejected instead of silently rewritten, and runtime ownership is matched by exact native name.
 
-Compose requests containing a `/var/run/docker.sock` bind are rejected by default. After two explicit UI warnings, the confirmed request carries `X-SUMA-Allow-Docker-Socket: true`; this authorizes only that request. TCP-node binds must still use non-interpolated absolute source paths.
+Compose requests containing a `/var/run/docker.sock` bind are rejected by default. After two explicit UI warnings, the confirmed request carries `X-SUMA-Allow-Docker-Socket: true`; this authorizes only that request. TCP and Agent node binds must still use non-interpolated absolute source paths.
 
 The resource routes listed below remain deprecated aliases for the migrated default node. `GET /health` reports only control-plane/database health; a disconnected Docker node does not make it fail. Legacy `node_id` filters validate that the node exists. Global `GET /tasks` and `GET /audit-logs` accept `scope=control_plane|all` and default to `control_plane`.
 
@@ -85,7 +96,7 @@ SUMA uses `Project` as the first-level application/orchestration object. Current
 
 `GET /nodes/:nodeID/projects` derives Compose Projects from Docker `com.docker.compose.*` labels instead of runtime rows in SQLite. Each response includes backend/scope identity, `source`, `managed`, capabilities, working-directory hints, and aggregated Service/Container Instance counts. SUMA-owned directories below the node Compose root keep a managed Project visible after `docker compose down` removes all labeled containers.
 
-Project Takeover always operates on the entire Docker Compose Project. Preview aggregates every Service and Container Instance, detects scale/drift/one-off/orphan state, then either normalizes every safely accessible Local source file in label order or falls back for the whole Project to Inspect-based runtime reconstruction. Drafts remove normalized nulls, injected `com.docker.compose.*` labels, default port/bind/stop fields, service-name self aliases, implicit default-network declarations, and unused observed resources; simple long-form published ports are rendered in short form. Runtime reconstruction also subtracts image-owned command, entrypoint, user, working directory, environment, healthcheck, stop signal, exposed ports, and anonymous image volumes, plus engine-generated hostname/private IPC/default shared memory. Explicit custom values and named resources remain intact. TCP nodes never read remote label paths. Render applies per-variable `compose`/`.env`/exclude choices; validate checks the unsaved draft. Final takeover requires the exact native Project Name and current fingerprint, atomically writes managed files, and never calls pull/up/down.
+Project Takeover always operates on the entire Docker Compose Project. Preview aggregates every Service and Container Instance, detects scale/drift/one-off/orphan state, then either normalizes every safely accessible Local source file in label order or falls back for the whole Project to Inspect-based runtime reconstruction. Drafts remove normalized nulls, injected `com.docker.compose.*` labels, default port/bind/stop fields, service-name self aliases, implicit default-network declarations, and unused observed resources; simple long-form published ports are rendered in short form. Runtime reconstruction also subtracts image-owned command, entrypoint, user, working directory, environment, healthcheck, stop signal, exposed ports, and anonymous image volumes, plus engine-generated hostname/private IPC/default shared memory. Explicit custom values and named resources remain intact. TCP and Agent nodes never read remote label paths. Render applies per-variable `compose`/`.env`/exclude choices; validate checks the unsaved draft. Final takeover requires the exact native Project Name and current fingerprint, atomically writes managed files, and never calls pull/up/down.
 
 The takeover body carries `mode`: `draft` (default) claims the reviewed generated draft, while `manual` claims a `compose.yml` and `.env` the operator wrote directly, skipping the generated draft and environment review. Both modes require the current preview fingerprint and pass the same content policy and `docker compose config` validation; `manual` is recorded as `takeover_source: manual` in the managed metadata and audited as `project.takeover_manual`. In both modes, and in `takeover/validate`, a declared top-level `name` or a `COMPOSE_PROJECT_NAME` entry in `.env` must equal the Project name, because the managed directory is deployed under that name.
 
