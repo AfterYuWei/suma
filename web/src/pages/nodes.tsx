@@ -36,7 +36,7 @@ const blank = (groupID?: number): NodeFormValues => ({ name: '', connection_type
 
 const connectionLabels: Record<string, string> = { unix: 'Unix Socket', tcp: 'Docker TCP', agent: 'Agent (WSS)' }
 
-const agentCompose = (publicURL: string, token: string) => `services:\n  suma-agent:\n    image: ghcr.io/afteryuwei/suma-agent:stable\n    restart: unless-stopped\n    environment:\n      SUMA_AGENT_SERVER_URL: ${publicURL}\n      SUMA_AGENT_TOKEN: ${token}\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock:ro\n      - suma-agent-data:/var/lib/suma-agent\nvolumes:\n  suma-agent-data:\n`
+const agentCompose = (publicURL: string, token: string) => `services:\n  suma-agent:\n    image: ghcr.io/afteryuwei/suma-agent:stable\n    container_name: suma-agent\n    restart: unless-stopped\n    environment:\n      SUMA_AGENT_SERVER_URL: ${publicURL}\n      SUMA_AGENT_TOKEN: ${token}\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock:ro\n      - suma-agent-data:/var/lib/suma-agent\nvolumes:\n  suma-agent-data:\n`
 
 export function NodesPage() {
   const { language } = useI18n()

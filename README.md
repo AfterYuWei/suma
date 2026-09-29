@@ -181,6 +181,7 @@ npm run build:demo
 services:
   suma-agent:
     image: ghcr.io/afteryuwei/suma-agent:stable # 生产环境建议固定与 SUMA 相同的版本标签
+    container_name: suma-agent
     restart: unless-stopped
     environment:
       SUMA_AGENT_SERVER_URL: https://suma.example.com

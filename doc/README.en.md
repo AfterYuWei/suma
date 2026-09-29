@@ -161,6 +161,7 @@ The Compose file generated on the Nodes page already includes the one-time token
 services:
   suma-agent:
     image: ghcr.io/afteryuwei/suma-agent:stable # pin the same release as SUMA in production
+    container_name: suma-agent
     restart: unless-stopped
     environment:
       SUMA_AGENT_SERVER_URL: https://suma.example.com
