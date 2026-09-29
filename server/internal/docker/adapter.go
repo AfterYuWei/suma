@@ -814,9 +814,17 @@ func (a *Adapter) ListImages(ctx context.Context) ([]imagedomain.Summary, error)
 	if err != nil {
 		return nil, fmt.Errorf("list images: %w", err)
 	}
+	containers, err := a.client.ContainerList(ctx, dockercontainer.ListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("list containers for image usage: %w", err)
+	}
+	usage := make(map[string]int64, len(containers))
+	for _, container := range containers {
+		usage[container.ImageID]++
+	}
 	result := make([]imagedomain.Summary, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, imagedomain.Summary{ID: row.ID, Tags: row.RepoTags, Digests: row.RepoDigests, Size: row.Size, Created: time.Unix(row.Created, 0), Containers: row.Containers, Labels: row.Labels})
+		result = append(result, imagedomain.Summary{ID: row.ID, Tags: row.RepoTags, Digests: row.RepoDigests, Size: row.Size, Created: time.Unix(row.Created, 0), Containers: usage[row.ID], Labels: row.Labels})
 	}
 	return result, nil
 }

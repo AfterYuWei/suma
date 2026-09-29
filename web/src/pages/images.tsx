@@ -67,7 +67,7 @@ export function ImagesPage() {
     onError: (error) => setOperationError(error.message),
   })
   const tag = async (row: Image) => { const value = await promptDialog({ title: t('newImageTag'), description: t('tagDescription'), confirmLabel: t('tag'), input: { label: t('newImageTag'), initialValue: row.tags?.[0] || 'repository:tag' } }); if (!value) return; await api(nodePath(nodeID, `/images/${encodeURIComponent(row.id)}/tag`), { method: 'POST', body: JSON.stringify({ reference: value }) }); await client.invalidateQueries({ queryKey: ['images', nodeID] }) }
-  const removeImage = async (row: Image) => { const name = row.tags?.[0] || row.id; if (await confirmDialog({ title: t('removeImage'), description: t('removeImageDescription', { name }), confirmLabel: t('remove'), danger: true })) remove.mutate(row.id) }
+  const removeImage = async (row: Image) => { if (row.containers !== 0) return; const name = row.tags?.[0] || row.id; if (await confirmDialog({ title: t('removeImage'), description: t('removeImageDescription', { name }), confirmLabel: t('remove'), danger: true })) remove.mutate(row.id) }
   const size = (bytes: number) => `${(bytes / 1024 ** 2).toFixed(1)} MB`
   const credentialOptions = [{ value: '', label: zh ? '不使用凭据（公开镜像）' : 'No credential (public image)' }, ...(credentials.data || []).filter((row) => row.authorized_node_ids?.includes(nodeID)).map((row) => ({ value: String(row.id), label: `${row.name} · ${row.server_address}` }))]
   const rows = (query.data ?? []).filter((row) => `${row.id} ${(row.tags ?? []).join(' ')} ${(row.digests ?? []).join(' ')}`.toLowerCase().includes(filter.toLowerCase()))
@@ -77,12 +77,13 @@ export function ImagesPage() {
   const trackedPull = pullTasks.data?.find((row) => row.id === pullTaskID) ?? (pull.data?.id === pullTaskID ? pull.data : undefined)
   const pullRunning = !!trackedPull && (trackedPull.status === 'pending' || trackedPull.status === 'running')
   const pullSteps = useQuery({ queryKey: ['task-steps', nodeID, pullTaskID], queryFn: () => api<TaskStep[]>(nodePath(nodeID, `/tasks/${encodeURIComponent(pullTaskID)}/steps`)), enabled: !!pullTaskID, refetchInterval: pullRunning ? 1_000 : false })
-  const selectedRows = query.data?.filter((row) => selected.has(row.id)) ?? []
-  const allSelected = pagination.items.length > 0 && pagination.items.every((row) => selected.has(row.id))
-  const someSelected = !allSelected && pagination.items.some((row) => selected.has(row.id))
+  const selectedRows = query.data?.filter((row) => row.containers === 0 && selected.has(row.id)) ?? []
+  const pageRemovableRows = pagination.items.filter((row) => row.containers === 0)
+  const allSelected = pageRemovableRows.length > 0 && pageRemovableRows.every((row) => selected.has(row.id))
+  const someSelected = !allSelected && pageRemovableRows.some((row) => selected.has(row.id))
 
-  const toggleAll = (checked: boolean | 'indeterminate') => setSelected((current) => { const next = new Set(current); for (const row of pagination.items) { if (checked === true) next.add(row.id); else next.delete(row.id) }; return next })
-  const toggleOne = (id: string, checked: boolean) => setSelected((current) => { const next = new Set(current); if (checked) next.add(id); else next.delete(id); return next })
+  const toggleAll = (checked: boolean | 'indeterminate') => setSelected((current) => { const next = new Set(current); for (const row of pageRemovableRows) { if (checked === true) next.add(row.id); else next.delete(row.id) }; return next })
+  const toggleOne = (row: Image, checked: boolean) => { if (row.containers !== 0) return; setSelected((current) => { const next = new Set(current); if (checked) next.add(row.id); else next.delete(row.id); return next }) }
   const openPull = () => {
     if (!pullRunning) {
       setPullTaskID('')
@@ -106,8 +107,17 @@ export function ImagesPage() {
     }
   }, [client, nodeID, trackedPull?.status])
 
-  const selectionBar = selected.size > 0 && <div className="flex flex-wrap items-center gap-2">
-    <Badge variant="outline">{selected.size} {zh ? '已选' : 'selected'}</Badge>
+  useEffect(() => {
+    if (!query.data) return
+    const removable = new Set(query.data.filter((row) => row.containers === 0).map((row) => row.id))
+    setSelected((current) => {
+      const next = new Set([...current].filter((id) => removable.has(id)))
+      return next.size === current.size ? current : next
+    })
+  }, [query.data])
+
+  const selectionBar = selectedRows.length > 0 && <div className="flex flex-wrap items-center gap-2">
+    <Badge variant="outline">{selectedRows.length} {zh ? '已选' : 'selected'}</Badge>
     <Button size="sm" variant="destructive" disabled={batchRemove.isPending} onClick={() => void removeSelected()}>{batchRemove.isPending ? <Spinner /> : <Trash2 />}{zh ? '删除' : 'Remove'}</Button>
   </div>
 
@@ -133,7 +143,7 @@ export function ImagesPage() {
           <TableHeader>
             <TableRow>
               <TableHead className="w-10 pl-3">
-                <Checkbox checked={allSelected} indeterminate={someSelected} onCheckedChange={(checked) => toggleAll(checked)} aria-label={allSelected ? (zh ? '取消选择本页' : 'Deselect this page') : (zh ? '选择本页' : 'Select this page')} />
+                <Checkbox checked={allSelected} indeterminate={someSelected} disabled={pageRemovableRows.length === 0} onCheckedChange={(checked) => toggleAll(checked)} aria-label={allSelected ? (zh ? '取消选择本页' : 'Deselect this page') : (zh ? '选择本页未使用的镜像' : 'Select unused images on this page')} />
               </TableHead>
               <TableHead>{zh ? '镜像' : 'Image'}</TableHead>
               <TableHead className="min-w-[110px]">{zh ? '大小' : 'Size'}</TableHead>
@@ -144,9 +154,9 @@ export function ImagesPage() {
           </TableHeader>
           <TableBody>
             {pagination.items.map((row) => (
-              <TableRow key={row.id} data-state={selected.has(row.id) ? 'selected' : undefined}>
+              <TableRow key={row.id} data-state={row.containers === 0 && selected.has(row.id) ? 'selected' : undefined}>
                 <TableCell className="pl-3">
-                  <Checkbox checked={selected.has(row.id)} onCheckedChange={(checked) => toggleOne(row.id, Boolean(checked))} aria-label={`${zh ? '选择' : 'Select'} ${row.tags?.[0] || row.id}`} />
+                  <Checkbox disabled={row.containers !== 0} checked={row.containers === 0 && selected.has(row.id)} onCheckedChange={(checked) => toggleOne(row, Boolean(checked))} aria-label={row.containers > 0 ? (zh ? `${row.tags?.[0] || row.id} 正在使用，无法选择` : `${row.tags?.[0] || row.id} is in use and cannot be selected`) : `${zh ? '选择' : 'Select'} ${row.tags?.[0] || row.id}`} />
                 </TableCell>
                 <TableCell>
                   <button type="button" onClick={() => setDetailImageID(row.id)} className="-ml-2 flex items-center gap-2.5 rounded-md px-2 py-1 text-left outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50">
@@ -163,7 +173,7 @@ export function ImagesPage() {
                 <TableCell>
                   <div className="flex items-center gap-1">
                     <TooltipHint content={t('tag')}><Button variant="ghost" size="icon-sm" aria-label={t('tag')} onClick={() => void tag(row)}><TagIcon /></Button></TooltipHint>
-                    <TooltipHint content={t('removeImage')}><Button variant="destructive" size="icon-sm" aria-label={t('removeImage')} onClick={() => void removeImage(row)}><Trash2 /></Button></TooltipHint>
+                    <TooltipHint content={row.containers > 0 ? (zh ? '镜像正在使用中' : 'Image is in use') : t('removeImage')}><Button variant="destructive" size="icon-sm" disabled={row.containers !== 0} aria-label={t('removeImage')} onClick={() => void removeImage(row)}><Trash2 /></Button></TooltipHint>
                   </div>
                 </TableCell>
               </TableRow>

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	dockercontainer "github.com/docker/docker/api/types/container"
+	dockerimage "github.com/docker/docker/api/types/image"
 	dockernetwork "github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/system"
 	dockervolume "github.com/docker/docker/api/types/volume"
@@ -163,6 +164,35 @@ func TestAdapterForceRemovesRunningContainerWithoutVolumes(t *testing.T) {
 	})
 	if len(requests) != 1 || requests[0].Query.Get("force") != "1" || requests[0].Query.Has("v") {
 		t.Fatalf("forced container removal options = %#v", requests)
+	}
+}
+
+func TestAdapterListImagesCountsRunningAndStoppedContainers(t *testing.T) {
+	stub := newDockerStub(t, map[string]http.HandlerFunc{
+		"/images/json": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, []dockerimage.Summary{
+				{ID: "sha256:used", RepoTags: []string{"example:latest"}, Containers: -1},
+				{ID: "sha256:unused", RepoTags: []string{"other:latest"}, Containers: -1},
+			})
+		},
+		"/containers/json": func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, []dockercontainer.Summary{
+				{ID: "running", ImageID: "sha256:used"},
+				{ID: "stopped", ImageID: "sha256:used"},
+			})
+		},
+	})
+	adapter := newAdapter(t, stub)
+	images, err := adapter.ListImages(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(images) != 2 || images[0].Containers != 2 || images[1].Containers != 0 {
+		t.Fatalf("image usage = %#v", images)
+	}
+	requests := stub.find(t, func(request stubRequest) bool { return request.Path == "/containers/json" })
+	if len(requests) != 1 || requests[0].Query.Get("all") != "1" {
+		t.Fatalf("expected all containers for image usage, got %#v", requests)
 	}
 }
 
