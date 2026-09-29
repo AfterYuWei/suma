@@ -125,7 +125,7 @@ docker logs suma 2>&1 | sed -n 's/.*"msg":"SUMA initialization key".*"setup_toke
 | `SUMA_BROWSER_ORIGIN` | 空 | 可选的高级来源限制初值；通常无需设置，默认按当前请求主机和端口校验 |
 | `SUMA_TRUSTED_PROXIES` | 空 | 需要识别代理后客户端 IP 时设置可信代理 IP/CIDR，逗号分隔；不能安全地自动推断 |
 | `SUMA_DOCKER_HOST` | `unix:///var/run/docker.sock` | 首次引导默认节点的引擎地址 |
-| `SUMA_AGENT_PUBLIC_URL` | 空 | Agent 配对前必填；Agent 可访问的 SUMA HTTPS 地址，如 `https://suma.example.com` |
+| `SUMA_AGENT_PUBLIC_URL` | 空 | 可选覆盖；默认使用配对时当前 HTTPS 页面来源。仅当 Agent 无法访问该地址时设置其可访问的 HTTPS 来源 |
 
 安全 Cookie 根据直连 TLS 或同主机 HTTPS 浏览器来源自动启用。HTTP 写操作和 WebSocket 握手默认要求来源的主机及端口与请求一致；若通过环境变量或 API 指定浏览器来源，还要求协议一致。可信代理留空时，SUMA 忽略 `X-Forwarded-For` 并使用直连 IP；填写时只信任列出的代理，并由右向左解析代理链。安全项无需在设置页手动填写；已有的高级设置仍可通过 API 修改。代理应保留原始 `Host` 并正确追加或覆盖 `X-Forwarded-For`。
 
@@ -169,7 +169,7 @@ npm run build:demo
    - 可先创建一个或多个节点 Group，并在节点表单中多选归属；Group 只用于组织和筛选，不代表集群或批量执行目标；
    - **Unix Socket**：把目标机的 `/var/run/docker.sock` 挂载进 SUMA 容器的某个路径后填入该路径；
    - **Docker TCP**：填写远端端点，例如 `tcp://192.168.1.99:2376`，选择 mTLS 并绑定 Docker TLS 凭据。
-   - **Agent**：先设置 `SUMA_AGENT_PUBLIC_URL`，在节点页生成 10 分钟有效的一次性令牌；可选择现有 Unix/TCP 节点原位迁移，节点 ID 与关联保持不变。
+   - **Agent**：通过 HTTPS 打开 SUMA 后，在节点页生成 10 分钟有效的一次性令牌；默认使用当前页面来源作为 Agent 地址。若 Agent 无法访问此地址，再设置 `SUMA_AGENT_PUBLIC_URL`。可选择现有 Unix/TCP 节点原位迁移，节点 ID 与关联保持不变。
 2. 点击「测试连接」验证连通性与延迟。
 3. TCP 与 Agent 节点的 Compose bind 源必须是目标宿主机上的不可插值绝对路径。
 

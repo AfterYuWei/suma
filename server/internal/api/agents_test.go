@@ -123,6 +123,43 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 	if _, err := nodes.Get(context.Background(), adminEnrollment.Data.NodeID); err == nil {
 		t.Fatal("canceled pending API node still exists")
 	}
+	automaticRouter := NewRouter(Dependencies{Nodes: nodes, Agents: hub, Auth: adminAuth, Audit: audit.NewService(db)})
+	automaticRequest := func(origin string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/agent-enrollments", strings.NewReader(`{"name":"automatic-pairing"}`))
+		request.AddCookie(&http.Cookie{Name: sessionCookie, Value: adminToken})
+		request.Header.Set("Origin", origin)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("X-Forwarded-Proto", "https")
+		response := httptest.NewRecorder()
+		automaticRouter.ServeHTTP(response, request)
+		return response
+	}
+	for _, origin := range []string{"", "http://example.com", "https://other.example.com"} {
+		response := automaticRequest(origin)
+		if response.Code == http.StatusCreated {
+			t.Fatalf("Agent pairing unexpectedly accepted origin %q: %s", origin, response.Body.String())
+		}
+	}
+	automatic := automaticRequest("https://example.com")
+	if automatic.Code != http.StatusCreated || !strings.Contains(automatic.Body.String(), `"public_url":"https://example.com"`) {
+		t.Fatalf("HTTPS page origin did not configure Agent pairing: %d %s", automatic.Code, automatic.Body.String())
+	}
+	var automaticEnrollment struct {
+		Data struct {
+			NodeID string `json:"node_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(automatic.Body.Bytes(), &automaticEnrollment); err != nil || automaticEnrollment.Data.NodeID == "" {
+		t.Fatalf("invalid automatic pairing response: %s, %v", automatic.Body.String(), err)
+	}
+	reissueRequest := httptest.NewRequest(http.MethodPost, "/api/v1/agent-enrollments/"+automaticEnrollment.Data.NodeID+"/reissue", nil)
+	reissueRequest.AddCookie(&http.Cookie{Name: sessionCookie, Value: adminToken})
+	reissueRequest.Header.Set("Origin", "https://example.com")
+	reissueResponse := httptest.NewRecorder()
+	automaticRouter.ServeHTTP(reissueResponse, reissueRequest)
+	if reissueResponse.Code != http.StatusOK || !strings.Contains(reissueResponse.Body.String(), `"public_url":"https://example.com"`) {
+		t.Fatalf("HTTPS page origin did not configure Agent reissue: %d %s", reissueResponse.Code, reissueResponse.Body.String())
+	}
 	issued, err := nodes.IssueAgentEnrollment(context.Background(), node.AgentEnrollmentInput{Name: "edge"})
 	if err != nil {
 		t.Fatal(err)

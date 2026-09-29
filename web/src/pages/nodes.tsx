@@ -20,7 +20,7 @@ import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { Textarea } from '../components/ui/textarea'
 import { TooltipHint } from '../components/ui/tooltip-hint'
-import { api } from '../lib/api'
+import { api, ApiError } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { filterNodesByGroup, groupFilterID, type DockerNode, type NodeGroup } from '../lib/nodes'
 import { confirmDialog, promptDialog } from '../stores/dialog'
@@ -41,6 +41,7 @@ const agentCompose = (publicURL: string) => `services:\n  suma-agent:\n    image
 export function NodesPage() {
   const { language } = useI18n()
   const zh = language === 'zh-CN'
+  const agentURLHelp = zh ? '请通过 HTTPS 打开 SUMA；若已设置 SUMA_AGENT_PUBLIC_URL，请检查它是否为有效的 HTTPS 来源。' : 'Open SUMA over HTTPS. If SUMA_AGENT_PUBLIC_URL is set, check that it is a valid HTTPS origin.'
   const client = useQueryClient()
   const currentGroupFilter = useUIStore((state) => state.currentGroupFilter)
   const setCurrentGroupFilter = useUIStore((state) => state.setCurrentGroupFilter)
@@ -61,7 +62,7 @@ export function NodesPage() {
   const test = useMutation({ mutationFn: (id: string) => api(`/nodes/${id}/test`, { method: 'POST' }), onSuccess: () => client.invalidateQueries({ queryKey: ['nodes'] }) })
   const edit = (node: DockerNode) => { setEditing(node); setValues({ name: node.name, connection_type: node.connection_type, endpoint: node.endpoint, tls_mode: node.tls_mode, tls_credential_id: node.tls_credential_id, enabled: node.enabled, group_ids: node.group_ids }); setOpen(true) }
   const remove = async (node: DockerNode) => { if (!await confirmDialog({ title: zh ? `删除节点 ${node.name}？` : `Delete node ${node.name}?`, description: zh ? '必须先解绑 Compose、CD 和全部凭据授权。历史任务和审计记录会保留。' : 'Compose, CD, and credential grants must be detached first. Historical tasks and audits remain.', confirmLabel: zh ? '删除节点' : 'Delete node', danger: true })) return; await api(`/nodes/${node.id}`, { method: 'DELETE' }); await client.invalidateQueries({ queryKey: ['nodes'] }) }
-  const reissue = async (node: DockerNode) => { try { setAgentActionError(''); const value = await api<AgentEnrollment>(`/agent-enrollments/${node.id}/reissue`, { method: 'POST' }); setPairing(value) } catch (error) { setAgentActionError(error instanceof Error ? error.message : String(error)) } }
+  const reissue = async (node: DockerNode) => { try { setAgentActionError(''); const value = await api<AgentEnrollment>(`/agent-enrollments/${node.id}/reissue`, { method: 'POST' }); setPairing(value) } catch (error) { setAgentActionError(error instanceof ApiError && error.code === 20501 ? agentURLHelp : error instanceof Error ? error.message : String(error)) } }
   const revoke = async (node: DockerNode) => { if (!await confirmDialog({ title: zh ? `撤销 ${node.name} 的 Agent 凭据？` : `Revoke Agent for ${node.name}?`, description: zh ? 'Agent 会立即断开。重新接入需要生成新的配对令牌。' : 'The Agent disconnects immediately. A new token is required to pair again.', confirmLabel: zh ? '撤销凭据' : 'Revoke credential', danger: true })) return; try { setAgentActionError(''); await api(`/nodes/${node.id}/agent/revoke`, { method: 'POST' }); await client.invalidateQueries({ queryKey: ['nodes'] }) } catch (error) { setAgentActionError(error instanceof Error ? error.message : String(error)) } }
   const submitNode = async () => {
     if (values.connection_type === 'agent' && editing?.connection_type !== 'agent') {
@@ -259,7 +260,7 @@ export function NodesPage() {
             <Checkbox checked={values.enabled} onCheckedChange={(checked) => update({ enabled: Boolean(checked) })} />
             {zh ? '启用节点' : 'Enable node'}
           </label>
-          {(save.isError || enroll.isError) && <Alert variant="destructive"><AlertDescription>{save.error?.message ?? enroll.error?.message}</AlertDescription></Alert>}
+          {(save.isError || enroll.isError) && <Alert variant="destructive"><AlertDescription>{enroll.error instanceof ApiError && enroll.error.code === 20501 ? agentURLHelp : save.error?.message ?? enroll.error?.message}</AlertDescription></Alert>}
           <div className="mt-auto flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>{zh ? '取消' : 'Cancel'}</Button>
             <Button type="submit" disabled={save.isPending || enroll.isPending}>{(save.isPending || enroll.isPending) && <Spinner className="size-4" />}{values.connection_type === 'agent' && editing?.connection_type !== 'agent' ? (zh ? '生成配对令牌' : 'Create pairing token') : (zh ? '保存节点' : 'Save node')}</Button>
@@ -271,6 +272,7 @@ export function NodesPage() {
       <SheetContent side="right" className="w-full sm:max-w-[620px]">
         <SheetHeader><SheetTitle>{zh ? 'Agent 配对' : 'Agent pairing'}</SheetTitle><SheetDescription>{zh ? '令牌只显示一次，有效期 10 分钟。先在 Agent 主机创建权限为 0600 的 /etc/suma-agent/enrollment-token，写入令牌，再运行 Compose。配对成功后清空文件内容，保留文件供容器重启挂载。' : 'The token is shown once and expires in 10 minutes. Put it in /etc/suma-agent/enrollment-token with mode 0600 on the Agent host, then run Compose. After pairing, empty the file but keep it for container restarts.'}</SheetDescription></SheetHeader>
         {pairing && <div className="flex flex-col gap-4 overflow-y-auto px-4 pb-4">
+          <p className="text-xs text-muted-foreground">{zh ? `Agent 将连接 ${pairing.public_url}。请确认远端主机能访问此地址且信任其 HTTPS 证书。` : `The Agent will connect to ${pairing.public_url}. Check that the remote host can reach it and trusts its HTTPS certificate.`}</p>
           <div className="grid gap-1.5"><Label>{zh ? '节点 ID' : 'Node ID'}</Label><Input readOnly value={pairing.node_id} /></div>
           <div className="grid gap-1.5"><Label>{zh ? '一次性令牌' : 'One-time token'}</Label><div className="flex gap-2"><Input readOnly value={pairing.token} className="font-mono" /><Button type="button" variant="outline" onClick={() => void navigator.clipboard.writeText(pairing.token)}><Copy />{zh ? '复制' : 'Copy'}</Button></div></div>
           <div className="grid gap-1.5"><Label>docker-compose.yml</Label><pre className="overflow-x-auto rounded-lg border bg-muted/30 p-3 text-xs">{agentCompose(pairing.public_url)}</pre><Button type="button" variant="outline" onClick={() => void navigator.clipboard.writeText(agentCompose(pairing.public_url))}><Copy />{zh ? '复制 Compose' : 'Copy Compose'}</Button></div>

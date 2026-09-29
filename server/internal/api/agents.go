@@ -11,14 +11,15 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/suma/suma/server/internal/node"
+	"github.com/suma/suma/server/internal/settings"
 )
 
 func registerAgentRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps Dependencies) {
 	enrollments := v1.Group("/agent-enrollments", requireAuth(deps.Auth))
 	enrollments.POST("", func(c *gin.Context) {
-		publicURL, ok := agentPublicURL(deps)
+		publicURL, ok := agentPublicURL(c, deps)
 		if !ok {
-			failure(c, http.StatusServiceUnavailable, 20501, "Set SUMA_AGENT_PUBLIC_URL to a reachable HTTPS origin before pairing Agents")
+			failure(c, http.StatusServiceUnavailable, 20501, "Open SUMA over HTTPS or set SUMA_AGENT_PUBLIC_URL to a valid reachable HTTPS origin before pairing Agents")
 			return
 		}
 		var input node.AgentEnrollmentInput
@@ -44,9 +45,9 @@ func registerAgentRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps Dependenc
 		success(c, value)
 	})
 	enrollments.POST("/:nodeID/reissue", func(c *gin.Context) {
-		publicURL, ok := agentPublicURL(deps)
+		publicURL, ok := agentPublicURL(c, deps)
 		if !ok {
-			failure(c, http.StatusServiceUnavailable, 20501, "Set SUMA_AGENT_PUBLIC_URL to a reachable HTTPS origin before pairing Agents")
+			failure(c, http.StatusServiceUnavailable, 20501, "Open SUMA over HTTPS or set SUMA_AGENT_PUBLIC_URL to a valid reachable HTTPS origin before pairing Agents")
 			return
 		}
 		view, err := deps.Nodes.Get(c.Request.Context(), c.Param("nodeID"))
@@ -87,7 +88,14 @@ func registerAgentRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps Dependenc
 	registerAgentTransport(router, v1, deps)
 }
 
-func agentPublicURL(deps Dependencies) (string, bool) {
+func agentPublicURL(c *gin.Context, deps Dependencies) (string, bool) {
+	if deps.AgentPublicURL == "" {
+		origin, err := settings.ParseOrigin(c.GetHeader("Origin"))
+		if err != nil || !strings.HasPrefix(origin, "https://") || !policyFromRequest(c.Request).AllowsOrigin(c.Request) {
+			return "", false
+		}
+		return origin, true
+	}
 	parsed, err := url.Parse(deps.AgentPublicURL)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil {
 		return "", false

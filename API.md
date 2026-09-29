@@ -18,7 +18,7 @@ Node-aware clients use these routes:
 
 ### Agent pairing and transport
 
-An administrator sets `SUMA_AGENT_PUBLIC_URL` to the externally reachable HTTPS origin before issuing tokens. Agent connections require trusted TLS and do not use browser cookies.
+When `SUMA_AGENT_PUBLIC_URL` is unset, Agent pairing uses the authenticated administrator request's same-host HTTPS `Origin`. The Agent host must be able to reach that address and trust its TLS certificate. `SUMA_AGENT_PUBLIC_URL` remains an explicit override for deployments where the Agent needs a different HTTPS origin. HTTP page origins cannot be used for automatic pairing. Agent connections require trusted TLS and do not use browser cookies.
 
 - `POST /agent-enrollments` accepts `{ "name": "edge", "group_ids": [1] }` for a new node or `{ "node_id": "existing-node", "name": "ignored" }` for an in-place migration. It returns the node ID, a one-time 256-bit `token`, `expires_at`, and `public_url`; the token is never returned again.
 - `GET /agent-enrollments/:nodeID` returns non-secret enrollment status; `POST /agent-enrollments/:nodeID/reissue` invalidates the old token and returns a new one; `DELETE /agent-enrollments/:nodeID` cancels pairing.

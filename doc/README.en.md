@@ -120,7 +120,7 @@ Open `http://<host-ip>:8080`, create the administrator account, and sign in.
 | `SUMA_BROWSER_ORIGIN` | empty | Optional advanced origin restriction; normally the request host and port are checked automatically |
 | `SUMA_TRUSTED_PROXIES` | empty | Trusted proxy IPs/CIDRs if client IPs behind a reverse proxy are needed; cannot be safely inferred |
 | `SUMA_DOCKER_HOST` | `unix:///var/run/docker.sock` | Engine address used only for first-run node bootstrap |
-| `SUMA_AGENT_PUBLIC_URL` | empty | Required before Agent pairing; HTTPS origin reachable by Agents |
+| `SUMA_AGENT_PUBLIC_URL` | empty | Optional override; pairing defaults to the current HTTPS page origin. Set it only if the Agent needs a different reachable HTTPS origin |
 
 **Image tags**
 
@@ -149,7 +149,7 @@ Quality checks: `make check` (backend `go test ./...` + `go build ./...`; fronte
    - You may first create one or more Node Groups and select multiple memberships in the node form. Groups organize and filter nodes; they are not clusters or batch execution targets.
    - **Unix Socket**: mount the target machine's `/var/run/docker.sock` into the SUMA container at any path, then register that path;
    - **Docker TCP**: enter the remote endpoint such as `tcp://192.168.1.99:2376`, choose mTLS, and attach a Docker TLS credential.
-   - **Agent**: set `SUMA_AGENT_PUBLIC_URL`, then generate a one-time token valid for 10 minutes. You can select an existing Unix/TCP node for an in-place migration that preserves its ID and references.
+   - **Agent**: open SUMA over HTTPS and generate a one-time token valid for 10 minutes. The current page origin is used by default; set `SUMA_AGENT_PUBLIC_URL` if the Agent cannot reach it. You can select an existing Unix/TCP node for an in-place migration that preserves its ID and references.
 2. Use Test Connection to verify reachability and latency.
 3. Use explicit absolute host paths for bind mounts on TCP nodes; interpolated and relative sources are rejected.
 
