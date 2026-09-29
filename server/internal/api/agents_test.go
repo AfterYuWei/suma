@@ -187,6 +187,23 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 	if result.Data.NodeID != issued.NodeID || result.Data.Credential == "" {
 		t.Fatal("invalid credential exchange")
 	}
+	retry, _ := http.NewRequest(http.MethodPost, server.URL+"/api/v1/agents/enroll", strings.NewReader(`{"protocol":1,"version":"test"}`))
+	retry.Header.Set("Content-Type", "application/json")
+	retry.Header.Set("Authorization", "Bearer "+issued.Token)
+	retryResponse, err := server.Client().Do(retry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer retryResponse.Body.Close()
+	var repeated struct {
+		Data struct {
+			NodeID     string `json:"node_id"`
+			Credential string `json:"credential"`
+		} `json:"data"`
+	}
+	if retryResponse.StatusCode != http.StatusOK || json.NewDecoder(retryResponse.Body).Decode(&repeated) != nil || repeated.Data.Credential != result.Data.Credential {
+		t.Fatalf("valid token retry did not return the same credential: status=%d", retryResponse.StatusCode)
+	}
 	address := "ws" + strings.TrimPrefix(server.URL, "http")
 	headers := http.Header{"Authorization": {"Bearer " + result.Data.Credential}, "X-SUMA-Agent-Node-ID": {issued.NodeID}, "X-SUMA-Agent-Protocol": {"1"}, "X-SUMA-Agent-Version": {"test"}}
 	if _, response, err := websocket.DefaultDialer.Dial(address+"/ws/agents/control", http.Header{"Cookie": {sessionCookie + "=" + adminToken}}); err == nil || response == nil || response.StatusCode != http.StatusUnauthorized {
@@ -240,6 +257,22 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 			info, err := client.Info(context.Background())
 			if err != nil || info.ID != "agent-engine" {
 				t.Fatalf("Docker runtime failed through Agent: %+v, %v", info, err)
+			}
+			expiredAt := time.Now().Add(-time.Second)
+			if err := db.Model(&database.AgentEnrollment{}).Where("node_id = ?", issued.NodeID).Update("expires_at", expiredAt).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Model(&database.AgentCredential{}).Where("node_id = ?", issued.NodeID).Update("expires_at", expiredAt).Error; err != nil {
+				t.Fatal(err)
+			}
+			if _, response, err := websocket.DefaultDialer.Dial(address+"/ws/agents/control", headers); err == nil || response == nil || response.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("expired credential opened a new control connection: response=%v, err=%v", response, err)
+			}
+			if _, _, err := nodes.ClaimAgentEnrollment(context.Background(), issued.Token, agentwire.ProtocolVersion); err == nil {
+				t.Fatal("expired enrollment token was accepted")
+			}
+			if info, err := client.Info(context.Background()); err != nil || info.ID != "agent-engine" {
+				t.Fatalf("active Agent lost Docker streams when its token expired: %+v, %v", info, err)
 			}
 			mismatch := database.Node{ID: "old-node", Name: "Old node", ConnectionType: node.ConnectionUnix, Endpoint: "unix:///missing/docker.sock", TLSMode: node.TLSDisabled, AllowedBindRootsJSON: "[]", EngineID: "different-engine", Enabled: true, Status: "offline"}
 			if err := db.Create(&mismatch).Error; err != nil {

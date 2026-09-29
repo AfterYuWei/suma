@@ -50,7 +50,8 @@ export function NodesPage() {
   const client = useQueryClient()
   const currentGroupFilter = useUIStore((state) => state.currentGroupFilter)
   const setCurrentGroupFilter = useUIStore((state) => state.setCurrentGroupFilter)
-  const query = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes'), refetchInterval: 15_000 })
+  const [pairing, setPairing] = useState<AgentEnrollment | null>(null)
+  const query = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes'), refetchInterval: pairing ? 2_000 : 15_000 })
   const groups = useQuery({ queryKey: ['node-groups'], queryFn: () => api<NodeGroup[]>('/node-groups') })
   const credentials = useQuery({ queryKey: ['docker-tls-credentials'], queryFn: () => api<TLSCredential[]>('/credentials/docker-tls') })
   const [editing, setEditing] = useState<DockerNode | null>(null)
@@ -59,11 +60,10 @@ export function NodesPage() {
   const [groupOpen, setGroupOpen] = useState(false)
   const [editingGroup, setEditingGroup] = useState<NodeGroup | null>(null)
   const [groupValues, setGroupValues] = useState({ name: '', description: '' })
-  const [pairing, setPairing] = useState<AgentEnrollment | null>(null)
   const [agentActionError, setAgentActionError] = useState('')
   const [reissuing, setReissuing] = useState(false)
   const [now, setNow] = useState(() => Date.now())
-  const hasPendingEnrollment = pairing !== null || query.data?.some((node) => node.agent_enrollment && !node.agent_enrollment.consumed_at)
+  const hasPendingEnrollment = pairing !== null || query.data?.some((node) => node.agent_enrollment && !tokenExpired(node.agent_enrollment.expires_at, now))
   useEffect(() => {
     if (!hasPendingEnrollment) return
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
@@ -115,6 +115,7 @@ export function NodesPage() {
   const update = (patch: Partial<NodeFormValues>) => setValues((previous) => ({ ...previous, ...patch }))
   const tcp = values.connection_type === 'tcp'
   const pairingExpired = pairing !== null && tokenExpired(pairing.expires_at, now)
+  const pairingConnected = pairing !== null && query.data?.some((node) => node.id === pairing.node_id && node.connection_type === 'agent' && node.status === 'online' && node.agent_connected_at && Date.parse(node.agent_connected_at) >= Date.parse(pairing.expires_at) - 10 * 60_000)
   const filteredNodes = filterNodesByGroup(query.data ?? [], currentGroupFilter)
   const pagination = useListPagination(filteredNodes)
 
@@ -160,7 +161,7 @@ export function NodesPage() {
                     <div className="font-medium">{node.name}</div>
                     <TooltipHint content={node.endpoint}><span className="block truncate text-xs text-muted-foreground">{node.connection_type === 'agent' ? (zh ? '主动连接到 SUMA' : 'Outbound connection to SUMA') : node.endpoint}{node.agent_version ? ` · ${node.agent_version}` : ''}</span></TooltipHint>
                     {node.last_error && <div className="mt-0.5 text-xs break-all text-destructive">{node.last_error}</div>}
-                    {node.agent_enrollment && !node.agent_enrollment.consumed_at && <div className={cn('mt-0.5 text-xs', tokenExpired(node.agent_enrollment.expires_at, now) ? 'text-destructive' : 'text-muted-foreground')}>{tokenExpired(node.agent_enrollment.expires_at, now) ? (zh ? '配对令牌已过期，请手动刷新' : 'Pairing token expired; refresh it manually') : (zh ? '等待 Agent 配对' : 'Waiting for Agent pairing')}</div>}
+                    {node.agent_enrollment && (tokenExpired(node.agent_enrollment.expires_at, now) || !node.agent_connected_at) && <div className={cn('mt-0.5 text-xs', tokenExpired(node.agent_enrollment.expires_at, now) ? 'text-destructive' : 'text-muted-foreground')}>{tokenExpired(node.agent_enrollment.expires_at, now) ? (zh ? '配对令牌已过期；断线后需手动刷新' : 'Pairing token expired; refresh it before reconnecting') : (zh ? '等待 Agent 连接' : 'Waiting for Agent connection')}</div>}
                     {node.agent_enrollment?.last_error && <div className="mt-0.5 text-xs break-all text-destructive">{node.agent_enrollment.last_error}</div>}
                   </TableCell>
                   <TableCell>
@@ -180,7 +181,7 @@ export function NodesPage() {
                         disabled={test.isPending && test.variables === node.id}
                         onClick={() => test.mutate(node.id)}
                       ><RefreshCw className={cn(test.isPending && test.variables === node.id && 'animate-spin')} /></Button></TooltipHint>
-                      {(node.connection_type === 'agent' || node.agent_enrollment) && <><TooltipHint content={node.agent_enrollment && !node.agent_enrollment.consumed_at ? (zh ? '手动刷新配对令牌' : 'Refresh pairing token manually') : (zh ? '重新配对' : 'Pair again')}><Button variant="ghost" size="icon-sm" disabled={reissuing} aria-label={node.agent_enrollment && !node.agent_enrollment.consumed_at ? (zh ? '手动刷新配对令牌' : 'Refresh pairing token manually') : (zh ? '重新配对' : 'Pair again')} onClick={() => void reissue(node.id)}>{node.agent_enrollment && !node.agent_enrollment.consumed_at ? <RefreshCw /> : <Copy />}</Button></TooltipHint>{node.connection_type === 'agent' && <TooltipHint content={zh ? '撤销 Agent' : 'Revoke Agent'}><Button variant="ghost" size="icon-sm" aria-label={zh ? '撤销 Agent' : 'Revoke Agent'} onClick={() => void revoke(node)}><Link2Off /></Button></TooltipHint>}</>}
+                      {(node.connection_type === 'agent' || node.agent_enrollment) && <><TooltipHint content={zh ? '手动刷新配对令牌' : 'Refresh pairing token manually'}><Button variant="ghost" size="icon-sm" disabled={reissuing} aria-label={zh ? '手动刷新配对令牌' : 'Refresh pairing token manually'} onClick={() => void reissue(node.id)}><RefreshCw /></Button></TooltipHint>{node.connection_type === 'agent' && <TooltipHint content={zh ? '撤销 Agent' : 'Revoke Agent'}><Button variant="ghost" size="icon-sm" aria-label={zh ? '撤销 Agent' : 'Revoke Agent'} onClick={() => void revoke(node)}><Link2Off /></Button></TooltipHint>}</>}
                       <TooltipHint content={zh ? '编辑' : 'Edit'}><Button variant="ghost" size="icon-sm" aria-label={zh ? '编辑' : 'Edit'} onClick={() => edit(node)}><Pencil /></Button></TooltipHint>
                       <TooltipHint content={zh ? '删除' : 'Delete'}><Button
                         variant="destructive"
@@ -235,7 +236,7 @@ export function NodesPage() {
             <Label htmlFor="node-endpoint">Endpoint</Label>
             <Input id="node-endpoint" required value={values.endpoint} onChange={(event) => update({ endpoint: event.target.value })} />
           </div>}
-          {values.connection_type === 'agent' && <p className="text-sm text-muted-foreground">{zh ? 'Agent 主动通过 HTTPS/WSS 连接；保存后生成一次性配对令牌。' : 'The Agent connects outbound over HTTPS/WSS. Saving generates a one-time pairing token.'}</p>}
+          {values.connection_type === 'agent' && <p className="text-sm text-muted-foreground">{zh ? 'Agent 主动通过 HTTPS/WSS 连接；保存后生成 10 分钟有效的配对令牌。' : 'The Agent connects outbound over HTTPS/WSS. Saving generates a pairing token valid for 10 minutes.'}</p>}
           {tcp && <>
             <div className="grid gap-1.5">
               <Label>TLS</Label>
@@ -284,16 +285,16 @@ export function NodesPage() {
     </Sheet>
     <Sheet open={pairing !== null} onOpenChange={(next) => { if (!next) setPairing(null) }}>
       <SheetContent side="right" className="w-full sm:max-w-[620px]">
-        <SheetHeader><SheetTitle>{zh ? 'Agent 配对' : 'Agent pairing'}</SheetTitle><SheetDescription>{zh ? '令牌只显示一次，有效期 10 分钟。过期后需手动刷新；不会自动生成新令牌。请勿将含令牌的 Compose 提交到仓库。配对成功后可删除 SUMA_AGENT_TOKEN 并重新部署，数据卷会保留重连凭据。' : 'The token is shown once and expires in 10 minutes. Refresh it manually after expiry; no new token is generated automatically. Do not commit the Compose file with the token. After pairing, you can remove SUMA_AGENT_TOKEN and redeploy; the volume retains the reconnect credential.'}</SheetDescription></SheetHeader>
+        <SheetHeader><SheetTitle>{zh ? 'Agent 配对' : 'Agent pairing'}</SheetTitle><SheetDescription>{zh ? '令牌只显示一次，在 10 分钟有效期内可重复验证。连接成功后会自动显示状态；过期后断线重连需要手动刷新令牌，并更新 Agent 的 SUMA_AGENT_TOKEN。请勿将含令牌的 Compose 提交到仓库。' : 'The token is shown once and can be verified repeatedly during its 10-minute lifetime. Connection status updates automatically. After expiry, a new connection needs a manually refreshed token in the Agent SUMA_AGENT_TOKEN environment variable. Do not commit the Compose file with the token.'}</SheetDescription></SheetHeader>
         {pairing && <div className="flex flex-col gap-4 overflow-y-auto px-4 pb-4">
           <p className="text-xs text-muted-foreground">{zh ? `Agent 将连接 ${pairing.public_url}。请确认远端主机能访问此地址且信任其 HTTPS 证书。` : `The Agent will connect to ${pairing.public_url}. Check that the remote host can reach it and trusts its HTTPS certificate.`}</p>
           <div className="grid gap-1.5"><Label>{zh ? '节点 ID' : 'Node ID'}</Label><Input readOnly value={pairing.node_id} /></div>
-          {pairingExpired ? <Alert variant="destructive"><AlertDescription>{zh ? '配对令牌已过期。请手动刷新令牌后再部署 Agent。' : 'The pairing token has expired. Refresh it manually before deploying the Agent.'}</AlertDescription></Alert> : <>
-            <div className="grid gap-1.5"><Label>{zh ? '一次性令牌' : 'One-time token'}</Label><div className="flex gap-2"><Input readOnly value={pairing.token} className="font-mono" /><Button type="button" variant="outline" onClick={() => void navigator.clipboard.writeText(pairing.token)}><Copy />{zh ? '复制' : 'Copy'}</Button></div></div>
+          {pairingConnected ? <Alert><AlertDescription>{pairingExpired ? (zh ? 'Agent 已连接成功。令牌已过期；断线后需手动刷新令牌并更新 Agent 配置。' : 'Agent connected successfully. The token has expired; refresh it manually and update the Agent before reconnecting.') : (zh ? 'Agent 已连接成功。当前连接可继续使用；断线后需在令牌有效期内重新连接。' : 'Agent connected successfully. The current connection can continue; reconnect within the token lifetime.')}</AlertDescription></Alert> : pairingExpired ? <Alert variant="destructive"><AlertDescription>{zh ? '配对令牌已过期。请手动刷新令牌后再部署 Agent。' : 'The pairing token has expired. Refresh it manually before deploying the Agent.'}</AlertDescription></Alert> : <>
+            <div className="grid gap-1.5"><Label>{zh ? '配对令牌' : 'Pairing token'}</Label><div className="flex gap-2"><Input readOnly value={pairing.token} className="font-mono" /><Button type="button" variant="outline" onClick={() => void navigator.clipboard.writeText(pairing.token)}><Copy />{zh ? '复制' : 'Copy'}</Button></div></div>
             <div className="grid gap-1.5"><Label>docker-compose.yml</Label><pre className="overflow-x-auto rounded-lg border bg-muted/30 p-3 text-xs">{agentCompose(pairing.public_url, pairing.token)}</pre><Button type="button" variant="outline" onClick={() => void navigator.clipboard.writeText(agentCompose(pairing.public_url, pairing.token))}><Copy />{zh ? '复制 Compose' : 'Copy Compose'}</Button></div>
           </>}
           {agentActionError && <Alert variant="destructive"><AlertDescription>{agentActionError}</AlertDescription></Alert>}
-          <Button type="button" variant="outline" disabled={reissuing} onClick={() => void reissue(pairing.node_id)}>{reissuing && <Spinner className="size-4" />}<RefreshCw />{zh ? '手动刷新令牌' : 'Refresh token manually'}</Button>
+          {(!pairingConnected || pairingExpired) && <Button type="button" variant="outline" disabled={reissuing} onClick={() => void reissue(pairing.node_id)}>{reissuing && <Spinner className="size-4" />}<RefreshCw />{zh ? '手动刷新令牌' : 'Refresh token manually'}</Button>}
           <p className="text-xs text-muted-foreground">{zh ? 'Docker socket 即使只读挂载，Agent 仍拥有 Docker 管理权限。生产环境请固定镜像版本，并确保 SUMA 的 HTTPS 证书受信任。' : 'A read-only Docker socket mount still grants Docker control. Pin the image version and use a trusted HTTPS certificate in production.'}</p>
         </div>}
       </SheetContent>

@@ -135,7 +135,7 @@ func registerAgentTransport(router *gin.Engine, v1 *gin.RouterGroup, deps Depend
 		success(c, gin.H{"node_id": id, "credential": credential})
 	})
 	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" }, ReadBufferSize: 32 << 10, WriteBufferSize: 32 << 10}
-	authenticate := func(c *gin.Context) (string, bool) {
+	authenticate := func(c *gin.Context, stream bool) (string, bool) {
 		id := c.GetHeader("X-SUMA-Agent-Node-ID")
 		version, _ := strconv.Atoi(c.GetHeader("X-SUMA-Agent-Protocol"))
 		secret := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
@@ -143,7 +143,13 @@ func registerAgentTransport(router *gin.Engine, v1 *gin.RouterGroup, deps Depend
 			failure(c, 401, 20511, "Agent authentication failed")
 			return "", false
 		}
-		if err := deps.Nodes.AuthenticateAgent(c.Request.Context(), id, secret, version); err != nil {
+		var err error
+		if stream {
+			err = deps.Nodes.AuthenticateAgentStream(c.Request.Context(), id, secret, version)
+		} else {
+			err = deps.Nodes.AuthenticateAgent(c.Request.Context(), id, secret, version)
+		}
+		if err != nil {
 			if errors.Is(err, node.ErrAgentProtocol) {
 				failure(c, http.StatusUpgradeRequired, 20512, err.Error())
 			} else {
@@ -154,7 +160,7 @@ func registerAgentTransport(router *gin.Engine, v1 *gin.RouterGroup, deps Depend
 		return id, true
 	}
 	router.GET("/ws/agents/control", func(c *gin.Context) {
-		id, ok := authenticate(c)
+		id, ok := authenticate(c, false)
 		if !ok {
 			return
 		}
@@ -176,7 +182,7 @@ func registerAgentTransport(router *gin.Engine, v1 *gin.RouterGroup, deps Depend
 		<-done
 	})
 	router.GET("/ws/agents/streams/:streamID", func(c *gin.Context) {
-		id, ok := authenticate(c)
+		id, ok := authenticate(c, true)
 		if !ok {
 			return
 		}

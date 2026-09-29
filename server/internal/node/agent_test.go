@@ -39,7 +39,7 @@ func agentTestService(t *testing.T) *Service {
 	return service
 }
 
-func TestAgentEnrollmentIsSingleUseAndRevocable(t *testing.T) {
+func TestAgentEnrollmentReusableUntilExpiryAndRevocable(t *testing.T) {
 	service := agentTestService(t)
 	ctx := context.Background()
 	issued, err := service.IssueAgentEnrollment(ctx, AgentEnrollmentInput{Name: "Edge"})
@@ -88,11 +88,14 @@ func TestAgentEnrollmentIsSingleUseAndRevocable(t *testing.T) {
 	for result := range results {
 		if result.err == nil {
 			successes++
+			if secret != "" && secret != result.credential {
+				t.Fatal("repeat enrollment returned a different credential")
+			}
 			secret = result.credential
 		}
 	}
-	if successes != 1 {
-		t.Fatalf("expected exactly one successful claim, got %d", successes)
+	if successes != 2 {
+		t.Fatalf("expected both valid token claims to succeed, got %d", successes)
 	}
 	var credential database.AgentCredential
 	if err := service.db.Where("node_id = ?", issued.NodeID).First(&credential).Error; err != nil {
@@ -104,6 +107,9 @@ func TestAgentEnrollmentIsSingleUseAndRevocable(t *testing.T) {
 	if err := service.AuthenticateAgent(ctx, issued.NodeID, secret, agentwire.ProtocolVersion); err != nil {
 		t.Fatalf("valid credential rejected: %v", err)
 	}
+	if !credential.ExpiresAt.Equal(issued.ExpiresAt) {
+		t.Fatalf("credential expiry differs from token expiry: %v != %v", credential.ExpiresAt, issued.ExpiresAt)
+	}
 	if err := service.AuthenticateAgent(ctx, issued.NodeID, secret, agentwire.ProtocolVersion+1); !errors.Is(err, ErrAgentProtocol) {
 		t.Fatalf("incompatible reconnect not reported: %v", err)
 	}
@@ -114,8 +120,17 @@ func TestAgentEnrollmentIsSingleUseAndRevocable(t *testing.T) {
 	if view, err := service.Get(ctx, issued.NodeID); err != nil || view.Status != "incompatible" {
 		t.Fatalf("background probe hid protocol mismatch: %+v, %v", view, err)
 	}
+	if err := service.db.Model(&database.AgentCredential{}).Where("node_id = ?", issued.NodeID).Update("expires_at", time.Now().Add(-time.Second)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := service.AuthenticateAgent(ctx, issued.NodeID, secret, agentwire.ProtocolVersion); err == nil {
+		t.Fatal("expired credential opened a new Agent connection")
+	}
 	if err := service.RevokeAgent(ctx, issued.NodeID); err != nil {
 		t.Fatal(err)
+	}
+	if _, _, err := service.ClaimAgentEnrollment(ctx, issued.Token, agentwire.ProtocolVersion); err == nil {
+		t.Fatal("revoked Agent re-enrolled with the old token")
 	}
 	if err := service.AuthenticateAgent(ctx, issued.NodeID, secret, agentwire.ProtocolVersion); err == nil {
 		t.Fatal("revoked credential was accepted")
@@ -192,10 +207,46 @@ func TestReissuePendingAgentRevokesClaimedCredential(t *testing.T) {
 	if reissued.Token == issued.Token {
 		t.Fatal("reissued token was reused")
 	}
+	if _, _, err := service.ClaimAgentEnrollment(ctx, issued.Token, agentwire.ProtocolVersion); err == nil {
+		t.Fatal("old token remained valid after manual refresh")
+	}
 	if err := service.AuthenticateAgent(ctx, issued.NodeID, credential, agentwire.ProtocolVersion); err == nil {
 		t.Fatal("old claimed credential survived token reissue")
 	}
 	if view, err := service.Get(ctx, issued.NodeID); err != nil || view.Enabled || view.Status != "pairing" || view.LastError != "" {
 		t.Fatalf("reissued pending Agent did not reset pairing state: %+v, %v", view, err)
+	}
+}
+
+func TestReissueConnectedAgentRequiresNewTokenOnReconnect(t *testing.T) {
+	service := agentTestService(t)
+	ctx := context.Background()
+	issued, err := service.IssueAgentEnrollment(ctx, AgentEnrollmentInput{Name: "Connected Agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, oldCredential, err := service.ClaimAgentEnrollment(ctx, issued.Token, agentwire.ProtocolVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.db.Model(&database.Node{}).Where("id = ?", issued.NodeID).Updates(map[string]any{"engine_id": "connected-engine", "status": "online", "agent_connected_at": time.Now()}).Error; err != nil {
+		t.Fatal(err)
+	}
+	reissued, err := service.IssueAgentEnrollment(ctx, AgentEnrollmentInput{NodeID: issued.NodeID, Name: "Connected Agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.AuthenticateAgent(ctx, issued.NodeID, oldCredential, agentwire.ProtocolVersion); err == nil {
+		t.Fatal("old credential reconnected after token refresh")
+	}
+	if _, _, err := service.ClaimAgentEnrollment(ctx, issued.Token, agentwire.ProtocolVersion); err == nil {
+		t.Fatal("old token remained valid after refresh")
+	}
+	_, newCredential, err := service.ClaimAgentEnrollment(ctx, reissued.Token, agentwire.ProtocolVersion)
+	if err != nil || newCredential == oldCredential {
+		t.Fatalf("new token did not issue a new credential: %v", err)
+	}
+	if err := service.AuthenticateAgent(ctx, issued.NodeID, newCredential, agentwire.ProtocolVersion); err != nil {
+		t.Fatalf("new credential was rejected: %v", err)
 	}
 }

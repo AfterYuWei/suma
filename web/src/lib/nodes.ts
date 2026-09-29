@@ -13,7 +13,7 @@ export interface DockerNode {
   status: 'unknown' | 'pairing' | 'online' | 'offline' | 'incompatible'
   agent_version?: string
   agent_connected_at?: string
-  agent_enrollment?: { node_id: string; expires_at: string; consumed_at?: string; last_error?: string }
+  agent_enrollment?: { node_id: string; expires_at: string; last_error?: string }
   last_error?: string
   last_latency_ms?: number
   last_checked_at?: string

@@ -101,6 +101,7 @@ type Service struct {
 	secrets     *secret.Store
 	mu          sync.Mutex
 	engineMu    sync.Mutex
+	claimMu     sync.Mutex
 	clients     map[string]cachedClient
 	retired     []*docker.Adapter
 	probeCancel context.CancelFunc
