@@ -12,9 +12,9 @@ export function ListPagination({ total, page, pageCount, pageSize, setPage, setP
   setPageSize: (pageSize: ListPageSize) => void
   zh: boolean
 }) {
-  return <nav aria-label={zh ? '列表分页' : 'List pagination'} className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 overflow-x-auto overscroll-contain pt-3 text-sm text-muted-foreground">
-    <span className="justify-self-start whitespace-nowrap tabular-nums">{zh ? `共 ${total} 条` : `${total} items`}</span>
-    <div className="flex min-w-max flex-nowrap items-center gap-2 justify-self-end">
+  return <nav aria-label={zh ? '列表分页' : 'List pagination'} className="flex w-full flex-wrap items-center justify-between gap-3 pt-3 text-sm text-muted-foreground">
+    <span className="whitespace-nowrap tabular-nums">{zh ? `共 ${total} 条` : `${total} items`}</span>
+    <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
       <span className="whitespace-nowrap">{zh ? '每页' : 'Per page'}</span>
       <Select<ListPageSize> value={pageSize} onValueChange={(value) => { if (value !== null) setPageSize(value) }}>
         <SelectTrigger size="sm" className="w-20" aria-label={zh ? '每页数量' : 'Items per page'}><SelectValue /></SelectTrigger>

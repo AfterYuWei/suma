@@ -268,3 +268,43 @@ Rollback creates a new release record from a previously `succeeded` or `rolled_b
 All WebSockets require the same session cookie as REST. Disconnecting cancels the underlying context and closes Docker streams or exec sessions.
 
 Node-aware realtime routes are `/ws/nodes/:nodeID/containers/:id/{logs,stats,terminal}`. Legacy container WebSockets are default-node aliases.
+
+## Scheduled Docker storage cleanup
+
+All cleanup endpoints require the existing authenticated session and request-origin protections. The node must exist; previews and run IDs are bound to that node.
+
+| Method and path | Behavior |
+| --- | --- |
+| `GET /api/v1/cleanup/policies` | Node policy summaries, next occurrence, latest and active run |
+| `GET /api/v1/nodes/:nodeID/cleanup/policy` | Policy, live Engine capabilities and next three occurrences |
+| `PUT /api/v1/nodes/:nodeID/cleanup/policy` | Replace configuration with optimistic `version` checking |
+| `POST /api/v1/nodes/:nodeID/cleanup/preview` | Send `{}`; read-only five-minute preview of the saved policy |
+| `POST /api/v1/nodes/:nodeID/cleanup/run` | Send `preview_id` and exact `confirmation_name`; returns a node Task with HTTP 202 |
+| `GET /api/v1/nodes/:nodeID/cleanup/runs?page=1&failed=false` | Twenty execution records per page, policy snapshots and partial results |
+| `GET /api/v1/nodes/:nodeID/cleanup/runs/:runID` | One execution with Task ID and per-category results |
+
+A policy update sends the complete configuration below. Initial `version` is zero. Enabling scheduling, reducing retention or budget, removing protections, or adding automatic deletion categories requires `authorize: true` and the exact node name in `confirmation_name`. Copying configuration in the UI leaves scheduling disabled. There is no automatic-volume-deletion field; unknown JSON fields are rejected.
+
+```json
+{
+  "version": 0,
+  "enabled": false,
+  "schedule": { "frequency": "weekly", "weekday": 0, "hour": 3, "minute": 0, "timezone": "UTC" },
+  "images": { "enabled": true, "retention_days": 7, "include_tagged": false },
+  "cache": { "enabled": true, "retention_days": 7, "reserved_bytes": 10737418240 },
+  "containers": { "enabled": false, "retention_days": 7 },
+  "networks": { "enabled": false, "retention_days": 7 },
+  "scan_volumes": true,
+  "protected": { "image": [], "container": [], "network": [], "volume": [] }
+}
+```
+
+`weekday` uses Sunday=0. Timezones use embedded IANA data. Missing daylight-saving times are skipped; repeated times run once. Retention is 1–3650 days. The cache budget is a best-effort Engine parameter, not an exact disk-space guarantee. Negotiated API 1.39–1.47 uses `keep-storage`; API 1.48+ uses `reserved-space`; earlier APIs skip cache cleanup explicitly. Cache pruning always uses `all=false` and an `until` duration based on last use. See the [Engine API version history](https://docs.docker.com/reference/api/engine/version-history/) for the parameter rename.
+
+Stale policy versions, expired or changed previews, changed node runtimes and concurrent node executions return 409. Confirmations and invalid policies return 422. Unavailable nodes return 503. Resource failures continue within the frozen candidate set, producing `partial_failed` when appropriate; disconnects, cancellation or lost protection information stop further deletion. The associated Task reports failure for partial failures. Task cancellation uses the existing node Task endpoint.
+
+Volumes never enter automatic deletion. `DELETE /api/v1/nodes/:nodeID/volumes/:name?confirm=:name` requires the exact volume name and performs fresh reference/protection checks followed by non-force Engine removal. Previews estimate individual sizes without summing shared image layers. Reports distinguish Engine cache reclaimed bytes from before/after image-layer, container-writable-layer and volume usage observations. Unknown usage remains null. Mutable historical image tags protect only images currently resolving to those references; they do not guarantee offline rollback after a tag has been overwritten.
+
+Both legacy `/system/prune` routes still accept `{"confirm":"PRUNE"}` and generate a fresh preview through this same service, using the saved node policy. They no longer invoke blanket Engine prune or delete volumes.
+
+Repeatable isolated Unix/mTLS/Agent verification is documented in [Docker cleanup smoke verification](doc/cleanup-smoke.md).

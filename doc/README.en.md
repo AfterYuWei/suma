@@ -188,3 +188,11 @@ Run `docker compose up -d` and verify the node is online. You can then remove `S
 - [ARCHITECTURE.md](../../ARCHITECTURE.md): architecture overview
 - [API.md](../../API.md): REST / WebSocket API reference
 - [CD-DESIGN.md](../../CD-DESIGN.md): continuous delivery design model
+
+## Scheduled Docker storage cleanup
+
+Open **Settings → Storage cleanup** to configure each node independently. New policies are paused; the suggested schedule is Sunday 03:00 in the application timezone (UTC fallback). Default cleanup retains seven days of dangling images and Engine builder cache with a best-effort 10 GiB budget. Stopped-container and unused-network removal start disabled.
+
+Generate a five-minute preview before immediate execution. Enabling scheduling or expanding deletion requires the exact node name and automatic-deletion authorization. Managed Compose declarations, Compose resources, SUMA/Agent/builders, current CD releases and direct rollback/pending references are protected. Volumes are scanned only and require individual typed-name deletion confirmation. Image sizes are estimates with shared layers; cache reclamation is reported by Engine.
+
+Pause stops future schedules; cancel the associated Task to stop subsequent steps of a running cleanup. Completed deletion cannot be undone. Offline/missed schedules and interrupted work are never replayed. Logs and independent Buildx builders are outside this feature's scope. See [API](../API.md#scheduled-docker-storage-cleanup) for endpoint contracts.

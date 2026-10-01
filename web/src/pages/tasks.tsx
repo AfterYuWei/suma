@@ -1,5 +1,7 @@
 import { Fragment, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { CleanupNodeSheet } from '../features/cleanup/storage-cleanup'
+import type { DockerNode } from '../lib/nodes'
+import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { Button } from '../components/ui/button'
 import { ListShell } from '../components/ui/list-shell'
@@ -7,7 +9,6 @@ import { ListPagination } from '../components/ui/list-pagination'
 import { useListPagination } from '../components/ui/use-list-pagination'
 import { LoadingState } from '../components/ui/loading-state'
 import { Progress } from '../components/ui/progress'
-import { Spinner } from '../components/ui/spinner'
 import { StatusBadge } from '../components/ui/status-badge'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
@@ -15,7 +16,6 @@ import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { nodePath } from '../lib/nodes'
 import { compactTaskLogs } from '../features/tasks/compact-task-logs'
-import { promptDialog } from '../stores/dialog'
 import { useUIStore } from '../stores/ui'
 import { ResourceFrame } from './images'
 
@@ -26,27 +26,28 @@ const taskTone = (status: string) => status === 'success' ? 'success' : status =
 
 export function TasksPage() {
   const nodeID = useUIStore((state) => state.currentNodeID)
-  const client = useQueryClient()
   const { t, language } = useI18n()
   const zh = language === 'zh-CN'
   const [expandedID, setExpandedID] = useState<string | null>(null)
   const [scope, setScope] = useState<'current' | 'control_plane' | 'all'>('current')
   const query = useQuery({ queryKey: ['tasks', scope, nodeID], queryFn: () => api<Task[]>(scope === 'current' ? nodePath(nodeID, '/tasks') : `/tasks?scope=${scope}`), refetchInterval: 2_000 })
   const pagination = useListPagination(query.data ?? [], scope)
-  const prune = useMutation({ mutationFn: () => api(nodePath(nodeID, '/system/prune'), { method: 'POST', body: JSON.stringify({ confirm: 'PRUNE' }) }), onSuccess: () => client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] }) })
-  const startPrune = async () => { const value = await promptDialog({ title: t('systemPrune'), description: t('systemPruneDescription'), confirmLabel: t('systemPrune'), danger: true, input: { label: t('typeToConfirm', { value: 'PRUNE' }), requiredValue: 'PRUNE' } }); if (value === 'PRUNE') prune.mutate() }
+  const [cleanupOpen, setCleanupOpen] = useState(false)
+  const nodes = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes') })
+  const currentNode = nodes.data?.find(node => node.id === nodeID)
+
 
   return (
     <ResourceFrame
       title={t('tasks')}
       detail={zh ? '长时间运行的 Docker 与 Compose 操作' : 'Long-running Docker and Compose operations'}
       action={(
-        <div className="flex flex-wrap items-center gap-2"><Tabs value={scope} onValueChange={(value) => { setScope(value as typeof scope); setExpandedID(null) }}><TabsList><TabsTrigger value="current">{zh ? '当前节点' : 'Current node'}</TabsTrigger><TabsTrigger value="control_plane">{zh ? '控制平面' : 'Control plane'}</TabsTrigger><TabsTrigger value="all">{zh ? '全部' : 'All'}</TabsTrigger></TabsList></Tabs><Button variant="outline" className="text-destructive hover:text-destructive" disabled={prune.isPending} onClick={() => void startPrune()}>
-            {prune.isPending && <Spinner className="size-4" />}
-            {t('systemPrune')}
+        <div className="flex flex-wrap items-center gap-2"><Tabs value={scope} onValueChange={(value) => { setScope(value as typeof scope); setExpandedID(null) }}><TabsList><TabsTrigger value="current">{zh ? '当前节点' : 'Current node'}</TabsTrigger><TabsTrigger value="control_plane">{zh ? '控制平面' : 'Control plane'}</TabsTrigger><TabsTrigger value="all">{zh ? '全部' : 'All'}</TabsTrigger></TabsList></Tabs><Button variant="outline" disabled={!currentNode} onClick={() => setCleanupOpen(true)}>
+            {zh ? '存储清理' : 'Storage cleanup'}
           </Button></div>
       )}
     >
+      {cleanupOpen && currentNode && <CleanupNodeSheet key={nodeID} node={currentNode} open initialTab="preview" onOpenChange={setCleanupOpen} />}
       {query.isPending
         ? <LoadingState label={zh ? '正在加载任务' : 'Loading tasks'} />
         : (

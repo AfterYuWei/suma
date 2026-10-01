@@ -7,7 +7,7 @@ export interface DialogRequest {
   cancelLabel?: string
   danger?: boolean
   input?: { label: string; initialValue?: string; placeholder?: string; requiredValue?: string }
-  checkbox?: { label: string; description?: string; initialChecked?: boolean }
+  checkbox?: { label: string; description?: string; initialChecked?: boolean; required?: boolean }
   choices?: { value: string; label: string; primary?: boolean }[]
 }
 

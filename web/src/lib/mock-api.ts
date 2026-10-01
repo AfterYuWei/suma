@@ -1,3 +1,4 @@
+import { createMockCleanup } from './mock-cleanup'
 import type { User } from '../features/auth/types'
 import type { Project, ProjectSummary, ProjectTakeoverDraft, ShadowAssessment, ShadowPreviewSession, ShadowPreviewStatus } from '../features/compose/types'
 import type { ContainerDetail, ContainerMetrics, ContainerSummary } from '../features/containers/types'
@@ -24,6 +25,8 @@ const nodes: DockerNode[] = [
   { id: 'edge-hk', name: 'edge-hk', connection_type: 'tcp', endpoint: 'tcp://10.20.0.8:2376', tls_mode: 'required', tls_credential_id: 1, enabled: true, engine_id: 'engine-edge-hk', engine_version: '28.3.3', status: 'online', last_latency_ms: 46, last_checked_at: now, created_at: earlier, updated_at: now, group_ids: [1, 3] },
   { id: 'nas-prod', name: 'nas-prod', connection_type: 'unix', endpoint: 'unix:///var/run/docker.sock', tls_mode: 'disabled', enabled: true, engine_id: 'engine-nas-prod', engine_version: '27.5.1', status: 'online', last_latency_ms: 21, last_checked_at: now, created_at: earlier, updated_at: now, group_ids: [1, 2] },
 ]
+
+const mockCleanup = createMockCleanup(nodes)
 
 const nodeGroups: NodeGroup[] = [
   { id: 1, name: 'Default', description: 'Default node group', is_default: true, node_count: 3, created_at: earlier, updated_at: now },
@@ -150,6 +153,8 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
   if (pathname === '/auth/session') { requireSession(); return clone(user) as T }
 
   requireSession()
+  const cleanupResult = mockCleanup(pathname, method, body, url)
+  if (cleanupResult !== undefined) return clone(cleanupResult) as T
 
   if (pathname === '/account/profile' && method === 'PUT') return clone({ ...user, ...body }) as T
   if (pathname === '/account/passkeys' && method === 'GET') return [] as T

@@ -86,6 +86,39 @@ type Setting struct {
 	UpdatedAt time.Time
 }
 
+// Cleanup records contain application configuration and historical operation
+// evidence, never the source of current Docker resource state.
+type CleanupPolicy struct {
+	NodeID       string `gorm:"primaryKey;size:64"`
+	Version      uint64 `gorm:"not null"`
+	Enabled      bool   `gorm:"index;not null"`
+	ConfigJSON   string `gorm:"not null"`
+	AuthorizedBy *uint
+	AuthorizedAt *time.Time
+	NextRunAt    *time.Time `gorm:"index"`
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+type CleanupRun struct {
+	ID            string     `gorm:"primaryKey;size:64" json:"id"`
+	NodeID        string     `gorm:"index;uniqueIndex:idx_cleanup_occurrence;size:64;not null" json:"node_id"`
+	NodeName      string     `json:"node_name"`
+	PolicyVersion uint64     `json:"policy_version"`
+	PolicyJSON    string     `json:"-"`
+	Trigger       string     `json:"trigger"`
+	ScheduledFor  *time.Time `gorm:"uniqueIndex:idx_cleanup_occurrence" json:"scheduled_for,omitempty"`
+	TaskID        string     `gorm:"index;size:64" json:"task_id,omitempty"`
+	UserID        *uint      `json:"user_id,omitempty"`
+	AuthorizedBy  *uint      `json:"authorized_by,omitempty"`
+	Status        string     `gorm:"index;size:32" json:"status"`
+	Message       string     `json:"message"`
+	ResultJSON    string     `json:"-"`
+	StartedAt     *time.Time `json:"started_at,omitempty"`
+	FinishedAt    *time.Time `json:"finished_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+}
+
 // SchemaMigration records one-time data migrations without exposing internal
 // markers through the user-facing settings service.
 type SchemaMigration struct {

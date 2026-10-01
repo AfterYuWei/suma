@@ -13,6 +13,7 @@ import (
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/auth"
 	cdService "github.com/suma/suma/server/internal/cd"
+	"github.com/suma/suma/server/internal/cleanup"
 	composeService "github.com/suma/suma/server/internal/compose"
 	"github.com/suma/suma/server/internal/config"
 	"github.com/suma/suma/server/internal/containerfiles"
@@ -32,6 +33,7 @@ import (
 )
 
 type App struct {
+	cleanup        *cleanup.Service
 	logger         *slog.Logger
 	server         *http.Server
 	engine         docker.Engine
@@ -97,14 +99,53 @@ func New(logger *slog.Logger) (*App, error) {
 	if err := applicationSettings.LoadSecurity(context.Background()); err != nil {
 		return nil, fmt.Errorf("load security settings: %w", err)
 	}
+	cleanupService := cleanup.NewService(db, taskService, auditService, cleanup.Dependencies{
+		OnError: func(err error) { logger.Warn("cleanup scheduler failed", "error", err) },
+		Node: func(ctx context.Context, id string) (cleanup.Node, error) {
+			view, err := nodes.Get(ctx, id)
+			credentialID := uint(0)
+			if view.TLSCredentialID != nil {
+				credentialID = *view.TLSCredentialID
+			}
+			return cleanup.Node{ID: view.ID, Name: view.Name, Enabled: view.Enabled, RuntimeKey: fmt.Sprintf("%s|%s|%s|%s|%d", view.Endpoint, view.ConnectionType, view.EngineID, view.TLSMode, credentialID)}, err
+		},
+		Runtime: func(ctx context.Context, id string) (cleanup.Runtime, error) { return nodes.Runtime(ctx, id) },
+		Timezone: func(ctx context.Context) string {
+			values, err := applicationSettings.Get(ctx)
+			if err != nil {
+				return "UTC"
+			}
+			return values["general.timezone"]
+		},
+		Protection: func(ctx context.Context, id string) (cleanup.Protection, error) {
+			target, view, err := nodes.ComposeTarget(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			current := compose.ForNode(id, view.Name, runner.ForTarget(target), nil, view.ConnectionType == nodeService.ConnectionUnix)
+			refs, err := current.CleanupResourceReferences(ctx)
+			if err != nil {
+				return nil, err
+			}
+			images, err := continuousDelivery.CleanupImageReferences(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			return cleanup.Protection{cleanup.Image: append(refs.Images, images...), cleanup.Network: refs.Networks, cleanup.Volume: refs.Volumes}, nil
+		},
+	})
+	if err := cleanupService.Recover(context.Background()); err != nil {
+		return nil, fmt.Errorf("recover cleanup: %w", err)
+	}
 	if setupToken != "" {
 		logger.Info("SUMA initialization key", "setup_token", setupToken, "expires_at", setupExpires.UTC().Format(time.RFC3339))
 	}
 	nodes.Start()
 	continuousDelivery.Start()
+	cleanupService.Start()
 	recoveryContext, recoveryCancel := context.WithCancel(context.Background())
 	fileService := containerfiles.NewService(db, secretStore)
-	application := &App{logger: logger, engine: engine, nodes: nodes, agents: agents, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{Engine: engine, Containers: engine, Files: fileService, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: applicationSettings, Monitor: monitorService.NewService(engine, cfg.DatabasePath), System: systemService.NewService(engine, taskService), Nodes: nodes, Agents: agents, AgentPublicURL: cfg.AgentPublicURL, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
+	application := &App{cleanup: cleanupService, logger: logger, engine: engine, nodes: nodes, agents: agents, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{Cleanup: cleanupService, Engine: engine, Containers: engine, Files: fileService, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: applicationSettings, Monitor: monitorService.NewService(engine, cfg.DatabasePath), System: systemService.NewService(engine, taskService), Nodes: nodes, Agents: agents, AgentPublicURL: cfg.AgentPublicURL, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
 	application.recoveryWG.Add(1)
 	go func() {
 		defer application.recoveryWG.Done()
@@ -166,6 +207,9 @@ func (a *App) Run() error {
 }
 
 func (a *App) Shutdown(ctx context.Context) error {
+	if a.cleanup != nil {
+		a.cleanup.Stop()
+	}
 	if a.recoveryCancel != nil {
 		a.recoveryCancel()
 		a.recoveryWG.Wait()

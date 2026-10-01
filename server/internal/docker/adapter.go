@@ -997,23 +997,6 @@ func (a *Adapter) RemoveVolume(ctx context.Context, id string) error {
 	return a.client.VolumeRemove(ctx, id, false)
 }
 
-func (a *Adapter) Prune(ctx context.Context, report task.Reporter) error {
-	report(10, "Pruning stopped containers")
-	if _, err := a.client.ContainersPrune(ctx, filters.Args{}); err != nil {
-		return fmt.Errorf("prune containers: %w", err)
-	}
-	report(35, "Pruning unused networks")
-	if _, err := a.client.NetworksPrune(ctx, filters.Args{}); err != nil {
-		return fmt.Errorf("prune networks: %w", err)
-	}
-	report(60, "Pruning dangling images")
-	if _, err := a.client.ImagesPrune(ctx, filters.Args{}); err != nil {
-		return fmt.Errorf("prune images: %w", err)
-	}
-	report(85, "Pruning unused anonymous volumes")
-	if _, err := a.client.VolumesPrune(ctx, filters.Args{}); err != nil {
-		return fmt.Errorf("prune volumes: %w", err)
-	}
-	report(100, "System prune complete")
-	return nil
+func (a *Adapter) Prune(_ context.Context, _ task.Reporter) error {
+	return fmt.Errorf("system cleanup requires the node Cleanup service")
 }

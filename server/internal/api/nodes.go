@@ -14,7 +14,6 @@ import (
 	"github.com/suma/suma/server/internal/image"
 	"github.com/suma/suma/server/internal/network"
 	"github.com/suma/suma/server/internal/node"
-	"github.com/suma/suma/server/internal/system"
 	"github.com/suma/suma/server/internal/volume"
 )
 
@@ -361,8 +360,9 @@ func registerNodeRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps Dependenci
 	registerNodeComposeRoutes(resources, deps)
 	registerNodeProjectRoutes(resources, deps)
 	resources.POST("/system/prune", func(c *gin.Context) {
-		adapter, view, ok := resolveNode(c, deps)
-		if !ok {
+		view, err := deps.Nodes.Get(c.Request.Context(), c.Param("nodeID"))
+		if err != nil {
+			failure(c, 404, 20004, "Docker node not found")
 			return
 		}
 		var input struct {
@@ -372,9 +372,13 @@ func registerNodeRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps Dependenci
 			failure(c, 400, 20250, "Type PRUNE to confirm system cleanup")
 			return
 		}
-		row, err := system.NewService(adapter, deps.Tasks).PruneForNode(view.ID, view.Name)
+		if deps.Cleanup == nil {
+			failure(c, 503, 20601, "Cleanup service unavailable")
+			return
+		}
+		row, err := deps.Cleanup.LegacyRun(c.Request.Context(), view.ID, cleanupActor(c))
 		if err != nil {
-			failure(c, 500, 20251, "Unable to start system prune")
+			cleanupFailure(c, err)
 			return
 		}
 		recordNodeAudit(c, deps, view.ID, view.Name, "system.prune", "system", view.Name, "success")
@@ -1548,9 +1552,19 @@ func registerNodeVolumeRoutes(group *gin.RouterGroup, deps Dependencies) {
 		c.JSON(201, envelope{Code: 0, Message: "success", Data: row})
 	})
 	routes.DELETE("/:name", func(c *gin.Context) {
+		if c.Query("confirm") != c.Param("name") {
+			failure(c, 400, 15005, "Type the volume name to confirm permanent data loss")
+			return
+		}
 		adapter, view, ok := resolveNode(c, deps)
 		if !ok {
 			return
+		}
+		if deps.Cleanup != nil {
+			if err := deps.Cleanup.CheckVolumeDeletion(c.Request.Context(), view.ID, c.Param("name")); err != nil {
+				failure(c, 409, 20244, "Volume is protected, in use, or unavailable")
+				return
+			}
 		}
 		err := adapter.RemoveVolume(c.Request.Context(), c.Param("name"))
 		result := "success"

@@ -17,6 +17,7 @@ import (
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/auth"
 	cdService "github.com/suma/suma/server/internal/cd"
+	"github.com/suma/suma/server/internal/cleanup"
 	composeService "github.com/suma/suma/server/internal/compose"
 	containerdomain "github.com/suma/suma/server/internal/container"
 	"github.com/suma/suma/server/internal/containerfiles"
@@ -38,6 +39,7 @@ import (
 const sessionCookie = "suma_session"
 
 type Dependencies struct {
+	Cleanup             *cleanup.Service
 	Engine              docker.Engine
 	Containers          containerdomain.Service
 	Files               *containerfiles.Service
@@ -441,6 +443,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	v1.GET("/health", func(c *gin.Context) { success(c, gin.H{"status": "ok", "control_plane": "available"}) })
 	if deps.Nodes != nil {
 		registerNodeRoutes(router, v1, deps)
+		registerCleanupRoutes(v1, deps)
 		if deps.Agents != nil {
 			registerAgentRoutes(router, v1, deps)
 		}
@@ -1504,9 +1507,13 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			failure(c, http.StatusBadRequest, 19501, "Type PRUNE to confirm system cleanup")
 			return
 		}
-		row, err := deps.System.Prune()
+		if deps.Cleanup == nil {
+			failure(c, 503, 20601, "Cleanup service unavailable")
+			return
+		}
+		row, err := deps.Cleanup.LegacyRun(c.Request.Context(), "local", cleanupActor(c))
 		if err != nil {
-			failure(c, http.StatusInternalServerError, 19502, "Unable to start system prune")
+			cleanupFailure(c, err)
 			return
 		}
 		recordAudit(c, deps.Audit, "system.prune", "system", "local", "success")

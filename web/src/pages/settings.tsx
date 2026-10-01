@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { useLocation, useNavigate } from '@tanstack/react-router'
+import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
+import { StorageCleanup } from '../features/cleanup/storage-cleanup'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Save } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -22,6 +25,20 @@ const sections: [TranslationKey, [string, TranslationKey][]][] = [
 ]
 
 export function SettingsPage() {
+  const { t, language } = useI18n()
+  const zh = language === 'zh-CN'
+  const hash = useLocation({ select: location => location.hash })
+  const navigate = useNavigate()
+  const tab = hash === 'cleanup' ? 'cleanup' : 'general'
+  return <ResourceFrame title={t('settings')} detail={t('localConfiguration')}>
+    <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-6">
+      <Tabs value={tab} onValueChange={value => { void navigate({ to: '/settings', hash: value === 'cleanup' ? 'cleanup' : '' }) }}><TabsList><TabsTrigger value="general">{zh ? '常规设置' : 'General settings'}</TabsTrigger><TabsTrigger value="cleanup">{zh ? '存储清理' : 'Storage cleanup'}</TabsTrigger></TabsList></Tabs>
+      {tab === 'cleanup' ? <StorageCleanup /> : <GeneralSettings />}
+    </div>
+  </ResourceFrame>
+}
+
+function GeneralSettings() {
   const client = useQueryClient()
   const { theme, setTheme, language, setLanguage } = useUIStore()
   const { t } = useI18n()
@@ -41,8 +58,7 @@ export function SettingsPage() {
   const update = (key: string, value: string) => setValues((previous) => previous ? { ...previous, [key]: value } : previous)
   const submit = () => save.mutate(Object.fromEntries(Object.entries(values).filter(([key]) => !key.startsWith('security.'))))
 
-  return <ResourceFrame title={t('settings')} detail={t('localConfiguration')}>
-    <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-8">
+  return <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-8">
       <section className="flex w-full flex-col gap-4">
         <h3 className="text-sm font-medium">{t('appearance')}</h3>
         <div className="flex flex-col gap-4">
@@ -101,5 +117,4 @@ export function SettingsPage() {
         </div>
       </form>
     </div>
-  </ResourceFrame>
 }

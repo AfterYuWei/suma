@@ -26,7 +26,7 @@ export function AppDialog() {
     setChecked(request?.checkbox?.initialChecked ?? false)
   }, [request])
 
-  const valid = !request?.input?.requiredValue || value === request.input.requiredValue
+  const valid = (!request?.input?.requiredValue || value === request.input.requiredValue) && (!request?.checkbox?.required || checked)
   const complete = () => finishDialog(request?.checkbox ? { value: request.input ? value : 'confirmed', checked } : request?.input ? value : 'confirmed')
   const submit = (event: FormEvent) => { event.preventDefault(); if (!request?.choices && valid) complete() }
 
