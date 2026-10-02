@@ -1147,8 +1147,8 @@ func environmentValue(value any) string {
 }
 
 func sensitiveEnvironmentKey(key string) bool {
-	upper := strings.ToUpper(key)
-	for _, marker := range []string{"PASSWORD", "PASSWD", "TOKEN", "SECRET", "API_KEY", "APIKEY", "PRIVATE_KEY", "ACCESS_KEY", "AUTH"} {
+	upper := strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(key, "-", "_"), ".", "_"))
+	for _, marker := range []string{"PASSWORD", "PASSWD", "TOKEN", "SECRET", "CREDENTIAL", "API_KEY", "APIKEY", "PRIVATE_KEY", "PRIVATEKEY", "ACCESS_KEY", "ACCESSKEY", "AUTH"} {
 		if strings.Contains(upper, marker) {
 			return true
 		}

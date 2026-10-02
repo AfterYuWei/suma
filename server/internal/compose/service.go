@@ -30,6 +30,7 @@ type Project struct {
 	Containers  int                     `json:"containers"`
 	Compose     string                  `json:"compose"`
 	Environment string                  `json:"environment"`
+	Revision    string                  `json:"revision,omitempty"`
 	Metadata    *ManagedProjectMetadata `json:"metadata,omitempty"`
 }
 
@@ -48,6 +49,7 @@ type Service struct {
 	localSources bool
 	instanceID   string
 	projectLocks *sync.Map
+	operations   *sync.Map
 }
 
 func NewService(_ *gorm.DB, root string, runner Runner, tasks *task.Service, containers containerdomain.Service) (*Service, error) {
@@ -58,10 +60,10 @@ func NewService(_ *gorm.DB, root string, runner Runner, tasks *task.Service, con
 	if err := os.MkdirAll(absolute, 0o750); err != nil {
 		return nil, err
 	}
-	return &Service{root: absolute, runner: runner, tasks: tasks, containers: containers, nodeID: "local", nodeName: "Local", localSources: true, instanceID: fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano()), projectLocks: &sync.Map{}}, nil
+	return &Service{root: absolute, runner: runner, tasks: tasks, containers: containers, nodeID: "local", nodeName: "Local", localSources: true, instanceID: fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano()), projectLocks: &sync.Map{}, operations: &sync.Map{}}, nil
 }
 func (s *Service) ForNode(nodeID, nodeName string, runner Runner, containers containerdomain.Service, localSources bool) *Service {
-	return &Service{root: s.root, runner: runner, tasks: s.tasks, containers: containers, nodeID: nodeID, nodeName: nodeName, localSources: localSources, instanceID: s.instanceID, projectLocks: s.projectLocks}
+	return &Service{root: s.root, runner: runner, tasks: s.tasks, containers: containers, nodeID: nodeID, nodeName: nodeName, localSources: localSources, instanceID: s.instanceID, projectLocks: s.projectLocks, operations: s.operations}
 }
 func (s *Service) List(ctx context.Context) ([]Project, error) {
 	containers, err := s.containers.List(ctx)
@@ -120,6 +122,11 @@ func (s *Service) ListSummaries(ctx context.Context) ([]projectdomain.Summary, e
 	return summaries, nil
 }
 func (s *Service) Get(ctx context.Context, name string) (Project, error) {
+	unlock := s.lockProject(name)
+	defer unlock()
+	return s.getUnlocked(ctx, name)
+}
+func (s *Service) getUnlocked(ctx context.Context, name string) (Project, error) {
 	project, err := s.findProject(ctx, name)
 	if err != nil {
 		return Project{}, err
@@ -137,6 +144,7 @@ func (s *Service) Get(ctx context.Context, name string) (Project, error) {
 		return Project{}, err
 	}
 	project.Environment = string(environment)
+	project.Revision = configurationRevision(project.Compose, project.Environment)
 	return project, nil
 }
 
@@ -196,6 +204,11 @@ func (s *Service) Create(ctx context.Context, name, content, environment string)
 	if err != nil {
 		return Project{}, err
 	}
+	unlock := s.lockProject(name)
+	defer unlock()
+	if err := validateConfigurationIdentity(name, content, environment); err != nil {
+		return Project{}, err
+	}
 	path, err := s.safePath(name)
 	if err != nil {
 		return Project{}, err
@@ -203,36 +216,65 @@ func (s *Service) Create(ctx context.Context, name, content, environment string)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return Project{}, err
 	}
-	if err := os.Mkdir(path, 0o750); err != nil {
-		return Project{}, fmt.Errorf("create project directory: %w", err)
-	}
-	if err := writeAtomic(filepath.Join(path, "compose.yml"), content); err != nil {
+	if _, err := os.Lstat(path); err == nil {
+		return Project{}, errors.New("Project already exists")
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return Project{}, err
 	}
-	if err := writeAtomic(filepath.Join(path, ".env"), environment); err != nil {
+	temporary, err := os.MkdirTemp(filepath.Dir(path), ".create-")
+	if err != nil {
+		return Project{}, err
+	}
+	defer os.RemoveAll(temporary)
+	if err := os.Chmod(temporary, 0o750); err != nil {
+		return Project{}, err
+	}
+	if err := writeConfiguration(temporary, content, environment); err != nil {
 		return Project{}, err
 	}
 	metadata := newManagedProjectMetadata(s.effectiveNodeID(), name, "created", "", time.Now().UTC())
-	if err := writeManagedProjectMetadata(path, metadata); err != nil {
+	if err := writeManagedProjectMetadata(temporary, metadata); err != nil {
 		return Project{}, err
 	}
-	return s.Get(ctx, name)
+	if err := os.Rename(temporary, path); err != nil {
+		return Project{}, err
+	}
+	return s.getUnlocked(ctx, name)
 }
 
 func (s *Service) Save(ctx context.Context, name, content, environment string) (Project, error) {
+	return s.SaveWithRevision(ctx, name, content, environment, "")
+}
+func (s *Service) SaveWithRevision(ctx context.Context, name, content, environment, expected string) (Project, error) {
+	unlock := s.lockProject(name)
+	defer unlock()
+	if s.operationActive(name) {
+		return Project{}, ErrProjectBusy
+	}
 	project, err := s.managedProject(name)
 	if err != nil {
 		return Project{}, err
 	}
-	if err := writeAtomic(filepath.Join(project.Path, "compose.yml"), content); err != nil {
+	if err := s.checkRevision(project.Path, expected); err != nil {
 		return Project{}, err
 	}
-	if err := writeAtomic(filepath.Join(project.Path, ".env"), environment); err != nil {
+	if err := validateConfigurationIdentity(name, content, environment); err != nil {
 		return Project{}, err
 	}
-	return s.Get(ctx, name)
+	if err := writeConfiguration(project.Path, content, environment); err != nil {
+		return Project{}, err
+	}
+	return s.getUnlocked(ctx, name)
 }
 func (s *Service) Remove(ctx context.Context, name string) error {
+	unlock := s.lockProject(name)
+	defer unlock()
+	if s.operationActive(name) {
+		return ErrProjectBusy
+	}
+	return s.removeUnlocked(ctx, name)
+}
+func (s *Service) removeUnlocked(_ context.Context, name string) error {
 	project, err := s.managedProject(name)
 	if err != nil {
 		return err
@@ -247,6 +289,11 @@ func (s *Service) Remove(ctx context.Context, name string) error {
 // ForceRemove tears down runtime resources with no graceful-stop delay before
 // removing SUMA-owned state. Named volumes are deleted unless explicitly preserved.
 func (s *Service) ForceRemove(ctx context.Context, name string, preserveVolumes bool) error {
+	unlock := s.lockProject(name)
+	defer unlock()
+	if s.operationActive(name) {
+		return ErrProjectBusy
+	}
 	project, err := s.managedProject(name)
 	if err != nil {
 		return err
@@ -258,7 +305,7 @@ func (s *Service) ForceRemove(ctx context.Context, name string, preserveVolumes 
 	if err := s.runner.ForceDown(ctx, project.Path, preserveVolumes, io.Discard); err != nil {
 		return fmt.Errorf("force down Compose project: %w", err)
 	}
-	return s.Remove(ctx, name)
+	return s.removeUnlocked(ctx, name)
 }
 func (s *Service) Services(ctx context.Context, name string) ([]containerdomain.Summary, error) {
 	rows, err := s.containers.List(ctx)
@@ -304,7 +351,7 @@ func (s *Service) Validate(ctx context.Context, name, content, environment strin
 	if _, err := s.managedProject(name); err != nil {
 		return err
 	}
-	return s.ValidateDraft(ctx, content, environment)
+	return s.ValidateConfiguration(ctx, name, content, environment)
 }
 
 // ValidateDraft validates an unsaved Compose Project without requiring a
@@ -366,16 +413,61 @@ func composeValidationDetail(output, environment string) string {
 	return output
 }
 func (s *Service) Action(ctx context.Context, name, action string) (database.Task, error) {
+	return s.ActionWithRevision(ctx, name, action, "")
+}
+func (s *Service) ActionWithRevision(ctx context.Context, name, action, expected string, allowDockerSocket ...bool) (database.Task, error) {
+	unlock := s.lockProject(name)
+	defer unlock()
+	if s.operationActive(name) {
+		return database.Task{}, ErrProjectBusy
+	}
 	project, err := s.managedProject(name)
 	if err != nil {
 		return database.Task{}, err
 	}
-	return s.tasks.StartWithIDForNode(s.effectiveNodeID(), s.effectiveNodeName(), "compose."+action, strings.Title(action)+" "+name, func(ctx context.Context, taskID string, report task.Reporter) error {
+	if err := s.checkRevision(project.Path, expected); err != nil {
+		return database.Task{}, err
+	}
+	snapshot, err := readConfiguration(project.Path)
+	if err != nil {
+		return database.Task{}, err
+	}
+	revision := configurationRevision(snapshot[0], snapshot[1])
+	redact := configurationRedactor(snapshot[0], snapshot[1])
+	confirmedSocket := len(allowDockerSocket) > 0 && allowDockerSocket[0]
+	if expected != "" && (action == "up" || action == "update") {
+		if err := ValidateComposeBindMounts(snapshot[0], !s.localSources, confirmedSocket); err != nil {
+			return database.Task{}, err
+		}
+	}
+	if s.operations == nil {
+		s.operations = &sync.Map{}
+	}
+	key := s.operationKey(name)
+	s.operations.Store(key, true)
+	result, startErr := s.tasks.StartWithIDForNode(s.effectiveNodeID(), s.effectiveNodeName(), "compose."+action, strings.Title(action)+" "+name, func(ctx context.Context, taskID string, report task.Reporter) error {
+		defer s.operations.Delete(key)
+		if err := s.checkRevision(project.Path, revision); err != nil {
+			return err
+		}
+		if expected != "" && (action == "up" || action == "update") {
+			if err := ValidateComposeBindMounts(snapshot[0], !s.localSources, confirmedSocket); err != nil {
+				return err
+			}
+			if err := s.ValidateConfiguration(ctx, name, snapshot[0], snapshot[1]); err != nil {
+				return err
+			}
+		}
 		var err error
 		report(1, "Starting docker compose "+action)
 		run := func(start, end int, operation func(io.Writer) error) error {
-			writer := newReportWriter(report, func(progress int, message string) {
-				_ = s.tasks.UpdateProgress(ctx, taskID, progress, message)
+			if err := s.checkRevision(project.Path, revision); err != nil {
+				return err
+			}
+			writer := newReportWriter(func(progress int, message string) {
+				report(progress, redact(message))
+			}, func(progress int, message string) {
+				_ = s.tasks.UpdateProgress(ctx, taskID, progress, redact(message))
 			}, start, end)
 			err := operation(writer)
 			writer.Flush()
@@ -407,8 +499,15 @@ func (s *Service) Action(ctx context.Context, name, action string) (database.Tas
 		if err == nil && (action == "up" || action == "update") {
 			_ = s.markDeployed(project)
 		}
+		if err != nil && redact(err.Error()) != err.Error() {
+			return errors.New(redact(err.Error()))
+		}
 		return err
 	})
+	if startErr != nil {
+		s.operations.Delete(key)
+	}
+	return result, startErr
 }
 
 func (s *Service) managedProjects() ([]Project, error) {

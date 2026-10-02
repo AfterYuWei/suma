@@ -40,10 +40,11 @@ interface MonacoEditorProps {
   theme: string
   value: string
   onChange?: (value: string | undefined) => void
+  revealLine?: number
   options?: monaco.editor.IStandaloneEditorConstructionOptions
 }
 
-export default function MonacoEditor({ language, theme, value, onChange, options }: MonacoEditorProps) {
+export default function MonacoEditor({ language, theme, value, onChange, options, revealLine }: MonacoEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const onChangeRef = useRef(onChange)
@@ -83,6 +84,8 @@ export default function MonacoEditor({ language, theme, value, onChange, options
     editorRef.current?.updateOptions(options ?? {})
   }, [options])
 
+  useEffect(() => { if (revealLine) { editorRef.current?.revealLineInCenter(revealLine); editorRef.current?.setPosition({ lineNumber: revealLine, column: 1 }) } }, [revealLine])
+
   return <div ref={containerRef} className="h-full w-full" />
 }
 
@@ -92,7 +95,7 @@ export function MonacoDiffEditor({ original, modified, language, theme }: { orig
     if (!element.current) return
     const before = monaco.editor.createModel(original, language)
     const after = monaco.editor.createModel(modified, language)
-    const editor = monaco.editor.createDiffEditor(element.current, { theme, readOnly: true, automaticLayout: true, minimap: { enabled: false }, renderSideBySide: true })
+    const editor = monaco.editor.createDiffEditor(element.current, { theme, readOnly: true, automaticLayout: true, minimap: { enabled: false }, renderSideBySide: true, occurrencesHighlight: 'off' })
     editor.setModel({ original: before, modified: after })
     return () => { editor.dispose(); before.dispose(); after.dispose() }
   }, [original, modified, language, theme])

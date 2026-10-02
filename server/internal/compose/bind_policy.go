@@ -21,7 +21,7 @@ func ValidateComposeBindMounts(content string, remote, allowDockerSocket bool) e
 		} `yaml:"services"`
 	}
 	if err := yaml.Unmarshal([]byte(content), &document); err != nil {
-		return fmt.Errorf("parse Compose file: %w", err)
+		return errors.New("Compose YAML cannot be parsed; check source syntax")
 	}
 	for serviceName, service := range document.Services {
 		for _, raw := range service.Volumes {

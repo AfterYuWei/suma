@@ -22,6 +22,7 @@ import { TooltipProvider } from './components/ui/tooltip'
 
 const ContainerDetailPage = lazy(() => import('./pages/container-detail').then((module) => ({ default: module.ContainerDetailPage })))
 const ComposeDetailPage = lazy(() => import('./pages/compose-detail').then((module) => ({ default: module.ComposeDetailPage })))
+const ProjectCreatePage = lazy(() => import('./pages/project-create').then((module) => ({ default: module.ProjectCreatePage })))
 const ProjectTakeoverPage = lazy(() => import('./pages/project-takeover').then((module) => ({ default: module.ProjectTakeoverPage })))
 const ContinuousDeliveryDetailPage = lazy(() => import('./pages/continuous-delivery-detail').then((module) => ({ default: module.ContinuousDeliveryDetailPage })))
 const deferred = (Component: ComponentType) => () => <Suspense fallback={<div role="status" className="grid min-h-72 place-items-center gap-2 text-muted-foreground"><Spinner /><span className="text-sm">Loading module</span></div>}><Component /></Suspense>
@@ -36,7 +37,8 @@ const volumesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/volu
 const tasksRoute = createRoute({ getParentRoute: () => rootRoute, path: '/tasks', component: TasksPage })
 const auditRoute = createRoute({ getParentRoute: () => rootRoute, path: '/audit-logs', component: AuditLogsPage })
 const projectsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/projects', component: ComposePage })
-const projectDetailRoute = createRoute({ getParentRoute: () => rootRoute, path: '/projects/$backend/$projectName', component: deferred(ComposeDetailPage) })
+const projectCreateRoute = createRoute({ getParentRoute: () => rootRoute, path: '/projects/new', component: deferred(ProjectCreatePage) })
+const projectDetailRoute = createRoute({ getParentRoute: () => rootRoute, path: '/projects/$backend/$projectName', component: deferred(ComposeDetailPage), validateSearch: (search: Record<string, unknown>): { task?: string; action?: string } => ({ task: typeof search.task === 'string' ? search.task : undefined, action: typeof search.action === 'string' ? search.action : undefined }), remountDeps: ({ params }) => [params.backend, params.projectName] })
 const projectTakeoverRoute = createRoute({ getParentRoute: () => rootRoute, path: '/projects/$backend/$projectName/takeover', component: deferred(ProjectTakeoverPage) })
 const composeRoute = createRoute({ getParentRoute: () => rootRoute, path: '/compose', beforeLoad: () => { throw redirect({ to: '/projects' }) } })
 const composeDetailRoute = createRoute({ getParentRoute: () => rootRoute, path: '/compose/$projectName', beforeLoad: ({ params }) => { throw redirect({ to: '/projects/$backend/$projectName', params: { backend: 'compose', projectName: params.projectName } }) } })
@@ -46,7 +48,7 @@ const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/set
 const authenticationRoute = createRoute({ getParentRoute: () => rootRoute, path: '/authentication', component: AuthenticationPage })
 const nodesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/nodes', component: NodesPage })
 const accountRoute = createRoute({ getParentRoute: () => rootRoute, path: '/account', component: AccountPage })
-const router = createRouter({ routeTree: rootRoute.addChildren([overviewRoute, containersRoute, containerDetailRoute, imagesRoute, networksRoute, volumesRoute, tasksRoute, auditRoute, projectsRoute, projectDetailRoute, projectTakeoverRoute, composeRoute, composeDetailRoute, continuousDeliveryRoute, continuousDeliveryDetailRoute, authenticationRoute, nodesRoute, settingsRoute, accountRoute]) })
+const router = createRouter({ routeTree: rootRoute.addChildren([overviewRoute, containersRoute, containerDetailRoute, imagesRoute, networksRoute, volumesRoute, tasksRoute, auditRoute, projectsRoute, projectCreateRoute, projectDetailRoute, projectTakeoverRoute, composeRoute, composeDetailRoute, continuousDeliveryRoute, continuousDeliveryDetailRoute, authenticationRoute, nodesRoute, settingsRoute, accountRoute]) })
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 5_000, retry: 1 } } })
 
 declare module '@tanstack/react-router' { interface Register { router: typeof router } }

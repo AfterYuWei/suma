@@ -109,7 +109,7 @@ func (s *Service) Takeover(ctx context.Context, name string, input TakeoverInput
 	if err := os.Rename(temporary, target); err != nil {
 		return Project{}, fmt.Errorf("claim Compose Project: %w", err)
 	}
-	return s.Get(ctx, name)
+	return s.getUnlocked(ctx, name)
 }
 
 // ValidateTakeoverDraft validates unsaved takeover content for one Compose

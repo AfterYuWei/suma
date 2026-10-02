@@ -636,8 +636,9 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 			return
 		}
 		var input struct {
-			Compose     string `json:"compose"`
-			Environment string `json:"environment"`
+			Compose          string `json:"compose"`
+			Environment      string `json:"environment"`
+			ExpectedRevision string `json:"expected_revision"`
 		}
 		if c.ShouldBindJSON(&input) != nil || input.Compose == "" {
 			failure(c, 400, 20306, "Compose YAML is required")
@@ -647,9 +648,9 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 422, 20307, err.Error())
 			return
 		}
-		row, err := current.Save(c.Request.Context(), c.Param("name"), input.Compose, input.Environment)
+		row, err := current.SaveWithRevision(c.Request.Context(), c.Param("name"), input.Compose, input.Environment, input.ExpectedRevision)
 		if err != nil {
-			failure(c, 409, 20309, "Unable to save Compose project")
+			failure(c, 409, 20309, err.Error())
 			return
 		}
 		recordNodeAudit(c, deps, view.ID, view.Name, "compose.save", "compose", c.Param("name"), "success")
@@ -741,7 +742,14 @@ func registerNodeComposeRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 404, 20313, "Unknown Compose action")
 			return
 		}
-		row, err := current.Action(c.Request.Context(), c.Param("name"), action)
+		var input struct {
+			ExpectedRevision string `json:"expected_revision"`
+		}
+		if c.Request.ContentLength != 0 && c.ShouldBindJSON(&input) != nil {
+			failure(c, 400, 20403, "Invalid Project action request")
+			return
+		}
+		row, err := current.ActionWithRevision(c.Request.Context(), c.Param("name"), action, input.ExpectedRevision, strings.EqualFold(strings.TrimSpace(c.GetHeader(composeService.DockerSocketConfirmationHeader)), "true"))
 		if err != nil {
 			failure(c, 409, 20314, "Unable to start Compose action")
 			return
@@ -810,6 +818,30 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 		}
 		recordNodeAudit(c, deps, view.ID, view.Name, "project.create", "project", row.Name, "success")
 		c.JSON(201, envelope{Code: 0, Message: "success", Data: row})
+	})
+	projects.POST("/validate", func(c *gin.Context) {
+		current, view, ok := service(c)
+		if !ok {
+			return
+		}
+		var input struct {
+			Name        string `json:"name"`
+			Compose     string `json:"compose"`
+			Environment string `json:"environment"`
+		}
+		if c.ShouldBindJSON(&input) != nil || input.Name == "" || input.Compose == "" {
+			failure(c, 400, 20403, "Project name and Compose YAML are required")
+			return
+		}
+		if err := validatePolicy(c, view, input.Compose); err != nil {
+			failure(c, 422, 20404, err.Error())
+			return
+		}
+		if err := current.ValidateConfiguration(c.Request.Context(), input.Name, input.Compose, input.Environment); err != nil {
+			failure(c, 422, 20412, err.Error())
+			return
+		}
+		success(c, gin.H{"valid": true})
 	})
 	projects.POST("/batch", func(c *gin.Context) {
 		current, view, ok := service(c)
@@ -887,8 +919,9 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 			return
 		}
 		var input struct {
-			Compose     string `json:"compose"`
-			Environment string `json:"environment"`
+			Compose          string `json:"compose"`
+			Environment      string `json:"environment"`
+			ExpectedRevision string `json:"expected_revision"`
 		}
 		if c.ShouldBindJSON(&input) != nil || input.Compose == "" {
 			failure(c, 400, 20403, "Compose YAML is required")
@@ -898,9 +931,9 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 422, 20404, err.Error())
 			return
 		}
-		row, err := current.Save(c.Request.Context(), c.Param("name"), input.Compose, input.Environment)
+		row, err := current.SaveWithRevision(c.Request.Context(), c.Param("name"), input.Compose, input.Environment, input.ExpectedRevision)
 		if err != nil {
-			failure(c, 409, 20411, "Unable to save Project")
+			failure(c, 409, 20411, err.Error())
 			return
 		}
 		recordNodeAudit(c, deps, view.ID, view.Name, "project.save", "project", c.Param("name"), "success")
@@ -963,9 +996,16 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 			failure(c, 404, 20415, "Unknown Project action")
 			return
 		}
-		row, err := current.Action(c.Request.Context(), c.Param("name"), action)
+		var input struct {
+			ExpectedRevision string `json:"expected_revision"`
+		}
+		if c.Request.ContentLength != 0 && c.ShouldBindJSON(&input) != nil {
+			failure(c, 400, 20403, "Invalid Project action request")
+			return
+		}
+		row, err := current.ActionWithRevision(c.Request.Context(), c.Param("name"), action, input.ExpectedRevision, strings.EqualFold(strings.TrimSpace(c.GetHeader(composeService.DockerSocketConfirmationHeader)), "true"))
 		if err != nil {
-			failure(c, 409, 20416, "Unable to start Project action")
+			failure(c, 409, 20416, err.Error())
 			return
 		}
 		recordNodeAudit(c, deps, view.ID, view.Name, "project."+action, "project", c.Param("name"), "success")

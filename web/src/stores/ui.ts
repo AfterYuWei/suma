@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { NodeGroupFilter } from '../lib/nodes'
+import { allowProjectNodeChange } from '../lib/project-navigation-guard'
 
 export type Theme = 'dark' | 'light' | 'system'
 export type Language = 'zh-CN' | 'en-US'
@@ -99,7 +100,7 @@ export const useUIStore = create<UIState>((set) => ({
   },
   setCommandOpen: (commandOpen) => set({ commandOpen }),
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
-  setCurrentNodeID: (currentNodeID) => { localStorage.setItem('suma-node', currentNodeID); set({ currentNodeID }) },
+  setCurrentNodeID: (currentNodeID) => { void allowProjectNodeChange().then((allowed) => { if (allowed) { localStorage.setItem('suma-node', currentNodeID); set({ currentNodeID }) } }) },
 	setCurrentGroupFilter: (currentGroupFilter) => { localStorage.setItem('suma-node-group', currentGroupFilter); set({ currentGroupFilter }) },
   setLogTail: (logTail) => { localStorage.setItem('suma-log-tail', String(logTail)); set({ logTail }) },
   setListPageSize: (listPageSize) => { localStorage.setItem('suma-list-page-size', String(listPageSize)); set({ listPageSize }) },

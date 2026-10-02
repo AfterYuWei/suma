@@ -1158,8 +1158,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	})
 	compose.PUT("/:name", func(c *gin.Context) {
 		var input struct {
-			Compose     string `json:"compose" binding:"required"`
-			Environment string `json:"environment"`
+			Compose          string `json:"compose" binding:"required"`
+			Environment      string `json:"environment"`
+			ExpectedRevision string `json:"expected_revision"`
 		}
 		if c.ShouldBindJSON(&input) != nil {
 			failure(c, http.StatusBadRequest, 18003, "Compose YAML is required")
@@ -1168,9 +1169,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		if !validateComposePolicy(c, input.Compose) {
 			return
 		}
-		row, err := deps.Compose.Save(c.Request.Context(), c.Param("name"), input.Compose, input.Environment)
+		row, err := deps.Compose.SaveWithRevision(c.Request.Context(), c.Param("name"), input.Compose, input.Environment, input.ExpectedRevision)
 		if err != nil {
-			failure(c, http.StatusConflict, 18005, "Unable to save Compose project")
+			failure(c, http.StatusConflict, 18005, err.Error())
 			return
 		}
 		recordAudit(c, deps.Audit, "compose.save", "compose", c.Param("name"), "success")
@@ -1371,7 +1372,14 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			failure(c, http.StatusNotFound, 18007, "Unknown Compose action")
 			return
 		}
-		row, err := deps.Compose.Action(c.Request.Context(), c.Param("name"), action)
+		var input struct {
+			ExpectedRevision string `json:"expected_revision"`
+		}
+		if c.Request.ContentLength != 0 && c.ShouldBindJSON(&input) != nil {
+			failure(c, 400, 20403, "Invalid Project action request")
+			return
+		}
+		row, err := deps.Compose.ActionWithRevision(c.Request.Context(), c.Param("name"), action, input.ExpectedRevision, strings.EqualFold(strings.TrimSpace(c.GetHeader(composeService.DockerSocketConfirmationHeader)), "true"))
 		if err != nil {
 			failure(c, http.StatusConflict, 18008, "Unable to start Compose action")
 			return

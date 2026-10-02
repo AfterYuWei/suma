@@ -2,6 +2,7 @@ package compose
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -108,6 +109,9 @@ func (r *CLIRunner) runSpec(ctx context.Context, spec ExecutionSpec, output io.W
 	values = append(values, args...)
 	command := exec.CommandContext(ctx, r.command, values...)
 	command.Dir = spec.ProjectDir
+	if _, statErr := os.Stat(spec.ProjectDir); errors.Is(statErr, os.ErrNotExist) && len(spec.Files) > 0 {
+		command.Dir = filepath.Dir(spec.Files[0])
+	}
 	environment, cleanup, err := r.commandEnvironment()
 	if err != nil {
 		return err
@@ -130,6 +134,9 @@ func (r *CLIRunner) captureSpec(ctx context.Context, spec ExecutionSpec, output 
 	values = append(values, args...)
 	command := exec.CommandContext(ctx, r.command, values...)
 	command.Dir = spec.ProjectDir
+	if _, statErr := os.Stat(spec.ProjectDir); errors.Is(statErr, os.ErrNotExist) && len(spec.Files) > 0 {
+		command.Dir = filepath.Dir(spec.Files[0])
+	}
 	environment, cleanup, err := r.commandEnvironment()
 	if err != nil {
 		return "", err

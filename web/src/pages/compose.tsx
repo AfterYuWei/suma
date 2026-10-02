@@ -18,16 +18,16 @@ import { TooltipHint } from '../components/ui/tooltip-hint'
 import { confirmExternalProjectCleanup } from '../features/compose/external-project-cleanup'
 import { confirmManagedProjectRemoval } from '../features/compose/managed-project-removal'
 import { TakeoverWarningDialog } from '../features/compose/takeover-warning-dialog'
-import type { Project, ProjectSummary } from '../features/compose/types'
+import type { ProjectSummary } from '../features/compose/types'
 import type { ContainerSummary } from '../features/containers/types'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { nodePath } from '../lib/nodes'
-import { confirmDialog, promptDialog } from '../stores/dialog'
+import { confirmDialog } from '../stores/dialog'
 import { useUIStore } from '../stores/ui'
 import { ResourceFrame } from './images'
 
-const starter = `services:\n  app:\n    image: nginx:alpine\n    ports:\n      - "8080:80"\n`
+
 const projectTone = (status: string) => status === 'running' ? 'success' : status === 'degraded' ? 'warning' : 'neutral'
 const containerTone = (state: string) => state === 'running' ? 'success' : state === 'paused' || state === 'restarting' ? 'warning' : 'neutral'
 interface ProjectTask { id: string; status: string; message: string }
@@ -58,10 +58,6 @@ export function ComposePage() {
       return !task || task.status === 'pending' || task.status === 'running' ? 1_000 : false
     },
   })
-  const create = useMutation({
-    mutationFn: (name: string) => api<Project>(nodePath(nodeID, '/projects'), { method: 'POST', body: JSON.stringify({ backend: 'compose', name, compose: starter, environment: '' }) }),
-    onSuccess: async () => { await client.invalidateQueries({ queryKey: ['projects', nodeID] }) },
-  })
   const batch = useMutation({
     mutationFn: ({ names, action }: { names: string[]; action: string }) => api(nodePath(nodeID, '/projects/batch'), { method: 'POST', body: JSON.stringify({ backend: 'compose', names, action }) }),
     onSuccess: async () => { setSelected(new Set()); await Promise.all([client.invalidateQueries({ queryKey: ['projects', nodeID] }), client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] })]) },
@@ -73,10 +69,7 @@ export function ComposePage() {
   const selectedRows = manageable.filter((row) => selected.has(row.name))
   const allSelected = pageManageable.length > 0 && pageManageable.every((row) => selected.has(row.name))
   const someSelected = !allSelected && pageManageable.some((row) => selected.has(row.name))
-  const add = async () => {
-    const name = await promptDialog({ title: t('newProject'), description: zh ? '创建一个使用 Docker Compose 后端的 SUMA Project。项目名必须使用小写字母、数字、连字符或下划线，并以字母或数字开头。' : 'Create a SUMA Project using the Docker Compose backend. The name must be lowercase and use only letters, numbers, hyphens, or underscores, starting with a letter or number.', confirmLabel: t('create'), input: { label: t('projectName') } })
-    if (name) create.mutate(name.trim())
-  }
+  const add = () => navigate({ to: '/projects/new' })
   const runBatch = async (action: string) => {
     if (!selectedRows.length) return
     if (action === 'down' && !await confirmDialog({ title: zh ? `Down ${selectedRows.length} 个项目？` : `Down ${selectedRows.length} projects?`, description: zh ? '这会移除项目容器和网络，但保留托管文件和命名卷。' : 'This removes project containers and networks while preserving managed files and named volumes.', confirmLabel: 'Down', danger: true })) return
@@ -88,14 +81,13 @@ export function ComposePage() {
   const running = rows.filter((row) => row.status === 'running').length
   const trackedTask = feedback?.kind === 'task' ? trackedTasks.data?.find((row) => row.id === feedback.taskID) : undefined
   const feedbackView = projectFeedbackView(feedback, trackedTask, zh)
-  const toolbar = <div className="flex flex-wrap items-center gap-2"><StatusBadge tone="success">{running} {zh ? '运行中' : 'running'}</StatusBadge><StatusBadge tone="neutral">{rows.length - running} {zh ? '其他' : 'other'}</StatusBadge><Button onClick={() => void add()} disabled={create.isPending}>{create.isPending ? <Spinner /> : <Plus />}{t('newProject')}</Button></div>
+  const toolbar = <div className="flex flex-wrap items-center gap-2"><StatusBadge tone="success">{running} {zh ? '运行中' : 'running'}</StatusBadge><StatusBadge tone="neutral">{rows.length - running} {zh ? '其他' : 'other'}</StatusBadge><Button onClick={() => void add()} ><Plus />{t('newProject')}</Button></div>
 
   return <ResourceFrame title={zh ? '项目' : 'Projects'} detail={zh ? `${rows.length} 个 Project` : `${rows.length} Projects`} action={toolbar}>
     <div className="flex w-full flex-col gap-4">
       {!!selected.size && <div className="flex flex-wrap items-center gap-2"><span className="text-sm font-medium">{selected.size} {zh ? '已选' : 'selected'}</span>{[['up', Play], ['stop', Square], ['restart', RefreshCw], ['update', Download], ['down', PowerOff]].map(([name, Icon]) => <Button key={String(name)} variant={name === 'down' ? 'destructive' : 'outline'} size="sm" disabled={batch.isPending} onClick={() => void runBatch(String(name))}><Icon />{actionLabel(String(name), zh)}</Button>)}</div>}
       {feedbackView && <Alert variant={feedbackView.error ? 'destructive' : 'default'}>{feedbackView.error ? <CircleAlert /> : feedbackView.pending ? <Spinner /> : <CheckCircle2 />}<AlertDescription>{feedbackView.message}{feedback?.kind === 'task' && <> <Link to="/tasks">{zh ? '查看任务' : 'View task'}</Link></>}</AlertDescription></Alert>}
       {batch.isError && <ErrorState description={batch.error.message} />}
-      {create.isError && <ErrorState description={create.error.message} />}
       {query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载项目' : 'Loading Projects'} /> : query.isError ? <ErrorState description={query.error.message} /> : rows.length === 0 ? <div className="rounded-xl bg-card px-4 py-10 text-center ring-1 ring-foreground/10"><p className="text-sm font-medium">{zh ? '未发现 Project' : 'No Projects discovered'}</p><p className="text-sm text-muted-foreground">{zh ? 'Compose Project 会根据 Docker 标签自动聚合显示。' : 'Compose Projects are aggregated automatically from Docker labels.'}</p></div> : <><ListShell><Table>
         <TableHeader><TableRow><TableHead className="w-9 pr-0"><Checkbox checked={allSelected} indeterminate={someSelected} onCheckedChange={(value) => toggleAll(value === true)} aria-label={allSelected ? (zh ? '取消选择本页' : 'Deselect this page') : (zh ? '选择本页托管项目' : 'Select managed Projects on this page')} /></TableHead><TableHead className="w-9" /><TableHead>{zh ? '项目' : 'Project'}</TableHead><TableHead className="w-24">Backend</TableHead><TableHead className="w-28">{zh ? '状态' : 'Status'}</TableHead><TableHead className="w-40">{zh ? '运行资源' : 'Runtime'}</TableHead><TableHead className="w-56">{zh ? '操作' : 'Actions'}</TableHead></TableRow></TableHeader>
         <TableBody>{pagination.items.flatMap((row) => {

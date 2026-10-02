@@ -1,3 +1,4 @@
+import { composeProblems, configKeys, configValue } from '../features/compose/document'
 import { createMockCleanup } from './mock-cleanup'
 import type { User } from '../features/auth/types'
 import type { Project, ProjectSummary, ProjectTakeoverDraft, ShadowAssessment, ShadowPreviewSession, ShadowPreviewStatus } from '../features/compose/types'
@@ -68,6 +69,8 @@ const projects: ProjectSummary[] = [
   { ref: { backend: 'compose', scope: { kind: 'engine', id: 'local' }, native_name: 'legacy-tools' }, backend: 'compose', scope: { kind: 'engine', id: 'local' }, node_id: 'local', name: 'legacy-tools', native_name: 'legacy-tools', managed: false, source: 'external', capabilities: ['view', 'services', 'logs', 'takeover', 'cleanup'], service_count: 1, instance_count: 1, status: 'stopped', created_at: earlier, updated_at: now },
 ]
 
+const projectConfigurations = new Map<string, Project>()
+let projectRevision = 0
 const projectDetail = (row: ProjectSummary): Project => ({ ...row, path: `/srv/compose/${row.name}`, can_manage: row.managed, config_files: ['compose.yml'], services: row.service_count, containers: row.instance_count, compose: `services:\n  app:\n    image: ghcr.io/example/${row.name}:latest\n    restart: unless-stopped\n`, environment: 'APP_ENV=production\n', metadata: { origin: row.managed ? 'created' : 'takeover', claimed_at: earlier, last_deployed_at: now } })
 
 const images = [
@@ -461,15 +464,44 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     if (suffix.startsWith('/volumes')) return {} as T
 
     if (suffix === '/projects' && method === 'GET') return clone(projects.map((item) => ({ ...item, node_id: nodeID, scope: { kind: 'engine', id: nodeID }, ref: { ...item.ref, scope: { kind: 'engine', id: nodeID } } }))) as T
-    if (suffix === '/projects' && method === 'POST') return clone(projectDetail(projects[0])) as T
+    if (suffix === '/projects/validate') {
+      const content = String(body.compose ?? '')
+      if (composeProblems(content).length || !configKeys(content, ['services']).length || configKeys(content, ['services']).some((service) => !configValue(content, ['services', service, 'image']) && !configValue(content, ['services', service, 'build']))) throw new ApiError('Compose validation failed', 20412, 422)
+      return { valid: true } as T
+    }
+    if (suffix === '/projects' && method === 'POST') {
+      const name = String(body.name ?? '')
+      if (!/^[a-z0-9][a-z0-9_-]*$/.test(name) || composeProblems(String(body.compose)).length) throw new ApiError('Invalid Project configuration', 20403, 422)
+      if (projects.some((row) => row.name === name)) throw new ApiError('Project already exists', 20405, 409)
+      const summary: ProjectSummary = { ...clone(projects[0]), name, native_name: name, node_id: nodeID, managed: true, source: 'managed', service_count: configKeys(String(body.compose), ['services']).length, instance_count: 0, status: 'stopped', scope: { kind: 'engine', id: nodeID }, ref: { backend: 'compose', scope: { kind: 'engine', id: nodeID }, native_name: name }, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+      projects.push(summary)
+      const detail: Project = { ...projectDetail(summary), compose: String(body.compose), environment: String(body.environment ?? ''), revision: `demo-config-${++projectRevision}` }
+      projectConfigurations.set(`${nodeID}/${name}`, detail)
+      return clone(detail) as T
+    }
     if (suffix === '/projects/batch') return {} as T
     const projectMatch = suffix.match(/^\/projects\/compose\/([^/]+)(\/.*)?$/)
     if (projectMatch) {
       const name = projectMatch[1]
       const rest = projectMatch[2] || ''
       const row = projects.find((item) => item.name === name) ?? projects[0]
-      if (!rest && method === 'GET') return clone(projectDetail(row)) as T
+      const configurationKey = `${nodeID}/${name}`
+      const detail = projectConfigurations.get(configurationKey) ?? { ...projectDetail(row), revision: 'demo-config-0' }
+      if (!rest && method === 'GET') return clone(detail) as T
+      if (!rest && method === 'PUT') {
+        if (body.expected_revision && body.expected_revision !== detail.revision) throw new ApiError('Project configuration changed', 20411, 409)
+        if (composeProblems(String(body.compose)).length) throw new ApiError('Compose YAML cannot be parsed', 20404, 422)
+        const saved = { ...detail, compose: String(body.compose), environment: String(body.environment ?? ''), revision: `demo-config-${++projectRevision}` }
+        projectConfigurations.set(configurationKey, saved)
+        return clone(saved) as T
+      }
+      if (rest === '/validate') {
+        const content = String(body.compose)
+        if (composeProblems(content).length || !configKeys(content, ['services']).length || configKeys(content, ['services']).some((service) => !configValue(content, ['services', service, 'image']) && !configValue(content, ['services', service, 'build']))) throw new ApiError('Compose validation failed', 20412, 422)
+        return { valid: true } as T
+      }
       if (!rest && method === 'DELETE') {
+        projectConfigurations.delete(configurationKey)
         const index = projects.findIndex((item) => item.name === name)
         if (index >= 0) projects.splice(index, 1)
         return clone({ name }) as T
@@ -483,7 +515,12 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
       if (rest === '/takeover/shadow/assess') return clone({ eligible: true, reasons: [], warnings: [] } satisfies ShadowAssessment) as T
       if (rest === '/takeover/shadow' && method === 'POST') return clone({ session_id: 'shadow-demo', preview_project: `${name}-preview`, expires_at: now, task: { id: 'task-shadow-demo', status: 'success', progress: 100, message: 'Preview ready' } } satisfies ShadowPreviewSession) as T
       if (rest.startsWith('/takeover/shadow/')) return clone({ session_id: 'shadow-demo', preview_project: `${name}-preview`, expires_at: now, containers: '1 running', logs: 'Preview service is healthy' } satisfies ShadowPreviewStatus) as T
-      if (rest.startsWith('/actions/')) return clone({ id: `task-${name}`, scope: 'node', node_id: nodeID, type: `compose.${rest.slice('/actions/'.length)}`, name: `Compose ${name}`, status: 'success', progress: 100, message: 'Operation completed', created_at: now }) as T
+      if (rest.startsWith('/actions/')) {
+        if (body.expected_revision && body.expected_revision !== detail.revision) throw new ApiError('Project configuration changed', 20416, 409)
+        const task = { id: `task-${name}-${Date.now()}`, scope: 'node', node_id: nodeID, node_name: nodeID, type: `compose.${rest.slice('/actions/'.length)}`, name: `Compose ${name}`, status: 'success', progress: 100, message: 'Operation completed', created_at: new Date().toISOString() }
+        tasks.push(task)
+        return clone(task) as T
+      }
       if (rest === '/cleanup' && method === 'POST') return clone({ id: `task-cleanup-${name}`, scope: 'node', node_id: nodeID, type: 'project.cleanup', name: `Clean ${name}`, status: 'success', progress: 100, message: 'Project resources removed', created_at: now }) as T
       return {} as T
     }

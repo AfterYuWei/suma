@@ -19,6 +19,7 @@ export interface ProjectSummary {
 }
 
 export interface Project extends ProjectSummary {
+  revision?: string
   path: string
   can_manage: boolean
   config_files: string[]

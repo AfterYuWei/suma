@@ -41,7 +41,7 @@ export function CommandPalette({ open, close }: { open: boolean; close: () => vo
 
     ;[
       { id: 'containers', label: zh ? '打开容器' : 'Open containers', detail: zh ? '导航' : 'Navigation', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/containers' }) } },
-      { id: 'projects', label: zh ? '创建项目' : 'Create project', detail: zh ? '当前使用 Compose 后端' : 'Compose backend', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/projects' }) } },
+      { id: 'projects', label: zh ? '创建项目' : 'Create project', detail: zh ? '可视化或 Compose 配置' : 'Visual or Compose configuration', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/projects/new' }) } },
       { id: 'continuous-delivery', label: zh ? '打开持续交付' : 'Open continuous delivery', detail: zh ? 'Git 发布与回滚' : 'Git releases and rollback', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/continuous-delivery' }) } },
       { id: 'pull', label: zh ? '拉取镜像' : 'Pull an image', detail: zh ? 'Docker 镜像' : 'Docker image', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/images' }) } },
       { id: 'authentication', label: zh ? '打开认证中心' : 'Open Authentication Center', detail: zh ? 'Git 与镜像仓库凭据' : 'Git and registry credentials', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/authentication' }) } },
