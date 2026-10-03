@@ -1,3 +1,4 @@
+import { useDateTime } from '../lib/time-zone'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Camera, Copy, Fingerprint, KeyRound, Pencil, Plus, RefreshCw, Save, ShieldCheck, Trash2, UserRound } from 'lucide-react'
 import { type FormEvent, type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
@@ -300,6 +301,8 @@ function TwoFactorSettings({ zh }: { zh: boolean }) {
 }
 
 function PasskeySettings({ zh, twoFactorEnabled }: { zh: boolean; twoFactorEnabled: boolean }) {
+  const { formatDateTime, formatDate } = useDateTime()
+
   const client = useQueryClient()
   const passkeys = useQuery({ queryKey: ['passkeys'], queryFn: () => api<PasskeyRecord[]>('/account/passkeys') })
   const [addOpen, setAddOpen] = useState(false)
@@ -337,7 +340,7 @@ function PasskeySettings({ zh, twoFactorEnabled }: { zh: boolean; twoFactorEnabl
         <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground"><Fingerprint className="size-4" /></div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium">{passkey.name}</p>
-          <p className="mt-0.5 text-xs text-muted-foreground">{passkey.last_used_at ? (zh ? `最近使用 ${new Date(passkey.last_used_at).toLocaleString()}` : `Last used ${new Date(passkey.last_used_at).toLocaleString()}`) : (zh ? `添加于 ${new Date(passkey.created_at).toLocaleDateString()}` : `Added ${new Date(passkey.created_at).toLocaleDateString()}`)}</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">{passkey.last_used_at ? (zh ? `最近使用 ${formatDateTime(passkey.last_used_at)}` : `Last used ${formatDateTime(passkey.last_used_at)}`) : (zh ? `添加于 ${formatDate(passkey.created_at)}` : `Added ${formatDate(passkey.created_at)}`)}</p>
         </div>
         <div className="flex items-center gap-1">
           <Button size="icon-sm" variant="ghost" aria-label={zh ? '重命名 Passkey' : 'Rename passkey'} onClick={() => { setRename(passkey); setRenameValue(passkey.name); updateName.reset() }}><Pencil /></Button>

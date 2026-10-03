@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from '@tanstack/react-router'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
-import { ImageUpdateSettings } from '../features/image-updates/settings'
+import { TimeZoneField } from '../features/settings/time-zone-field'
+import { validTimeZone } from '../lib/date-time'
 import { StorageCleanup } from '../features/cleanup/storage-cleanup'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Save } from 'lucide-react'
@@ -30,11 +31,14 @@ export function SettingsPage() {
   const zh = language === 'zh-CN'
   const hash = useLocation({ select: location => location.hash })
   const navigate = useNavigate()
-  const tab = hash === 'cleanup' ? 'cleanup' : hash === 'image-updates' ? 'image-updates' : 'general'
+  const tab = hash === 'cleanup' ? 'cleanup' : 'general'
+  useEffect(() => {
+    if (hash === 'image-updates') void navigate({ to: '/images', hash: 'image-updates', replace: true })
+  }, [hash, navigate])
   return <ResourceFrame title={t('settings')} detail={t('localConfiguration')}>
     <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-6">
-      <Tabs value={tab} onValueChange={value => { void navigate({ to: '/settings', hash: value === 'general' ? '' : value }) }}><TabsList><TabsTrigger value="general">{zh ? '常规设置' : 'General settings'}</TabsTrigger><TabsTrigger value="cleanup">{zh ? '存储清理' : 'Storage cleanup'}</TabsTrigger><TabsTrigger value="image-updates">{zh ? '镜像更新' : 'Image updates'}</TabsTrigger></TabsList></Tabs>
-      {tab === 'cleanup' ? <StorageCleanup /> : tab === 'image-updates' ? <ImageUpdateSettings /> : <GeneralSettings />}
+      <Tabs value={tab} onValueChange={value => { void navigate({ to: '/settings', hash: value === 'general' ? '' : value }) }}><TabsList><TabsTrigger value="general">{zh ? '常规设置' : 'General settings'}</TabsTrigger><TabsTrigger value="cleanup">{zh ? '存储清理' : 'Storage cleanup'}</TabsTrigger></TabsList></Tabs>
+      {tab === 'cleanup' ? <StorageCleanup /> : <GeneralSettings />}
     </div>
   </ResourceFrame>
 }
@@ -43,9 +47,8 @@ function GeneralSettings() {
   const client = useQueryClient()
   const { theme, setTheme, language, setLanguage } = useUIStore()
   const { t } = useI18n()
-  const zh = language === 'zh-CN'
   const query = useQuery({ queryKey: ['settings'], queryFn: () => api<Record<string, string>>('/settings') })
-  const save = useMutation({ mutationFn: (values: Record<string, string>) => api('/settings', { method: 'PUT', body: JSON.stringify(values) }), onSuccess: () => client.invalidateQueries({ queryKey: ['settings'] }) })
+  const save = useMutation({ mutationFn: (values: Record<string, string>) => api<Record<string, string>>('/settings', { method: 'PUT', body: JSON.stringify(values) }), onSuccess: (saved) => { client.setQueryData(['settings'], saved); void client.invalidateQueries({ queryKey: ['settings'] }) } })
   const [values, setValues] = useState<Record<string, string> | null>(null)
   const initializedRef = useRef(false)
   useEffect(() => {
@@ -57,7 +60,8 @@ function GeneralSettings() {
   }, [query.data])
   if (!values) return <LoadingState label={t('loading')} rows={6} />
   const update = (key: string, value: string) => setValues((previous) => previous ? { ...previous, [key]: value } : previous)
-  const submit = () => save.mutate(Object.fromEntries(Object.entries(values).filter(([key]) => !key.startsWith('security.'))))
+  const timezoneInvalid = values['general.timezone'] !== 'system' && !validTimeZone(values['general.timezone'] || '')
+  const submit = () => !timezoneInvalid && save.mutate(Object.fromEntries(Object.entries(values).filter(([key]) => !key.startsWith('security.'))))
 
   return <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-8">
       <section className="flex w-full flex-col gap-4">
@@ -105,16 +109,16 @@ function GeneralSettings() {
               {fields.map(([key, label]) => (
                 <div key={key} className="grid gap-1.5">
                   <Label htmlFor={`settings-${key}`}>{t(label)}</Label>
-                  <Input id={`settings-${key}`} value={values[key] ?? ''} onChange={(event) => update(key, event.target.value)} />
+                  {key === 'general.timezone' ? <TimeZoneField value={values[key] || 'system'} onChange={value => update(key, value)} /> : <Input id={`settings-${key}`} value={values[key] ?? ''} onChange={(event) => update(key, event.target.value)} />}
                 </div>
               ))}
             </div>
           </section>
         ))}
         <div className="flex flex-wrap items-center gap-3">
-          <Button type="submit" disabled={save.isPending}>{save.isPending ? <Spinner className="size-4" /> : <Save className="size-4" />}{t('saveChanges')}</Button>
+          <Button type="submit" disabled={save.isPending || timezoneInvalid}>{save.isPending ? <Spinner className="size-4" /> : <Save className="size-4" />}{t('saveChanges')}</Button>
           {save.isSuccess && <span className="text-sm text-emerald-600 dark:text-emerald-400">{t('settingsSaved')}</span>}
-          {save.isError && <span className="text-sm text-destructive">{zh ? '保存失败' : 'Save failed'}</span>}
+          {save.isError && <span className="text-sm text-destructive">{save.error.message}</span>}
         </div>
       </form>
     </div>

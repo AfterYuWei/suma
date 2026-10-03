@@ -191,7 +191,9 @@ Run `docker compose up -d` and verify the node is online. You can then remove `S
 
 ## Scheduled Docker storage cleanup
 
-Open **Settings → Storage cleanup** to configure each node independently. New policies are paused; the suggested schedule is Sunday 03:00 in the application timezone (UTC fallback). Default cleanup retains seven days of dangling images and Engine builder cache with a best-effort 10 GiB budget. Stopped-container and unused-network removal start disabled.
+Open **Settings → Storage cleanup → node menu → Manage cleanup** to configure each node independently. New policies are paused; the suggested schedule is Sunday 03:00 in the explicitly selected application timezone, or UTC when device timezone is automatic. Default cleanup retains seven days of dangling images and Engine builder cache with a best-effort 10 GiB budget. Stopped-container and unused-network removal start disabled.
+
+**Settings → General settings → Timezone** defaults to following the browser device. Select an IANA zone to use it across project timestamps, logs, tasks, audits and other interface times. Saving updates the interface immediately and persists the choice. **Use system timezone** restores device following. Existing cleanup schedules retain their execution zone; next-run timestamps are displayed in the application zone.
 
 Generate a five-minute preview before immediate execution. Enabling scheduling or expanding deletion requires the exact node name and automatic-deletion authorization. Managed Compose declarations, Compose resources, SUMA/Agent/builders, current CD releases and direct rollback/pending references are protected. Volumes are scanned only and require individual typed-name deletion confirmation. Image sizes are estimates with shared layers; cache reclamation is reported by Engine.
 

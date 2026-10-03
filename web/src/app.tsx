@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Outlet, RouterProvider, createRootRoute, createRoute, createRouter, redirect } from '@tanstack/react-router'
 import { lazy, Suspense, type ComponentType } from 'react'
 import { AppShell } from './components/shell/app-shell'
+import { TimeZoneProvider } from './features/settings/time-zone-provider'
 import { AuthGate } from './features/auth/auth-gate'
 import { OverviewPage } from './pages/overview'
 import { ContainersPage } from './pages/containers'
@@ -27,7 +28,7 @@ const ProjectTakeoverPage = lazy(() => import('./pages/project-takeover').then((
 const ContinuousDeliveryDetailPage = lazy(() => import('./pages/continuous-delivery-detail').then((module) => ({ default: module.ContinuousDeliveryDetailPage })))
 const deferred = (Component: ComponentType) => () => <Suspense fallback={<div role="status" className="grid min-h-72 place-items-center gap-2 text-muted-foreground"><Spinner /><span className="text-sm">Loading module</span></div>}><Component /></Suspense>
 
-const rootRoute = createRootRoute({ component: () => <AuthGate><AppShell><Outlet /></AppShell></AuthGate> })
+const rootRoute = createRootRoute({ component: () => <AuthGate><TimeZoneProvider><AppShell><Outlet /></AppShell></TimeZoneProvider></AuthGate> })
 const overviewRoute = createRoute({ getParentRoute: () => rootRoute, path: '/', component: OverviewPage })
 const containersRoute = createRoute({ getParentRoute: () => rootRoute, path: '/containers', component: ContainersPage })
 const containerDetailRoute = createRoute({ getParentRoute: () => rootRoute, path: '/containers/$containerId', component: deferred(ContainerDetailPage), remountDeps: ({ params }) => params.containerId })

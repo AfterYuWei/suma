@@ -1,3 +1,4 @@
+import { useDateTime } from '../lib/time-zone'
 import { Fragment, useState } from 'react'
 import { CleanupNodeSheet } from '../features/cleanup/storage-cleanup'
 import type { DockerNode } from '../lib/nodes'
@@ -25,6 +26,8 @@ interface Log { id: number; level: string; message: string; created_at: string }
 const taskTone = (status: string) => status === 'success' ? 'success' : status === 'failed' ? 'critical' : status === 'running' ? 'warning' : 'neutral'
 
 export function TasksPage() {
+  const { formatDateTime } = useDateTime()
+
   const nodeID = useUIStore((state) => state.currentNodeID)
   const { t, language } = useI18n()
   const zh = language === 'zh-CN'
@@ -81,7 +84,7 @@ export function TasksPage() {
                       {scope !== 'current' && <TableCell><div>{row.scope === 'control_plane' ? (zh ? '控制平面' : 'Control plane') : (zh ? '节点' : 'Node')}</div>{row.node_id && <div className="text-xs text-muted-foreground">{row.node_name || row.node_id}</div>}</TableCell>}
                       <TableCell><Progress value={Number(row.progress)} /></TableCell>
                       <TableCell><StatusBadge tone={taskTone(row.status)}>{row.status}</StatusBadge></TableCell>
-                      <TableCell className="text-muted-foreground tabular-nums">{new Date(row.created_at).toLocaleString(language)}</TableCell>
+                      <TableCell className="text-muted-foreground tabular-nums">{formatDateTime(row.created_at)}</TableCell>
                     </TableRow>
                     {expandedID === row.id && (
                       <TableRow className="hover:bg-transparent">
@@ -100,6 +103,8 @@ export function TasksPage() {
 }
 
 function TaskLogs({ task }: { task: Task }) {
+  const { formatTime } = useDateTime()
+
   const { language } = useI18n()
   const zh = language === 'zh-CN'
   const logsPath = task.scope === 'node' && task.node_id ? nodePath(task.node_id, `/tasks/${encodeURIComponent(task.id)}/logs`) : `/tasks/${encodeURIComponent(task.id)}/logs`
@@ -114,7 +119,7 @@ function TaskLogs({ task }: { task: Task }) {
       {rawLogs.length === 0 && <p className="py-2 text-center text-sm text-muted-foreground">{zh ? '等待任务输出…' : 'Waiting for task output…'}</p>}
       {pagination.items.map((log) => (
         <div key={log.id} className="flex items-baseline gap-3">
-          <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">{new Date(log.created_at).toLocaleTimeString(language)}</span>
+          <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">{formatTime(log.created_at)}</span>
           <span className={cn('font-mono text-xs break-all', log.level === 'error' ? 'text-destructive' : 'text-foreground')}>{log.message}</span>
         </div>
       ))}

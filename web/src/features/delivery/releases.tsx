@@ -1,3 +1,4 @@
+import { useDateTime } from '../../lib/time-zone'
 import { Alert, AlertDescription, AlertTitle } from '../../components/ui/alert'
 import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
@@ -49,6 +50,8 @@ function EmptyHint({ icon, title, description }: { icon: ReactNode; title: strin
 }
 
 export function CDOverview({ configuration, drift, releases, zh }: { configuration: CDConfiguration; drift?: CDDrift; releases?: DeliveryRelease[]; zh: boolean }) {
+  const { formatDateTime } = useDateTime()
+
   const latest = releases?.[0]
   const repository = configuration.repository
   const checking = !drift
@@ -87,7 +90,7 @@ export function CDOverview({ configuration, drift, releases, zh }: { configurati
             <TableCell className="font-mono text-xs">{node.active_release_id ? `#${node.active_release_id} · ${shortCommit(node.active_commit)}` : '—'}</TableCell>
             <TableCell><Badge className={node.status === 'healthy' ? statusBadgeClass('succeeded') : node.status === 'degraded' ? statusBadgeClass('failed') : statusBadgeClass('rolled_back')}>{node.status}</Badge></TableCell>
             <TableCell className="max-w-80 whitespace-normal text-xs text-muted-foreground">{node.reason || '—'}{node.health_summary && <details className="mt-1"><summary className="cursor-pointer">{zh ? '健康摘要' : 'Health summary'}</summary><pre className="mt-1 max-h-32 overflow-auto overscroll-contain whitespace-pre-wrap rounded bg-muted p-2">{node.health_summary}</pre></details>}</TableCell>
-            <TableCell className="text-xs text-muted-foreground">{new Date(node.checked_at).toLocaleString(zh ? 'zh-CN' : 'en-US')}</TableCell>
+            <TableCell className="text-xs text-muted-foreground">{formatDateTime(node.checked_at)}</TableCell>
           </TableRow>)}</TableBody>
         </Table>
         <ListPagination {...nodePagination} zh={zh} />
@@ -100,7 +103,7 @@ export function CDOverview({ configuration, drift, releases, zh }: { configurati
           <ReleaseStatus status={latest.status} zh={zh} />
           <div className="min-w-0">
             <p className="font-medium">{latest.commit_message || (zh ? '无提交说明' : 'No commit message')}</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">#{latest.id} · {shortCommit(latest.commit_sha)} · {new Date(latest.created_at).toLocaleString(zh ? 'zh-CN' : 'en-US')}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">#{latest.id} · {shortCommit(latest.commit_sha)} · {formatDateTime(latest.created_at)}</p>
           </div>
         </div> : <EmptyHint icon={<GitCommitHorizontal className="size-5" />} title={zh ? '同步仓库后将在这里生成首个 Release' : 'Synchronize the repository to create the first release'} />}
       </CardContent>
@@ -149,6 +152,8 @@ export function ReleasePanel({ configuration, releases, pendingReleaseID, zh, on
 }
 
 function ReleaseDetails({ release, zh }: { release: DeliveryRelease; zh: boolean }) {
+  const { formatDateTime } = useDateTime()
+
   const images = parseStringList(release.image_references)
   const files = parseStringList(release.compose_files)
   const deployments = release.deployments ?? []
@@ -183,7 +188,7 @@ function ReleaseDetails({ release, zh }: { release: DeliveryRelease; zh: boolean
               <TableCell className="min-w-64 whitespace-normal break-all text-xs text-muted-foreground">
                 {deployment.failure_reason && <p className="text-destructive">{deployment.failure_reason}</p>}
                 {deployment.rollback_result && <p>{zh ? '回滚结果' : 'Rollback'}: {deployment.rollback_result}</p>}
-                {!!deployment.attempts?.length && <details className="mt-1"><summary className="cursor-pointer">{zh ? `${deployment.attempts.length} 次尝试` : `${deployment.attempts.length} attempts`}</summary><div className="mt-2 flex flex-col gap-2 border-l pl-3">{[...deployment.attempts].reverse().map((attempt) => <div key={attempt.id}><div className="flex flex-wrap items-center gap-2"><ReleaseStatus status={attempt.status} zh={zh} /><span>{attempt.operation.replaceAll('_', ' ')} → Release #{attempt.target_release_id}</span></div><p>{attempt.failure_reason || attempt.message || '—'}</p><p className="text-[11px]">{new Date(attempt.started_at || attempt.created_at).toLocaleString(zh ? 'zh-CN' : 'en-US')}{attempt.finished_at ? ` → ${new Date(attempt.finished_at).toLocaleString(zh ? 'zh-CN' : 'en-US')}` : ''}</p></div>)}</div></details>}
+                {!!deployment.attempts?.length && <details className="mt-1"><summary className="cursor-pointer">{zh ? `${deployment.attempts.length} 次尝试` : `${deployment.attempts.length} attempts`}</summary><div className="mt-2 flex flex-col gap-2 border-l pl-3">{[...deployment.attempts].reverse().map((attempt) => <div key={attempt.id}><div className="flex flex-wrap items-center gap-2"><ReleaseStatus status={attempt.status} zh={zh} /><span>{attempt.operation.replaceAll('_', ' ')} → Release #{attempt.target_release_id}</span></div><p>{attempt.failure_reason || attempt.message || '—'}</p><p className="text-[11px]">{formatDateTime(attempt.started_at || attempt.created_at)}{attempt.finished_at ? ` → ${formatDateTime(attempt.finished_at)}` : ''}</p></div>)}</div></details>}
               </TableCell>
             </TableRow>
           ))}

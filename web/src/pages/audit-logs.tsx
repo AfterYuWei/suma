@@ -1,3 +1,4 @@
+import { useDateTime } from '../lib/time-zone'
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { LoadingState } from '../components/ui/loading-state'
@@ -17,6 +18,8 @@ import { ResourceFrame } from './images'
 interface Audit { id: number; scope: 'control_plane' | 'node'; node_id?: string; node_name?: string; user_id?: number; action: string; resource_type: string; resource_name: string; ip: string; result: string; created_at: string }
 
 export function AuditLogsPage() {
+  const { formatDateTime } = useDateTime()
+
   const nodeID = useUIStore((state) => state.currentNodeID)
   const { t, language } = useI18n()
   const zh = language === 'zh-CN'
@@ -47,7 +50,7 @@ export function AuditLogsPage() {
                   <TableBody>
                     {pagination.items.map((row) => (
                       <TableRow key={row.id}>
-                        <TableCell className="text-muted-foreground tabular-nums">{new Date(row.created_at).toLocaleString(language)}</TableCell>
+                        <TableCell className="text-muted-foreground tabular-nums">{formatDateTime(row.created_at)}</TableCell>
                         {scope !== 'current' && <TableCell><div>{row.scope === 'control_plane' ? (zh ? '控制平面' : 'Control plane') : (zh ? '节点' : 'Node')}</div>{row.node_id && <div className="text-xs text-muted-foreground">{row.node_name || row.node_id}</div>}</TableCell>}
                         <TableCell className="font-medium">{row.action}</TableCell>
                         <TableCell>{`${row.resource_type} · ${row.resource_type === 'container' ? displayDockerId(row.resource_name) : row.resource_name}`}</TableCell>

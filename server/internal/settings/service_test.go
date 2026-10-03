@@ -53,7 +53,7 @@ func TestGetMergesDefaultsWithConfig(t *testing.T) {
 	rows := []struct{ key, want string }{
 		{"general.server_name", "SUMA"},
 		{"general.language", "en"},
-		{"general.timezone", "UTC"},
+		{"general.timezone", "system"},
 		{"docker.compose_command", "docker compose --profile prod"},
 		{"storage.compose_root", "/srv/compose"},
 		{"storage.data_root", "/var/lib/suma"},
@@ -188,4 +188,23 @@ func TestUpdateAfterRestartUsesRecomputedDataRootDefault(t *testing.T) {
 	// Stored override survives while config-derived defaults follow the new deployment.
 	requireSetting(t, values, "storage.compose_root", "/custom/compose")
 	requireSetting(t, values, "storage.data_root", "/mnt/newdata")
+}
+
+func TestTimezoneValidationIsAtomic(t *testing.T) {
+	db := openDatabase(t, filepath.Join(t.TempDir(), "zones.db"))
+	svc := NewService(db, testConfig())
+	ctx := context.Background()
+	for _, zone := range []string{"", "Local", "Not/AZone", "UTC+8"} {
+		if _, err := svc.Update(ctx, map[string]string{"general.timezone": zone, "general.server_name": "must not save"}); err == nil {
+			t.Fatalf("accepted %q", zone)
+		}
+		values, _ := svc.Get(ctx)
+		requireSetting(t, values, "general.timezone", "system")
+		requireSetting(t, values, "general.server_name", "SUMA")
+	}
+	for _, zone := range []string{"Asia/Shanghai", "America/New_York", "UTC", "system"} {
+		if _, err := svc.Update(ctx, map[string]string{"general.timezone": zone}); err != nil {
+			t.Fatal(err)
+		}
+	}
 }

@@ -1,3 +1,4 @@
+import { useDateTime } from '../../lib/time-zone'
 import { useRef, type KeyboardEvent, type PointerEvent } from 'react'
 import { motion, useReducedMotion } from 'motion/react'
 import { Boxes, Container, Cpu, Grip, GripVertical, MemoryStick, Server } from 'lucide-react'
@@ -153,6 +154,8 @@ export function NodeOverviewCard({ node, size, isDragging, onSizeChange, onOrder
   onOrderDragEnd: () => void
   onOrderMove: (offset: -1 | 1) => void
 }) {
+  const { formatDateTime } = useDateTime()
+
   const { language } = useI18n()
   const zh = language === 'zh-CN'
   const reduceMotion = useReducedMotion()
@@ -213,7 +216,7 @@ export function NodeOverviewCard({ node, size, isDragging, onSizeChange, onOrder
 
   const unavailable = '—'
   const latency = available && node.last_latency_ms != null ? `${node.last_latency_ms} ms` : unavailable
-  const checkedAt = node.last_checked_at ? new Date(node.last_checked_at).toLocaleString(language) : unavailable
+  const checkedAt = node.last_checked_at ? formatDateTime(node.last_checked_at) : unavailable
 
   return (
     <motion.div

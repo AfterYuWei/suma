@@ -9,7 +9,7 @@ test('image detection and per-node schedule', async ({ page }) => {
  const dialog = page.getByRole('dialog', { name: 'Check image updates', exact: true }); await dialog.getByRole('button', { name: 'Start check', exact: true }).click()
  await expect(dialog.getByText('100%', { exact: false })).toBeVisible(); await dialog.getByRole('button', { name: 'Close', exact: true }).first().click()
  await expect(page.getByText('Update available', { exact: true }).first()).toBeVisible()
- await page.goto('/settings#image-updates'); const enabled = page.getByRole('switch', { name: 'Enable scheduled checks', exact: true }); await expect(enabled).not.toBeChecked(); await enabled.click()
+ await page.getByRole('tab', { name: 'Image updates', exact: true }).click(); await expect(page).toHaveURL('/images#image-updates'); const enabled = page.getByRole('switch', { name: 'Enable scheduled checks', exact: true }); await expect(enabled).not.toBeChecked(); await enabled.click()
  await page.getByRole('combobox', { name: 'Check interval', exact: true }).click(); await page.getByRole('option', { name: 'Every 1 hours', exact: true }).click()
  await page.getByRole('button', { name: 'Save policy', exact: true }).click(); await expect(page.getByText('Saved', { exact: true })).toBeVisible(); await expect(enabled).toBeChecked(); await expect(page.getByText('Next check:', { exact: false })).toBeVisible()
 })

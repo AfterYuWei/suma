@@ -1,3 +1,4 @@
+import { useDateTime } from '../../lib/time-zone'
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -85,20 +86,10 @@ const tone = (status: string) =>
       : status === 'running'
         ? 'warning'
         : 'neutral'
-const date = (
-  value: string | undefined,
-  language: string,
-  timezone?: string,
-) =>
-  value
-    ? new Date(value).toLocaleString(
-        language,
-        timezone ? { timeZone: timezone } : undefined,
-      )
-    : '—'
 const root = (nodeID: string) => nodePath(nodeID, '/cleanup')
 
 export function StorageCleanup() {
+  const { formatDateTime, timeZone } = useDateTime()
   const { language } = useI18n()
   const zh = language === 'zh-CN'
   const client = useQueryClient()
@@ -216,14 +207,10 @@ export function StorageCleanup() {
                     </TableCell>
                     <TableCell>
                       <div className="text-xs">
-                        {date(
-                          row.view.policy.next_run_at,
-                          language,
-                          row.view.policy.schedule.timezone,
-                        )}
+                        {formatDateTime(row.view.policy.next_run_at)}
                       </div>
                       <div className="text-xs text-muted-foreground">
-                        {row.view.policy.schedule.timezone}
+                        {timeZone}
                       </div>
                     </TableCell>
                     <TableCell>
@@ -259,8 +246,8 @@ export function StorageCleanup() {
                             }
                           >
                             {zh
-                              ? '配置／预览／历史'
-                              : 'Configure / preview / history'}
+                              ? '管理清理'
+                              : 'Manage cleanup'}
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             disabled={
@@ -317,6 +304,7 @@ export function CleanupNodeSheet({
   onOpenChange: (open: boolean) => void
   initialTab?: 'policy' | 'preview'
 }) {
+  const { formatDateTime, timeZone } = useDateTime()
   const { language } = useI18n()
   const zh = language === 'zh-CN'
   const client = useQueryClient()
@@ -532,13 +520,13 @@ export function CleanupNodeSheet({
           <Tabs value={tab} onValueChange={setTab}>
             <TabsList>
               <TabsTrigger value="policy">
-                {zh ? '清理策略' : 'Policy'}
+                {zh ? '清理策略' : 'Cleanup policy'}
               </TabsTrigger>
               <TabsTrigger value="preview">
-                {zh ? '资源预览' : 'Preview'}
+                {zh ? '清理预览' : 'Cleanup preview'}
               </TabsTrigger>
               <TabsTrigger value="history">
-                {zh ? '执行历史' : 'History'}
+                {zh ? '执行历史' : 'Run history'}
               </TabsTrigger>
             </TabsList>
           </Tabs>
@@ -660,8 +648,8 @@ export function CleanupNodeSheet({
                     </p>
                     {view.data.next_runs.map((value) => (
                       <div key={value} className="text-sm tabular-nums">
-                        {date(value, language, saved.schedule.timezone)} ·{' '}
-                        {saved.schedule.timezone}
+                        {formatDateTime(value)} ·{' '}
+                        {timeZone}
                       </div>
                     ))}
                   </div>
@@ -708,9 +696,9 @@ export function CleanupNodeSheet({
                     <>
                       <p className="text-xs text-muted-foreground">
                         {zh ? '生成于' : 'Generated'}{' '}
-                        {date(preview.generated_at, language)} ·{' '}
+                        {formatDateTime(preview.generated_at)} ·{' '}
                         {zh ? '有效至' : 'Expires'}{' '}
-                        {date(preview.expires_at, language)}
+                        {formatDateTime(preview.expires_at)}
                         {now >= Date.parse(preview.expires_at) && (
                           <span className="text-destructive">
                             {' '}
@@ -763,7 +751,7 @@ export function CleanupNodeSheet({
                 </>
               )}
               {tab === 'history' && (
-                <CleanupHistory nodeID={node.id} zh={zh} language={language} />
+                <CleanupHistory nodeID={node.id} zh={zh} />
               )}
             </>
           )}
@@ -1260,12 +1248,11 @@ function PreviewResources({
 function CleanupHistory({
   nodeID,
   zh,
-  language,
 }: {
   nodeID: string
   zh: boolean
-  language: string
 }) {
+  const { formatDateTime } = useDateTime()
   const [page, setPage] = useState(1)
   const [failedOnly, setFailedOnly] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -1310,7 +1297,7 @@ function CleanupHistory({
                 onClick={() => setExpanded(expanded === row.id ? null : row.id)}
               >
                 <div className="text-sm">
-                  <span>{date(row.created_at, language)}</span>
+                  <span>{formatDateTime(row.created_at)}</span>
                   <div className="text-xs text-muted-foreground">
                     {row.trigger === 'scheduled'
                       ? zh
@@ -1331,7 +1318,6 @@ function CleanupHistory({
                   nodeID={nodeID}
                   row={row}
                   zh={zh}
-                  language={language}
                 />
               )}
             </div>
@@ -1370,13 +1356,12 @@ function RunDetails({
   nodeID,
   row,
   zh,
-  language,
 }: {
   nodeID: string
   row: Run
   zh: boolean
-  language: string
 }) {
+  const { formatTime } = useDateTime()
   const details = useQuery({
     queryKey: ['cleanup-run', nodeID, row.id],
     queryFn: () => api<Run>(`${root(nodeID)}/runs/${row.id}`),
@@ -1469,7 +1454,7 @@ function RunDetails({
             <div className="mt-2 max-h-56 space-y-1 overflow-y-auto rounded-md bg-muted p-2 font-mono text-xs">
               {logs.data?.map((log) => (
                 <div key={log.id} className="break-all">
-                  {new Date(log.created_at).toLocaleTimeString(language)}{' '}
+                  {formatTime(log.created_at)}{' '}
                   {log.message}
                 </div>
               ))}

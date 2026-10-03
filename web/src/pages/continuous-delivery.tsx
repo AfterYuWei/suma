@@ -1,3 +1,4 @@
+import { useDateTime } from '../lib/time-zone'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { GitPullRequest, Plus } from 'lucide-react'
@@ -26,6 +27,8 @@ import { ResourceFrame } from './images'
 interface CreateValues { name: string; node_ids: string[] }
 
 export function ContinuousDeliveryPage() {
+  const { formatDateTime } = useDateTime()
+
   const client = useQueryClient()
   const navigate = useNavigate()
   const { language } = useI18n()
@@ -85,7 +88,7 @@ export function ContinuousDeliveryPage() {
               <TableCell className="text-muted-foreground">{project.git_ref || '—'}</TableCell>
               <TableCell className="font-mono text-xs">{shortCommit(project.desired_commit)}</TableCell>
               <TableCell className="font-mono text-xs">{shortCommit(project.observed_commit)}</TableCell>
-              <TableCell className="text-sm text-muted-foreground">{new Date(String(project.updated_at)).toLocaleString(language)}</TableCell>
+              <TableCell className="text-sm text-muted-foreground">{formatDateTime(String(project.updated_at))}</TableCell>
             </TableRow>
           })}
         </TableBody>

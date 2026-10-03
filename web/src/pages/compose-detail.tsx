@@ -1,3 +1,4 @@
+import { useDateTime } from '../lib/time-zone'
 import { useImageUpdates } from '../features/image-updates/hooks'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -1028,6 +1029,8 @@ function ComposeActionDialog({
   onCancel: () => void
   onViewTasks: () => void
 }) {
+  const { formatTime } = useDateTime()
+
   const visibleLogs = compactTaskLogs(logs)
   const compactedCount = logs.length - visibleLogs.length
   const { viewportRef, onScroll } = useLogAutoScroll<HTMLDivElement>(
@@ -1139,9 +1142,7 @@ function ComposeActionDialog({
                   {visibleLogs.map((log) => (
                     <div key={log.id} className="flex items-baseline gap-3">
                       <span className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">
-                        {new Date(log.created_at).toLocaleTimeString(
-                          zh ? 'zh-CN' : 'en-US'
-                        )}
+                        {formatTime(log.created_at)}
                       </span>
                       <span
                         className={`font-mono text-xs break-all ${log.level === 'error' ? 'text-destructive' : ''}`}
@@ -1249,6 +1250,8 @@ function Services({
   error?: string
   zh: boolean
 }) {
+  const { formatDateTime } = useDateTime()
+
   const pagination = useListPagination(rows ?? [])
   if (loading)
     return (
@@ -1359,7 +1362,7 @@ function Services({
                 </TooltipHint>
               </TableCell>
               <TableCell className="text-xs text-muted-foreground tabular-nums">
-                {new Date(row.created).toLocaleString(zh ? 'zh-CN' : 'en-US')}
+                {formatDateTime(row.created)}
               </TableCell>
             </TableRow>
           ))}

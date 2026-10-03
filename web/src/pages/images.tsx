@@ -1,3 +1,7 @@
+import { useLocation, useNavigate } from '@tanstack/react-router'
+import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
+import { ImageUpdatePolicyPanel } from '../features/image-updates/policy'
+import { useDateTime } from '../lib/time-zone'
 import { useImageUpdates } from '../features/image-updates/hooks'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CircleAlert, Download, Package, Search, Tag as TagIcon, Trash2, X } from 'lucide-react'
@@ -36,6 +40,11 @@ interface PullTask { id: string; type: string; name: string; status: string; pro
 interface TaskStep { id: string; status: string; current: number; total: number; progress: number }
 
 export function ImagesPage() {
+  const { formatDateTime } = useDateTime()
+
+  const hash = useLocation({ select: location => location.hash })
+  const navigate = useNavigate()
+  const showUpdatePolicy = hash === 'image-updates'
   const nodeID = useUIStore((state) => state.currentNodeID)
   const client = useQueryClient()
   const updates = useImageUpdates(nodeID)
@@ -140,7 +149,9 @@ export function ImagesPage() {
     <Badge variant="outline" className="text-muted-foreground">{unused} {zh ? '未使用镜像' : 'unused images'}</Badge>
   </>
 
-  return <ResourceFrame title={t('images')} detail={zh ? `${query.data?.length ?? 0} 个本地镜像` : `${query.data?.length ?? 0} local images`} lead={statusStrip} action={toolbar}>
+  return <ResourceFrame title={t('images')} detail={zh ? `${query.data?.length ?? 0} 个本地镜像` : `${query.data?.length ?? 0} local images`} lead={showUpdatePolicy ? undefined : statusStrip} action={showUpdatePolicy ? undefined : toolbar}>
+    <Tabs value={showUpdatePolicy ? 'image-updates' : 'images'} onValueChange={value => { void navigate({ to: '/images', hash: value === 'image-updates' ? 'image-updates' : '' }) }} className="mb-5"><TabsList><TabsTrigger value="images">{zh ? '本地镜像' : 'Local images'}</TabsTrigger><TabsTrigger value="image-updates">{zh ? '镜像更新' : 'Image updates'}</TabsTrigger></TabsList></Tabs>
+    {showUpdatePolicy ? <ImageUpdatePolicyPanel key={nodeID} nodeID={nodeID} /> : <>
     {query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载镜像' : 'Loading images'} /> : query.isError ? <ErrorState description={query.error.message} /> : (query.data ?? []).length === 0 ? <EmptyState icon={<Package size={20} />} title={zh ? '暂无本地镜像' : 'No local images'} detail={zh ? '输入镜像引用并拉取后会显示在这里。' : 'Pull an image reference to see it here.'} /> : rows.length === 0 ? <EmptyState icon={<Search size={20} />} title={zh ? '没有匹配的镜像' : 'No matching images'} detail={zh ? '调整筛选条件后再试。' : 'Adjust the filter and try again.'} /> :
       <><ListShell>
         <Table>
@@ -175,7 +186,7 @@ export function ImagesPage() {
                 <TableCell><UpdateStatus rows={updates.data?.results.filter(result => result.local_image_id === row.id) || []} zh={zh} /></TableCell>
                 <TableCell>{size(row.size)}</TableCell>
                 <TableCell>{row.containers < 0 ? '—' : String(row.containers)}</TableCell>
-                <TableCell>{new Date(row.created).toLocaleString(language)}</TableCell>
+                <TableCell>{formatDateTime(row.created)}</TableCell>
                 <TableCell>
                   <div className="flex items-center gap-1">
                     <ImageUpdateCheck nodeID={nodeID} target={{ image_ids: [row.id] }} compact />
@@ -196,6 +207,8 @@ export function ImagesPage() {
         <AlertAction><Button variant="ghost" size="icon-xs" aria-label={zh ? '关闭' : 'Dismiss'} onClick={() => setOperationError('')}><X /></Button></AlertAction>
       </Alert>
     )}
+
+    </>}
 
     <Dialog open={pullOpen} onOpenChange={setPullOpen}>
       {pullOpen && <DialogContent className="sm:max-w-md">
@@ -237,7 +250,7 @@ export function ImagesPage() {
         <div className="flex-1 overflow-y-auto p-4">
           <ImageUpdateDetails rows={updates.data?.results.filter(row => row.local_image_id === detailImageID) || []} zh={zh} onPull={row => { setDetailImageID(''); setPullTaskID(''); setReference(row.reference); setCredentialID(''); pull.reset(); setPullOpen(true) }} />
           {detail.isPending ? <LoadingState compact embedded rows={5} label={zh ? '正在加载镜像详情' : 'Loading image details'} /> : <div className="divide-y divide-border">
-            {([[ 'ID', detail.data?.id ?? '—' ], [zh ? '大小' : 'Size', detail.data ? size(detail.data.size) : '—'], [zh ? '平台' : 'Platform', `${detail.data?.os || '—'} / ${detail.data?.architecture || '—'}`], [zh ? '创建时间' : 'Created', detail.data?.created ? new Date(detail.data.created).toLocaleString(language) : '—'], [zh ? '层数' : 'Layers', String(detail.data?.layers?.length ?? 0)]] as [string, string][]).map(([key, value]) => (
+            {([[ 'ID', detail.data?.id ?? '—' ], [zh ? '大小' : 'Size', detail.data ? size(detail.data.size) : '—'], [zh ? '平台' : 'Platform', `${detail.data?.os || '—'} / ${detail.data?.architecture || '—'}`], [zh ? '创建时间' : 'Created', detail.data?.created ? formatDateTime(detail.data.created) : '—'], [zh ? '层数' : 'Layers', String(detail.data?.layers?.length ?? 0)]] as [string, string][]).map(([key, value]) => (
               <div key={key} className="flex items-start justify-between gap-6 py-2.5 first:pt-0 last:pb-0">
                 <span className="shrink-0 text-xs text-muted-foreground">{key}</span>
                 <span className="min-w-0 break-all text-right font-mono text-xs">{value}</span>

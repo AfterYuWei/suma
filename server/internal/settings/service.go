@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
+	_ "time/tzdata"
 
 	"github.com/suma/suma/server/internal/config"
 	"github.com/suma/suma/server/internal/database"
@@ -21,7 +23,7 @@ type Service struct {
 }
 
 func NewService(db *gorm.DB, cfg config.Config) *Service {
-	return &Service{db: db, defaults: map[string]string{"general.server_name": "SUMA", "general.language": "en", "general.timezone": "UTC", "docker.compose_command": cfg.ComposeCommand, "storage.compose_root": cfg.ComposeRoot, "storage.data_root": strings.TrimSuffix(cfg.DatabasePath, "/suma.db"), "storage.backup_root": cfg.BackupRoot, "security.browser_origin": cfg.BrowserOrigin, "security.trusted_proxies": cfg.TrustedProxies, "appearance.theme": "system", "registry.default": ""}}
+	return &Service{db: db, defaults: map[string]string{"general.server_name": "SUMA", "general.language": "en", "general.timezone": "system", "docker.compose_command": cfg.ComposeCommand, "storage.compose_root": cfg.ComposeRoot, "storage.data_root": strings.TrimSuffix(cfg.DatabasePath, "/suma.db"), "storage.backup_root": cfg.BackupRoot, "security.browser_origin": cfg.BrowserOrigin, "security.trusted_proxies": cfg.TrustedProxies, "appearance.theme": "system", "registry.default": ""}}
 }
 
 func (s *Service) LoadSecurity(ctx context.Context) error {
@@ -68,6 +70,19 @@ func (s *Service) Update(ctx context.Context, values map[string]string) (map[str
 			return nil, fmt.Errorf("unsupported setting: %s", key)
 		}
 		merged[key] = value
+	}
+	zone := strings.TrimSpace(merged["general.timezone"])
+	if zone != "system" {
+		if zone == "" || zone == "Local" {
+			return nil, fmt.Errorf("invalid timezone: select an IANA timezone or system")
+		}
+		if _, err := time.LoadLocation(zone); err != nil {
+			return nil, fmt.Errorf("invalid timezone: select an IANA timezone or system")
+		}
+	}
+	merged["general.timezone"] = zone
+	if _, supplied := values["general.timezone"]; supplied {
+		values["general.timezone"] = zone
 	}
 	policy, err := parseSecurity(merged)
 	if err != nil {

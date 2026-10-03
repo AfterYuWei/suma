@@ -1,3 +1,4 @@
+import { useDateTime } from '../lib/time-zone'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CircleAlert, Database, Plus, Trash2, X } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
@@ -25,6 +26,8 @@ interface Volume { name: string; driver: string; mountpoint: string; created_at:
 interface VolumeValues { name: string }
 
 export function VolumesPage() {
+  const { formatDateTime } = useDateTime()
+
   const nodeID = useUIStore((state) => state.currentNodeID)
   const client = useQueryClient()
   const { t, language } = useI18n()
@@ -106,7 +109,7 @@ export function VolumesPage() {
                 <TableCell><Badge variant="outline">{row.driver}</Badge></TableCell>
                 <TableCell>{formatSize(row.size)}</TableCell>
                 <TableCell>{row.used_by.length ? <div className="flex max-w-64 flex-wrap gap-1">{row.used_by.map((used) => <Badge key={used} variant="secondary">{used}</Badge>)}</div> : <span className="text-sm text-muted-foreground">{zh ? '未使用' : 'Unused'}</span>}</TableCell>
-                <TableCell className="text-muted-foreground">{row.created_at ? new Date(row.created_at).toLocaleString(language) : '—'}</TableCell>
+                <TableCell className="text-muted-foreground">{row.created_at ? formatDateTime(row.created_at) : '—'}</TableCell>
                 <TableCell><TooltipHint content={row.used_by.length ? (zh ? '存储卷正在使用中' : 'Volume is in use') : t('deleteVolume')}><Button variant="ghost" size="icon-sm" className="text-red-600 hover:text-red-600 dark:text-red-400 dark:hover:text-red-400" disabled={row.used_by.length > 0} onClick={() => void removeVolume(row)} aria-label={t('deleteVolume')}><Trash2 /></Button></TooltipHint></TableCell>
               </TableRow>
             ))}

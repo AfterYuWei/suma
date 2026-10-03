@@ -1,3 +1,4 @@
+import { useDateTime } from '../lib/time-zone'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { LayoutGroup, motion, useReducedMotion } from 'motion/react'
@@ -32,6 +33,8 @@ function releaseTone(status: string) {
 }
 
 export function OverviewPage() {
+  const { formatTime } = useDateTime()
+
   const navigate = useNavigate()
   const { language } = useI18n()
   const zh = language === 'zh-CN'
@@ -66,7 +69,7 @@ export function OverviewPage() {
   const nodeNames = new Map((allNodes.data ?? []).map((node) => [node.id, node.name]))
   const layoutTransition = reduceMotion ? { duration: 0 } : { layout: { duration: 0.3, ease: 'linear' as const } }
   const fleetUpdatedAt = fleet.dataUpdatedAt > 0
-    ? new Date(fleet.dataUpdatedAt).toLocaleTimeString(language, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    ? formatTime(fleet.dataUpdatedAt, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
     : '—'
 
   const startNodeOrderDrag = (nodeID: string) => {
