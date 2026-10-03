@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from '@tanstack/react-router'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
+import { ImageUpdateSettings } from '../features/image-updates/settings'
 import { StorageCleanup } from '../features/cleanup/storage-cleanup'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Save } from 'lucide-react'
@@ -29,11 +30,11 @@ export function SettingsPage() {
   const zh = language === 'zh-CN'
   const hash = useLocation({ select: location => location.hash })
   const navigate = useNavigate()
-  const tab = hash === 'cleanup' ? 'cleanup' : 'general'
+  const tab = hash === 'cleanup' ? 'cleanup' : hash === 'image-updates' ? 'image-updates' : 'general'
   return <ResourceFrame title={t('settings')} detail={t('localConfiguration')}>
     <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-6">
-      <Tabs value={tab} onValueChange={value => { void navigate({ to: '/settings', hash: value === 'cleanup' ? 'cleanup' : '' }) }}><TabsList><TabsTrigger value="general">{zh ? '常规设置' : 'General settings'}</TabsTrigger><TabsTrigger value="cleanup">{zh ? '存储清理' : 'Storage cleanup'}</TabsTrigger></TabsList></Tabs>
-      {tab === 'cleanup' ? <StorageCleanup /> : <GeneralSettings />}
+      <Tabs value={tab} onValueChange={value => { void navigate({ to: '/settings', hash: value === 'general' ? '' : value }) }}><TabsList><TabsTrigger value="general">{zh ? '常规设置' : 'General settings'}</TabsTrigger><TabsTrigger value="cleanup">{zh ? '存储清理' : 'Storage cleanup'}</TabsTrigger><TabsTrigger value="image-updates">{zh ? '镜像更新' : 'Image updates'}</TabsTrigger></TabsList></Tabs>
+      {tab === 'cleanup' ? <StorageCleanup /> : tab === 'image-updates' ? <ImageUpdateSettings /> : <GeneralSettings />}
     </div>
   </ResourceFrame>
 }

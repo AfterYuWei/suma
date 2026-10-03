@@ -58,3 +58,42 @@ func TestRegistryCredentialValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestImageUpdatePolicyProtectsCredentialAndGrants(t *testing.T) {
+	root := t.TempDir()
+	db, err := database.Open(filepath.Join(root, "policy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := secret.Open(filepath.Join(root, "key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewRegistryService(db, store)
+	ctx := context.Background()
+	if err := db.Create(&database.Node{ID: "edge", Name: "Edge", ConnectionType: "unix", Endpoint: "unix:///test", Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	cred, err := service.Create(ctx, RegistryInput{Name: "reg", ServerAddress: "ghcr.io", AuthType: RegistryBasic, Username: "user", Secret: "private", AuthorizedNodeIDs: []string{"edge"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&database.ImageUpdateRegistryCredential{NodeID: "edge", Registry: "ghcr.io", CredentialID: cred.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if service.Delete(ctx, cred.ID) == nil {
+		t.Fatal("deleted referenced credential")
+	}
+	if _, err := service.Update(ctx, cred.ID, RegistryInput{AuthorizedNodeIDs: []string{}}); err == nil {
+		t.Fatal("removed referenced grant")
+	}
+	if _, err := service.Update(ctx, cred.ID, RegistryInput{ServerAddress: "another.example"}); err == nil {
+		t.Fatal("changed referenced registry")
+	}
+	if _, err := service.Update(ctx, cred.ID, RegistryInput{Secret: "rotated"}); err != nil {
+		t.Fatalf("safe rotation: %v", err)
+	}
+	if err := service.AuthorizedForNode(ctx, cred.ID, "edge"); err != nil {
+		t.Fatal("failed mutation was not atomic")
+	}
+}

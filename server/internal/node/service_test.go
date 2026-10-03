@@ -151,8 +151,16 @@ func TestNodeGroupsSupportMultipleAndNoGroupMemberships(t *testing.T) {
 	if err := replaceNodeGroups(db, "remote", []uint{groups[0].ID}); err != nil {
 		t.Fatal(err)
 	}
+	db.Create(&database.ImageUpdatePolicy{NodeID: "remote", Enabled: true, IntervalHours: 6})
+	db.Create(&database.ImageUpdateRegistryCredential{NodeID: "remote", Registry: "example.test", CredentialID: 99})
 	if err := service.Delete(context.Background(), "remote"); err != nil {
 		t.Fatal(err)
+	}
+	var policyCount, referenceCount int64
+	db.Model(&database.ImageUpdatePolicy{}).Where("node_id = ?", "remote").Count(&policyCount)
+	db.Model(&database.ImageUpdateRegistryCredential{}).Where("node_id = ?", "remote").Count(&referenceCount)
+	if policyCount != 0 || referenceCount != 0 {
+		t.Fatal("deleted node retained image policy references")
 	}
 	var membershipCount int64
 	if err := db.Model(&database.NodeGroupNode{}).Where("node_id = ?", "remote").Count(&membershipCount).Error; err != nil || membershipCount != 0 {

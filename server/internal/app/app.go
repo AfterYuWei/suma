@@ -22,9 +22,12 @@ import (
 	"github.com/suma/suma/server/internal/docker"
 	gitService "github.com/suma/suma/server/internal/git"
 	imageService "github.com/suma/suma/server/internal/image"
+	"github.com/suma/suma/server/internal/imageupdate"
 	monitorService "github.com/suma/suma/server/internal/monitor"
 	networkService "github.com/suma/suma/server/internal/network"
 	nodeService "github.com/suma/suma/server/internal/node"
+	"github.com/suma/suma/server/internal/projectlogs"
+	"github.com/suma/suma/server/internal/registry"
 	"github.com/suma/suma/server/internal/secret"
 	settingsService "github.com/suma/suma/server/internal/settings"
 	systemService "github.com/suma/suma/server/internal/system"
@@ -33,6 +36,8 @@ import (
 )
 
 type App struct {
+	imageUpdates   *imageupdate.Service
+	projectLogs    *projectlogs.Service
 	cleanup        *cleanup.Service
 	logger         *slog.Logger
 	server         *http.Server
@@ -140,12 +145,25 @@ func New(logger *slog.Logger) (*App, error) {
 	if setupToken != "" {
 		logger.Info("SUMA initialization key", "setup_token", setupToken, "expires_at", setupExpires.UTC().Format(time.RFC3339))
 	}
+	imageUpdates := imageupdate.NewService(db, taskService, auditService, imageupdate.Dependencies{
+		Node: imageUpdateNode(nodes, db),
+		Runtime: func(ctx context.Context, id string) (imageupdate.Runtime, error) {
+			adapter, err := nodes.Runtime(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			return imageUpdateRuntime{adapter: adapter, db: db}, nil
+		},
+		Resolver: registry.Adapter{}, Credentials: registryCredentials,
+	})
+	imageUpdates.Start()
+	projectLogs := projectLogsService(nodes, compose, runner, db)
 	nodes.Start()
 	continuousDelivery.Start()
 	cleanupService.Start()
 	recoveryContext, recoveryCancel := context.WithCancel(context.Background())
 	fileService := containerfiles.NewService(db, secretStore)
-	application := &App{cleanup: cleanupService, logger: logger, engine: engine, nodes: nodes, agents: agents, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{Cleanup: cleanupService, Engine: engine, Containers: engine, Files: fileService, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: applicationSettings, Monitor: monitorService.NewService(engine, cfg.DatabasePath), System: systemService.NewService(engine, taskService), Nodes: nodes, Agents: agents, AgentPublicURL: cfg.AgentPublicURL, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
+	application := &App{imageUpdates: imageUpdates, projectLogs: projectLogs, cleanup: cleanupService, logger: logger, engine: engine, nodes: nodes, agents: agents, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{ImageUpdates: imageUpdates, ProjectLogs: projectLogs, Cleanup: cleanupService, Engine: engine, Containers: engine, Files: fileService, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: applicationSettings, Monitor: monitorService.NewService(engine, cfg.DatabasePath), System: systemService.NewService(engine, taskService), Nodes: nodes, Agents: agents, AgentPublicURL: cfg.AgentPublicURL, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
 	application.recoveryWG.Add(1)
 	go func() {
 		defer application.recoveryWG.Done()
@@ -207,6 +225,12 @@ func (a *App) Run() error {
 }
 
 func (a *App) Shutdown(ctx context.Context) error {
+	if a.projectLogs != nil {
+		a.projectLogs.Stop()
+	}
+	if a.imageUpdates != nil {
+		a.imageUpdates.Stop()
+	}
 	if a.cleanup != nil {
 		a.cleanup.Stop()
 	}

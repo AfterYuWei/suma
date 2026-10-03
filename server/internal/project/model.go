@@ -81,7 +81,7 @@ func ComposeSummary(nodeID, name, source, status string, managed bool) Summary {
 
 func ComposeCapabilities(managed bool) []Capability {
 	if !managed {
-		return []Capability{CapabilityView, CapabilityServices, CapabilityTakeover, CapabilityCleanup}
+		return []Capability{CapabilityView, CapabilityServices, CapabilityLogs, CapabilityTakeover, CapabilityCleanup}
 	}
 	return []Capability{
 		CapabilityView, CapabilityEdit, CapabilityDeploy, CapabilityStart,

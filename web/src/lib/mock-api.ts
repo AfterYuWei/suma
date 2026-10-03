@@ -1,3 +1,5 @@
+import { operationsDemo, demoProjectLogStream } from './mock-operations'
+import type { LogEvent } from '../features/project-logs/types'
 import { composeProblems, configKeys, configValue } from '../features/compose/document'
 import { createMockCleanup } from './mock-cleanup'
 import type { User } from '../features/auth/types'
@@ -374,6 +376,8 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     const nodeID = nodeMatch[1]
     const suffix = nodeMatch[2] || ''
     const containers = nodeContainers(nodeID)
+    const operation = operationsDemo(nodeID, suffix, method, body, url, images)
+    if (operation.handled) return clone(operation.value) as T
     if (suffix === '/tasks') return clone(tasks.filter((item) => item.scope === 'node' && item.node_id === nodeID)) as T
     if (/^\/tasks\/[^/]+\/logs$/.test(suffix)) return clone([{ id: 1, level: 'info', message: 'Task accepted by SUMA task service', created_at: earlier }, { id: 2, level: 'info', message: 'Docker operation completed successfully', created_at: now }]) as T
     if (/^\/tasks\/[^/]+\/steps$/.test(suffix)) return clone([{ id: 'download', status: 'success', current: 1, total: 1, progress: 100 }, { id: 'extract', status: 'success', current: 1, total: 1, progress: 100 }]) as T
@@ -550,3 +554,5 @@ export function subscribeDemoStream(stream: DemoStream, onMessage: (value: strin
   onMessage('\r\n\x1b[1;36mSUMA demo terminal\x1b[0m\r\nContainer: gateway · Node: homelab-01\r\n\r\n$ ')
   return () => undefined
 }
+
+export function subscribeProjectLogs(_nodeID: string, projectName: string, onEvent: (event: LogEvent) => void, tail: number): () => void { return demoProjectLogStream(projectName, onEvent, tail) }

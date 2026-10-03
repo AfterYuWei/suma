@@ -5,7 +5,7 @@ export interface ApiEnvelope<T> {
 }
 
 export class ApiError extends Error {
-  constructor(message: string, readonly code: number, readonly status: number) {
+  constructor(message: string, readonly code: number, readonly status: number, readonly data?: unknown) {
     super(message)
   }
 }
@@ -58,6 +58,12 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   if (!contentType.includes('json') || typeof body !== 'object' || body === null || typeof body.code !== 'number') {
     throw new ApiError(`The API returned an unexpected response type for ${path} (HTTP ${response.status}).`, -1, response.status)
   }
-  if (!response.ok || body.code !== 0) throw new ApiError(body.message || 'Request failed', body.code, response.status)
+  if (!response.ok || body.code !== 0) throw new ApiError(body.message || 'Request failed', body.code, response.status, body.data)
   return body.data
+}
+
+export async function subscribeDemoProjectLogs(nodeID: string, projectName: string, consume: (event: import('../features/project-logs/types').LogEvent) => void, tail: number): Promise<() => void> {
+  if (!demoMode) return () => undefined
+  const mock = await import('./mock-api')
+  return mock.subscribeProjectLogs(nodeID, projectName, consume, tail)
 }

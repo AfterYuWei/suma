@@ -26,9 +26,11 @@ import (
 	"github.com/suma/suma/server/internal/docker"
 	gitService "github.com/suma/suma/server/internal/git"
 	imageService "github.com/suma/suma/server/internal/image"
+	"github.com/suma/suma/server/internal/imageupdate"
 	monitorService "github.com/suma/suma/server/internal/monitor"
 	networkService "github.com/suma/suma/server/internal/network"
 	nodeService "github.com/suma/suma/server/internal/node"
+	"github.com/suma/suma/server/internal/projectlogs"
 	settingsService "github.com/suma/suma/server/internal/settings"
 	systemService "github.com/suma/suma/server/internal/system"
 	"github.com/suma/suma/server/internal/task"
@@ -39,6 +41,8 @@ import (
 const sessionCookie = "suma_session"
 
 type Dependencies struct {
+	ImageUpdates        *imageupdate.Service
+	ProjectLogs         *projectlogs.Service
 	Cleanup             *cleanup.Service
 	Engine              docker.Engine
 	Containers          containerdomain.Service
@@ -104,6 +108,8 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	loginAttempts := newLoginLimiter()
 	setupAttempts := newLoginLimiter()
 	v1 := router.Group("/api/v1")
+	registerImageUpdateRoutes(v1, deps)
+	registerProjectLogRoutes(router, v1, deps)
 
 	v1.GET("/auth/status", func(c *gin.Context) {
 		needsSetup, err := deps.Auth.NeedsSetup(c.Request.Context())

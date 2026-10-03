@@ -471,3 +471,20 @@ type LoginLog struct {
 	Success   bool
 	CreatedAt time.Time
 }
+
+// Image update tables persist only application-owned scheduling configuration.
+// Docker and registry observations stay in bounded runtime-bound memory.
+type ImageUpdatePolicy struct {
+	NodeID        string     `gorm:"primaryKey;size:64"`
+	Version       uint64     `gorm:"not null"`
+	Enabled       bool       `gorm:"index;not null"`
+	IntervalHours int        `gorm:"not null;default:6"`
+	NextRunAt     *time.Time `gorm:"index"`
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+type ImageUpdateRegistryCredential struct {
+	NodeID       string `gorm:"primaryKey;size:64"`
+	Registry     string `gorm:"primaryKey;size:512"`
+	CredentialID uint   `gorm:"index;not null"`
+}

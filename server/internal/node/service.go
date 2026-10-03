@@ -393,6 +393,13 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 		}
 	}
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("node_id = ?", id).Delete(&database.ImageUpdateRegistryCredential{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("node_id = ?", id).Delete(&database.ImageUpdatePolicy{}).Error; err != nil {
+			return err
+		}
+
 		if err := tx.Where("node_id = ?", id).Delete(&database.AgentEnrollment{}).Error; err != nil {
 			return err
 		}

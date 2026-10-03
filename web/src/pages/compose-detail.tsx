@@ -1,3 +1,4 @@
+import { useImageUpdates } from '../features/image-updates/hooks'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Link,
@@ -21,7 +22,6 @@ import {
   Trash2
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { Card, CardContent } from '../components/ui/card'
 import { Button } from '../components/ui/button'
 import {
   Alert,
@@ -62,7 +62,8 @@ import {
 import { confirmManagedProjectRemoval } from '../features/compose/managed-project-removal'
 import { TakeoverWarningDialog } from '../features/compose/takeover-warning-dialog'
 import type { Project } from '../features/compose/types'
-import { LogTailSelect } from '../features/containers/log-tail-select'
+import { ProjectLogs } from '../features/project-logs/project-logs'
+import { ImageUpdateCheck, ImageUpdateDetails, UpdateStatus } from '../features/image-updates/image-updates'
 import { useLogAutoScroll } from '../features/containers/use-log-auto-scroll'
 import type {
   ContainerMetrics,
@@ -89,7 +90,8 @@ import {
 } from '../components/ui/dropdown-menu'
 import { registerProjectNavigationGuard } from '../lib/project-navigation-guard'
 import { ApiError } from '../lib/api'
-import type { ConfigPath } from '../features/compose/document'
+import { configKeys, type ConfigPath } from '../features/compose/document'
+import type { ImageUpdateResult } from '../features/image-updates/types'
 type View = 'Files' | 'Services' | 'Logs'
 interface ComposeTask {
   id: string
@@ -131,7 +133,7 @@ export function ComposeDetailPage() {
   const { t, language } = useI18n()
   const zh = language === 'zh-CN'
   const nodeID = useUIStore((state) => state.currentNodeID)
-  const logTail = useUIStore((state) => state.logTail)
+  const imageUpdates = useImageUpdates(nodeID, projectName)
   const query = useQuery({
     queryKey: ['project', nodeID, backend, projectName],
     queryFn: () =>
@@ -210,7 +212,7 @@ export function ComposeDetailPage() {
     setCompose(query.data.compose)
     setEnvironment(query.data.environment)
     setConflict(false)
-    if (!query.data.managed) setView('Services')
+    if (!query.data.managed && (baselineRef.current?.name !== projectName || baselineRef.current?.node_id !== nodeID)) setView('Services')
   }, [query.data, nodeID, projectName])
   useEffect(
     () =>
@@ -243,19 +245,6 @@ export function ComposeDetailPage() {
     },
     enabled: view === 'Services',
     refetchInterval: 5_000
-  })
-  const logs = useQuery({
-    queryKey: ['project-logs', nodeID, projectName, logTail],
-    queryFn: () =>
-      api<{ logs: string }>(
-        nodePath(
-          nodeID,
-          `/projects/compose/${encodedName}/logs?tail=${logTail}`
-        )
-      ),
-    enabled: view === 'Logs',
-    refetchInterval: 3_000,
-    retry: false
   })
   const save = useMutation({
     mutationFn: (allowDockerSocket: boolean) =>
@@ -747,7 +736,7 @@ export function ComposeDetailPage() {
             <TabsList variant="line">
               {(project.managed
                 ? ['Files', 'Services', 'Logs']
-                : ['Services']
+                : ['Services', 'Logs']
               ).map((name) => (
                 <TabsTrigger key={name} value={name}>
                   {name === 'Files'
@@ -851,22 +840,16 @@ export function ComposeDetailPage() {
           )}
 
           {view === 'Services' && (
-            <Services
+            <div className="flex flex-col gap-4"><div className="flex justify-end"><ImageUpdateCheck nodeID={nodeID} target={{ project_name: projectName }} /></div><ImageUpdateDetails rows={imageUpdates.data?.results || []} zh={zh} />{project.managed && imageUpdates.data?.results.some(row => row.pull_required || row.recreate_required) && <Button className="self-start" variant="outline" disabled={pendingConfiguration || operationActive || validate.isPending || !!review} onClick={() => void deploy()}>{zh ? '拉取并重建' : 'Pull & recreate'}</Button>}<Services
               rows={services.data}
+              updates={imageUpdates.data?.results || []}
+              declared={project.managed ? configKeys(project.compose, ['services']) : []}
               loading={services.isPending}
               error={services.error?.message}
               zh={zh}
-            />
+            /></div>
           )}
-          {view === 'Logs' && project.managed && (
-            <Logs
-              value={logs.data?.logs}
-              loading={logs.isPending}
-              error={logs.isError}
-              zh={zh}
-              sourceKey={`${nodeID}\n${projectName}\n${logTail}`}
-            />
-          )}
+          {view === 'Logs' && <ProjectLogs key={`${nodeID}/${projectName}`} nodeID={nodeID} projectName={projectName} />}
         </div>
       </ResourceFrame>
       <Dialog
@@ -1253,11 +1236,15 @@ const serviceState = (state: string, zh: boolean) =>
 
 function Services({
   rows,
+  updates,
+  declared,
   loading,
   error,
   zh
 }: {
   rows?: ContainerSummary[]
+  updates: ImageUpdateResult[]
+  declared: string[]
   loading: boolean
   error?: string
   zh: boolean
@@ -1307,6 +1294,7 @@ function Services({
               </TableCell>
             </TableRow>
           )}
+          {declared.filter(name => !(rows || []).some(row => row.labels['com.docker.compose.service'] === name)).map(name => <TableRow key={`undeployed/${name}`}><TableCell>{name}</TableCell><TableCell colSpan={5} className="text-xs text-muted-foreground">{zh ? '尚未部署 · 没有本地运行版本可检测' : 'Not deployed · no local runtime version to check'}</TableCell></TableRow>)}
           {pagination.items.map((row) => (
             <TableRow key={row.id}>
               <TableCell>
@@ -1335,6 +1323,7 @@ function Services({
                     {row.image}
                   </span>
                 </TooltipHint>
+                <UpdateStatus rows={updates.filter(update => update.containers.some(container => container.container_id === row.id))} zh={zh} />
               </TableCell>
               <TableCell>
                 <div className="flex flex-col items-start gap-1">
@@ -1378,58 +1367,5 @@ function Services({
       </Table>
       <ListPagination {...pagination} zh={zh} />
     </>
-  )
-}
-
-function Logs({
-  value,
-  loading,
-  error,
-  zh,
-  sourceKey
-}: {
-  value?: string
-  loading: boolean
-  error: boolean
-  zh: boolean
-  sourceKey: string
-}) {
-  const { viewportRef, onScroll } = useLogAutoScroll<HTMLDivElement>(
-    value || '',
-    sourceKey
-  )
-  return (
-    <div className="flex w-full flex-col gap-3">
-      <div className="flex justify-end">
-        <LogTailSelect zh={zh} />
-      </div>
-      {loading ? (
-        <LoadingState
-          rows={6}
-          label={zh ? '正在加载 Compose 日志' : 'Loading Compose logs'}
-        />
-      ) : (
-        <Card className="h-[55vh] w-full">
-          <CardContent
-            ref={viewportRef}
-            onScroll={onScroll}
-            className="min-h-0 flex-1 overflow-auto overscroll-contain"
-          >
-            <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap">
-              {value || ''}
-            </pre>
-            {!value && (
-              <p className="text-sm text-muted-foreground">
-                {error
-                  ? zh
-                    ? '没有可用日志，请先启动项目。'
-                    : 'No Compose logs available. Start the project first.'
-                  : ''}
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      )}
-    </div>
   )
 }

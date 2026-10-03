@@ -1,3 +1,4 @@
+import { useImageUpdates } from '../features/image-updates/hooks'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CircleAlert, Download, Package, Search, Tag as TagIcon, Trash2, X } from 'lucide-react'
 import { type ReactNode, useEffect, useState } from 'react'
@@ -27,6 +28,8 @@ import { nodePath } from '../lib/nodes'
 import { confirmDialog, promptDialog } from '../stores/dialog'
 import { useUIStore } from '../stores/ui'
 
+import { ImageUpdateCheck, ImageUpdateDetails, UpdateStatus } from '../features/image-updates/image-updates'
+
 interface Image { id: string; tags: string[]; digests: string[]; size: number; created: string; containers: number; architecture?: string; os?: string; author?: string; docker_version?: string; layers?: string[] }
 interface RegistryCredential { id: number; name: string; server_address: string; authorized_node_ids: string[] }
 interface PullTask { id: string; type: string; name: string; status: string; progress: number; message: string }
@@ -35,6 +38,7 @@ interface TaskStep { id: string; status: string; current: number; total: number;
 export function ImagesPage() {
   const nodeID = useUIStore((state) => state.currentNodeID)
   const client = useQueryClient()
+  const updates = useImageUpdates(nodeID)
   const [pullOpen, setPullOpen] = useState(false)
   const [pullTaskID, setPullTaskID] = useState('')
   const [reference, setReference] = useState('')
@@ -103,7 +107,7 @@ export function ImagesPage() {
 
   useEffect(() => {
     if (trackedPull?.status === 'success') {
-      void client.invalidateQueries({ queryKey: ['images', nodeID] })
+      void client.invalidateQueries({ queryKey: ['images', nodeID] }); void client.invalidateQueries({ queryKey: ['image-updates', nodeID] })
     }
   }, [client, nodeID, trackedPull?.status])
 
@@ -128,7 +132,7 @@ export function ImagesPage() {
       <InputGroupInput value={filter} onChange={(event) => setFilter(event.target.value)} placeholder={zh ? '名称、标签或摘要…' : 'Name, tag, or digest…'} aria-label={zh ? '筛选镜像' : 'Filter images'} />
       {!!filter && <InputGroupAddon align="inline-end"><InputGroupButton size="icon-xs" aria-label={zh ? '清空筛选' : 'Clear filter'} onClick={() => setFilter('')}><X /></InputGroupButton></InputGroupAddon>}
     </InputGroup>
-    <Button onClick={openPull}><Download />Pull</Button>
+    <ImageUpdateCheck nodeID={nodeID} /><Button onClick={openPull}><Download />Pull</Button>
   </div>
 
   const statusStrip = <>
@@ -146,6 +150,7 @@ export function ImagesPage() {
                 <Checkbox checked={allSelected} indeterminate={someSelected} disabled={pageRemovableRows.length === 0} onCheckedChange={(checked) => toggleAll(checked)} aria-label={allSelected ? (zh ? '取消选择本页' : 'Deselect this page') : (zh ? '选择本页未使用的镜像' : 'Select unused images on this page')} />
               </TableHead>
               <TableHead>{zh ? '镜像' : 'Image'}</TableHead>
+              <TableHead className="min-w-[140px]">{zh ? '更新状态' : 'Updates'}</TableHead>
               <TableHead className="min-w-[110px]">{zh ? '大小' : 'Size'}</TableHead>
               <TableHead className="min-w-[90px]">{zh ? '引用' : 'Usage'}</TableHead>
               <TableHead className="min-w-[180px]">{zh ? '创建时间' : 'Created'}</TableHead>
@@ -167,11 +172,13 @@ export function ImagesPage() {
                     </span>
                   </button>
                 </TableCell>
+                <TableCell><UpdateStatus rows={updates.data?.results.filter(result => result.local_image_id === row.id) || []} zh={zh} /></TableCell>
                 <TableCell>{size(row.size)}</TableCell>
                 <TableCell>{row.containers < 0 ? '—' : String(row.containers)}</TableCell>
                 <TableCell>{new Date(row.created).toLocaleString(language)}</TableCell>
                 <TableCell>
                   <div className="flex items-center gap-1">
+                    <ImageUpdateCheck nodeID={nodeID} target={{ image_ids: [row.id] }} compact />
                     <TooltipHint content={t('tag')}><Button variant="ghost" size="icon-sm" aria-label={t('tag')} onClick={() => void tag(row)}><TagIcon /></Button></TooltipHint>
                     <TooltipHint content={row.containers > 0 ? (zh ? '镜像正在使用中' : 'Image is in use') : t('removeImage')}><Button variant="destructive" size="icon-sm" disabled={row.containers !== 0} aria-label={t('removeImage')} onClick={() => void removeImage(row)}><Trash2 /></Button></TooltipHint>
                   </div>
@@ -228,6 +235,7 @@ export function ImagesPage() {
       <SheetContent side="right" className="w-[448px] max-w-full gap-0 sm:max-w-[448px]">
         <SheetHeader className="border-b"><SheetTitle className="truncate pr-6">{detail.data?.tags?.[0] || detailImageID.slice(0, 19)}</SheetTitle></SheetHeader>
         <div className="flex-1 overflow-y-auto p-4">
+          <ImageUpdateDetails rows={updates.data?.results.filter(row => row.local_image_id === detailImageID) || []} zh={zh} onPull={row => { setDetailImageID(''); setPullTaskID(''); setReference(row.reference); setCredentialID(''); pull.reset(); setPullOpen(true) }} />
           {detail.isPending ? <LoadingState compact embedded rows={5} label={zh ? '正在加载镜像详情' : 'Loading image details'} /> : <div className="divide-y divide-border">
             {([[ 'ID', detail.data?.id ?? '—' ], [zh ? '大小' : 'Size', detail.data ? size(detail.data.size) : '—'], [zh ? '平台' : 'Platform', `${detail.data?.os || '—'} / ${detail.data?.architecture || '—'}`], [zh ? '创建时间' : 'Created', detail.data?.created ? new Date(detail.data.created).toLocaleString(language) : '—'], [zh ? '层数' : 'Layers', String(detail.data?.layers?.length ?? 0)]] as [string, string][]).map(([key, value]) => (
               <div key={key} className="flex items-start justify-between gap-6 py-2.5 first:pt-0 last:pb-0">
