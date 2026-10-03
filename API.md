@@ -51,7 +51,7 @@ Compose Project names and managed directories must match Docker Compose's lowerc
 
 Compose requests containing a `/var/run/docker.sock` bind are rejected by default. After two explicit UI warnings, the confirmed request carries `X-SUMA-Allow-Docker-Socket: true`; this authorizes only that request. TCP and Agent node binds must still use non-interpolated absolute source paths.
 
-The resource routes listed below remain deprecated aliases for the migrated default node. `GET /health` reports only control-plane/database health; a disconnected Docker node does not make it fail. Legacy `node_id` filters validate that the node exists. Global `GET /tasks` and `GET /audit-logs` accept `scope=control_plane|all` and default to `control_plane`.
+The resource routes listed below remain deprecated aliases for the migrated default node. `GET /health` reports only control-plane/database health; a disconnected Docker node does not make it fail. Legacy `node_id` filters validate that the node exists. Global `GET /tasks` and `GET /audit-logs` accept `scope=control_plane|all`. Tasks default to `control_plane`; audit logs default to `all`, including ordinary and AI actions.
 
 - `GET /health`, `GET /docker/info`
 - `GET /auth/status`, `POST /auth/initialize`, `POST /auth/login`, `POST /auth/two-factor`, `POST /auth/passkey/options`, `POST /auth/passkey`, `POST /auth/logout`, `GET /auth/session`
@@ -308,3 +308,37 @@ Volumes never enter automatic deletion. `DELETE /api/v1/nodes/:nodeID/volumes/:n
 Both legacy `/system/prune` routes still accept `{"confirm":"PRUNE"}` and generate a fresh preview through this same service, using the saved node policy. They no longer invoke blanket Engine prune or delete volumes.
 
 Repeatable isolated Unix/mTLS/Agent verification is documented in [Docker cleanup smoke verification](doc/cleanup-smoke.md).
+
+## Notifications and reviewed AI operations
+
+All routes require an authenticated session and the usual Origin check for writes. Secrets are write-only; blank fields retain encrypted material. Channel/rule/settings writes carry an optimistic `version`. See [setup, provider permissions and approval behavior](doc/notifications-and-ai-operations.md).
+
+| Method | `/api/v1` path | Behavior |
+| --- | --- | --- |
+| GET | `/notifications/catalog` | Canonical events and rule presets |
+| GET / POST | `/notifications/channels` | List or create a channel |
+| PUT / DELETE | `/notifications/channels/:id` | Edit/pause or delete; identity changes revoke bindings |
+| POST | `/notifications/channels/:id/check` | Check bot credentials (does not prove delivery/callback setup) |
+| POST | `/notifications/channels/:id/test` | Send an explicit test message, including while paused |
+| GET | `/notifications/channels/:id/chats` | Detected chats from incoming platform events |
+| GET / POST | `/notifications/rules` | List or create a routing rule |
+| PUT / DELETE | `/notifications/rules/:id` | Edit or remove a rule |
+| GET | `/notifications/inbox` | Latest 200 historical messages plus total per-user unread count |
+| POST | `/notifications/inbox/:id/read` | Persist per-user read state |
+| GET | `/notifications/deliveries` | Latest 200 delivery attempts and suppression reasons |
+| POST | `/notifications/deliveries/:id/resend` | Create a new durable delivery |
+| GET / POST | `/notification-bindings` | List own bindings or issue a 10-minute private-chat code |
+| POST | `/notification-bindings/:id/confirm` | Confirm a claimed stable platform identity |
+| DELETE | `/notification-bindings/:id` | Revoke own binding and associated approval tokens |
+| GET / PUT | `/ai/settings` | Read/update enablement, model, node scope and limits; API key is write-only |
+| POST | `/ai/settings/test` | Test text and registered function calling separately |
+| GET / POST | `/ai/runs` | History or start an authorized-node diagnosis (202) |
+| GET | `/ai/runs/:id` | Status, redacted evidence, summary and proposal IDs |
+| GET | `/ai/operations` | Individually reviewed proposals and execution history |
+| GET | `/ai/operations/:id` | Full frozen preview, expiry, `review_token`, status and linked Task |
+| POST | `/ai/operations/:id/decision` | `{ "approve": true, "review_token": "..." }`; no parameter overrides |
+| GET | `/ai/audit` | Bounded diagnosis/approval/execution audit history |
+
+`GET /ws/ai/runs/:id` streams diagnosis snapshots until completion and cancels its polling context on disconnect. Execution progress uses existing node Task APIs/WebSockets. Creating a proposal never executes; a successful decision atomically creates the pending Task, claims approval and records reviewer identity, then launches work after commit. Expired/changed/repeated approvals return 409, disabled/out-of-scope access 403 and exhausted concurrency/automatic budget 429. Restart recovery does not replay AI mutations.
+
+`GET /audit-logs` is the unified global audit source, including `ai.*` actions. Records may include `source`, `run_id`, `operation_id`, `task_id`, platform identity and redacted `details`. `GET /ai/audit` returns only the AI projection of these same records and preserves their IDs and correlations. Both require a SUMA session; chat guest queries cannot read either endpoint.

@@ -494,6 +494,8 @@ func (s *Service) ComposeTarget(ctx context.Context, id string) (compose.Target,
 		}
 	}
 	target := compose.Target{NodeID: row.ID, NodeName: row.Name, Host: host, TLSRequired: row.ConnectionType == ConnectionTCP && row.TLSMode == TLSRequired}
+	target.RuntimeIdentity = fmt.Sprintf("%s|%d|%v", row.EngineID, row.UpdatedAt.UnixNano(), row.AgentConnectedAt)
+	target.RemoteSources = row.ConnectionType != ConnectionUnix
 	if target.TLSRequired {
 		if row.TLSCredentialID == nil {
 			return compose.Target{}, nodeView, errors.New("Docker TLS credential is required")

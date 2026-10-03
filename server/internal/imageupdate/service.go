@@ -7,6 +7,7 @@ import (
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/credential"
 	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/event"
 	"github.com/suma/suma/server/internal/task"
 	"gorm.io/gorm"
 	"sort"
@@ -154,7 +155,15 @@ func (s *Service) View(ctx context.Context, id, project string) (View, error) {
 	age := time.Duration(p.IntervalHours) * time.Hour
 	result := View{Results: []Result{}}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	pendingEvents := []event.Event{}
+	defer func() {
+		s.mu.Unlock()
+		if s.deps.Emit != nil {
+			for _, e := range pendingEvents {
+				s.deps.Emit(e)
+			}
+		}
+	}()
 	result.RunningTaskID = s.running[id]
 	for _, t := range targets(inv, CheckInput{ProjectName: project}) {
 		r := t.result
@@ -171,6 +180,9 @@ func (s *Service) View(ctx context.Context, id, project string) (View, error) {
 			}
 		} else if r.Status == "unchecked" && result.RunningTaskID != "" {
 			r.Status = "checking"
+		}
+		if r.RecreateRequired && !r.PullRequired {
+			pendingEvents = append(pendingEvents, event.Event{Type: "image.recreate_required", Severity: "info", NodeID: node.ID, NodeName: node.Name, ResourceType: "image", ResourceID: r.LocalImageID, Title: r.Reference, Message: "Local image updated; containers still use an older image", DedupeKey: node.ID + "|" + r.Reference + "|" + r.RemoteManifestDigest + "|recreate"})
 		}
 		result.Results = append(result.Results, r)
 	}
@@ -380,6 +392,22 @@ func (s *Service) check(ctx context.Context, node Node, in CheckInput, mappings 
 					}
 					s.cache[node.ID][key(r)] = cached{RuntimeKey: node.RuntimeKey, Result: r}
 					s.mu.Unlock()
+					if s.deps.Emit != nil {
+						kind := ""
+						severity := "info"
+						switch r.Status {
+						case "update_available":
+							kind = "image.available"
+						case "recreate_required":
+							kind = "image.recreate_required"
+						case "unavailable":
+							kind = "image.check_failed"
+							severity = "warning"
+						}
+						if kind != "" {
+							s.deps.Emit(event.Event{Type: kind, Severity: severity, NodeID: node.ID, NodeName: node.Name, ResourceType: "image", ResourceID: r.LocalImageID, Title: r.Reference, Message: r.Status + " " + r.RemoteManifestDigest + " " + r.ReasonCode, DedupeKey: node.ID + "|" + r.Reference + "|" + r.RemoteManifestDigest + "|" + kind})
+						}
+					}
 				}
 			}
 		}()

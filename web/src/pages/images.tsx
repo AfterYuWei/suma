@@ -1,3 +1,4 @@
+import { AIAnalyzeButton } from '../features/operations/workbench'
 import { useLocation, useNavigate } from '@tanstack/react-router'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { ImageUpdatePolicyPanel } from '../features/image-updates/policy'
@@ -248,6 +249,7 @@ export function ImagesPage() {
       <SheetContent side="right" className="w-[448px] max-w-full gap-0 sm:max-w-[448px]">
         <SheetHeader className="border-b"><SheetTitle className="truncate pr-6">{detail.data?.tags?.[0] || detailImageID.slice(0, 19)}</SheetTitle></SheetHeader>
         <div className="flex-1 overflow-y-auto p-4">
+          <AIAnalyzeButton kind="image" id={detailImageID} nodeID={nodeID} />
           <ImageUpdateDetails rows={updates.data?.results.filter(row => row.local_image_id === detailImageID) || []} zh={zh} onPull={row => { setDetailImageID(''); setPullTaskID(''); setReference(row.reference); setCredentialID(''); pull.reset(); setPullOpen(true) }} />
           {detail.isPending ? <LoadingState compact embedded rows={5} label={zh ? '正在加载镜像详情' : 'Loading image details'} /> : <div className="divide-y divide-border">
             {([[ 'ID', detail.data?.id ?? '—' ], [zh ? '大小' : 'Size', detail.data ? size(detail.data.size) : '—'], [zh ? '平台' : 'Platform', `${detail.data?.os || '—'} / ${detail.data?.architecture || '—'}`], [zh ? '创建时间' : 'Created', detail.data?.created ? formatDateTime(detail.data.created) : '—'], [zh ? '层数' : 'Layers', String(detail.data?.layers?.length ?? 0)]] as [string, string][]).map(([key, value]) => (

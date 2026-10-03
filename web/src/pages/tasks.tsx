@@ -1,5 +1,7 @@
+import { AIAnalyzeButton } from '../features/operations/workbench'
 import { useDateTime } from '../lib/time-zone'
 import { Fragment, useState } from 'react'
+import { Link, useLocation } from '@tanstack/react-router'
 import { CleanupNodeSheet } from '../features/cleanup/storage-cleanup'
 import type { DockerNode } from '../lib/nodes'
 import { useQuery } from '@tanstack/react-query'
@@ -38,7 +40,7 @@ export function TasksPage() {
   const [cleanupOpen, setCleanupOpen] = useState(false)
   const nodes = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes') })
   const currentNode = nodes.data?.find(node => node.id === nodeID)
-
+  const linkedTaskID = useLocation({ select: (location) => location.hash })
 
   return (
     <ResourceFrame
@@ -51,6 +53,7 @@ export function TasksPage() {
       )}
     >
       {cleanupOpen && currentNode && <CleanupNodeSheet key={nodeID} node={currentNode} open initialTab="preview" onOpenChange={setCleanupOpen} />}
+      {linkedTaskID && <LinkedTask key={linkedTaskID} id={linkedTaskID} zh={zh} />}
       {query.isPending
         ? <LoadingState label={zh ? '正在加载任务' : 'Loading tasks'} />
         : (
@@ -102,6 +105,24 @@ export function TasksPage() {
   )
 }
 
+function LinkedTask({ id, zh }: { id: string; zh: boolean }) {
+  const query = useQuery({
+    queryKey: ['linked-task', id],
+    queryFn: () => api<Task>(`/tasks/${encodeURIComponent(id)}`),
+    refetchInterval: (query) => ['pending', 'running'].includes(query.state.data?.status ?? '') ? 2000 : false,
+  })
+  const task = query.data
+  return <section aria-label={zh ? '关联任务' : 'Linked task'} className="mb-4 space-y-3 border-y py-4">
+    <div className="flex items-center justify-between gap-3"><p className="text-xs text-muted-foreground">{zh ? '关联任务' : 'Linked task'}</p><Button size="sm" variant="ghost" nativeButton={false} render={<Link to="/tasks" hash="" />}>{zh ? '关闭任务详情' : 'Close task details'}</Button></div>
+    {query.isPending ? <LoadingState compact label={zh ? '正在加载任务' : 'Loading task'} /> : query.isError ? <p role="alert" className="text-sm text-destructive">{zh ? '无法加载关联任务' : 'Unable to load linked task'}</p> : task && <>
+      <div className="flex flex-wrap items-center gap-3"><h2 className="min-w-0 break-words text-sm font-medium">{task.name}</h2><StatusBadge tone={taskTone(task.status)}>{task.status}</StatusBadge></div>
+      <p className="break-all text-xs text-muted-foreground">{task.scope === 'node' ? task.node_name || task.node_id : zh ? '控制平面' : 'Control plane'} · {task.id}</p>
+      <Progress value={Number(task.progress)} />
+      <TaskLogs task={task} />
+    </>}
+  </section>
+}
+
 function TaskLogs({ task }: { task: Task }) {
   const { formatTime } = useDateTime()
 
@@ -115,7 +136,7 @@ function TaskLogs({ task }: { task: Task }) {
   const compactedCount = rawLogs.length - visibleLogs.length
   if (logs.isPending) return <LoadingState embedded compact rows={3} label={zh ? '正在加载任务输出' : 'Loading task output'} />
   return (
-    <><div className="flex max-h-64 flex-col gap-1.5 overflow-y-auto overscroll-contain">
+    <><AIAnalyzeButton kind="task" id={task.id} nodeID={task.node_id} /><div className="flex max-h-64 flex-col gap-1.5 overflow-y-auto overscroll-contain">
       {rawLogs.length === 0 && <p className="py-2 text-center text-sm text-muted-foreground">{zh ? '等待任务输出…' : 'Waiting for task output…'}</p>}
       {pagination.items.map((log) => (
         <div key={log.id} className="flex items-baseline gap-3">

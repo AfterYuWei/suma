@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/suma/suma/server/internal/agenthub"
+	"github.com/suma/suma/server/internal/ai"
 	"github.com/suma/suma/server/internal/api"
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/auth"
@@ -20,12 +22,14 @@ import (
 	credentialService "github.com/suma/suma/server/internal/credential"
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/docker"
+	"github.com/suma/suma/server/internal/event"
 	gitService "github.com/suma/suma/server/internal/git"
 	imageService "github.com/suma/suma/server/internal/image"
 	"github.com/suma/suma/server/internal/imageupdate"
 	monitorService "github.com/suma/suma/server/internal/monitor"
 	networkService "github.com/suma/suma/server/internal/network"
 	nodeService "github.com/suma/suma/server/internal/node"
+	"github.com/suma/suma/server/internal/notification"
 	"github.com/suma/suma/server/internal/projectlogs"
 	"github.com/suma/suma/server/internal/registry"
 	"github.com/suma/suma/server/internal/secret"
@@ -36,6 +40,8 @@ import (
 )
 
 type App struct {
+	notifications  *notification.Service
+	ai             *ai.Service
 	imageUpdates   *imageupdate.Service
 	projectLogs    *projectlogs.Service
 	cleanup        *cleanup.Service
@@ -79,6 +85,9 @@ func New(logger *slog.Logger) (*App, error) {
 	}
 	auditService := audit.NewService(db)
 	taskService := task.NewService(db)
+	if err := taskService.RecoverInterrupted(context.Background()); err != nil {
+		return nil, fmt.Errorf("recover tasks: %w", err)
+	}
 	images := imageService.NewService(engine, taskService)
 	runner, err := composeService.NewRunner(cfg.ComposeCommand)
 	if err != nil {
@@ -108,11 +117,11 @@ func New(logger *slog.Logger) (*App, error) {
 		OnError: func(err error) { logger.Warn("cleanup scheduler failed", "error", err) },
 		Node: func(ctx context.Context, id string) (cleanup.Node, error) {
 			view, err := nodes.Get(ctx, id)
-			credentialID := uint(0)
-			if view.TLSCredentialID != nil {
-				credentialID = *view.TLSCredentialID
+			if err != nil {
+				return cleanup.Node{}, err
 			}
-			return cleanup.Node{ID: view.ID, Name: view.Name, Enabled: view.Enabled, RuntimeKey: fmt.Sprintf("%s|%s|%s|%s|%d", view.Endpoint, view.ConnectionType, view.EngineID, view.TLSMode, credentialID)}, err
+			current, err := imageUpdateNode(nodes, db)(ctx, id)
+			return cleanup.Node{ID: view.ID, Name: view.Name, Enabled: view.Enabled, RuntimeKey: current.RuntimeKey}, err
 		},
 		Runtime: func(ctx context.Context, id string) (cleanup.Runtime, error) { return nodes.Runtime(ctx, id) },
 		Timezone: func(ctx context.Context) string {
@@ -145,7 +154,25 @@ func New(logger *slog.Logger) (*App, error) {
 	if setupToken != "" {
 		logger.Info("SUMA initialization key", "setup_token", setupToken, "expires_at", setupExpires.UTC().Format(time.RFC3339))
 	}
+	notifications := notification.NewService(db, secretStore, notification.Dependencies{Audit: auditService, OnError: func(err error) { logger.Warn("notification service", "error", err) }})
+	auditService.SetSink(auditNotifications(db, notifications))
+	continuousDelivery.SetEventSink(notifications.Emit)
+	taskService.SetEventSink(func(e event.Event) {
+		var row database.Task
+		if db.First(&row, "id = ?", e.TaskID).Error == nil {
+			if strings.HasPrefix(row.Type, "compose.") {
+				e.Type = "project.completed"
+			}
+			if strings.HasPrefix(row.Type, "image.pull") && e.Type == "task.failed" {
+				e.Type = "image.pull_failed"
+			}
+		}
+		if e.Type != "task.completed" {
+			notifications.Emit(e)
+		}
+	})
 	imageUpdates := imageupdate.NewService(db, taskService, auditService, imageupdate.Dependencies{
+		Emit: notifications.Emit,
 		Node: imageUpdateNode(nodes, db),
 		Runtime: func(ctx context.Context, id string) (imageupdate.Runtime, error) {
 			adapter, err := nodes.Runtime(ctx, id)
@@ -156,6 +183,23 @@ func New(logger *slog.Logger) (*App, error) {
 		},
 		Resolver: registry.Adapter{}, Credentials: registryCredentials,
 	})
+	controlled := aiRuntime{db: db, nodes: nodes, compose: compose, runner: runner, cd: continuousDelivery, cleanup: cleanupService, tasks: taskService, registries: registryCredentials, imageUpdates: imageUpdates}
+	assistant, err := ai.NewService(db, secretStore, taskService, ai.Dependencies{Audit: auditService, Read: controlled.Read, Query: controlled.Query, Freeze: controlled.Freeze, Execute: controlled.Execute, Emit: notifications.Emit, ActorValid: func(ctx context.Context, a ai.Actor) error {
+		if a.BindingID != "" {
+			binding, err := notifications.ValidateBinding(ctx, a.UserID, a.BindingID)
+			if err != nil || binding.ExternalUserID != a.ExternalUserID {
+				return ai.ErrScope
+			}
+			return nil
+		}
+		return nil
+	}})
+	if err != nil {
+		return nil, err
+	}
+	notifications.SetEventHandler(assistant.OnEvent)
+	notifications.SetChatHandler(chatOperations(notifications, assistant))
+	notifications.Start()
 	imageUpdates.Start()
 	projectLogs := projectLogsService(nodes, compose, runner, db)
 	nodes.Start()
@@ -163,7 +207,17 @@ func New(logger *slog.Logger) (*App, error) {
 	cleanupService.Start()
 	recoveryContext, recoveryCancel := context.WithCancel(context.Background())
 	fileService := containerfiles.NewService(db, secretStore)
-	application := &App{imageUpdates: imageUpdates, projectLogs: projectLogs, cleanup: cleanupService, logger: logger, engine: engine, nodes: nodes, agents: agents, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{ImageUpdates: imageUpdates, ProjectLogs: projectLogs, Cleanup: cleanupService, Engine: engine, Containers: engine, Files: fileService, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: applicationSettings, Monitor: monitorService.NewService(engine, cfg.DatabasePath), System: systemService.NewService(engine, taskService), Nodes: nodes, Agents: agents, AgentPublicURL: cfg.AgentPublicURL, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
+	application := &App{notifications: notifications, ai: assistant, imageUpdates: imageUpdates, projectLogs: projectLogs, cleanup: cleanupService, logger: logger, engine: engine, nodes: nodes, agents: agents, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{Notifications: notifications, AI: assistant, ImageUpdates: imageUpdates, ProjectLogs: projectLogs, Cleanup: cleanupService, Engine: engine, Containers: engine, Files: fileService, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: applicationSettings, Monitor: monitorService.NewService(engine, cfg.DatabasePath), System: systemService.NewService(engine, taskService), Nodes: nodes, Agents: agents, AgentPublicURL: cfg.AgentPublicURL, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
+	application.recoveryWG.Add(1)
+	go func() {
+		defer application.recoveryWG.Done()
+		assistant.ReconcileInterrupted(recoveryContext)
+	}()
+	application.recoveryWG.Add(1)
+	go func() {
+		defer application.recoveryWG.Done()
+		observeNotifications(recoveryContext, nodes, db, notifications, assistant.Expire)
+	}()
 	application.recoveryWG.Add(1)
 	go func() {
 		defer application.recoveryWG.Done()
@@ -225,6 +279,9 @@ func (a *App) Run() error {
 }
 
 func (a *App) Shutdown(ctx context.Context) error {
+	if a.ai != nil {
+		a.ai.Stop()
+	}
 	if a.projectLogs != nil {
 		a.projectLogs.Stop()
 	}
@@ -240,6 +297,9 @@ func (a *App) Shutdown(ctx context.Context) error {
 	}
 	if a.cd != nil {
 		a.cd.Stop()
+	}
+	if a.notifications != nil {
+		a.notifications.Stop()
 	}
 	serverErr := a.server.Shutdown(ctx)
 	engineErr := a.engine.Close()

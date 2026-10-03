@@ -22,6 +22,7 @@ import (
 	"github.com/suma/suma/server/internal/compose"
 	credentialrepo "github.com/suma/suma/server/internal/credential"
 	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/event"
 	gitrepo "github.com/suma/suma/server/internal/git"
 	"github.com/suma/suma/server/internal/secret"
 	"github.com/suma/suma/server/internal/task"
@@ -140,6 +141,7 @@ type Actor struct {
 }
 
 type Service struct {
+	emit             event.Sink
 	db               *gorm.DB
 	git              gitrepo.Client
 	credentials      *gitrepo.CredentialService
@@ -605,6 +607,9 @@ func (s *Service) syncLocked(ctx context.Context, projectID uint, taskID, trigge
 	}
 	if project.ReconcileMode == ModeAuto {
 		return s.deployLocked(ctx, project, release, taskID, false, actor, report)
+	}
+	if s.emit != nil {
+		s.emit(event.Event{Type: "cd.awaiting_approval", Severity: "warning", Scope: "control_plane", Project: project.Name, ResourceType: "release", ResourceID: fmt.Sprint(release.ID), ReleaseID: &release.ID, TaskID: taskID, Title: project.Name, Message: "Release " + release.CommitSHA + " is ready for approval"})
 	}
 	report(100, "Release is ready for approval")
 	return nil
@@ -1325,6 +1330,13 @@ func (s *Service) Drift(ctx context.Context, name string) (Drift, error) {
 	delete(s.driftFlight, project.ID)
 	close(flight)
 	s.driftMu.Unlock()
+	if err == nil && value.Drifted && s.emit != nil {
+		for _, n := range value.Nodes {
+			if n.Drifted {
+				s.emit(event.Event{Type: "cd.drift", Severity: "warning", NodeID: n.NodeID, NodeName: n.NodeName, Project: project.Name, ResourceType: "project", ResourceID: project.Name, Title: project.Name, Message: n.ReasonCode})
+			}
+		}
+	}
 	if err != nil {
 		return Drift{}, err
 	}
@@ -1896,3 +1908,5 @@ func (w *reportWriter) Write(value []byte) (int, error) {
 	}
 	return len(value), nil
 }
+
+func (s *Service) SetEventSink(sink event.Sink) { s.emit = sink }

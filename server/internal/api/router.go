@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/suma/suma/server/internal/agenthub"
+	"github.com/suma/suma/server/internal/ai"
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/auth"
 	cdService "github.com/suma/suma/server/internal/cd"
@@ -30,6 +31,7 @@ import (
 	monitorService "github.com/suma/suma/server/internal/monitor"
 	networkService "github.com/suma/suma/server/internal/network"
 	nodeService "github.com/suma/suma/server/internal/node"
+	"github.com/suma/suma/server/internal/notification"
 	"github.com/suma/suma/server/internal/projectlogs"
 	settingsService "github.com/suma/suma/server/internal/settings"
 	systemService "github.com/suma/suma/server/internal/system"
@@ -41,6 +43,8 @@ import (
 const sessionCookie = "suma_session"
 
 type Dependencies struct {
+	Notifications       *notification.Service
+	AI                  *ai.Service
 	ImageUpdates        *imageupdate.Service
 	ProjectLogs         *projectlogs.Service
 	Cleanup             *cleanup.Service
@@ -108,6 +112,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	loginAttempts := newLoginLimiter()
 	setupAttempts := newLoginLimiter()
 	v1 := router.Group("/api/v1")
+	registerNotificationRoutes(router, v1, deps)
 	registerImageUpdateRoutes(v1, deps)
 	registerProjectLogRoutes(router, v1, deps)
 
@@ -183,6 +188,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		result, err := deps.Auth.StartLogin(c.Request.Context(), input.Username, input.Password, ip)
 		if err != nil {
+			if deps.Notifications != nil {
+				deps.Notifications.LoginFailed(c.Request.Context(), input.Username, ip)
+			}
 			failure(c, http.StatusUnauthorized, 11004, "Invalid username or password")
 			return
 		}
@@ -203,6 +211,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		token, user, err := deps.Auth.CompleteTwoFactorLogin(c.Request.Context(), input.ChallengeToken, input.Code, requestClientIP(c))
 		if err != nil {
+			if deps.Notifications != nil && !errors.Is(err, auth.ErrTwoFactorStore) {
+				deps.Notifications.LoginFailed(c.Request.Context(), "", requestClientIP(c))
+			}
 			status := http.StatusUnauthorized
 			if errors.Is(err, auth.ErrTwoFactorStore) {
 				status = http.StatusInternalServerError
@@ -558,6 +569,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 				results = append(results, batchResult{ID: id, Success: false})
 				continue
 			}
+			if deps.Notifications != nil && (input.Action == "stop" || input.Action == "restart" || input.Action == "kill" || input.Action == "remove") {
+				deps.Notifications.Expect("local", id)
+			}
 			var err error
 			switch input.Action {
 			case "start":
@@ -610,6 +624,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	})
 	containers.POST("/:id/:action", func(c *gin.Context) {
 		id, action := c.Param("id"), c.Param("action")
+		if deps.Notifications != nil && (action == "stop" || action == "restart" || action == "kill") {
+			deps.Notifications.Expect("local", id)
+		}
 		var err error
 		switch action {
 		case "start":
@@ -1436,7 +1453,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			}
 			rows, err = deps.Audit.ListForNode(c.Request.Context(), 100, nodeID)
 		} else {
-			switch c.DefaultQuery("scope", task.ScopeControlPlane) {
+			switch c.DefaultQuery("scope", "all") {
 			case task.ScopeControlPlane:
 				rows, err = deps.Audit.ListControlPlane(c.Request.Context(), 100)
 			case "all":

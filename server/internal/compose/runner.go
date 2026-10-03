@@ -42,14 +42,16 @@ type ExecutionSpec struct {
 }
 
 type Target struct {
-	NodeID       string
-	NodeName     string
-	Host         string
-	TLSRequired  bool
-	CA           string
-	Certificate  string
-	PrivateKey   string
-	DockerConfig string
+	RuntimeIdentity string
+	RemoteSources   bool
+	NodeID          string
+	NodeName        string
+	Host            string
+	TLSRequired     bool
+	CA              string
+	Certificate     string
+	PrivateKey      string
+	DockerConfig    string
 }
 
 type CLIRunner struct {

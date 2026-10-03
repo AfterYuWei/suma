@@ -35,7 +35,9 @@ func ValidateComposeBindMounts(content string, remote, allowDockerSocket bool) e
 			}
 			// An interpolated short source may not look like a bind until Compose
 			// resolves it, but a Docker socket target makes the intent explicit.
-			bind = bind || dockerSocket
+			// An interpolated short source could resolve to a host path. Treat it
+			// as an unproven bind for remote nodes before rendering expands it.
+			bind = bind || dockerSocket || remote && strings.Contains(source, "$")
 			if !bind {
 				continue
 			}

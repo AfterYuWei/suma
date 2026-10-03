@@ -1,3 +1,4 @@
+import { AIAnalyzeButton } from '../features/operations/workbench'
 import { useDateTime } from '../lib/time-zone'
 import { useImageUpdates } from '../features/image-updates/hooks'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -683,7 +684,7 @@ export function ComposeDetailPage() {
               ? '从 Docker Compose 标签发现 · 外部'
               : 'Discovered from Docker Compose labels · External'
         }
-        action={headerActions}
+        action={<div className="flex flex-wrap gap-2"><AIAnalyzeButton kind="project" id={projectName} nodeID={nodeID} />{headerActions}</div>}
       >
         <div className="flex w-full flex-col items-start gap-3">
           {!project.managed && (

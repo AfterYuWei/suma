@@ -1,3 +1,4 @@
+import { AIAnalyzeButton } from '../features/operations/workbench'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useBlocker, useNavigate, useParams, useRouterState } from '@tanstack/react-router'
 import { ChevronLeft, MoreHorizontal, OctagonX, Pause, Pencil, Play, RefreshCw, Square, Trash2 } from 'lucide-react'
@@ -55,6 +56,7 @@ export function ContainerDetailPage() {
   const label = (name: (typeof tabs)[number]) => zh ? ({ Overview: '概览', Files: '文件', Logs: '日志', Terminal: '终端', Stats: '统计', Inspect: '检查' } as const)[name] : name
 
   const actions = <div className="flex flex-wrap items-center gap-2">
+    <AIAnalyzeButton kind="container" id={row.id} nodeID={nodeID} />
     <StatusBadge tone={row.state === 'running' ? 'success' : row.state === 'paused' || row.state === 'restarting' ? 'warning' : row.state === 'dead' ? 'critical' : 'neutral'}>{row.state}</StatusBadge>
     {row.state === 'running'
       ? <Button variant="outline" disabled={action.isPending} onClick={() => action.mutate('stop')}>{action.isPending ? <Spinner /> : <Square />}{zh ? '停止' : 'Stop'}</Button>

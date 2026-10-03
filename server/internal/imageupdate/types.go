@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/distribution/reference"
 	"github.com/suma/suma/server/internal/credential"
+	"github.com/suma/suma/server/internal/event"
 	"regexp"
 	"strings"
 	"time"
@@ -68,6 +69,7 @@ type CredentialStore interface {
 	Material(context.Context, uint) (credential.RegistryMaterial, error)
 }
 type Dependencies struct {
+	Emit        event.Sink
 	Node        func(context.Context, string) (Node, error)
 	Runtime     func(context.Context, string) (Runtime, error)
 	Resolver    Resolver

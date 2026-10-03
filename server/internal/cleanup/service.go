@@ -579,6 +579,12 @@ func (s *Service) execute(taskCtx context.Context, node Node, preview Preview, r
 			if err = ctx.Err(); err != nil {
 				return err
 			}
+			if run.Trigger == "ai_reviewed" {
+				policy, e := s.policy(ctx, node.ID)
+				if e != nil || policy.Version != run.PolicyVersion {
+					return ErrConflict
+				}
+			}
 			if err = s.ready(ctx, node); err != nil {
 				return err
 			}

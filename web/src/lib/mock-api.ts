@@ -1,3 +1,4 @@
+import { mockAIAuditLogs, mockOperations, persistMockOperations } from '../features/operations/mock'
 import { validTimeZone } from './date-time'
 import { operationsDemo, demoProjectLogStream } from './mock-operations'
 import type { LogEvent } from '../features/project-logs/types'
@@ -103,9 +104,9 @@ const tasks = [
 
 const audits = [
   { id: 18, scope: 'node', node_id: 'local', node_name: 'homelab-01', user_id: 1, action: 'container.restart', resource_type: 'container', resource_name: containerSets.local[0].id, ip: '192.168.1.36', result: 'success', created_at: '2026-08-29T08:25:00.000Z' },
-  { id: 17, scope: 'node', node_id: 'local', node_name: 'homelab-01', user_id: 1, action: 'project.deploy', resource_type: 'project', resource_name: 'gateway-prod', ip: '192.168.1.36', result: 'success', created_at: '2026-08-29T08:14:00.000Z' },
+  { id: 17, scope: 'node', node_id: 'local', node_name: 'homelab-01', user_id: 1, action: 'project.deploy', resource_type: 'project', resource_name: 'gateway-prod', ip: '192.168.1.36', result: 'success', task_id: 'task-release-184', created_at: '2026-08-29T08:14:00.000Z' },
   { id: 16, scope: 'control_plane', user_id: 1, action: 'node.test', resource_type: 'node', resource_name: 'edge-hk', ip: '192.168.1.36', result: 'success', created_at: '2026-08-29T07:58:00.000Z' },
-  { id: 15, scope: 'node', node_id: 'local', node_name: 'homelab-01', user_id: 1, action: 'image.pull', resource_type: 'image', resource_name: 'ghcr.io/afteryuwei/gateway:1.8.2', ip: '192.168.1.36', result: 'success', created_at: '2026-08-29T07:52:00.000Z' },
+  { id: 15, scope: 'node', node_id: 'local', node_name: 'homelab-01', user_id: 1, action: 'image.pull', resource_type: 'image', resource_name: 'ghcr.io/afteryuwei/gateway:1.8.2', ip: '192.168.1.36', result: 'success', task_id: 'task-pull-183', created_at: '2026-08-29T07:52:00.000Z' },
 ]
 
 const deliveryProjects: DeliveryProject[] = [
@@ -159,7 +160,9 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
   if (pathname === '/auth/session') { requireSession(); return clone(user) as T }
 
   requireSession()
-  const cleanupResult = mockCleanup(pathname, method, body, url)
+  const operationsResult = mockOperations(pathname, method, body)
+ if (operationsResult !== undefined) { persistMockOperations(); return clone(operationsResult) as T }
+ const cleanupResult = mockCleanup(pathname, method, body, url)
   if (cleanupResult !== undefined) return clone(cleanupResult) as T
 
   if (pathname === '/account/profile' && method === 'PUT') return clone({ ...user, ...body }) as T
@@ -340,8 +343,9 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
   if (/^\/tasks\/[^/]+\/cancel$/.test(pathname)) return {} as T
   if (/^\/tasks\/[^/]+$/.test(pathname)) return clone(tasks.find((item) => pathname.endsWith(item.id)) ?? { id: pathname.split('/').pop(), scope: 'node', node_id: 'local', type: 'compose.pull', name: 'Compose operation', status: 'success', progress: 100, message: 'Operation completed', created_at: now }) as T
   if (pathname === '/audit-logs') {
-    const scope = url.searchParams.get('scope') || 'control_plane'
-    return clone(scope === 'all' ? audits : audits.filter((item) => item.scope === scope)) as T
+    const scope = url.searchParams.get('scope') || 'all'
+    const entries = [...mockAIAuditLogs(), ...audits]
+    return clone(scope === 'all' ? entries : entries.filter((item) => item.scope === scope)) as T
   }
 
   if (pathname === '/credentials/git' && method === 'GET') return clone(gitCredentials) as T
@@ -386,7 +390,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     if (/^\/tasks\/[^/]+\/steps$/.test(suffix)) return clone([{ id: 'download', status: 'success', current: 1, total: 1, progress: 100 }, { id: 'extract', status: 'success', current: 1, total: 1, progress: 100 }]) as T
     if (/^\/tasks\/[^/]+\/cancel$/.test(suffix)) return {} as T
     if (/^\/tasks\/[^/]+$/.test(suffix)) return clone(tasks.find((item) => suffix.endsWith(item.id)) ?? { id: suffix.split('/').pop(), scope: 'node', node_id: nodeID, node_name: nodes.find((item) => item.id === nodeID)?.name ?? nodeID, type: 'compose.pull', name: 'Compose operation', status: 'success', progress: 100, message: 'Operation completed', created_at: now }) as T
-    if (suffix === '/audit-logs') return clone(audits.filter((item) => item.scope === 'node' && item.node_id === nodeID)) as T
+    if (suffix === '/audit-logs') return clone([...mockAIAuditLogs(), ...audits].filter((item) => item.scope === 'node' && item.node_id === nodeID)) as T
     if (suffix === '/overview') {
       const running = containers.filter((item) => item.state === 'running')
       return clone({ host: { hostname: nodes.find((item) => item.id === nodeID)?.name ?? nodeID, os: 'Ubuntu 24.04.3 LTS', kernel: '6.8.0-71-generic', architecture: 'x86_64', cpus: 8, uptime_seconds: 1_284_220, cpu_percent: 31.4, memory_used: 6_978_321_408, memory_total: 17_179_869_184, disk_used: 184_683_593_728, disk_total: 512_110_190_592 }, containers: { cpu_percent: running.reduce((sum, item) => sum + item.cpu_percent, 0), memory_bytes: running.reduce((sum, item) => sum + item.memory_bytes, 0) }, docker: { server_version: nodes.find((item) => item.id === nodeID)?.engine_version ?? '28.3.3', containers_running: running.length, containers_stopped: containers.length - running.length, images: images.length }, docker_disk_usage_bytes: 14_495_514_624 }) as T

@@ -1246,6 +1246,9 @@ func registerNodeContainerRoutes(group *gin.RouterGroup, _ *gin.Engine, deps Dep
 		}
 		rows := make([]result, 0, len(input.IDs))
 		for _, id := range input.IDs {
+			if deps.Notifications != nil && (input.Action == "stop" || input.Action == "restart" || input.Action == "kill" || input.Action == "remove") {
+				deps.Notifications.Expect(view.ID, id)
+			}
 			var err error
 			switch input.Action {
 			case "start":
@@ -1302,6 +1305,9 @@ func registerNodeContainerRoutes(group *gin.RouterGroup, _ *gin.Engine, deps Dep
 			return
 		}
 		id, action := c.Param("id"), c.Param("action")
+		if deps.Notifications != nil && (action == "stop" || action == "restart" || action == "kill") {
+			deps.Notifications.Expect(view.ID, id)
+		}
 		var err error
 		switch action {
 		case "start":

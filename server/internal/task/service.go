@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/suma/suma/server/internal/database"
+	domainEvent "github.com/suma/suma/server/internal/event"
+	"github.com/suma/suma/server/internal/redact"
 	"gorm.io/gorm"
 )
 
@@ -35,6 +37,7 @@ type Work func(context.Context, Reporter) error
 type IdentifiedWork func(context.Context, string, Reporter) error
 type Service struct {
 	db          *gorm.DB
+	sink        domainEvent.Sink
 	mu          sync.RWMutex
 	subscribers map[string]map[chan Event]struct{}
 	cancels     map[string]context.CancelFunc
@@ -112,8 +115,19 @@ func (s *Service) startWithID(scope, nodeID, nodeName, taskType, name string, wo
 }
 
 func (s *Service) run(ctx context.Context, row database.Task, work Work) {
+	defer func() {
+		s.mu.Lock()
+		if cancel := s.cancels[row.ID]; cancel != nil {
+			cancel()
+		}
+		delete(s.cancels, row.ID)
+		s.mu.Unlock()
+	}()
 	now := time.Now()
-	s.db.Model(&database.Task{}).Where("id = ?", row.ID).Updates(map[string]any{"status": StatusRunning, "started_at": now})
+	claimed := s.db.Model(&database.Task{}).Where("id = ? AND status = ?", row.ID, StatusPending).Updates(map[string]any{"status": StatusRunning, "started_at": now})
+	if claimed.Error != nil || claimed.RowsAffected != 1 {
+		return
+	}
 	s.publish(row.ID, Event{Type: "status", Status: StatusRunning, Time: now})
 	reporter := func(progress int, message string) {
 		_ = s.updateProgress(ctx, row.ID, progress, message, true)
@@ -126,17 +140,41 @@ func (s *Service) run(ctx context.Context, row database.Task, work Work) {
 	if ctx.Err() != nil {
 		status, message = StatusCanceled, "Canceled"
 	}
+	message = redact.Bounded(message, 8192)
 	finished := time.Now()
 	progress := 100
 	if status != StatusSuccess {
 		progress = 0
 	}
-	s.db.Model(&database.Task{}).Where("id = ?", row.ID).Updates(map[string]any{"status": status, "progress": progress, "message": message, "finished_at": finished})
-	s.db.Create(&database.TaskLog{TaskID: row.ID, Level: map[bool]string{true: "info", false: "error"}[status == StatusSuccess], Message: message})
+	// A caller observing a terminal status must also be able to read its result
+	// log. Persist both before publishing completion or emitting domain events.
+	persistErr := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&database.TaskLog{TaskID: row.ID, Level: map[bool]string{true: "info", false: "error"}[status == StatusSuccess], Message: message}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&database.Task{}).Where("id = ?", row.ID).Updates(map[string]any{"status": status, "progress": progress, "message": message, "finished_at": finished}).Error
+	})
+	if persistErr != nil {
+		s.publish(row.ID, Event{Type: "status", Status: StatusFailed, Message: "Unable to persist task result; inspect actual state before retrying", Time: finished})
+		return
+	}
 	s.publish(row.ID, Event{Type: "status", Status: status, Progress: progress, Message: message, Time: finished})
 	s.mu.Lock()
-	delete(s.cancels, row.ID)
+	sink := s.sink
 	s.mu.Unlock()
+	if sink != nil {
+		severity := "info"
+		kind := "task.completed"
+		if status == StatusFailed {
+			kind = "task.failed"
+			severity = "error"
+		}
+		if status == StatusCanceled {
+			kind = "task.canceled"
+			severity = "warning"
+		}
+		sink(domainEvent.Event{Type: kind, Severity: severity, NodeID: row.NodeID, NodeName: row.NodeName, Scope: row.Scope, ResourceType: "task", ResourceID: row.ID, Title: row.Name, Message: message, TaskID: row.ID, Time: finished})
+	}
 }
 
 // UpdateProgress refreshes a task's live state without appending another
@@ -147,6 +185,7 @@ func (s *Service) UpdateProgress(ctx context.Context, id string, progress int, m
 }
 
 func (s *Service) updateProgress(ctx context.Context, id string, progress int, message string, persist bool) error {
+	message = redact.Bounded(message, 8192)
 	progress = max(0, min(100, progress))
 	if err := s.db.WithContext(ctx).Model(&database.Task{}).Where("id = ?", id).Updates(map[string]any{"progress": progress, "message": message}).Error; err != nil {
 		return err
@@ -216,6 +255,29 @@ func (s *Service) LogsForNode(ctx context.Context, nodeID, id string) ([]databas
 		return nil, err
 	}
 	return s.Logs(ctx, id)
+}
+
+// RecentLogsForNode bounds both the database read and the returned time range.
+// The caller applies its total byte budget and redaction before model access.
+func (s *Service) RecentLogsForNode(ctx context.Context, nodeID, id string, since time.Time, lines, bytes int) ([]database.TaskLog, error) {
+	if _, err := s.GetForNode(ctx, nodeID, id); err != nil {
+		return nil, err
+	}
+	if lines <= 0 || lines > 500 {
+		lines = 500
+	}
+	if bytes <= 0 || bytes > 64*1024 {
+		bytes = 64 * 1024
+	}
+	var rows []database.TaskLog
+	err := s.db.WithContext(ctx).Model(&database.TaskLog{}).
+		Select("id, task_id, level, substr(message, 1, ?) AS message, created_at", bytes).
+		Where("task_id = ? AND julianday(created_at) >= julianday(?)", id, since.UTC()).
+		Order("created_at DESC, id DESC").Limit(lines).Find(&rows).Error
+	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
+		rows[i], rows[j] = rows[j], rows[i]
+	}
+	return rows, err
 }
 
 func (s *Service) StepsForNode(ctx context.Context, nodeID, id string) ([]database.TaskStep, error) {

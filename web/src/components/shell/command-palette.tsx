@@ -29,7 +29,8 @@ export function CommandPalette({ open, close }: { open: boolean; close: () => vo
   const containers = useQuery({ queryKey: ['containers', nodeID], queryFn: () => api<ContainerSummary[]>(nodePath(nodeID, '/containers')), enabled: open && !!nodeID })
   const projects = useQuery({ queryKey: ['projects', nodeID], queryFn: () => api<Project[]>(nodePath(nodeID, '/projects')), enabled: open && !!nodeID })
   const deliveries = useQuery({ queryKey: ['delivery-projects'], queryFn: () => api<Project[]>('/delivery-projects'), enabled: open })
-  const images = useQuery({ queryKey: ['images', nodeID], queryFn: () => api<Image[]>(nodePath(nodeID, '/images')), enabled: open && !!nodeID })
+  const rules = useQuery({ queryKey: ['notification-rules'], queryFn: () => api<{id: string; name: string}[]>('/notifications/rules'), enabled: open })
+ const images = useQuery({ queryKey: ['images', nodeID], queryFn: () => api<Image[]>(nodePath(nodeID, '/images')), enabled: open && !!nodeID })
 
   const groups = useMemo(() => {
     const byType = new Map<string, Result[]>()
@@ -47,10 +48,14 @@ export function CommandPalette({ open, close }: { open: boolean; close: () => vo
       { id: 'authentication', label: zh ? '打开认证中心' : 'Open Authentication Center', detail: zh ? 'Git 与镜像仓库凭据' : 'Git and registry credentials', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/authentication' }) } },
       { id: 'image-updates', label: zh ? '打开镜像更新' : 'Open image updates', detail: zh ? '定时检测与仓库凭据' : 'Scheduled checks and registry credentials', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/images', hash: 'image-updates' }) } },
       { id: 'storage-cleanup', label: zh ? '打开存储清理' : 'Open storage cleanup', detail: zh ? '定时策略、预览与历史' : 'Schedules, preview and history', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/settings', hash: 'cleanup' }) } },
-      { id: 'account', label: zh ? '打开账户设置' : 'Open account settings', detail: zh ? '头像、资料与密码' : 'Avatar, profile, and password', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/account' }) } },
+      { id: 'notifications', label: zh ? '打开通知渠道' : 'Open notification channels', detail: '', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/settings', hash: 'notifications' }) } },
+ { id: 'diagnosis', label: zh ? '发起 AI 诊断' : 'Start AI diagnosis', detail: '', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/ai-operations' }) } },
+ { id: 'approvals', label: zh ? '打开待审核操作' : 'Open pending approvals', detail: '', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/ai-operations', hash: 'tab=operations' }) } },
+ { id: 'account', label: zh ? '打开账户设置' : 'Open account settings', detail: zh ? '头像、资料与密码' : 'Avatar, profile, and password', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/account' }) } },
     ].forEach(push)
 
-    containers.data?.forEach((row) => {
+    rules.data?.forEach(r => push({ id: r.id, label: r.name, detail: zh ? '通知规则' : 'Notification rule', type: zh ? '通知规则' : 'Notification rules', run: () => { close(); void navigate({ to: '/settings', hash: 'notifications?tab=rules' }) } }))
+ containers.data?.forEach((row) => {
       push({ id: `container-${row.id}`, label: row.name, detail: `${row.state} · ${row.image}`, type: zh ? '容器' : 'Containers', run: () => { close(); void navigate({ to: '/containers/$containerId', params: { containerId: row.id } }) } })
       push({ id: `logs-${row.id}`, label: zh ? `打开 ${row.name} 日志` : `Open ${row.name} logs`, detail: row.image, type: zh ? '容器操作' : 'Container actions', run: () => { close(); void navigate({ to: '/containers/$containerId', params: { containerId: row.id }, hash: 'logs' }) } })
       push({ id: `terminal-${row.id}`, label: zh ? `打开 ${row.name} 终端` : `Open ${row.name} terminal`, detail: row.image, type: zh ? '容器操作' : 'Container actions', run: () => { close(); void navigate({ to: '/containers/$containerId', params: { containerId: row.id }, hash: 'terminal' }) } })
@@ -73,7 +78,7 @@ export function CommandPalette({ open, close }: { open: boolean; close: () => vo
     deliveries.data?.forEach((row) => push({ id: `delivery-${row.name}`, label: row.name, detail: zh ? '持续交付项目' : 'Continuous delivery project', type: zh ? '持续交付' : 'Continuous Delivery', run: () => { close(); void navigate({ to: '/continuous-delivery/$projectName', params: { projectName: row.name } }) } }))
     images.data?.forEach((row) => push({ id: `image-${row.id}`, label: row.tags?.[0] || row.id.slice(0, 19), detail: zh ? '本地镜像' : 'Local image', type: zh ? '镜像' : 'Images', run: () => { close(); void navigate({ to: '/images' }) } }))
     return [...byType.entries()]
-  }, [containers.data, projects.data, deliveries.data, images.data, close, navigate, zh, nodeID])
+  }, [rules.data, containers.data, projects.data, deliveries.data, images.data, close, navigate, zh, nodeID])
 
   return <CommandDialog
     open={open}

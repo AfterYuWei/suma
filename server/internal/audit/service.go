@@ -2,8 +2,10 @@ package audit
 
 import (
 	"context"
+	"sync"
 
 	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/redact"
 	"github.com/suma/suma/server/internal/task"
 	"gorm.io/gorm"
 )
@@ -23,7 +25,11 @@ type Entry struct {
 	ReleaseID    *uint  `json:"release_id,omitempty"`
 	CreatedAt    any    `json:"created_at"`
 }
-type Service struct{ db *gorm.DB }
+type Service struct {
+	db   *gorm.DB
+	mu   sync.RWMutex
+	sink func(database.AuditLog)
+}
 
 func NewService(db *gorm.DB) *Service { return &Service{db: db} }
 func (s *Service) Record(ctx context.Context, userID *uint, action, resourceType, resourceName, ip, result string) error {
@@ -39,10 +45,10 @@ func (s *Service) RecordLinked(ctx context.Context, userID *uint, action, resour
 	return s.RecordLinkedControlPlane(ctx, userID, action, resourceType, resourceName, ip, result, taskID, releaseID)
 }
 func (s *Service) RecordLinkedControlPlane(ctx context.Context, userID *uint, action, resourceType, resourceName, ip, result, taskID string, releaseID *uint) error {
-	return s.db.WithContext(ctx).Create(&database.AuditLog{Scope: task.ScopeControlPlane, UserID: userID, Action: action, ResourceType: resourceType, ResourceName: resourceName, IP: ip, Result: result, TaskID: taskID, ReleaseID: releaseID}).Error
+	return s.record(ctx, database.AuditLog{Scope: task.ScopeControlPlane, UserID: userID, Action: action, ResourceType: resourceType, ResourceName: resourceName, IP: ip, Result: result, TaskID: taskID, ReleaseID: releaseID})
 }
 func (s *Service) RecordLinkedForNode(ctx context.Context, nodeID, nodeName string, userID *uint, action, resourceType, resourceName, ip, result, taskID string, releaseID *uint) error {
-	return s.db.WithContext(ctx).Create(&database.AuditLog{Scope: task.ScopeNode, NodeID: nodeID, NodeName: nodeName, UserID: userID, Action: action, ResourceType: resourceType, ResourceName: resourceName, IP: ip, Result: result, TaskID: taskID, ReleaseID: releaseID}).Error
+	return s.record(ctx, database.AuditLog{Scope: task.ScopeNode, NodeID: nodeID, NodeName: nodeName, UserID: userID, Action: action, ResourceType: resourceType, ResourceName: resourceName, IP: ip, Result: result, TaskID: taskID, ReleaseID: releaseID})
 }
 func (s *Service) List(ctx context.Context, limit int) ([]database.AuditLog, error) {
 	return s.list(ctx, limit, "", "")
@@ -58,7 +64,7 @@ func (s *Service) list(ctx context.Context, limit int, scope, nodeID string) ([]
 		limit = 100
 	}
 	var rows []database.AuditLog
-	query := s.db.WithContext(ctx).Order("created_at DESC").Limit(limit)
+	query := s.db.WithContext(ctx).Order("created_at DESC, id DESC").Limit(limit)
 	if scope != "" {
 		query = query.Where("scope = ?", scope)
 	}
@@ -66,4 +72,34 @@ func (s *Service) list(ctx context.Context, limit int, scope, nodeID string) ([]
 		query = query.Where("node_id = ?", nodeID)
 	}
 	return rows, query.Find(&rows).Error
+}
+
+func (s *Service) SetSink(sink func(database.AuditLog)) { s.mu.Lock(); s.sink = sink; s.mu.Unlock() }
+func (s *Service) record(ctx context.Context, row database.AuditLog) error {
+	if err := s.RecordTx(ctx, s.db, &row); err != nil {
+		return err
+	}
+	s.mu.RLock()
+	sink := s.sink
+	s.mu.RUnlock()
+	if sink != nil {
+		sink(row)
+	}
+	return nil
+}
+
+// RecordTx joins the caller's transaction. Notification sinks must run only
+// after commit; AI records use their own post-commit domain events.
+func (s *Service) RecordTx(ctx context.Context, tx *gorm.DB, row *database.AuditLog) error {
+	if row.Source == "" {
+		row.Source = "site"
+	}
+	row.ResourceName = redact.Bounded(row.ResourceName, 2048)
+	row.Details = redact.Bounded(row.Details, 1024)
+	if row.CreatedAt.IsZero() {
+		row.CreatedAt = tx.NowFunc().UTC()
+	} else {
+		row.CreatedAt = row.CreatedAt.UTC()
+	}
+	return tx.WithContext(ctx).Create(row).Error
 }
