@@ -44,9 +44,13 @@ SQLite 保存事件历史、每用户已读状态和投递队列。队列最多�
 
 ## 配置 AI 与发起诊断
 
+AI 工作台是导航顶部的全局入口，位于 Docker 资源之上。默认对话范围为“全部授权节点”，不跟随页面顶部的 Docker 节点或 Group 筛选；工作台隐藏该单节点切换器。输入框上方可临时选择某个授权节点，下一轮可切回全部节点或另一节点，连续追问不锁定节点。模型收到授权节点的 ID／名称目录；全局模式下每次只读工具或操作提案必须明确 `node_id`，后端校验授权后解析对应运行时。来自容器、镜像或项目的“交给 AI 分析”链接只为首轮带入该资源节点的证据，不限制后续对话；证据和操作预览分别标明实际节点。
+
+回复支持 Markdown 标题、粗体、列表、引用、行内代码、代码块、表格和任务列表。宽代码和表格在消息内部滚动，适配深浅主题及移动端。使用 [react-markdown](https://github.com/remarkjs/react-markdown) 和 [remark-gfm](https://github.com/remarkjs/remark-gfm)；原始 HTML 不执行，不自动加载模型提供的图片，危险链接协议不会变成可点击链接。
+
 工作台的会话采用官方 shadcn [Message](https://ui.shadcn.com/docs/components/base/message)、[Bubble](https://ui.shadcn.com/docs/components/base/bubble) 和 [MessageScroller](https://ui.shadcn.com/docs/components/base/message-scroller)，输入框复用 InputGroup。问题与回答按轮次排列，连续追问保留会话历史；桌面通过侧栏选择会话，移动端通过历史抽屉选择。布局沿用设置页的间距分组、项目详情的 muted 背景和共享圆角，不使用侧栏、标题、证据或输入区的线条分隔。输入框位于对话底部，Enter 发送、Shift + Enter 换行，中文输入法确认候选不会发送。阅读旧消息时保持位置，可点击“回到最新回复”；诊断证据与事件时间线按需展开，建议操作仍进入完整预览逐项审核。
 
-AI 默认关闭，使用开关启用，保存后生效；启用时必须添加模型并明确授权节点。填写 API 基础地址和密钥，模型服务必须支持 **Responses API**。协议固定为 Responses。点击“配置模型”打开模型选择弹窗：支持搜索、多选、按搜索结果全选，以及用逗号分隔手动添加多个模型。应用后显示可删除的模型标签，选择一个“默认诊断模型”，再保存 AI 设置。默认模型用于站内、聊天和自动诊断；多个模型共享这组服务地址和密钥，不自动轮询或故障切换。
+AI 默认关闭，使用开关启用，保存后生效；启用时必须添加模型并明确授权节点。填写 API 基础地址和密钥，模型服务必须支持 **Responses API**。协议固定为 Responses。点击“配置模型”打开模型选择弹窗：支持搜索、多选、按搜索结果全选，以及用逗号分隔手动添加多个模型。应用后显示可删除的模型标签，选择一个“默认模型”，再保存 AI 设置。新会话、通知渠道对话和自动诊断使用默认模型；工作台输入框上方可从已配置模型中选择本轮模型，切换不会修改全局默认项，历史回复保留实际模型名称。多个模型共享这组服务地址和密钥，不自动轮询或故障切换。
 
 后端仅接受 `protocol: "responses"`；旧的 `chat_completions` 配置或其他协议在保存时被拒绝。启动时发现已保存的旧协议配置，会保留地址、模型、节点授权和加密密钥，将协议迁移为 Responses 并关闭 AI、清除工具验证状态、使待审批和排队操作失效。迁移持久化且只发生一次。请确认服务提供 `/responses`，测试已保存连接，再启用 AI；历史已完成操作保留实际结果。
 
@@ -77,13 +81,13 @@ SUMA **不会自动添加 `/v1`**。是否需要由模型服务实际路由决�
 
 模型服务本身返回 HTTP 403 时，应检查 API 密钥权限和模型网关访问规则。SUMA 由服务端调用模型，不转发浏览器 Origin，不需要为浏览器开放模型服务的跨域权限。401 表示应核对密钥，404 表示应核对基础地址及 `/v1`。
 
-保存后点击“测试连接”，通过 Responses 验证默认模型的文本和注册工具调用；连接草稿有修改时需先保存，测试按钮才可使用。不支持工具的模型只能摘要。更换默认模型、地址、密钥或连接权限后，需重新验证工具调用；仅添加备用模型不会清除默认模型的已验证能力。参考：[OpenAI 工具调用](https://developers.openai.com/api/docs/guides/function-calling)。
+保存后点击“测试连接”，通过 Responses 验证默认模型的文本和注册工具调用；连接草稿有修改时需先保存，测试按钮才可使用。不支持工具的模型只能摘要。更换默认模型、地址、密钥或连接权限后，需重新验证工具调用；仅添加备用模型不会清除默认模型的已验证能力。工作台使用非默认模型时，每轮先独立执行工具能力探针，通过才开放诊断工具，否则只提供摘要；此检查不覆盖默认模型的验证结果。参考：[OpenAI 工具调用](https://developers.openai.com/api/docs/guides/function-calling)。
 
 工具探针 `connection_probe` 使用必填字符串参数 `{"message":"suma_connection_test"}`，要求返回一次具备调用 ID 的工具调用，并严格校验参数值和多余字段。它与实际工具一样有明确参数，避免部分兼容模型在空参数定义下将 `additionalProperties` 等 schema 字段误作调用参数。之前因空对象测试失败的模型应重新点击“测试连接”，无需更改模型或协议。
 
 点击后按钮下方显示独立“连接测试结果”：测试中、连接失败、文本与工具全部通过，或“连接正常，工具调用未通过”。结果包含测试模型、耗时、文本和工具各自状态，以及脱敏且最多 1024 字节的模型回复。工具验证未通过时显示具体原因：请求失败（附安全的 HTTP 错误）、模型未调用工具、工具名称／次数或调用 ID 不符、参数不符合测试要求。文本通过而工具未通过时，连接仍可用于摘要，但不能使用诊断工具或提出操作。结果保留到下一次测试或修改设置；页面刷新后需重新测试查看明细。测试不执行 Docker 操作，API 密钥和响应中的疑似秘密不会出现在结果中。
 
-默认最多两个并发诊断、每天二十次自动诊断、同一事件十分钟内不重复自动分析。每次最多八次只读工具调用，日志仅最近十五分钟，最多 500 行／64 KiB；诊断最长五分钟。模型输出和日志均有限制及脱敏，配置摘要不包含环境变量值或命令内容。会话最多携带四轮历史摘要，同节点的新诊断重新收集证据。
+默认最多两个并发诊断、每天二十次自动诊断、同一事件十分钟内不重复自动分析。每次最多八次只读工具调用，日志仅最近十五分钟，最多 500 行／64 KiB；诊断最长五分钟。模型输出和日志均有限制及脱敏，配置摘要不包含环境变量值或命令内容。会话最多携带四轮当前授权范围内的历史摘要；每一轮重新收集证据，不能凭历史摘要执行变更。
 
 镜像证据包含已有更新检查、检查时间、目标 digest 和当前受影响服务；诊断读取不会发起注册表检查，未检查或过期的结果会明确标注。清理证据包含当前候选、保护／保留原因和最近实际清理结果；卷与构建缓存不进入 AI 可申请集合。任务日志与容器日志沿用相同时间和大小限制。
 
@@ -114,7 +118,7 @@ Project／CD 使用统一 ComposeRunner，把既有渲染配置冻结到私有�
 1. 站内 AI 设置选择已启用的聊天渠道，生成十分钟、一次性的绑定码。
 2. 在机器人私聊发送 `/bind CODE`。
 3. 返回站内核对稳定平台用户 ID，再确认绑定。昵称和群成员身份不能授予权限。
-4. 单个授权节点可直接提问；多个节点时使用 `/node NODE_ID 问题`。连续请求沿用同一绑定、会话及节点的历史。
+4. 直接提问会在全部授权节点范围内对话，并使用当前保存的默认模型；可选 `/node NODE_ID 问题` 将这一轮限定到某节点。连续请求沿用同一绑定、聊天会话及诊断范围的历史；工作台模型切换不影响渠道对话。
 5. 事件卡片的“查看并审核”或 `/approve OPERATION_ID` 只打开完整预览。之后使用预览卡片的明确批准／拒绝按钮。按钮使用绑定到当前平台身份、会话、操作和过期时间的一次性令牌。文字“好的”“继续”不会批准。
 
 站内与聊天使用同一审批服务。撤销绑定、停用渠道、替换 Bot 身份后，原操作权限和按钮立即失效；渠道仍启用时，撤销身份只能查询安全摘要。白名单身份的每一项变更也必须单独审核。审计包含来源、请求者、读取工具、资源、提案、审核人、平台身份、入口、Task 和结果，不记录秘密或未脱敏日志。
@@ -138,9 +142,12 @@ npm --prefix web run typecheck
 npm --prefix web run test
 npm --prefix web run build
 npm --prefix web run build:demo
-npm --prefix web run test:browser -- ai-connection-result.spec.ts ai-settings.spec.ts ai-chat.spec.ts notification-ai.spec.ts operations.spec.ts
+npm --prefix web run test:browser -- ai-connection-result.spec.ts ai-settings.spec.ts ai-chat.spec.ts ai-workbench.spec.ts notification-ai.spec.ts operations.spec.ts
+SUMA_RUN_DOCKER_SMOKE=1 GOCACHE=/tmp/suma-notification-go-cache go -C server test -tags dockersmoke ./internal/app -run '^TestRealDockerGlobalAIWorkbenchReadOnly$' -count=1
 SUMA_PROJECT_SMOKE_GO_CACHE=/tmp/suma-notification-go-cache bash doc/operations-smoke.sh
 ```
+
+新增的全局 AI 只读冒烟经真实本地 Unix 运行时读取节点和已有容器证据，并确认不创建提案或 Task，不修改或删除 Docker 资源。
 
 Docker 脚本使用可清理的隔离 Docker 27 daemon，覆盖 Unix、mTLS TCP、HTTPS/WSS Agent；需要本地已有 `docker:27-dind`、`alpine:3.24` 和测试 Agent 镜像，不删除用户资源。包含真实固定镜像 Compose 应用、通知事件、AI 提案、审批、容器重启及重复审批拒绝。
 

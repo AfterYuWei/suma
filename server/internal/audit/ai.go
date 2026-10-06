@@ -20,7 +20,7 @@ func (s *Service) RecordAI(ctx context.Context, tx *gorm.DB, entry database.AIAu
 	return s.RecordTx(ctx, tx, &row)
 }
 func aiEntry(ctx context.Context, db *gorm.DB, entry database.AIAudit) (database.AuditLog, error) {
-	row := database.AuditLog{Scope: task.ScopeControlPlane, Source: entry.Source, Action: "ai." + entry.Action, ResourceType: "ai", ResourceName: entry.Resource, Details: entry.Result, Result: aiResult(entry.Result), RunID: entry.RunID, OperationID: entry.OperationID, BindingID: entry.BindingID, ExternalUserID: entry.ExternalUserID, ChatID: entry.ChatID, IP: entry.IP, CreatedAt: entry.CreatedAt}
+	row := database.AuditLog{Scope: task.ScopeControlPlane, NodeID: entry.NodeID, Source: entry.Source, Action: "ai." + entry.Action, ResourceType: "ai", ResourceName: entry.Resource, Details: entry.Result, Result: aiResult(entry.Result), RunID: entry.RunID, OperationID: entry.OperationID, BindingID: entry.BindingID, ExternalUserID: entry.ExternalUserID, ChatID: entry.ChatID, IP: entry.IP, CreatedAt: entry.CreatedAt}
 	// Older decisions recorded only "recorded"; their action carries the outcome.
 	if entry.Result == "recorded" {
 		row.Result = aiResult(entry.Action)

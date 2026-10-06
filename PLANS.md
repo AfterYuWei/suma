@@ -4,6 +4,8 @@ This file records the completed MVP implementation. Every checked phase was veri
 
 ## Current work
 
+- [x] 全局 AI 运维与 Markdown 工作台：导航置于 Docker 资源之上，不跟随全局节点／Group，默认全部授权节点并支持跨节点连续追问；每次读取／提案明确运行时且保留节点证据和审计。工作台逐轮切换已配置模型、记录实际模型，非默认模型独立验证工具能力；AI 设置明确默认模型，通知渠道和自动诊断始终使用该默认项。回复支持安全 Markdown／GFM 及宽表格／代码块内部滚动。验证：服务及认证 HTTP 回归覆盖跨节点读取／提案运行时、未知模型拒绝、逐轮模型持久化、渠道／自动诊断默认项、非默认模型工具探针、授权撤销和历史范围；46 项 AI 设置／会话／通知／工作台浏览器场景通过，覆盖中英文、深浅主题、390px／1440px、跨节点连续追问、模型切换／新会话／重载、草稿保护和安全 Markdown，启动空白的两项场景独立重跑通过。Web lint／typecheck／生产及 demo 构建、Go test／build、AI race 检查、只读真实 Docker 镜像冒烟及全局 AI → 显式 Unix 运行时 → 节点／容器证据冒烟均通过（2026-10-06）；仅保留原有共享 UI／构建警告。复现说明：`doc/notifications-and-ai-operations.md`。
+
 - [x] Agent 配对后长期凭据：10 分钟单次配对令牌与持久凭据分离，支持重启／断网后自动重连，显式撤销及手动刷新立即断开旧身份，安全迁移旧凭据并更新中英文界面与部署说明。验证：旧库迁移移除凭据到期字段、延续正常过期身份并保留撤销／刷新失效、重复迁移、数据库重开、并发单次配对、HTTP 令牌到期后重连及双通道撤销拒绝、握手期间撤销的 race 回归均通过；Go test／build、Web lint／typecheck／build、两项中英文浏览器配对／刷新确认／撤销场景通过。当前源码临时镜像的真实 Docker Agent 冒烟通过，涵盖移除令牌后的持久身份重建／重启、Compose／CD／日志／统计／终端、撤销／重新配对与切回 Unix；测试资源及临时镜像已清理（2026-10-06）。复现：`npx playwright test -c playwright.project-services.config.ts agent-credentials.spec.ts`；`SUMA_RUN_DOCKER_SMOKE=1 SUMA_AGENT_SMOKE_IMAGE=<current-agent-image> go test -tags dockersmoke ./internal/api -run TestRealDockerAgentInPlaceComposeReconnectAndRevoke -count=1`。
 
 - [x] 修复 deepseek-flash 的 Responses 工具连接测试误判：实际复现空参数探针返回 `additionalProperties` schema 字段，改用必填 `message` 标记并严格校验参数、调用名称／次数／ID，更新中英文错误说明和文档；保留 Responses-only。验证：已保存连接在修正后的完整服务中连续三次实测文本与工具均通过（约 1.6–1.9s，隔离数据库记录结果）；服务覆盖缺失／错误／多余参数、schema 字段、无效／尾随 JSON、调用 ID、脱敏、能力持久化和不执行操作，Responses 请求／响应适配及认证 HTTP 成功／失败回归通过。12 项连接结果浏览器场景、Web lint／typecheck／build、Go test／build、只读真实 Docker 冒烟通过（2026-10-06）。确认无运行任务后更新 8081 开发后端，5173 页面与后端健康 200，同源无效会话 401、异源 403；仅保留原有共享 UI／构建警告。

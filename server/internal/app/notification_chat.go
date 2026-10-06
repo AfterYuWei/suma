@@ -63,18 +63,14 @@ func chatOperations(notify *notification.Service, assistant *ai.Service) notific
 		nodeID := ""
 		if strings.HasPrefix(question, "/node ") {
 			parts := strings.SplitN(strings.TrimPrefix(question, "/node "), " ", 2)
-			if len(parts) == 2 {
-				nodeID = parts[0]
-				question = parts[1]
+			if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+				reply("请使用 /node 节点ID 问题。 / Use /node NODE_ID QUESTION.")
+				return
 			}
-		} else if len(cfg.NodeIDs) == 1 {
-			nodeID = cfg.NodeIDs[0]
+			nodeID = parts[0]
+			question = strings.TrimSpace(parts[1])
 		}
-		if nodeID == "" {
-			reply("请使用 /node 节点ID 问题 选择已授权节点。 / Use /node NODE_ID QUESTION to select an authorized node.")
-			return
-		}
-		run, err := assistant.Start(ctx, ai.RunInput{NodeID: nodeID, Question: question, ParentID: assistant.ChatParent(ctx, nodeID, actor)}, actor)
+		run, err := assistant.Start(ctx, ai.RunInput{NodeID: nodeID, Model: cfg.Model, Question: question, ParentID: assistant.ChatParent(ctx, nodeID, actor)}, actor)
 		if err != nil {
 			reply(err.Error())
 			return

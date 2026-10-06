@@ -30,7 +30,7 @@ import { CommandPalette } from './command-palette'
 
 const navigationSections = [
   { key: 'docker', label: 'Docker', rawLabel: false, items: [{ label: 'containers', path: '/containers', icon: Container }, { label: 'projects', path: '/projects', icon: Layers3 }, { label: 'images', path: '/images', icon: Boxes }, { label: 'networks', path: '/networks', icon: Network }, { label: 'volumes', path: '/volumes', icon: HardDrive }] },
-  { key: 'operations', label: 'operations', rawLabel: true, items: [{ label: 'continuousDelivery', path: '/continuous-delivery', icon: GitPullRequest }, { label: 'authenticationCenter', path: '/authentication', icon: KeyRound }, { label: 'aiOperations', path: '/ai-operations', icon: Sparkles }, { label: 'tasks', path: '/tasks', icon: Activity }, { label: 'auditLogs', path: '/audit-logs', icon: FileClock }] },
+  { key: 'operations', label: 'operations', rawLabel: true, items: [{ label: 'continuousDelivery', path: '/continuous-delivery', icon: GitPullRequest }, { label: 'authenticationCenter', path: '/authentication', icon: KeyRound }, { label: 'tasks', path: '/tasks', icon: Activity }, { label: 'auditLogs', path: '/audit-logs', icon: FileClock }] },
   { key: 'system', label: 'system', rawLabel: true, items: [{ label: 'nodes', path: '/nodes', icon: Server }, { label: 'settings', path: '/settings', icon: Settings }] },
 ] as const
 
@@ -96,16 +96,16 @@ export function AppShell({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('keydown', listener)
   }, [commandOpen, setCommandOpen])
 
-  const selectedPath = pathname === '/'
+  const selectedPath = pathname === '/ai-operations' ? '/ai-operations' : pathname === '/'
     ? '/'
     : navigationSections.map((section) => section.items.find((item) => pathname.startsWith(item.path))?.path).find(Boolean) ?? ''
 
   const sections: NavSection[] = [
-    { key: 'overview', label: '', items: [{ key: '/', label: t('overview'), icon: CircleGauge }] },
+    { key: 'overview', label: '', items: [{ key: '/', label: t('overview'), icon: CircleGauge }, { key: '/ai-operations', label: zh ? 'AI 工作台' : 'AI workbench', icon: Sparkles }] },
     ...navigationSections.map((section) => ({
       key: section.key,
       label: section.rawLabel ? t(section.label as TranslationKey) : 'Docker',
-      items: section.items.map(({ label, path, icon }) => ({ key: path, label: label === 'aiOperations' ? (zh ? 'AI 工作台' : 'AI workbench') : t(label as TranslationKey), icon })),
+      items: section.items.map(({ label, path, icon }) => ({ key: path, label: t(label as TranslationKey), icon })),
     })),
   ]
 
@@ -204,7 +204,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <PanelLeftOpen />
           </Button>
 
-          <div className="flex min-w-0 items-center gap-2">
+          {pathname === '/ai-operations' ? <span className="text-sm text-muted-foreground">{zh ? '全局 AI 运维' : 'Global AI operations'}</span> : <div className="flex min-w-0 items-center gap-2">
             <Select<NodeGroupFilter> value={currentGroupFilter} onValueChange={(value) => value && setCurrentGroupFilter(value)}>
               <SelectTrigger aria-label={zh ? '节点 Group 筛选' : 'Node group filter'} className="w-9 px-2 [&>svg:last-child]:hidden sm:w-40 sm:pl-2.5 sm:[&>svg:last-child]:block">
                 <FolderTree className="text-muted-foreground" />
@@ -259,7 +259,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 {filteredNodes.length === 0 && <div className="px-2 py-3 text-center text-xs text-muted-foreground">{zh ? '此筛选下没有节点' : 'No nodes in this filter'}</div>}
               </SelectContent>
             </Select>
-          </div>
+          </div>}
 
           <div className="ml-auto flex items-center gap-1.5">
             {demoMode && <Badge variant="secondary" className="hidden sm:inline-flex">{zh ? '演示模式' : 'Demo mode'}</Badge>}

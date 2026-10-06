@@ -89,19 +89,21 @@ type NotificationAction struct {
 	ConsumedAt  *time.Time
 }
 type AIRun struct {
-	ID         string    `gorm:"primaryKey;size:64" json:"id"`
-	UserID     uint      `gorm:"index" json:"user_id"`
-	NodeID     string    `gorm:"index" json:"node_id"`
-	Source     string    `json:"source"`
-	EventID    string    `gorm:"index" json:"event_id,omitempty"`
-	ParentID   string    `json:"parent_id,omitempty"`
-	Question   string    `json:"question"`
-	Status     string    `gorm:"index" json:"status"`
-	ResultJSON string    `json:"-"`
-	Error      string    `json:"error,omitempty"`
-	Tokens     int       `json:"tokens"`
-	CreatedAt  time.Time `gorm:"index" json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID          string    `gorm:"primaryKey;size:64" json:"id"`
+	UserID      uint      `gorm:"index" json:"user_id"`
+	NodeID      string    `gorm:"index" json:"node_id"`
+	Model       string    `json:"model"`
+	NodeIDsJSON string    `json:"-"`
+	Source      string    `json:"source"`
+	EventID     string    `gorm:"index" json:"event_id,omitempty"`
+	ParentID    string    `json:"parent_id,omitempty"`
+	Question    string    `json:"question"`
+	Status      string    `gorm:"index" json:"status"`
+	ResultJSON  string    `json:"-"`
+	Error       string    `json:"error,omitempty"`
+	Tokens      int       `json:"tokens"`
+	CreatedAt   time.Time `gorm:"index" json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 type AIOperation struct {
 	ID             string    `gorm:"primaryKey;size:64" json:"id"`

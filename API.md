@@ -333,14 +333,16 @@ All routes require an authenticated session and the usual Origin check for write
 | GET / PUT | `/ai/settings` | Read/update enablement switch, `models` list, default `model`, endpoint, `allow_private`, `allow_insecure`, node scope and limits; API key is write-only |
 | POST | `/ai/settings/test` | Test text and registered function calling separately |
 | POST | `/ai/settings/models` | Discover models using current connection draft and a write-only key; does not save or enable AI |
-| GET / POST | `/ai/runs` | History or start an authorized-node diagnosis (202) |
+| GET / POST | `/ai/runs` | History or start a global / optional node-scoped diagnosis (202) |
 | GET | `/ai/runs/:id` | Status, redacted evidence, summary and proposal IDs |
 | GET | `/ai/operations` | Individually reviewed proposals and execution history |
 | GET | `/ai/operations/:id` | Full frozen preview, expiry, `review_token`, status and linked Task |
 | POST | `/ai/operations/:id/decision` | `{ "approve": true, "review_token": "..." }`; no parameter overrides |
 | GET | `/ai/audit` | Bounded diagnosis/approval/execution audit history |
 
-`models` stores up to 200 unique model IDs (1–256 bytes each); `model` selects the default for all diagnoses and must belong to that list. Legacy single-model requests/configuration remain supported. Selecting a different default invalidates tool-capability verification; adding alternatives preserves it.
+`models` stores up to 200 unique model IDs (1–256 bytes each); `model` selects the default for new conversations, notification-channel chats and automatic diagnoses and must belong to that list. Legacy single-model requests/configuration remain supported. Selecting a different default invalidates tool-capability verification; adding alternatives preserves it.
+
+`POST /ai/runs` accepts `question`, an optional `model` from the configured list, optional `node_id` (omitted/empty means all authorized nodes), and `parent_id`. Site model selection applies to this turn only; chat and automatic diagnoses always resolve the saved default. Runs persist their actual `model`. Non-default models receive an independent tool probe for each diagnosis and fall back to summaries if it fails, without changing saved default capabilities. Global tool schemas require explicit `node_id` for every read and proposal; adapters always resolve one authorized runtime. Evidence includes its actual `node_id`, node reads retain node-scoped audit entries, and proposals/Tasks remain bound to that node. Resource links may send `resource_type`, `resource_id` and `resource_node_id` to collect initial evidence without restricting the conversation. Existing node-scoped requests remain supported. Same-user follow-ups may span authorized nodes; each new operation still requires fresh evidence and individual approval.
 
 `POST /ai/settings/test` verifies text and a single Responses `connection_probe` call with a nonempty call ID and exactly `{"message":"suma_connection_test"}` as arguments. The required string argument avoids empty-schema quirks in compatible models; unknown fields, missing/wrong values and malformed JSON remain rejected. It returns `text`, `tool_capable`, `summary_only`, the tested `model`, `duration_ms`, and a redacted `text_response` capped at 1024 bytes. Partial success also includes `tool_failure` (`request_failed`, `not_called`, `unexpected_call`, or `invalid_arguments`), plus a redacted `tool_error` for failed requests. Successful text with failed tool verification returns 200 and enables summaries only; failed text or connection requests return an API error. No Docker tools execute during the test. Results from a changed connection return 409 and do not replace its verification.
 

@@ -40,7 +40,7 @@ export function AIModels({ value, onChange, connection }: { value: string[]; onC
   return <>
     <section className="space-y-3 rounded-xl border p-4" aria-label={t('模型列表', 'Model list')}>
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 space-y-1"><h3 className="text-sm font-medium">{t('模型', 'Models')} <span className="text-destructive">*</span></h3><p className="text-xs text-muted-foreground">{t('添加此服务支持的多个模型，选择一个作为默认诊断模型。', 'Add models supported by this service and choose a default for diagnoses.')}</p></div>
+        <div className="min-w-0 space-y-1"><h3 className="text-sm font-medium">{t('模型', 'Models')} <span className="text-destructive">*</span></h3><p className="text-xs text-muted-foreground">{t('添加此服务支持的模型，供工作台切换或设为默认项。', 'Add supported models for workbench selection and the saved default.')}</p></div>
         <Button type="button" variant="outline" size="sm" onClick={() => start()}><Settings2 />{t('配置模型', 'Configure models')}</Button>
       </div>
       <div className="flex min-h-9 flex-wrap items-center gap-1.5 rounded-lg border bg-background px-2 py-1.5">

@@ -63,18 +63,22 @@ type Actor struct {
 	IP             string
 }
 type RunInput struct {
-	NodeID       string `json:"node_id"`
-	Question     string `json:"question"`
-	ResourceType string `json:"resource_type,omitempty"`
-	ResourceID   string `json:"resource_id,omitempty"`
-	ParentID     string `json:"parent_id,omitempty"`
-	EventID      string `json:"event_id,omitempty"`
+	NodeID         string `json:"node_id"`
+	Model          string `json:"model,omitempty"`
+	ResourceNodeID string `json:"resource_node_id,omitempty"`
+	Question       string `json:"question"`
+	ResourceType   string `json:"resource_type,omitempty"`
+	ResourceID     string `json:"resource_id,omitempty"`
+	ParentID       string `json:"parent_id,omitempty"`
+	EventID        string `json:"event_id,omitempty"`
 }
 type ToolArgs struct {
-	Kind string `json:"kind,omitempty"`
-	ID   string `json:"id,omitempty"`
+	NodeID string `json:"node_id,omitempty"`
+	Kind   string `json:"kind,omitempty"`
+	ID     string `json:"id,omitempty"`
 }
 type OperationRequest struct {
+	NodeID     string          `json:"node_id,omitempty"`
 	Action     string          `json:"action"`
 	ResourceID string          `json:"resource_id"`
 	Parameters json.RawMessage `json:"parameters"`
@@ -87,6 +91,7 @@ type Snapshot struct {
 	Details     json.RawMessage `json:"details"`
 }
 type Evidence struct {
+	NodeID      string    `json:"node_id,omitempty"`
 	Source      string    `json:"source"`
 	Resource    string    `json:"resource"`
 	Time        time.Time `json:"time"`
