@@ -25,6 +25,9 @@ func Open(path string) (*gorm.DB, error) {
 	if err := db.AutoMigrate(&User{}, &Session{}, &LoginChallenge{}, &TwoFactorEnrollment{}, &TwoFactorRecoveryCode{}, &PasskeyCredential{}, &WebAuthnCeremony{}, &Setting{}, &ImageUpdatePolicy{}, &ImageUpdateRegistryCredential{}, &CleanupPolicy{}, &CleanupRun{}, &SchemaMigration{}, &Node{}, &AgentEnrollment{}, &AgentCredential{}, &NodeGroup{}, &NodeGroupNode{}, &DockerTLSCredential{}, &DockerTLSCredentialNode{}, &GitCredentialNode{}, &RegistryCredentialNode{}, &DeliveryProject{}, &DeliveryProjectNode{}, &DeliveryProjectRegistryCredential{}, &DeliveryTargetState{}, &GitCredential{}, &DeliveryProjectGitCredential{}, &RegistryCredential{}, &DeliveryRelease{}, &DeliveryReleaseDeployment{}, &DeliveryDeploymentAttempt{}, &GitWebhookDelivery{}, &Task{}, &TaskLog{}, &TaskStep{}, &AuditLog{}, &FileRevision{}, &LoginLog{}, &NotificationChannel{}, &NotificationRule{}, &NotificationEvent{}, &NotificationRead{}, &NotificationDelivery{}, &NotificationBinding{}, &NotificationIncoming{}, &NotificationChat{}, &NotificationAction{}, &AIRun{}, &AIOperation{}, &AIAudit{}); err != nil {
 		return nil, fmt.Errorf("migrate sqlite: %w", err)
 	}
+	if err := migrateAgentCredentials(db); err != nil {
+		return nil, fmt.Errorf("migrate Agent credentials: %w", err)
+	}
 	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_node_groups_name_nocase ON node_groups(name COLLATE NOCASE)").Error; err != nil {
 		return nil, fmt.Errorf("create node group name index: %w", err)
 	}
@@ -35,6 +38,26 @@ func Open(path string) (*gorm.DB, error) {
 		return nil, fmt.Errorf("backfill scoped history: %w", err)
 	}
 	return db, nil
+}
+
+func migrateAgentCredentials(db *gorm.DB) error {
+	if !db.Migrator().HasColumn(&AgentCredential{}, "expires_at") {
+		return nil
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		// Legacy credentials inherited their enrollment deadline. Promote those
+		// credentials even if that deadline elapsed, but preserve invalidation by
+		// a manual token refresh (which changed the deadline or enrollment).
+		if err := tx.Exec(`UPDATE agent_credentials SET revoked_at = ?
+			WHERE revoked_at IS NULL AND NOT EXISTS (
+				SELECT 1 FROM agent_enrollments e
+				WHERE e.node_id = agent_credentials.node_id AND e.consumed_at IS NOT NULL
+				AND e.expires_at = agent_credentials.expires_at
+			)`, time.Now()).Error; err != nil {
+			return err
+		}
+		return tx.Migrator().DropColumn(&AgentCredential{}, "expires_at")
+	})
 }
 
 func migrateNodeGroups(db *gorm.DB) error {

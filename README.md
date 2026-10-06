@@ -180,7 +180,7 @@ npm run build:demo
 
 ### Agent Docker 部署
 
-节点页生成的 Compose 已将配对令牌填入 `SUMA_AGENT_TOKEN` 环境变量，可直接复制到 Agent 主机保存为 `docker-compose.yml`；不要将含令牌的配置提交到代码仓库。令牌首次成功使用后立即失效，Agent 连接成功后会自动更新节点状态。Agent 保存的连接凭据可在原 10 分钟期限内重连；期限过后如需重新连接，应在节点页手动刷新令牌，更新 Agent 主机的 `SUMA_AGENT_TOKEN` 并重建容器。手写配置时替换下方占位符。SUMA 地址必须是 Agent 可访问的 HTTPS 地址；反向代理需支持 WebSocket 升级与长连接。私有 CA 可只读挂载到容器并设置 `SUMA_AGENT_CA_FILE`，不能跳过证书校验。
+节点页生成的 Compose 已将配对令牌填入 `SUMA_AGENT_TOKEN` 环境变量，可直接复制到 Agent 主机保存为 `docker-compose.yml`；不要将含令牌的配置提交到代码仓库。令牌首次成功使用后立即失效，Agent 连接成功后会自动更新节点状态。配对后的 Agent 凭据长期有效，保存在 `suma-agent-data` 数据卷中；令牌到期不会影响重连。只要保留数据卷，Agent 或 SUMA 重启、网络断开后都可自动恢复连接。升级后，旧版正常配对的凭据自动转为长期有效；已撤销或被手动刷新作废的凭据仍然失效。手写配置时替换下方占位符。SUMA 地址必须是 Agent 可访问的 HTTPS 地址；反向代理需支持 WebSocket 升级与长连接。私有 CA 可只读挂载到容器并设置 `SUMA_AGENT_CA_FILE`，不能跳过证书校验。
 
 ```yaml
 services:
@@ -198,7 +198,7 @@ volumes:
   suma-agent-data:
 ```
 
-运行 `docker compose up -d`，确认节点在线后可从 Compose 删除 `SUMA_AGENT_TOKEN` 并再次运行该命令；持久卷保存后续重连凭据。撤销凭据后，如需重新配对，生成新令牌、更新环境变量并重新部署 Agent，旧身份认证失败时会自动用新令牌注册。Agent 只转发 Docker API；Compose 文件与 CLI 仍在 SUMA 控制端，远端 bind 源必须是目标主机上的明确绝对路径。
+运行 `docker compose up -d`，确认节点在线后可从 Compose 删除 `SUMA_AGENT_TOKEN` 并再次运行该命令；持久卷保存后续重连凭据。Docker 服务随系统启动且 Agent 未被手动停止时，`restart: unless-stopped` 会自动启动 Agent。撤销凭据或手动刷新令牌会立即作废旧凭据并断开 Agent；如需重新配对，生成新令牌、更新环境变量并重新部署 Agent，旧身份认证失败时会自动用新令牌注册。Agent 只转发 Docker API；Compose 文件与 CLI 仍在 SUMA 控制端，远端 bind 源必须是目标主机上的明确绝对路径。
 
 > 重要安全提醒：永远不要在网络上暴露无认证的 Docker API（明文 2375）。TCP 远程接入使用 mTLS；Agent 接入使用经验证的 HTTPS/WSS。Docker socket 即使以 `:ro` 挂载，仍授予 Agent 完整的 Docker 管理权限。公网 SUMA 请置于 HTTPS 反向代理之后；浏览器通过 HTTPS 访问时会自动使用 Secure Cookie。
 

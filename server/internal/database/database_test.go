@@ -29,6 +29,98 @@ func TestOpenMigratesDatabase(t *testing.T) {
 	}
 }
 
+type legacyAgentCredential struct {
+	NodeID     string `gorm:"primaryKey;size:64"`
+	SecretHash string `gorm:"size:64;not null"`
+	ExpiresAt  time.Time
+	RevokedAt  *time.Time
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+func (legacyAgentCredential) TableName() string { return "agent_credentials" }
+
+func TestOpenMigratesPersistentAgentCredentialsWithoutRevivingInvalidatedOnes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-agent.db")
+	legacy, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.AutoMigrate(&AgentEnrollment{}, &legacyAgentCredential{}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	for _, item := range []struct {
+		id       string
+		deadline time.Time
+		revoked  bool
+	}{
+		{"expired", now.Add(-time.Hour), false},
+		{"valid", now.Add(time.Minute), false},
+		{"revoked", now.Add(-time.Hour), true},
+		{"refreshed", now.Add(-time.Hour), false},
+		{"canceled", now.Add(-time.Hour), false},
+	} {
+		credential := legacyAgentCredential{NodeID: item.id, SecretHash: "hash-" + item.id, ExpiresAt: item.deadline}
+		if item.revoked {
+			credential.RevokedAt = &now
+		}
+		if err := legacy.Create(&credential).Error; err != nil {
+			t.Fatal(err)
+		}
+		if item.id == "canceled" {
+			continue
+		}
+		enrollment := AgentEnrollment{NodeID: item.id, TokenHash: "token-hash-" + item.id, ExpiresAt: item.deadline, ConsumedAt: &now}
+		if item.id == "refreshed" {
+			enrollment.ExpiresAt = now.Add(10 * time.Minute)
+			enrollment.ConsumedAt = nil
+		}
+		if err := legacy.Create(&enrollment).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	legacySQL, err := legacy.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacySQL.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		db, err := Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if db.Migrator().HasColumn(&AgentCredential{}, "expires_at") {
+			t.Fatal("credential expiry column survived migration")
+		}
+		var credentials []AgentCredential
+		if err := db.Find(&credentials).Error; err != nil {
+			t.Fatal(err)
+		}
+		if len(credentials) != 5 {
+			t.Fatalf("migration lost credentials: %d", len(credentials))
+		}
+		for _, credential := range credentials {
+			wantRevoked := credential.NodeID != "expired" && credential.NodeID != "valid"
+			if (credential.RevokedAt != nil) != wantRevoked || credential.SecretHash != "hash-"+credential.NodeID {
+				t.Fatalf("migration changed credential identity or revocation for %s", credential.NodeID)
+			}
+			if credential.NodeID == "revoked" && !credential.RevokedAt.Equal(now) {
+				t.Fatal("migration changed existing revocation time")
+			}
+		}
+		sqlDB, err := db.DB()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sqlDB.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestOpenMigratesLegacyUserProfileColumns(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy.db")
 	legacy, err := gorm.Open(sqlite.Open(path), &gorm.Config{})

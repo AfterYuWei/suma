@@ -229,6 +229,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     if (!node) throw new ApiError('Docker node not found', 20004, 404)
     const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString()
     node.agent_enrollment = { node_id: node.id, expires_at: expiresAt }
+    if (node.connection_type === 'agent') { node.status = 'offline'; node.last_error = 'Agent disconnected' }
     return clone({ node_id: node.id, token: 'b'.repeat(64), expires_at: expiresAt, public_url: 'https://suma.example.com' }) as T
   }
   const agentRevokeMatch = pathname.match(/^\/nodes\/([^/]+)\/agent\/revoke$/)
@@ -236,6 +237,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     const node = nodes.find((item) => item.id === agentRevokeMatch[1])
     if (!node) throw new ApiError('Docker node not found', 20004, 404)
     node.status = 'offline'
+    node.last_error = 'Agent credential revoked'
     return clone({ node_id: node.id }) as T
   }
   if (pathname === '/nodes' && method === 'POST') {

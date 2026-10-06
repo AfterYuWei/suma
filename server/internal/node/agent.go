@@ -116,8 +116,9 @@ func (s *Service) IssueAgentEnrollment(ctx context.Context, input AgentEnrollmen
 					return err
 				}
 			} else {
-				// Keep an active connection alive, but require the new token if it reconnects.
-				if err := tx.Model(&database.AgentCredential{}).Where("node_id = ?", nodeID).Update("expires_at", time.Now()).Error; err != nil {
+				// A manual refresh replaces the Agent identity. Revoke the old
+				// credential so the Agent exchanges the new enrollment token.
+				if err := tx.Model(&database.AgentCredential{}).Where("node_id = ? AND revoked_at IS NULL", nodeID).Update("revoked_at", time.Now()).Error; err != nil {
 					return err
 				}
 			}
@@ -130,9 +131,7 @@ func (s *Service) IssueAgentEnrollment(ctx context.Context, input AgentEnrollmen
 	if err != nil {
 		return AgentEnrollmentView{}, err
 	}
-	if dropPendingCredential {
-		s.agents.Disconnect(nodeID)
-	}
+	s.agents.Disconnect(nodeID)
 	return AgentEnrollmentView{NodeID: nodeID, Token: secret, ExpiresAt: expires}, nil
 }
 
@@ -224,7 +223,7 @@ func (s *Service) ClaimAgentEnrollment(ctx context.Context, token string, protoc
 		if err := tx.Where("node_id = ?", nodeID).Delete(&database.AgentCredential{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Create(&database.AgentCredential{NodeID: nodeID, SecretHash: hashSecret(credential), ExpiresAt: enrollment.ExpiresAt}).Error; err != nil {
+		if err := tx.Create(&database.AgentCredential{NodeID: nodeID, SecretHash: hashSecret(credential)}).Error; err != nil {
 			return err
 		}
 		return nil
@@ -236,14 +235,6 @@ func (s *Service) ClaimAgentEnrollment(ctx context.Context, token string, protoc
 }
 
 func (s *Service) AuthenticateAgent(ctx context.Context, id, credential string, protocol int) error {
-	return s.authenticateAgent(ctx, id, credential, protocol, false)
-}
-
-func (s *Service) AuthenticateAgentStream(ctx context.Context, id, credential string, protocol int) error {
-	return s.authenticateAgent(ctx, id, credential, protocol, true)
-}
-
-func (s *Service) authenticateAgent(ctx context.Context, id, credential string, protocol int, activeStream bool) error {
 	if !validID.MatchString(id) || len(credential) != 64 {
 		return errors.New("invalid Agent credential")
 	}
@@ -252,7 +243,7 @@ func (s *Service) authenticateAgent(ctx context.Context, id, credential string, 
 		return errors.New("Agent credential is invalid")
 	}
 	actual := hashSecret(credential)
-	if subtle.ConstantTimeCompare([]byte(actual), []byte(row.SecretHash)) != 1 || (!time.Now().Before(row.ExpiresAt) && !(activeStream && s.agents != nil && s.agents.Connected(id))) {
+	if subtle.ConstantTimeCompare([]byte(actual), []byte(row.SecretHash)) != 1 {
 		return errors.New("Agent credential is invalid")
 	}
 	if protocol != agentwire.ProtocolVersion {

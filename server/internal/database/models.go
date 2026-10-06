@@ -162,10 +162,11 @@ type AgentEnrollment struct {
 	UpdatedAt  time.Time
 }
 
+// AgentCredential remains valid until revoked or replaced by a new pairing.
+// Only the credential hash is stored by the control plane.
 type AgentCredential struct {
 	NodeID     string `gorm:"primaryKey;size:64"`
 	SecretHash string `gorm:"size:64;not null"`
-	ExpiresAt  time.Time
 	RevokedAt  *time.Time
 	CreatedAt  time.Time
 	UpdatedAt  time.Time

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,7 +24,96 @@ import (
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/node"
 	"github.com/suma/suma/server/internal/secret"
+	"gorm.io/gorm"
 )
+
+func TestAgentRevocationDuringControlHandshake(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	root := t.TempDir()
+	db, err := database.Open(filepath.Join(root, "suma.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := secret.Open(filepath.Join(root, "secret.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes, err := node.NewService(db, store, "unix:///var/run/docker.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nodes.Close()
+	hub, err := agenthub.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hub.Close()
+	nodes.SetAgentHub(hub)
+	issued, err := nodes.IssueAgentEnrollment(context.Background(), node.AgentEnrollmentInput{Name: "Handshake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, credential, err := nodes.ClaimAgentEnrollment(context.Background(), issued.Token, agentwire.ProtocolVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked, resume := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	if err := db.Callback().Query().After("gorm:query").Register("test:pause_agent_auth", func(tx *gorm.DB) {
+		if tx.Statement.Table == "agent_credentials" {
+			once.Do(func() { close(checked); <-resume })
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(NewRouter(Dependencies{Nodes: nodes, Agents: hub, Auth: auth.NewService(db, time.Hour)}))
+	defer server.Close()
+	defer func() {
+		select {
+		case <-resume:
+		default:
+			close(resume)
+		}
+	}()
+	connected := make(chan *websocket.Conn, 1)
+	dialError := make(chan error, 1)
+	go func() {
+		ws, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/ws/agents/control", http.Header{
+			"Authorization": {"Bearer " + credential}, "X-SUMA-Agent-Node-ID": {issued.NodeID}, "X-SUMA-Agent-Protocol": {"1"},
+		})
+		if err != nil {
+			dialError <- err
+			return
+		}
+		connected <- ws
+	}()
+	select {
+	case <-checked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Agent did not authenticate")
+	}
+	if err := nodes.RevokeAgent(context.Background(), issued.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	close(resume)
+	select {
+	case ws := <-connected:
+		defer ws.Close()
+		_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
+		_, _, err := ws.ReadMessage()
+		var timeout net.Error
+		if err == nil || (errors.As(err, &timeout) && timeout.Timeout()) {
+			t.Fatalf("revoked Agent reached Engine activation or kept its connection: %v", err)
+		}
+	case err := <-dialError:
+		t.Fatalf("initial handshake failed before the revocation recheck: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("control handshake did not finish")
+	}
+	if hub.Connected(issued.NodeID) {
+		t.Fatal("revoked Agent attached a control session after the disconnect")
+	}
+}
 
 func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -213,33 +304,39 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer control.Close()
-	go func() {
-		for {
-			_, payload, err := control.ReadMessage()
-			if err != nil {
-				return
-			}
-			var message struct {
-				Type string `json:"type"`
-				ID   string `json:"id"`
-			}
-			if json.Unmarshal(payload, &message) != nil || message.Type != "open" {
-				return
-			}
-			go func() {
-				backend, err := net.Dial("unix", dockerSocket)
+	serveControl := func(control *websocket.Conn) <-chan struct{} {
+		closed := make(chan struct{})
+		go func() {
+			defer close(closed)
+			for {
+				_, payload, err := control.ReadMessage()
 				if err != nil {
 					return
 				}
-				stream, _, err := websocket.DefaultDialer.Dial(address+"/ws/agents/streams/"+message.ID, headers)
-				if err != nil {
-					_ = backend.Close()
+				var message struct {
+					Type string `json:"type"`
+					ID   string `json:"id"`
+				}
+				if json.Unmarshal(payload, &message) != nil || message.Type != "open" {
 					return
 				}
-				_ = agentwire.Bridge(context.Background(), backend, stream)
-			}()
-		}
-	}()
+				go func() {
+					backend, err := net.Dial("unix", dockerSocket)
+					if err != nil {
+						return
+					}
+					stream, _, err := websocket.DefaultDialer.Dial(address+"/ws/agents/streams/"+message.ID, headers)
+					if err != nil {
+						_ = backend.Close()
+						return
+					}
+					_ = agentwire.Bridge(context.Background(), backend, stream)
+				}()
+			}
+		}()
+		return closed
+	}
+	controlClosed := serveControl(control)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		view, err := nodes.Get(context.Background(), issued.NodeID)
@@ -255,12 +352,6 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 			expiredAt := time.Now().Add(-time.Second)
 			if err := db.Model(&database.AgentEnrollment{}).Where("node_id = ?", issued.NodeID).Update("expires_at", expiredAt).Error; err != nil {
 				t.Fatal(err)
-			}
-			if err := db.Model(&database.AgentCredential{}).Where("node_id = ?", issued.NodeID).Update("expires_at", expiredAt).Error; err != nil {
-				t.Fatal(err)
-			}
-			if _, response, err := websocket.DefaultDialer.Dial(address+"/ws/agents/control", headers); err == nil || response == nil || response.StatusCode != http.StatusUnauthorized {
-				t.Fatalf("expired credential opened a new control connection: response=%v, err=%v", response, err)
 			}
 			if _, _, err := nodes.ClaimAgentEnrollment(context.Background(), issued.Token, agentwire.ProtocolVersion); err == nil {
 				t.Fatal("expired enrollment token was accepted")
@@ -396,6 +487,41 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 				t.Fatal("duplicate Engine ID was not rejected")
 			}
 			_ = control.Close()
+			select {
+			case <-controlClosed:
+			case <-time.After(5 * time.Second):
+				t.Fatal("Agent did not disconnect")
+			}
+			reconnected, _, err := websocket.DefaultDialer.Dial(address+"/ws/agents/control", headers)
+			if err != nil {
+				t.Fatalf("saved credential failed to reconnect after token expiry: %v", err)
+			}
+			defer reconnected.Close()
+			reconnectedClosed := serveControl(reconnected)
+			reconnectDeadline := time.Now().Add(5 * time.Second)
+			for !hub.Connected(issued.NodeID) && time.Now().Before(reconnectDeadline) {
+				time.Sleep(20 * time.Millisecond)
+			}
+			if info, err := client.Info(context.Background()); err != nil || info.ID != "agent-engine" {
+				t.Fatalf("Docker runtime failed after reconnect: %+v, %v", info, err)
+			}
+			revoked := adminRequest(http.MethodPost, "/api/v1/nodes/"+issued.NodeID+"/agent/revoke", "")
+			if revoked.Code != http.StatusOK {
+				t.Fatalf("revoke Agent: %d %s", revoked.Code, revoked.Body.String())
+			}
+			select {
+			case <-reconnectedClosed:
+			case <-time.After(5 * time.Second):
+				t.Fatal("revocation did not close the active Agent connection")
+			}
+			for _, path := range []string{"/ws/agents/control", "/ws/agents/streams/unused"} {
+				if ws, response, err := websocket.DefaultDialer.Dial(address+path, headers); err == nil {
+					_ = ws.Close()
+					t.Fatalf("revoked credential reached %s", path)
+				} else if response == nil || response.StatusCode != http.StatusUnauthorized {
+					t.Fatalf("revoked credential rejection for %s: response=%v, err=%v", path, response, err)
+				}
+			}
 			return
 		}
 		time.Sleep(20 * time.Millisecond)

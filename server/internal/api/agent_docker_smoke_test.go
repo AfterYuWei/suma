@@ -109,7 +109,7 @@ func TestRealDockerAgentInPlaceComposeReconnectAndRevoke(t *testing.T) {
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
 	startAgent := func() {
 		t.Helper()
-		docker("run", "-d", "--name", name, "--add-host", "host.docker.internal:host-gateway", "--env-file", environmentFile, "-e", "SUMA_AGENT_SERVER_URL="+publicURL,
+		docker("run", "-d", "--name", name, "--restart", "unless-stopped", "--add-host", "host.docker.internal:host-gateway", "--env-file", environmentFile, "-e", "SUMA_AGENT_SERVER_URL="+publicURL,
 			"-e", "SUMA_AGENT_CA_FILE=/run/secrets/ca.pem",
 			"-v", "/var/run/docker.sock:/var/run/docker.sock:ro", "-v", certFile+":/run/secrets/ca.pem:ro",
 			"-v", identityDir+":/var/lib/suma-agent", image)
@@ -160,6 +160,19 @@ func TestRealDockerAgentInPlaceComposeReconnectAndRevoke(t *testing.T) {
 	if after.ID != before.ID || after.EngineID != before.EngineID || after.ConnectionType != node.ConnectionAgent {
 		t.Fatalf("in-place migration changed identity: before=%+v after=%+v", before, after)
 	}
+	// A paired Agent must recover with only its persisted identity, even after
+	// its one-time enrollment deadline passed and the token was removed.
+	if err := db.Model(&database.AgentEnrollment{}).Where("node_id = ?", "local").Update("expires_at", time.Now().Add(-24*time.Hour)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(environmentFile, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	docker("rm", "-f", name)
+	startAgent()
+	await("local", "online")
+	docker("restart", name)
+	await("local", "online")
 	if _, err := authService.Initialize(ctx, "smoke-admin", "smoke@example.test", "", "TestAgentSmoke123!"); err != nil {
 		t.Fatal(err)
 	}

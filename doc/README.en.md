@@ -155,7 +155,7 @@ Quality checks: `make check` (backend `go test ./...` + `go build ./...`; fronte
 
 ### Deploy the Agent with Docker
 
-The Compose file generated on the Nodes page already includes the one-time token in the `SUMA_AGENT_TOKEN` environment variable. Copy it to the Agent host as `docker-compose.yml`; do not commit a file containing the token. If writing Compose manually, replace the placeholder below. The SUMA address must be reachable from the Agent over HTTPS. Your reverse proxy must allow WebSocket upgrades and long-lived connections. For a private CA, mount its PEM file read-only and set `SUMA_AGENT_CA_FILE`; TLS verification cannot be disabled.
+The Compose file generated on the Nodes page already includes the one-time token in the `SUMA_AGENT_TOKEN` environment variable. Copy it to the Agent host as `docker-compose.yml`; do not commit a file containing the token. Enrollment tokens expire after 10 minutes and can be used only once. The paired Agent credential remains valid until revoked or replaced; token expiry does not affect automatic reconnection after Agent or control-plane restarts. Keep the suma-agent-data volume. Upgrades preserve normally paired legacy credentials, including those past their former deadline, while previously revoked or manually invalidated credentials remain invalid. If writing Compose manually, replace the placeholder below. The SUMA address must be reachable from the Agent over HTTPS. Your reverse proxy must allow WebSocket upgrades and long-lived connections. For a private CA, mount its PEM file read-only and set `SUMA_AGENT_CA_FILE`; TLS verification cannot be disabled.
 
 ```yaml
 services:
@@ -173,7 +173,7 @@ volumes:
   suma-agent-data:
 ```
 
-Run `docker compose up -d` and verify the node is online. You can then remove `SUMA_AGENT_TOKEN` from Compose and run the command again; the named volume stores the reconnect credential. After revocation, generate a new token, update the environment variable, and redeploy the Agent; it exchanges the new token when its old credential is rejected. Compose files and the CLI remain on the SUMA control plane, so remote bind sources must be explicit absolute paths on the Agent host.
+Run `docker compose up -d` and verify the node is online. You can then remove `SUMA_AGENT_TOKEN` from Compose and run the command again; the named volume stores the reconnect credential. With Docker enabled at boot and the Agent not manually stopped, `restart: unless-stopped` starts it automatically. Revoking the credential or manually refreshing the token invalidates the old credential and closes the Agent connection immediately. To pair again, generate a new token, update the environment variable, and redeploy the Agent; it exchanges the new token when its old credential is rejected. Compose files and the CLI remain on the SUMA control plane, so remote bind sources must be explicit absolute paths on the Agent host.
 
 > Security: never expose an unauthenticated Docker API on a network. Direct TCP uses mTLS, while Agents use verified HTTPS/WSS. A Docker socket mounted `:ro` still grants full Docker control. Put public SUMA deployments behind HTTPS; browser access over HTTPS automatically uses Secure cookies.
 

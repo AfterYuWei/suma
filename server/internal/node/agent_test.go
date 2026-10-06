@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/glebarez/sqlite"
 	"github.com/suma/suma/server/internal/agenthub"
 	"github.com/suma/suma/server/internal/agentwire"
 	"github.com/suma/suma/server/internal/database"
@@ -110,8 +111,8 @@ func TestAgentEnrollmentIsSingleUseAndRevocable(t *testing.T) {
 	if err := service.AuthenticateAgent(ctx, issued.NodeID, secret, agentwire.ProtocolVersion); err != nil {
 		t.Fatalf("valid credential rejected: %v", err)
 	}
-	if !credential.ExpiresAt.Equal(issued.ExpiresAt) {
-		t.Fatalf("credential expiry differs from token expiry: %v != %v", credential.ExpiresAt, issued.ExpiresAt)
+	if credential.SecretHash != hashSecret(secret) || credential.SecretHash == secret {
+		t.Fatal("Agent credential was not stored as a hash")
 	}
 	if err := service.AuthenticateAgent(ctx, issued.NodeID, secret, agentwire.ProtocolVersion+1); !errors.Is(err, ErrAgentProtocol) {
 		t.Fatalf("incompatible reconnect not reported: %v", err)
@@ -123,11 +124,24 @@ func TestAgentEnrollmentIsSingleUseAndRevocable(t *testing.T) {
 	if view, err := service.Get(ctx, issued.NodeID); err != nil || view.Status != "incompatible" {
 		t.Fatalf("background probe hid protocol mismatch: %+v, %v", view, err)
 	}
-	if err := service.db.Model(&database.AgentCredential{}).Where("node_id = ?", issued.NodeID).Update("expires_at", time.Now().Add(-time.Second)).Error; err != nil {
+	if err := service.db.Model(&database.AgentEnrollment{}).Where("node_id = ?", issued.NodeID).Update("expires_at", time.Now().AddDate(-1, 0, 0)).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := service.AuthenticateAgent(ctx, issued.NodeID, secret, agentwire.ProtocolVersion); err == nil {
-		t.Fatal("expired credential opened a new Agent connection")
+	if err := service.AuthenticateAgent(ctx, issued.NodeID, secret, agentwire.ProtocolVersion); err != nil {
+		t.Fatalf("enrollment expiry invalidated the persistent credential: %v", err)
+	}
+	// Reopening the SQLite database simulates a control-plane restart.
+	reopened, err := database.Open(service.db.Dialector.(*sqlite.Dialector).DSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewService(reopened, service.secrets, "unix:///var/run/docker.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	if err := restarted.AuthenticateAgent(ctx, issued.NodeID, secret, agentwire.ProtocolVersion); err != nil {
+		t.Fatalf("credential did not survive a control-plane restart: %v", err)
 	}
 	if err := service.RevokeAgent(ctx, issued.NodeID); err != nil {
 		t.Fatal(err)
@@ -137,6 +151,9 @@ func TestAgentEnrollmentIsSingleUseAndRevocable(t *testing.T) {
 	}
 	if err := service.AuthenticateAgent(ctx, issued.NodeID, secret, agentwire.ProtocolVersion); err == nil {
 		t.Fatal("revoked credential was accepted")
+	}
+	if err := restarted.AuthenticateAgent(ctx, issued.NodeID, secret, agentwire.ProtocolVersion); err == nil {
+		t.Fatal("restarted service accepted a revoked credential")
 	}
 	if err := service.db.Where("node_id = ?", issued.NodeID).First(&credential).Error; err != nil {
 		t.Fatal(err)
@@ -251,5 +268,8 @@ func TestReissueConnectedAgentRequiresNewTokenOnReconnect(t *testing.T) {
 	}
 	if err := service.AuthenticateAgent(ctx, issued.NodeID, newCredential, agentwire.ProtocolVersion); err != nil {
 		t.Fatalf("new credential was rejected: %v", err)
+	}
+	if err := service.AuthenticateAgent(ctx, issued.NodeID, oldCredential, agentwire.ProtocolVersion); err == nil {
+		t.Fatal("replaced credential was accepted")
 	}
 }
