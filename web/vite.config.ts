@@ -20,8 +20,10 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       proxy: {
-        '/api': apiTarget,
-        '/ws': { target: apiTarget, ws: true },
+        // Vite's string shorthand rewrites Host to the API target, breaking
+        // SUMA's origin checks when the browser uses the frontend port.
+        '/api': { target: apiTarget, changeOrigin: false },
+        '/ws': { target: apiTarget, changeOrigin: false, ws: true },
       },
     },
   }

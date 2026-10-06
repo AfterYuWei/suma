@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +16,6 @@ import (
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/event"
-	"github.com/suma/suma/server/internal/outbound"
 	"github.com/suma/suma/server/internal/redact"
 	"github.com/suma/suma/server/internal/secret"
 	"github.com/suma/suma/server/internal/task"
@@ -64,6 +62,15 @@ func NewService(db *gorm.DB, store *secret.Store, tasks *task.Service, deps Depe
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
+	// Preserve existing single-model and explicitly allowed internal HTTP settings.
+	if len(s.cfg.Models) == 0 && s.cfg.Model != "" {
+		s.cfg.Models = []string{s.cfg.Model}
+	}
+	if strings.HasPrefix(s.cfg.Endpoint, "http://") && s.cfg.AllowPrivate {
+		s.cfg.AllowInsecure = true
+	}
+	// GORM otherwise retains the first Setting's primary key in this query.
+	row = database.Setting{}
 	if err := db.First(&row, "key = ?", "internal.ai.key").Error; err == nil {
 		cipher, err := hex.DecodeString(row.Value)
 		if err != nil {
@@ -75,6 +82,25 @@ func NewService(db *gorm.DB, store *secret.Store, tasks *task.Service, deps Depe
 		}
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
+	}
+	if s.cfg.Protocol != ProtocolResponses {
+		// Retain the connection for review, but require explicit re-enablement
+		// after the removed protocol is replaced with Responses.
+		s.cfg.Protocol = ProtocolResponses
+		s.cfg.Enabled = false
+		s.cfg.ToolCapable = false
+		s.cfg.TestedFingerprint = ""
+		s.cfg.HasSecret = false
+		s.cfg.Version++
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			row := database.Setting{Key: "internal.ai.settings", Value: marshal(s.cfg)}
+			if err := tx.Clauses(clause.OnConflict{UpdateAll: true}).Create(&row).Error; err != nil {
+				return err
+			}
+			return tx.Model(&database.AIOperation{}).Where("status IN ?", []string{"awaiting_approval", "queued"}).Updates(map[string]any{"status": "invalidated", "result": "Model protocol removed; configure Responses and create a new proposal"}).Error
+		}); err != nil {
+			return nil, err
+		}
 	}
 	// Interrupted mutations are recorded, never automatically replayed.
 	if err := db.Model(&database.AIOperation{}).Where("status IN ?", []string{"queued", "running"}).Updates(map[string]any{"status": "interrupted", "result": "SUMA restarted; inspect actual state before creating a new proposal"}).Error; err != nil {
@@ -106,21 +132,34 @@ func has(values []string, value string) bool {
 func (s *Service) Settings() Settings {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cfg := s.cfg
-	cfg.NodeIDs = append([]string{}, cfg.NodeIDs...)
-	cfg.AutoEvents = append([]string{}, cfg.AutoEvents...)
+	cfg := cloneSettings(s.cfg)
 	cfg.HasSecret = s.key != ""
 	return cfg
 }
+func cloneSettings(cfg Settings) Settings {
+	cfg.NodeIDs = append([]string{}, cfg.NodeIDs...)
+	cfg.AutoEvents = append([]string{}, cfg.AutoEvents...)
+	cfg.Models = append([]string{}, cfg.Models...)
+	return cfg
+}
 func (s *Service) SaveSettings(ctx context.Context, in SettingsInput, actor Actor) (Settings, error) {
-	if in.Protocol != "responses" && in.Protocol != "chat_completions" {
-		return Settings{}, ErrInvalid
+	if in.Protocol != ProtocolResponses {
+		return Settings{}, fmt.Errorf("%w: only Responses protocol is supported", ErrInvalid)
 	}
-	if outbound.Validate(in.Endpoint, in.AllowPrivate) != nil || len(in.Model) > 256 {
-		return Settings{}, ErrInvalid
+	in.Endpoint = strings.TrimRight(strings.TrimSpace(in.Endpoint), "/")
+	if err := validateEndpoint(in.Endpoint, in.AllowInsecure); err != nil {
+		return Settings{}, err
 	}
-	endpoint, err := url.Parse(in.Endpoint)
-	if err != nil || endpoint.RawQuery != "" {
+	models, err := normalizeModels(in.Models, in.Model)
+	if err != nil {
+		return Settings{}, err
+	}
+	in.Models = models
+	in.Model = strings.TrimSpace(in.Model)
+	if in.Model == "" && len(models) > 0 {
+		in.Model = models[0]
+	}
+	if in.Model != "" && !has(models, in.Model) || len(in.APIKey) > 8192 || strings.ContainsAny(in.APIKey, "\r\n") {
 		return Settings{}, ErrInvalid
 	}
 	if in.MaxConcurrent < 1 || in.MaxConcurrent > 8 || in.MaxToolCalls < 1 || in.MaxToolCalls > 32 || in.DailyAutoLimit < 1 || in.DailyAutoLimit > 1000 || in.LogLines < 1 || in.LogLines > 500 || in.LogBytes < 1024 || in.LogBytes > 64<<10 || in.ApprovalMinutes < 1 || in.ApprovalMinutes > 60 {
@@ -145,7 +184,7 @@ func (s *Service) SaveSettings(ctx context.Context, in SettingsInput, actor Acto
 	if s.stopped || in.Version != s.cfg.Version {
 		return Settings{}, ErrConflict
 	}
-	cfg := in.Settings
+	cfg := cloneSettings(in.Settings)
 	cfg.Version++
 	cfg.AuthorizedBy = actor.UserID
 	cfg.HasSecret = false
@@ -197,17 +236,24 @@ func (s *Service) SaveSettings(ctx context.Context, in SettingsInput, actor Acto
 		}
 	}
 	cfg.HasSecret = key != ""
-	return cfg, nil
+	return cloneSettings(cfg), nil
 }
 func connectionHash(cfg Settings, key string) string {
-	return digest([]any{cfg.Protocol, cfg.Endpoint, cfg.Model, cfg.AllowPrivate, key})
+	return digest([]any{cfg.Protocol, cfg.Endpoint, cfg.Model, cfg.AllowPrivate, cfg.AllowInsecure, key})
 }
 func (s *Service) TestModel(ctx context.Context) (map[string]any, error) {
+	started := time.Now()
 	s.mu.Lock()
 	cfg, key := s.cfg, s.key
 	s.mu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
+	safeDetail := func(value string) string {
+		if key != "" {
+			value = strings.ReplaceAll(value, key, "[redacted]")
+		}
+		return redact.Bounded(value, 1024)
+	}
 	first, err := s.deps.Model.Complete(ctx, cfg, key, []ModelMessage{{Role: "user", Text: "Reply with a short connection confirmation."}}, nil)
 	if err != nil {
 		return nil, err
@@ -215,10 +261,35 @@ func (s *Service) TestModel(ctx context.Context) (map[string]any, error) {
 	if strings.TrimSpace(first.Text) == "" {
 		return nil, errors.New("model returned no text")
 	}
-	probe := Tool{Name: "connection_probe", Description: "Call this tool with an empty object to validate tool support", Parameters: map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}}
-	second, toolErr := s.deps.Model.Complete(ctx, cfg, key, []ModelMessage{{Role: "user", Text: "Call connection_probe exactly once with an empty object."}}, []Tool{probe})
-	var probeArgs map[string]any
-	capable := toolErr == nil && len(second.Calls) == 1 && second.Calls[0].Name == probe.Name && json.Unmarshal(second.Calls[0].Arguments, &probeArgs) == nil && probeArgs != nil && len(probeArgs) == 0
+	// Use a required argument like the real tools. Some compatible models copy
+	// schema keywords into arguments when the probe has no parameters.
+	const probeMessage = "suma_connection_test"
+	probe := Tool{
+		Name: "connection_probe", Description: "Call this tool with the required message to validate tool support",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{"message": map[string]any{
+				"type": "string", "enum": []string{probeMessage},
+			}},
+			"required": []string{"message"}, "additionalProperties": false,
+		},
+	}
+	second, toolErr := s.deps.Model.Complete(ctx, cfg, key, []ModelMessage{{Role: "user", Text: fmt.Sprintf("Call connection_probe exactly once with {\"message\":%q}.", probeMessage)}}, []Tool{probe})
+	var probeArgs struct {
+		Message string `json:"message"`
+	}
+	failure := ""
+	switch {
+	case toolErr != nil:
+		failure = "request_failed"
+	case len(second.Calls) == 0:
+		failure = "not_called"
+	case len(second.Calls) != 1 || second.Calls[0].Name != probe.Name || strings.TrimSpace(second.Calls[0].ID) == "":
+		failure = "unexpected_call"
+	case strict(second.Calls[0].Arguments, &probeArgs) != nil || probeArgs.Message != probeMessage:
+		failure = "invalid_arguments"
+	}
+	capable := failure == ""
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if connectionHash(s.cfg, s.key) != connectionHash(cfg, key) {
@@ -230,7 +301,18 @@ func (s *Service) TestModel(ctx context.Context) (map[string]any, error) {
 	if err := s.db.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(&row).Error; err != nil {
 		return nil, err
 	}
-	return map[string]any{"text": true, "tool_capable": capable, "summary_only": !capable}, nil
+	result := map[string]any{
+		"text": true, "tool_capable": capable, "summary_only": !capable,
+		"model": cfg.Model, "duration_ms": time.Since(started).Milliseconds(),
+		"text_response": safeDetail(first.Text),
+	}
+	if failure != "" {
+		result["tool_failure"] = failure
+	}
+	if toolErr != nil {
+		result["tool_error"] = safeDetail(toolErr.Error())
+	}
+	return result, nil
 }
 func (s *Service) validateActor(ctx context.Context, a Actor) error {
 	if a.Source == "chat" && (a.BindingID == "" || a.ExternalUserID == "" || a.ChatID == "") {

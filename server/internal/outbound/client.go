@@ -34,6 +34,16 @@ func SafeIP(ip net.IP, allowPrivate bool) bool {
 	return true
 }
 func Client(allowPrivate bool) *http.Client {
+	return newClient(allowPrivate, allowPrivate, true)
+}
+
+// ModelClient separates private-network access from explicit plaintext HTTP
+// permission. TLS certificates are always verified, including with HTTP enabled.
+func ModelClient(allowPrivate, allowHTTP bool) *http.Client {
+	return newClient(allowPrivate, allowHTTP, false)
+}
+
+func newClient(allowPrivate, allowHTTP, privateHTTPOnly bool) *http.Client {
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	// Avoid proxy-based bypasses of destination validation.
@@ -60,5 +70,5 @@ func Client(allowPrivate bool) *http.Client {
 		}
 		return nil, errors.New("endpoint connection failed")
 	}
-	return &http.Client{Transport: guardedTransport{base: transport, allowPrivate: allowPrivate}, Timeout: 45 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("endpoint redirects are not allowed") }}
+	return &http.Client{Transport: guardedTransport{base: transport, allowHTTP: allowHTTP, privateHTTPOnly: privateHTTPOnly}, Timeout: 45 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("endpoint redirects are not allowed") }}
 }

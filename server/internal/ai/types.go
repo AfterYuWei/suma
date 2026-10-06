@@ -19,13 +19,17 @@ var ErrBusy = errors.New("AI diagnosis concurrency limit reached")
 var ErrBudget = errors.New("automatic diagnosis daily limit reached")
 var ErrInvalid = errors.New("invalid AI request")
 
+const ProtocolResponses = "responses"
+
 type Settings struct {
 	Version           uint64   `json:"version"`
 	Enabled           bool     `json:"enabled"`
 	Protocol          string   `json:"protocol"`
 	Endpoint          string   `json:"endpoint"`
 	Model             string   `json:"model"`
+	Models            []string `json:"models"`
 	AllowPrivate      bool     `json:"allow_private"`
+	AllowInsecure     bool     `json:"allow_insecure"`
 	NodeIDs           []string `json:"node_ids"`
 	AutoEvents        []string `json:"auto_events"`
 	MaxConcurrent     int      `json:"max_concurrent"`
@@ -42,6 +46,13 @@ type Settings struct {
 type SettingsInput struct {
 	Settings
 	APIKey string `json:"api_key,omitempty"`
+}
+type ModelsInput struct {
+	Version       uint64 `json:"version"`
+	Endpoint      string `json:"endpoint"`
+	AllowPrivate  bool   `json:"allow_private"`
+	AllowInsecure bool   `json:"allow_insecure"`
+	APIKey        string `json:"api_key,omitempty"`
 }
 type Actor struct {
 	UserID         uint
@@ -139,5 +150,5 @@ type Model interface {
 }
 
 func DefaultSettings() Settings {
-	return Settings{Protocol: "responses", Endpoint: "https://api.openai.com/v1", NodeIDs: []string{}, AutoEvents: []string{}, MaxConcurrent: 2, DailyAutoLimit: 20, MaxToolCalls: 8, LogLines: 500, LogBytes: 64 << 10, ApprovalMinutes: 15}
+	return Settings{Protocol: ProtocolResponses, Endpoint: "https://api.openai.com/v1", Models: []string{}, NodeIDs: []string{}, AutoEvents: []string{}, MaxConcurrent: 2, DailyAutoLimit: 20, MaxToolCalls: 8, LogLines: 500, LogBytes: 64 << 10, ApprovalMinutes: 15}
 }

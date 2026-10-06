@@ -46,7 +46,42 @@ SQLite 保存事件历史、每用户已读状态和投递队列。队列最多�
 
 工作台的会话采用官方 shadcn [Message](https://ui.shadcn.com/docs/components/base/message)、[Bubble](https://ui.shadcn.com/docs/components/base/bubble) 和 [MessageScroller](https://ui.shadcn.com/docs/components/base/message-scroller)，输入框复用 InputGroup。问题与回答按轮次排列，连续追问保留会话历史；桌面通过侧栏选择会话，移动端通过历史抽屉选择。布局沿用设置页的间距分组、项目详情的 muted 背景和共享圆角，不使用侧栏、标题、证据或输入区的线条分隔。输入框位于对话底部，Enter 发送、Shift + Enter 换行，中文输入法确认候选不会发送。阅读旧消息时保持位置，可点击“回到最新回复”；诊断证据与事件时间线按需展开，建议操作仍进入完整预览逐项审核。
 
-AI 默认关闭；启用时必须明确授权节点。填写模型名称、API 基础地址和密钥，选择 Responses 或兼容 Chat Completions 协议。服务地址默认要求 HTTPS，内网地址需明确允许。点击“测试已保存的连接”，分别验证文本和注册工具调用；不支持工具的模型只能摘要。参考：[OpenAI 工具调用](https://developers.openai.com/api/docs/guides/function-calling)。
+AI 默认关闭，使用开关启用，保存后生效；启用时必须添加模型并明确授权节点。填写 API 基础地址和密钥，模型服务必须支持 **Responses API**。协议固定为 Responses。点击“配置模型”打开模型选择弹窗：支持搜索、多选、按搜索结果全选，以及用逗号分隔手动添加多个模型。应用后显示可删除的模型标签，选择一个“默认诊断模型”，再保存 AI 设置。默认模型用于站内、聊天和自动诊断；多个模型共享这组服务地址和密钥，不自动轮询或故障切换。
+
+后端仅接受 `protocol: "responses"`；旧的 `chat_completions` 配置或其他协议在保存时被拒绝。启动时发现已保存的旧协议配置，会保留地址、模型、节点授权和加密密钥，将协议迁移为 Responses 并关闭 AI、清除工具验证状态、使待审批和排队操作失效。迁移持久化且只发生一次。请确认服务提供 `/responses`，测试已保存连接，再启用 AI；历史已完成操作保留实际结果。
+
+“自动探测模型”通过 SUMA 服务端请求当前基础地址的 `GET /models`，携带当前填写的密钥；密钥留空时使用已保存的加密密钥。探测可在 AI 关闭时使用，不保存配置、不启用 AI，也不自动选中返回的模型。标准返回格式为 `{"data":[{"id":"model-name"}]}`。未公开 `/models`、密钥无列表权限、列表为空或探测失败时，仍可手动添加服务支持的模型名称。单次返回最多 2000 条、1 MiB，最多保留 200 个模型。选中“应用”只更新页面草稿，需点击“保存 AI 设置”持久化。旧版单模型配置会自动转成一个模型标签。
+
+### 基础地址与 `/v1`
+
+SUMA **不会自动添加 `/v1`**。是否需要由模型服务实际路由决定；必须填写完整 API 的基础前缀，不含具体操作路径、查询参数或 URL 凭据。页面的展开说明会显示当前配置最终请求的地址。
+
+| 服务完整接口示例 | 应填写的基础地址 | 探测请求 |
+| --- | --- | --- |
+| `https://api.example.com/v1/responses` | `https://api.example.com/v1` | `https://api.example.com/v1/models` |
+| `https://gateway.example.com/responses` | `https://gateway.example.com` | `https://gateway.example.com/models` |
+| `https://gateway.example.com/api/v1/responses` | `https://gateway.example.com/api/v1` | `https://gateway.example.com/api/v1/models` |
+
+模型请求固定追加 `/responses`，探测追加 `/models`。已有 `/v1` 时不要重复添加；完整操作地址（包括已移除协议的 `/chat/completions` 路径）会被拒绝。尾部 `/` 会去除。遇到 404 时先核对服务文档给出的基础前缀和 Responses 支持。
+
+### 内网、HTTP 与页面来源错误
+
+模型服务默认要求经过证书验证的 HTTPS。两个连接开关各控制一项权限：
+
+- **允许内部模型服务地址**：允许内网／回环 IP 和解析到这些地址的域名。
+- **允许不安全的 AI 连接（HTTP）**：明确允许明文 HTTP，API 密钥和诊断内容可能被窃听。内网 HTTP 需要两个开关同时开启。此设置只影响 AI 模型请求，HTTPS 仍校验证书，重定向与链路本地／元数据地址仍被拒绝，通知与 Docker／Agent 连接策略不受影响。旧版已明确允许的内网 HTTP 配置会保留该权限。
+
+同源 HTTP 的 SUMA 页面可以使用 AI。`Request origin is not allowed` 是 SUMA 页面来源校验错误，此时请求尚未到达模型服务；开启 HTTP 模型连接不会绕过该校验。反向代理需保留浏览器访问的原始 Host 和端口（例如 Nginx `proxy_set_header Host $http_host;`）。若配置了 `SUMA_BROWSER_ORIGIN` 或持久化的 `security.browser_origin`，其协议、主机、端口必须与浏览器实际地址一致；不要添加路径或尾部 `/`。保留来源校验以防第三方页面借用会话执行操作。
+
+开发入口（例如 `http://192.168.1.100:5173/settings#ai`）经 Vite 转发到 Go 的 `8081` 端口。`/api` 与 `/ws` 代理必须使用对象配置并设 `changeOrigin: false`，保留浏览器的 Host 和 Origin；Vite 的字符串代理简写会改写 Host，导致来源不匹配。仓库配置已处理这一点，修改后 Vite 自动重载。如果出现“API endpoint not found”，请重启 Go 开发后端加载 `/api/v1/ai/settings/models` 接口。可执行 `npm --prefix web exec -- vitest run src/lib/dev-proxy.test.ts` 验证真实 HTTP／WebSocket 开发代理。
+
+模型服务本身返回 HTTP 403 时，应检查 API 密钥权限和模型网关访问规则。SUMA 由服务端调用模型，不转发浏览器 Origin，不需要为浏览器开放模型服务的跨域权限。401 表示应核对密钥，404 表示应核对基础地址及 `/v1`。
+
+保存后点击“测试连接”，通过 Responses 验证默认模型的文本和注册工具调用；连接草稿有修改时需先保存，测试按钮才可使用。不支持工具的模型只能摘要。更换默认模型、地址、密钥或连接权限后，需重新验证工具调用；仅添加备用模型不会清除默认模型的已验证能力。参考：[OpenAI 工具调用](https://developers.openai.com/api/docs/guides/function-calling)。
+
+工具探针 `connection_probe` 使用必填字符串参数 `{"message":"suma_connection_test"}`，要求返回一次具备调用 ID 的工具调用，并严格校验参数值和多余字段。它与实际工具一样有明确参数，避免部分兼容模型在空参数定义下将 `additionalProperties` 等 schema 字段误作调用参数。之前因空对象测试失败的模型应重新点击“测试连接”，无需更改模型或协议。
+
+点击后按钮下方显示独立“连接测试结果”：测试中、连接失败、文本与工具全部通过，或“连接正常，工具调用未通过”。结果包含测试模型、耗时、文本和工具各自状态，以及脱敏且最多 1024 字节的模型回复。工具验证未通过时显示具体原因：请求失败（附安全的 HTTP 错误）、模型未调用工具、工具名称／次数或调用 ID 不符、参数不符合测试要求。文本通过而工具未通过时，连接仍可用于摘要，但不能使用诊断工具或提出操作。结果保留到下一次测试或修改设置；页面刷新后需重新测试查看明细。测试不执行 Docker 操作，API 密钥和响应中的疑似秘密不会出现在结果中。
 
 默认最多两个并发诊断、每天二十次自动诊断、同一事件十分钟内不重复自动分析。每次最多八次只读工具调用，日志仅最近十五分钟，最多 500 行／64 KiB；诊断最长五分钟。模型输出和日志均有限制及脱敏，配置摘要不包含环境变量值或命令内容。会话最多携带四轮历史摘要，同节点的新诊断重新收集证据。
 
@@ -103,7 +138,7 @@ npm --prefix web run typecheck
 npm --prefix web run test
 npm --prefix web run build
 npm --prefix web run build:demo
-npm --prefix web run test:browser -- ai-chat.spec.ts notification-ai.spec.ts operations.spec.ts
+npm --prefix web run test:browser -- ai-connection-result.spec.ts ai-settings.spec.ts ai-chat.spec.ts notification-ai.spec.ts operations.spec.ts
 SUMA_PROJECT_SMOKE_GO_CACHE=/tmp/suma-notification-go-cache bash doc/operations-smoke.sh
 ```
 

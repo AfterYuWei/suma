@@ -223,6 +223,18 @@ func registerNotificationRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps De
 		}
 		success(c, result)
 	})
+	routes.POST("/settings/models", func(c *gin.Context) {
+		var in ai.ModelsInput
+		if !bindCleanup(c, &in) {
+			return
+		}
+		models, err := service.DiscoverModels(c.Request.Context(), in)
+		if err != nil {
+			operationsFailure(c, err)
+			return
+		}
+		success(c, gin.H{"models": models})
+	})
 	routes.GET("/runs", func(c *gin.Context) {
 		result, err := service.Runs(c.Request.Context())
 		if err != nil {

@@ -330,14 +330,25 @@ All routes require an authenticated session and the usual Origin check for write
 | GET / POST | `/notification-bindings` | List own bindings or issue a 10-minute private-chat code |
 | POST | `/notification-bindings/:id/confirm` | Confirm a claimed stable platform identity |
 | DELETE | `/notification-bindings/:id` | Revoke own binding and associated approval tokens |
-| GET / PUT | `/ai/settings` | Read/update enablement, model, node scope and limits; API key is write-only |
+| GET / PUT | `/ai/settings` | Read/update enablement switch, `models` list, default `model`, endpoint, `allow_private`, `allow_insecure`, node scope and limits; API key is write-only |
 | POST | `/ai/settings/test` | Test text and registered function calling separately |
+| POST | `/ai/settings/models` | Discover models using current connection draft and a write-only key; does not save or enable AI |
 | GET / POST | `/ai/runs` | History or start an authorized-node diagnosis (202) |
 | GET | `/ai/runs/:id` | Status, redacted evidence, summary and proposal IDs |
 | GET | `/ai/operations` | Individually reviewed proposals and execution history |
 | GET | `/ai/operations/:id` | Full frozen preview, expiry, `review_token`, status and linked Task |
 | POST | `/ai/operations/:id/decision` | `{ "approve": true, "review_token": "..." }`; no parameter overrides |
 | GET | `/ai/audit` | Bounded diagnosis/approval/execution audit history |
+
+`models` stores up to 200 unique model IDs (1–256 bytes each); `model` selects the default for all diagnoses and must belong to that list. Legacy single-model requests/configuration remain supported. Selecting a different default invalidates tool-capability verification; adding alternatives preserves it.
+
+`POST /ai/settings/test` verifies text and a single Responses `connection_probe` call with a nonempty call ID and exactly `{"message":"suma_connection_test"}` as arguments. The required string argument avoids empty-schema quirks in compatible models; unknown fields, missing/wrong values and malformed JSON remain rejected. It returns `text`, `tool_capable`, `summary_only`, the tested `model`, `duration_ms`, and a redacted `text_response` capped at 1024 bytes. Partial success also includes `tool_failure` (`request_failed`, `not_called`, `unexpected_call`, or `invalid_arguments`), plus a redacted `tool_error` for failed requests. Successful text with failed tool verification returns 200 and enables summaries only; failed text or connection requests return an API error. No Docker tools execute during the test. Results from a changed connection return 409 and do not replace its verification.
+
+Only the Responses API is supported. `protocol` is fixed to `"responses"`; writes carrying `"chat_completions"`, unknown or empty protocols return 422 without changing settings or contacting a model service. The adapter sends and parses Responses messages and function calls only. On startup, stored unsupported protocols are migrated to Responses with AI disabled, tool verification cleared and pending/queued operations invalidated in the same transaction. Addresses, models, scope and encrypted keys are retained; the configuration version increments once. Test the Responses connection before re-enabling AI.
+
+`POST /ai/settings/models` accepts `{ "version": 1, "endpoint": "https://example.com/v1", "allow_private": false, "allow_insecure": false, "api_key": "" }` and returns `{ "models": ["model-a", "model-b"] }`. Blank keys use the stored encrypted key. Draft connections are not persisted, and stale versions return 409. Discovery performs a server-side authenticated `GET <endpoint>/models`, accepts the standard `data[].id` format, deduplicates/sorts IDs, cancels on disconnect, and bounds requests to 30 seconds, 1 MiB and 2000 returned entries.
+
+Base URLs retain the provider's complete prefix; SUMA does not add `/v1`. It appends `/responses` for model requests and `/models` for discovery, and rejects complete operation URLs (including the removed `/chat/completions` path), query parameters and embedded credentials. `allow_insecure` explicitly allows plaintext HTTP for AI requests; private HTTP also requires `allow_private`. HTTPS certificate, destination, redirect and browser Origin checks remain enforced. Existing explicitly permitted internal HTTP configuration is migrated with its permission preserved.
 
 `GET /ws/ai/runs/:id` streams diagnosis snapshots until completion and cancels its polling context on disconnect. Execution progress uses existing node Task APIs/WebSockets. Creating a proposal never executes; a successful decision atomically creates the pending Task, claims approval and records reviewer identity, then launches work after commit. Expired/changed/repeated approvals return 409, disabled/out-of-scope access 403 and exhausted concurrency/automatic budget 429. Restart recovery does not replay AI mutations.
 

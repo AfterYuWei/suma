@@ -30,7 +30,7 @@ func (m *scriptedModel) Complete(_ context.Context, _ Settings, _ string, _ []Mo
 		return ModelReply{Text: "Connected"}, nil
 	}
 	if m.calls == 2 {
-		return ModelReply{Calls: []ToolCall{{ID: "probe", Name: "connection_probe", Arguments: json.RawMessage(`{}`)}}}, nil
+		return ModelReply{Calls: []ToolCall{{ID: "probe", Name: "connection_probe", Arguments: json.RawMessage(`{"message":"suma_connection_test"}`)}}}, nil
 	}
 	if m.calls == 3 {
 		calls := []ToolCall{{ID: "status", Name: "read_status", Arguments: json.RawMessage(`{"kind":"container","id":"frozen-container"}`)}, {ID: "proposal", Name: "create_proposal", Arguments: json.RawMessage(`{"action":"container.restart","resource_id":"frozen-container","parameters":{}}`)}}
