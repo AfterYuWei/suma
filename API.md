@@ -136,7 +136,7 @@ The CD API manages independent Delivery Projects. A project may deploy Compose d
 
 Authenticated routes:
 
-- `GET|POST /delivery-projects` lists or creates Delivery Projects; creation accepts `node_ids`.
+- `GET|POST /delivery-projects` lists or creates Delivery Projects. Full creation accepts `{ "name": "production", "configuration": <the configuration body below> }`; its transaction saves the project, explicit target nodes, repository, encrypted credentials and delivery policy together. Validation or persistence failure leaves no partial project or credential. The `201` response includes the project fields plus `configuration`; an automatically generated Webhook secret is returned once here and never by GET. Legacy name/`node_ids` creation remains supported.
 - `GET|DELETE /delivery-projects/:name` reads or deletes one project. Deletion requires `confirm=<project-name>`; optional `force=true` tears down its active runtime.
 - `GET|PUT /delivery-projects/:name/configuration` reads or updates repository and delivery configuration.
 - `POST /delivery-projects/:name/sync` queues a manual Git synchronization and returns `202 Accepted` with a task.

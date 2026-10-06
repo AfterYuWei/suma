@@ -964,23 +964,48 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	})
 	delivery.POST("", func(c *gin.Context) {
 		var input struct {
-			Name    string   `json:"name" binding:"required"`
-			NodeIDs []string `json:"node_ids"`
+			Name          string                    `json:"name" binding:"required"`
+			NodeIDs       []string                  `json:"node_ids"`
+			Configuration *cdService.ConfigureInput `json:"configuration"`
 		}
 		if c.ShouldBindJSON(&input) != nil {
 			failure(c, http.StatusBadRequest, 17712, "Project name is required")
 			return
 		}
-		if len(input.NodeIDs) == 0 {
-			input.NodeIDs = []string{"local"}
+		var row cdService.Project
+		var configuration *cdService.Configuration
+		var err error
+		if input.Configuration != nil {
+			if input.Configuration.NodeIDs == nil {
+				input.Configuration.NodeIDs = input.NodeIDs
+			}
+			var saved cdService.Configuration
+			row, saved, err = deps.CD.CreateConfiguredProject(c.Request.Context(), input.Name, *input.Configuration)
+			configuration = &saved
+		} else {
+			if len(input.NodeIDs) == 0 {
+				input.NodeIDs = []string{"local"}
+			}
+			row, err = deps.CD.CreateProjectOnNodes(c.Request.Context(), input.Name, input.NodeIDs)
 		}
-		row, err := deps.CD.CreateProjectOnNodes(c.Request.Context(), input.Name, input.NodeIDs)
 		if err != nil {
 			failure(c, http.StatusConflict, 17713, err.Error())
 			return
 		}
 		recordAudit(c, deps.Audit, "cd.project.create", "delivery_project", input.Name, "success")
-		c.JSON(http.StatusCreated, envelope{Code: 0, Message: "success", Data: row})
+		if input.Configuration != nil {
+			recordAudit(c, deps.Audit, "cd.configure", "delivery_project", input.Name, "success")
+			if input.Configuration.Repository.Authentication.Source == gitService.CredentialSourceProject {
+				recordAudit(c, deps.Audit, "git.project_credential.update", "delivery_project", input.Name, "success")
+				if input.Configuration.Repository.Authentication.SaveToCenter && input.Configuration.Repository.Authentication.Credential != nil {
+					recordAudit(c, deps.Audit, "git.credential.create", "git_credential", input.Configuration.Repository.Authentication.Credential.Name, "success")
+				}
+			}
+		}
+		c.JSON(http.StatusCreated, envelope{Code: 0, Message: "success", Data: struct {
+			cdService.Project
+			Configuration *cdService.Configuration `json:"configuration,omitempty"`
+		}{row, configuration}})
 	})
 	delivery.GET("/:name", func(c *gin.Context) {
 		row, err := deps.CD.GetProject(c.Request.Context(), c.Param("name"))

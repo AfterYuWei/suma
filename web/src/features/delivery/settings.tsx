@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Copy, Plus, Save, Trash2 } from 'lucide-react'
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
+import { Children, cloneElement, isValidElement, type FormEvent, type ReactElement, type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '../../components/ui/alert'
 import { Button } from '../../components/ui/button'
 import { Card, CardContent } from '../../components/ui/card'
@@ -43,7 +43,23 @@ function toDraft(value: CDConfiguration): CDConfigureInput {
   }
 }
 
-export function CDSettings({ projectName, configuration, zh, onSaved }: { projectName: string; configuration: CDConfiguration; zh: boolean; onSaved: (value: CDConfiguration) => void }) {
+interface CreationOptions {
+  name: string
+  onNameChange: (name: string) => void
+  submit: (input: CDConfigureInput) => Promise<CDConfiguration>
+  created: boolean
+  onDone: () => void
+  onCancel: () => void
+}
+
+export function CDSettings({ projectName, configuration, zh, onSaved, creation, onDirtyChange }: {
+  projectName: string
+  configuration: CDConfiguration
+  zh: boolean
+  onSaved: (value: CDConfiguration) => void
+  creation?: CreationOptions
+  onDirtyChange?: (dirty: boolean) => void
+}) {
   const initial = normalizedCDConfiguration(configuration)
   const [draft, setDraft] = useState<CDConfigureInput>(() => toDraft(initial))
   const [composeFiles, setComposeFiles] = useState<string[]>(initial.repository.compose_files.length ? initial.repository.compose_files : ['compose.yml'])
@@ -51,6 +67,7 @@ export function CDSettings({ projectName, configuration, zh, onSaved }: { projec
   const [revealedWebhookSecret, setRevealedWebhookSecret] = useState('')
   const [secretCopied, setSecretCopied] = useState(false)
   const configurationSignature = useRef(JSON.stringify(toDraft(initial)))
+  const initialFiles = useRef(JSON.stringify(composeFiles))
   const nodes = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes') })
   const registries = useQuery({ queryKey: ['registry-credentials'], queryFn: () => api<{ id: number; name: string; server_address: string; authorized_node_ids: string[] }[]>('/credentials/registries') })
 
@@ -64,14 +81,20 @@ export function CDSettings({ projectName, configuration, zh, onSaved }: { projec
   }, [configuration])
 
   const save = useMutation({
-    mutationFn: (input: CDConfigureInput) => api<CDConfiguration>(`/delivery-projects/${encodeURIComponent(projectName)}/configuration`, { method: 'PUT', body: JSON.stringify(input) }),
+    mutationFn: (input: CDConfigureInput) => creation ? creation.submit(input) : api<CDConfiguration>(`/delivery-projects/${encodeURIComponent(projectName)}/configuration`, { method: 'PUT', body: JSON.stringify(input) }),
     onSuccess: (value) => {
       if (value.webhook_secret) setRevealedWebhookSecret(value.webhook_secret)
-      setNotice(zh ? '持续交付配置已保存。' : 'Continuous delivery configuration saved.')
+      setNotice(creation ? (zh ? '交付项目已创建，配置已保存。' : 'Delivery project created and configured.') : (zh ? '持续交付配置已保存。' : 'Continuous delivery configuration saved.'))
       onSaved(value)
     },
     onError: (error) => setNotice(error.message),
   })
+
+  const draftSignature = JSON.stringify(draft)
+  const filesSignature = JSON.stringify(composeFiles)
+  useEffect(() => {
+    onDirtyChange?.(!creation?.created && (!!creation?.name || draftSignature !== configurationSignature.current || filesSignature !== initialFiles.current))
+  }, [creation?.name, creation?.created, draftSignature, filesSignature, onDirtyChange])
 
   const updateRepository = <K extends keyof CDConfigureInput['repository']>(key: K, value: CDConfigureInput['repository'][K]) => {
     setDraft((current) => ({ ...current, repository: { ...current.repository, [key]: value } }))
@@ -79,6 +102,11 @@ export function CDSettings({ projectName, configuration, zh, onSaved }: { projec
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    if (save.isPending || creation?.created) return
+    if (creation && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(creation.name.trim())) {
+      setNotice(zh ? '项目名称须为 1–128 个字母、数字、点、短横线或下划线，以字母或数字开头。' : 'Use 1–128 letters, numbers, dots, hyphens or underscores, starting with a letter or number.')
+      return
+    }
     if (draft.node_ids.length === 0) {
       setNotice(zh ? '请至少选择一个目标节点。' : 'Select at least one target node.')
       return
@@ -94,9 +122,9 @@ export function CDSettings({ projectName, configuration, zh, onSaved }: { projec
       const summary = authentication.summary
       const changed = !!(material.secret || material.private_key || material.passphrase || material.known_hosts || material.custom_ca || !summary || material.name !== summary.name || material.auth_type !== summary.auth_type || material.username !== (summary.username || ''))
       if (changed) {
-        const choice = await choiceDialog({ title: zh ? '保存项目认证凭据' : 'Save project credential', description: zh ? '该凭据可以仅由当前项目使用，也可以保存到认证中心供其他功能选择。' : 'Keep this credential private to the current project, or save it to the Authentication Center for reuse.', choices: [{ value: 'project', label: zh ? '仅保存到此项目' : 'Only this project' }, { value: 'center', label: zh ? '保存到认证中心并使用' : 'Save to center and use', primary: true }] })
+        const choice = creation ? (authentication.save_to_center ? 'center' : 'project') : await choiceDialog({ title: zh ? '保存项目认证凭据' : 'Save project credential', description: zh ? '该凭据可以仅由当前项目使用，也可以保存到认证中心供其他功能选择。' : 'Keep this credential private to the current project, or save it to the Authentication Center for reuse.', choices: [{ value: 'project', label: zh ? '仅保存到此项目' : 'Only this project' }, { value: 'center', label: zh ? '保存到认证中心并使用' : 'Save to center and use', primary: true }] })
         if (!choice) return
-        authentication = { ...authentication, save_to_center: choice === 'center' }
+        authentication = { ...authentication, save_to_center: choice === 'center', credential: choice === 'center' ? { ...material, authorized_node_ids: draft.node_ids } : material }
       } else {
         authentication = { source: 'project' }
       }
@@ -110,15 +138,18 @@ export function CDSettings({ projectName, configuration, zh, onSaved }: { projec
     ? `${window.location.origin}/api/v1/webhooks/git/${configuration.webhook_id}`
     : ''
 
-  return <form onSubmit={submit} className="flex w-full max-w-[960px] flex-col gap-8">
-    {!configuration.configured && <Alert>
+  return <form onSubmit={submit} className="flex w-full max-w-[1120px] flex-col gap-6" aria-label={creation ? (zh ? '新建交付项目配置' : 'New delivery project configuration') : (zh ? '交付项目配置' : 'Delivery project configuration')}>
+    {!configuration.configured && !creation && <Alert>
       <AlertTitle>{zh ? '连接 Git 持续交付' : 'Connect Git continuous delivery'}</AlertTitle>
       <AlertDescription>{zh ? '保存后 Git 将成为部署期望状态来源，SUMA 中的 Compose 文件会切换为只读。' : 'After saving, Git becomes the deployment source of truth and Compose files become read-only in SUMA.'}</AlertDescription>
     </Alert>}
 
-    <SettingsSection title={zh ? '目标节点' : 'Target nodes'} description={zh ? '一次审批后并行发布到全部选中节点；修改只影响后续 Release。' : 'One approval deploys to every selected node in parallel. Changes affect only future releases.'}>
-      <TargetSelector nodes={nodes.data || []} value={draft.node_ids} zh={zh} onChange={(node_ids) => setDraft((current) => ({ ...current, node_ids }))} />
-    </SettingsSection>
+    <fieldset disabled={save.isPending || creation?.created} className="flex min-w-0 flex-col gap-7">
+    {creation && <SettingsSection title={zh ? '基本信息' : 'Basics'} description={zh ? '为这份交付配置命名，后续发布记录按此项目归档。' : 'Name this delivery configuration. Its releases are recorded under this project.'}>
+      <Field label={zh ? '项目名称' : 'Project name'} hint={zh ? '字母、数字、点、短横线或下划线，最多 128 字符' : 'Letters, numbers, dots, hyphens or underscores; up to 128 characters'}>
+        <Input required maxLength={128} pattern="[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,127}" value={creation.name} onChange={event => creation.onNameChange(event.target.value)} placeholder="gateway-prod" autoComplete="off" />
+      </Field>
+    </SettingsSection>}
 
     <SettingsSection title={zh ? 'Git 仓库' : 'Git repository'} description={zh ? '支持任意标准 HTTPS 或 SSH Git 仓库，不区分代码托管平台。' : 'Works with any standard HTTPS or SSH Git repository without a hosting-provider setting.'}>
       <Field label="Git Clone URL" hint={zh ? '支持 HTTPS、ssh:// 或 git@host:path；认证信息请使用下方凭据，不要写入 URL。' : 'Supports HTTPS, ssh://, or git@host:path. Use a credential below instead of embedding secrets in the URL.'}>
@@ -129,7 +160,7 @@ export function CDSettings({ projectName, configuration, zh, onSaved }: { projec
     <SettingsSection title={zh ? '版本与文件' : 'Revision and files'} description={zh ? 'SUMA 会检出精确 Commit，并按仓库根目录相对路径依次合并 Compose 文件。' : 'SUMA checks out an exact commit and merges repository-root-relative Compose files in order.'}>
       <div className="grid gap-4 sm:grid-cols-[150px_1fr]">
         <Field label={zh ? '引用类型' : 'Reference type'}>
-          <Select value={draft.repository.ref_type} onValueChange={(value) => updateRepository('ref_type', value as CDConfigureInput['repository']['ref_type'])}>
+          <Select items={[{ value: 'branch', label: 'Branch' }, { value: 'tag', label: 'Tag' }, { value: 'commit', label: 'Commit' }]} value={draft.repository.ref_type} onValueChange={(value) => updateRepository('ref_type', value as CDConfigureInput['repository']['ref_type'])}>
             <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="branch">Branch</SelectItem>
@@ -146,18 +177,23 @@ export function CDSettings({ projectName, configuration, zh, onSaved }: { projec
         <div className="flex flex-col gap-2">
           {composeFiles.map((file, index) => (
             <div key={index} className="flex items-center gap-2">
-              <Input required value={file} onChange={(event) => setComposeFiles((current) => current.map((currentFile, fileIndex) => fileIndex === index ? event.target.value : currentFile))} placeholder={index === 0 ? 'compose.yml' : 'environments/production.yml'} />
+              <Input required aria-label={`${zh ? 'Compose 文件' : 'Compose file'} ${index + 1}`} value={file} onChange={(event) => setComposeFiles((current) => current.map((currentFile, fileIndex) => fileIndex === index ? event.target.value : currentFile))} placeholder={index === 0 ? 'compose.yml' : 'environments/production.yml'} />
               {composeFiles.length > 1 && <Button variant="destructive" size="icon" onClick={() => setComposeFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))} aria-label={zh ? '删除 Compose 文件' : 'Remove Compose file'}><Trash2 /></Button>}
             </div>
           ))}
         </div>
-        <Button variant="outline" size="sm" onClick={() => setComposeFiles((current) => [...current, ''])}><Plus data-icon="inline-start" />{zh ? '添加 Compose 文件' : 'Add Compose file'}</Button>
+        <Button variant="outline" size="sm" className="self-start" onClick={() => setComposeFiles((current) => [...current, ''])}><Plus data-icon="inline-start" />{zh ? '添加 Compose 文件' : 'Add Compose file'}</Button>
       </Field>
       <Field label={zh ? '环境变量文件（仓库根目录相对路径）' : 'Environment file (relative to repository root)'} hint={zh ? '可选，用于 Compose 中的 ${VARIABLE} 插值。' : 'Optional. Used for ${VARIABLE} interpolation in Compose files.'}><Input value={draft.repository.environment_file} onChange={(event) => updateRepository('environment_file', event.target.value)} placeholder="env/production.env" /></Field>
     </SettingsSection>
 
     <SettingsSection title={zh ? 'Git 认证' : 'Git authentication'} description={zh ? '凭据独立加密保存，可用于任何兼容的 HTTPS 或 SSH 仓库；公开仓库可以不选择。' : 'Credentials are encrypted separately and work with any compatible HTTPS or SSH repository. Public repositories need none.'}>
-      <CredentialSelector zh={zh} nodeIDs={draft.node_ids} value={draft.repository.authentication} onChange={(value) => updateRepository('authentication', value)} />
+      <CredentialSelector zh={zh} nodeIDs={draft.node_ids} value={draft.repository.authentication} onChange={(value) => updateRepository('authentication', value)} creating={!!creation} />
+    </SettingsSection>
+
+    <SettingsSection title={zh ? '目标节点' : 'Target nodes'} description={zh ? '一次审批后并行发布到全部选中节点；修改只影响后续 Release。' : 'One approval deploys to every selected node in parallel. Changes affect only future releases.'}>
+      {nodes.isError && <p role="alert" className="text-xs text-destructive">{nodes.error.message}</p>}
+      <TargetSelector nodes={nodes.data || []} value={draft.node_ids} zh={zh} onChange={(node_ids) => setDraft((current) => ({ ...current, node_ids }))} />
     </SettingsSection>
 
     <SettingsSection title={zh ? '镜像仓库凭据' : 'Registry credentials'} description={zh ? '为发布显式选择凭据；只显示已授权给全部目标节点的凭据。' : 'Explicitly select credentials for deployment. Only credentials granted to every target are available.'}>
@@ -196,32 +232,38 @@ export function CDSettings({ projectName, configuration, zh, onSaved }: { projec
         <span className="text-sm">{zh ? '启用仓库 Webhook' : 'Enable repository webhook'}</span>
       </label>
       {draft.webhook_enabled && <Card size="sm" className="w-full"><CardContent className="flex flex-col gap-4">
-        {webhookURL && <Field label="Webhook URL"><Input readOnly value={webhookURL} /></Field>}
+        {webhookURL && !creation?.created && <Field label="Webhook URL"><Input readOnly value={webhookURL} /></Field>}
         <Field label={zh ? 'Webhook Secret' : 'Webhook secret'} hint={configuration.webhook_id && !configuration.webhook_secret ? (zh ? '留空以保留已保存的 Secret；输入新值可轮换。' : 'Leave empty to keep the stored secret, or enter a new value to rotate it.') : (zh ? '留空时 SUMA 会生成随机 Secret，并只显示一次。' : 'Leave empty and SUMA generates a random secret that is shown once.')}>
           <Input type="password" autoComplete="new-password" value={draft.webhook_secret} onChange={(event) => setDraft((current) => ({ ...current, webhook_secret: event.target.value }))} placeholder={configuration.webhook_id ? '••••••••••••••••' : (zh ? '自动生成' : 'Generate automatically')} />
         </Field>
-        {revealedWebhookSecret && <Alert variant="destructive">
-          <AlertTitle>{zh ? '请立即保存新 Secret' : 'Save the new secret now'}</AlertTitle>
-          <AlertDescription>{zh ? '离开此页后不会再次显示。' : 'It will not be shown again after leaving this page.'}
-            <div className="mt-2 flex items-center gap-2">
-              <Input readOnly value={revealedWebhookSecret} />
-              <Button variant="outline" size="sm" className="shrink-0" onClick={() => { void navigator.clipboard.writeText(revealedWebhookSecret); setSecretCopied(true) }}><Copy />{secretCopied ? (zh ? '已复制' : 'Copied') : (zh ? '复制' : 'Copy')}</Button>
-            </div>
-          </AlertDescription>
-        </Alert>}
         <p className="text-xs text-muted-foreground">{zh ? '支持 GitHub、GitLab 原生 Push Webhook，也支持 Authorization: Bearer <secret> 的通用 JSON Webhook。' : 'Accepts native GitHub and GitLab push webhooks plus a generic JSON webhook using Authorization: Bearer <secret>.'}</p>
       </CardContent></Card>}
     </SettingsSection>
+    </fieldset>
+
+    {revealedWebhookSecret && <Alert>
+      <AlertTitle>{zh ? '请保存 Webhook Secret' : 'Save the webhook secret'}</AlertTitle>
+      <AlertDescription>{zh ? '离开此页后不会再次显示。' : 'It will not be shown again after leaving this page.'}
+        {creation?.created && webhookURL && <div className="mt-2"><Field label="Webhook URL"><Input readOnly value={webhookURL} /></Field></div>}
+        <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+          <Input readOnly type="password" aria-label="Webhook Secret" value={revealedWebhookSecret} />
+          <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={async () => { try { await navigator.clipboard.writeText(revealedWebhookSecret); setSecretCopied(true) } catch { setNotice(zh ? '无法复制，请检查剪贴板权限。' : 'Cannot copy; check clipboard permissions.') } }}><Copy />{secretCopied ? (zh ? '已复制' : 'Copied') : (zh ? '复制 Secret' : 'Copy secret')}</Button>
+        </div>
+      </AlertDescription>
+    </Alert>}
 
     <div className="flex flex-wrap items-center gap-3">
-      {notice && <p className={cn('text-sm', save.isError ? 'text-destructive' : 'text-muted-foreground')}>{notice}</p>}
-      <Button type="submit" disabled={save.isPending} className={save.isError ? '' : !notice ? 'ml-auto' : ''}>{save.isPending && <Spinner />}<Save data-icon="inline-end" />{!configuration.configured ? (zh ? '连接并保存' : 'Connect and save') : (zh ? '保存 CD 配置' : 'Save CD settings')}</Button>
+      {notice && <p role={save.isError ? 'alert' : 'status'} className={cn('text-sm', save.isError ? 'text-destructive' : 'text-muted-foreground')}>{notice}</p>}
+      {creation?.created ? <Button type="button" onClick={creation.onDone}>{zh ? '打开交付项目' : 'Open delivery project'}</Button> : <>
+        {creation && <Button type="button" variant="outline" className="ml-auto" disabled={save.isPending} onClick={creation.onCancel}>{zh ? '取消' : 'Cancel'}</Button>}
+        <Button type="submit" disabled={save.isPending || (creation && (!creation.name.trim() || !draft.node_ids.length))} className={!creation && !notice ? 'ml-auto' : ''}>{save.isPending && <Spinner />}<Save data-icon="inline-end" />{creation ? (zh ? '创建交付项目' : 'Create delivery project') : !configuration.configured ? (zh ? '连接并保存' : 'Connect and save') : (zh ? '保存 CD 配置' : 'Save CD settings')}</Button>
+      </>}
     </div>
   </form>
 }
 
 function SettingsSection({ title, description, children }: { title: string; description: string; children: ReactNode }) {
-  return <section className="flex w-full flex-col gap-4">
+  return <section className="grid w-full gap-4 border-b border-border/60 pb-7 lg:grid-cols-[220px_minmax(0,1fr)]">
     <header className="flex flex-col gap-0.5">
       <h3 className="text-sm font-semibold">{title}</h3>
       <p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">{description}</p>
@@ -231,22 +273,33 @@ function SettingsSection({ title, description, children }: { title: string; desc
 }
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  const id = useId()
+  const labelID = `${id}-label`
+  const controls = Children.map(children, child => {
+    if (!isValidElement(child)) return child
+    const element = child as ReactElement<{ id?: string; 'aria-labelledby'?: string; children?: ReactNode }>
+    if (child.type === Input || child.type === Textarea) return cloneElement(element, { id, 'aria-labelledby': labelID })
+    if (child.type === Select) return cloneElement(element, {}, Children.map(element.props.children, part =>
+      isValidElement(part) && part.type === SelectTrigger ? cloneElement(part as typeof element, { id, 'aria-labelledby': labelID }) : part
+    ))
+    return child
+  })
   return <div className="flex flex-col gap-1.5">
     <div className="flex flex-wrap items-baseline gap-x-2">
-      <Label>{label}</Label>
+      <Label id={labelID} htmlFor={id}>{label}</Label>
       {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
     </div>
-    {children}
+    <div className="flex min-w-0 flex-col gap-2 [&_input]:w-full">{controls}</div>
   </div>
 }
 
 const emptyCredential = (): GitCredentialInput => ({ name: '', auth_type: 'http_token', username: '', secret: '', private_key: '', passphrase: '', known_hosts: '', custom_ca: '' })
 
-function CredentialSelector({ zh, nodeIDs, value, onChange }: { zh: boolean; nodeIDs: string[]; value: GitAuthentication; onChange: (value: GitAuthentication) => void }) {
+function CredentialSelector({ zh, nodeIDs, value, onChange, creating }: { zh: boolean; nodeIDs: string[]; value: GitAuthentication; onChange: (value: GitAuthentication) => void; creating?: boolean }) {
   const query = useQuery({ queryKey: ['git-credentials'], queryFn: () => api<GitCredential[]>('/credentials/git') })
   const available = (query.data || []).filter((row) => nodeIDs.every((id) => row.authorized_node_ids?.includes(id)))
   const input = value.credential || { ...emptyCredential(), ...value.summary }
-  const set = <K extends keyof GitCredentialInput>(key: K, next: GitCredentialInput[K]) => onChange({ source: 'project', credential: { ...input, [key]: next } })
+  const set = <K extends keyof GitCredentialInput>(key: K, next: GitCredentialInput[K]) => onChange({ source: 'project', save_to_center: value.save_to_center, credential: { ...input, [key]: next } })
   const selectSource = (source: GitAuthentication['source']) => onChange(
     source === 'center'
       ? { source, credential_id: available[0]?.id }
@@ -256,7 +309,7 @@ function CredentialSelector({ zh, nodeIDs, value, onChange }: { zh: boolean; nod
   )
   return <div className="flex w-full flex-col gap-4">
     <Field label={zh ? '认证来源' : 'Authentication source'} hint={value.source === 'none' ? (zh ? '公开仓库无需提供凭据' : 'Public repositories need no credential') : undefined}>
-      <Select value={value.source} onValueChange={(next) => selectSource(next as GitAuthentication['source'])}>
+      <Select items={[{ value: 'none', label: zh ? '无需认证（公开仓库）' : 'No authentication (public repository)' }, { value: 'center', label: zh ? '从认证中心选择' : 'Choose from Authentication Center' }, { value: 'project', label: zh ? '使用当前项目凭据' : 'Use a project credential' }]} value={value.source} onValueChange={(next) => selectSource(next as GitAuthentication['source'])}>
         <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
         <SelectContent>
           <SelectItem value="none">{zh ? '无需认证（公开仓库）' : 'No authentication (public repository)'}</SelectItem>
@@ -266,7 +319,7 @@ function CredentialSelector({ zh, nodeIDs, value, onChange }: { zh: boolean; nod
       </Select>
     </Field>
     {value.source === 'center' && <Field label={zh ? 'Git 凭据' : 'Git credential'}>
-      <Select value={value.credential_id ? String(value.credential_id) : undefined} onValueChange={(credentialID) => onChange({ source: 'center', credential_id: Number(credentialID) })} disabled={query.isPending}>
+      <Select items={available.map(row => ({ value: String(row.id), label: `${row.name} · ${authLabel(row.auth_type, zh)}` }))} value={value.credential_id ? String(value.credential_id) : undefined} onValueChange={(credentialID) => onChange({ source: 'center', credential_id: Number(credentialID) })} disabled={query.isPending}>
         <SelectTrigger className="w-full"><SelectValue placeholder={query.isPending ? (zh ? '正在加载…' : 'Loading…') : (zh ? '选择已授权的 Git 凭据' : 'Choose an authorized Git credential')} /></SelectTrigger>
         <SelectContent>
           {available.map((row) => <SelectItem key={row.id} value={String(row.id)}>{`${row.name} · ${authLabel(row.auth_type, zh)}`}</SelectItem>)}
@@ -275,9 +328,9 @@ function CredentialSelector({ zh, nodeIDs, value, onChange }: { zh: boolean; nod
     </Field>}
     {value.source === 'project' && <Card size="sm" className="w-full"><CardContent className="flex flex-col gap-4">
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label={zh ? '名称' : 'Name'}><Input value={input.name} onChange={(event) => set('name', event.target.value)} placeholder={zh ? '当前项目 Git 凭据' : 'Project Git credential'} /></Field>
+        <Field label={zh ? '名称' : 'Name'}><Input required={creating} value={input.name} onChange={(event) => set('name', event.target.value)} placeholder={zh ? '当前项目 Git 凭据' : 'Project Git credential'} /></Field>
         <Field label={zh ? '认证类型' : 'Authentication type'}>
-          <Select value={input.auth_type} onValueChange={(next) => set('auth_type', next as GitAuthType)}>
+          <Select items={(['http_token', 'http_basic', 'ssh_key'] as GitAuthType[]).map(type => ({ value: type, label: authLabel(type, zh) }))} value={input.auth_type} onValueChange={(next) => set('auth_type', next as GitAuthType)}>
             <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="http_token">HTTPS token</SelectItem>
@@ -289,7 +342,7 @@ function CredentialSelector({ zh, nodeIDs, value, onChange }: { zh: boolean; nod
       </div>
       {(input.auth_type === 'http_token' || input.auth_type === 'http_basic') && <div className="grid gap-4 sm:grid-cols-2">
         <Field label={input.auth_type === 'http_token' ? (zh ? '用户名（可选）' : 'Username (optional)') : (zh ? '用户名' : 'Username')}><Input value={input.username} onChange={(event) => set('username', event.target.value)} /></Field>
-        <Field label={input.auth_type === 'http_token' ? 'Token' : (zh ? '密码' : 'Password')} hint={zh ? '已配置时留空可保留原值' : 'Leave empty to keep an existing value'}><Input type="password" autoComplete="new-password" value={input.secret} onChange={(event) => set('secret', event.target.value)} /></Field>
+        <Field label={input.auth_type === 'http_token' ? 'Token' : (zh ? '密码' : 'Password')} hint={creating ? undefined : zh ? '已配置时留空可保留原值' : 'Leave empty to keep an existing value'}><Input required={creating} type="password" autoComplete="new-password" value={input.secret} onChange={(event) => set('secret', event.target.value)} /></Field>
       </div>}
       {input.auth_type === 'ssh_key' && <>
         <Field label={zh ? 'SSH 私钥' : 'SSH private key'}><Textarea rows={5} value={input.private_key} onChange={(event) => set('private_key', event.target.value)} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" /></Field>
@@ -298,6 +351,7 @@ function CredentialSelector({ zh, nodeIDs, value, onChange }: { zh: boolean; nod
       </>}
       <Field label={zh ? '自定义 CA（可选）' : 'Custom CA (optional)'}><Textarea rows={4} value={input.custom_ca} onChange={(event) => set('custom_ca', event.target.value)} placeholder="-----BEGIN CERTIFICATE-----" /></Field>
       {input.fingerprint && <p className="font-mono text-xs text-muted-foreground">{zh ? '已配置' : 'Configured'} · {input.fingerprint}</p>}
+      {creating && <label className="flex items-center gap-2"><Checkbox checked={!!value.save_to_center} onCheckedChange={checked => onChange({ ...value, save_to_center: !!checked })} /><span className="text-sm">{zh ? '同时保存到认证中心并授权给所选节点' : 'Also save to Authentication Center and authorize selected nodes'}</span></label>}
     </CardContent></Card>}
   </div>
 }
@@ -324,7 +378,7 @@ function TargetSelector({ nodes, value, zh, onChange }: { nodes: DockerNode[]; v
     ))}
     {enabled.length === 0 && <p className="text-sm text-muted-foreground">{zh ? '当前 Group 筛选下没有已启用节点' : 'No enabled nodes match the current group filter'}</p>}
     </div>
-  </div><ListPagination {...pagination} zh={zh} /></>
+  </div>{pagination.total > pagination.pageSize && <ListPagination {...pagination} zh={zh} />}</>
 }
 
 function RegistryCredentialSelector({ rows, value, zh, onChange }: { rows: { id: number; name: string; server_address: string }[]; value: number[]; zh: boolean; onChange: (value: number[]) => void }) {
@@ -339,7 +393,7 @@ function RegistryCredentialSelector({ rows, value, zh, onChange }: { rows: { id:
         </span>
       </label>
     ))}
-    {rows.length === 0 ? <p className="text-sm text-muted-foreground">{zh ? '没有可用于全部目标节点的镜像仓库凭据' : 'No registry credentials are available to every target node'}</p> : <ListPagination {...pagination} zh={zh} />}
+    {rows.length === 0 ? <p className="text-sm text-muted-foreground">{zh ? '没有可用于全部目标节点的镜像仓库凭据' : 'No registry credentials are available to every target node'}</p> : pagination.total > pagination.pageSize && <ListPagination {...pagination} zh={zh} />}
   </div>
 }
 

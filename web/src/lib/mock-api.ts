@@ -7,7 +7,7 @@ import { createMockCleanup } from './mock-cleanup'
 import type { User } from '../features/auth/types'
 import type { Project, ProjectSummary, ProjectTakeoverDraft, ShadowAssessment, ShadowPreviewSession, ShadowPreviewStatus } from '../features/compose/types'
 import type { ContainerDetail, ContainerMetrics, ContainerSummary } from '../features/containers/types'
-import type { CDConfiguration, CDDrift, DeliveryProject, DeliveryRelease, GitCredential } from '../features/delivery/types'
+import type { CDConfiguration, CDConfigureInput, CDDrift, DeliveryProject, DeliveryRelease, GitCredential } from '../features/delivery/types'
 import type { DockerNode, NodeGroup } from './nodes'
 import { ApiError, type DemoCredentials, type DemoStream } from './api'
 
@@ -114,6 +114,7 @@ const deliveryProjects: DeliveryProject[] = [
   { id: 2, name: 'media-stack', configured: true, repository_url: 'https://github.com/example/media-stack.git', git_ref: 'stable', desired_commit: 'f4c9a82e10d2', observed_commit: 'f4c9a82e10d2', active_release_id: 181, created_at: earlier, updated_at: now, node_ids: ['local', 'nas-prod'] },
 ]
 
+const deliveryConfigurations = new Map<string, CDConfiguration>()
 const cdConfiguration = (name: string): CDConfiguration => ({ configured: true, repository: { clone_url: `https://github.com/example/${name}.git`, ref_type: 'branch', ref: name === 'gateway-prod' ? 'main' : 'stable', authentication: { source: 'center', credential_id: 1, summary: { name: 'GitHub Demo', auth_type: 'http_token', username: 'suma-demo' } }, compose_files: ['compose.yml'], environment_file: '.env' }, reconcile_mode: name === 'gateway-prod' ? 'auto' : 'manual', sync_interval_seconds: 300, desired_commit: name === 'gateway-prod' ? '7a31f0c87aa1' : 'f4c9a82e10d2', observed_commit: name === 'gateway-prod' ? '7a31f0c87aa1' : 'f4c9a82e10d2', active_release_id: name === 'gateway-prod' ? 184 : 181, auto_rollback: true, deployment_timeout: 180, webhook_enabled: true, webhook_id: `demo-${name}`, webhook_secret: '', node_ids: name === 'gateway-prod' ? ['local', 'edge-hk'] : ['local', 'nas-prod'], registry_credential_ids: [1] })
 
 const releases: DeliveryRelease[] = [
@@ -367,16 +368,55 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (pathname === '/delivery-projects' && method === 'GET') return clone(deliveryProjects) as T
-  if (pathname === '/delivery-projects' && method === 'POST') return clone(deliveryProjects[0]) as T
+  if (pathname === '/delivery-projects' && method === 'POST') {
+    const name = String(body.name || '')
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name)) throw new ApiError('Invalid delivery project name', 17713, 409)
+    if (deliveryProjects.some(project => project.name === name)) throw new ApiError('Delivery project already exists', 17713, 409)
+    const input = body.configuration as CDConfigureInput | undefined
+    const targetIDs = input?.node_ids || body.node_ids as string[] || ['local']
+    if (!targetIDs.length || targetIDs.some(id => !nodes.some(node => node.id === id && node.enabled))) throw new ApiError('Select enabled target nodes', 17713, 409)
+    if (input && (!input.repository?.clone_url || !input.repository.compose_files?.length || input.repository.compose_files.some(file => !file || file.startsWith('/') || file.split('/').includes('..')))) throw new ApiError('Invalid repository or Compose file path', 17713, 409)
+    let configuration: CDConfiguration | undefined
+    let generatedSecret = ''
+    if (input) {
+      const authentication = input.repository.authentication
+      const material = authentication.credential
+      let sanitizedAuthentication = authentication.source === 'project' && material
+        ? { source: 'project' as const, summary: { name: material.name, auth_type: material.auth_type, username: material.username, fingerprint: 'demo-project-credential' } }
+        : { source: authentication.source, credential_id: authentication.credential_id }
+      if (authentication.source === 'project' && material && authentication.save_to_center) {
+        const credential = { ...gitCredentials[0], id: Math.max(...gitCredentials.map(row => row.id), 0) + 1, name: material.name, auth_type: material.auth_type, username: material.username, authorized_node_ids: [...targetIDs], used_by: 1 }
+        gitCredentials.push(credential)
+        sanitizedAuthentication = { source: 'center', credential_id: credential.id }
+      }
+      if (input.webhook_enabled && !input.webhook_secret) generatedSecret = crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', '')
+      configuration = { ...input, repository: { ...input.repository, authentication: sanitizedAuthentication }, configured: true, webhook_secret: '', webhook_id: input.webhook_enabled ? `demo-${name}` : undefined, desired_commit: '', observed_commit: '' }
+      deliveryConfigurations.set(name, configuration)
+    }
+    const project: DeliveryProject = { id: Math.max(...deliveryProjects.map(row => row.id), 0) + 1, name, configured: !!input, repository_url: input?.repository.clone_url, git_ref: input?.repository.ref, node_ids: [...targetIDs], created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+    deliveryProjects.push(project)
+    return clone({ ...project, ...(configuration ? { configuration: { ...configuration, webhook_secret: generatedSecret } } : {}) }) as T
+  }
   const deliveryMatch = pathname.match(/^\/delivery-projects\/([^/]+)(\/.*)?$/)
   if (deliveryMatch) {
     const name = deliveryMatch[1]
     const suffix = deliveryMatch[2] || ''
     const project = deliveryProjects.find((item) => item.name === name) ?? deliveryProjects[0]
     if (!suffix && method === 'GET') return clone(project) as T
-    if (suffix === '/configuration') return clone(cdConfiguration(name)) as T
+    if (suffix === '/configuration') {
+      if (method === 'PUT') {
+        const input = body as unknown as CDConfigureInput
+        const saved = { ...deliveryConfigurations.get(name) || cdConfiguration(name), ...input, configured: true, repository: { ...input.repository, authentication: input.repository.authentication.source === 'project' ? { source: 'project' as const, summary: { name: input.repository.authentication.credential?.name || 'Project credential', auth_type: input.repository.authentication.credential?.auth_type || 'http_token' as const } } : { source: input.repository.authentication.source, credential_id: input.repository.authentication.credential_id } }, webhook_secret: '' }
+        deliveryConfigurations.set(name, saved)
+        project.configured = true
+        project.repository_url = saved.repository.clone_url
+        project.git_ref = saved.repository.ref
+        project.node_ids = [...saved.node_ids]
+      }
+      return clone(deliveryConfigurations.get(name) || cdConfiguration(name)) as T
+    }
     if (suffix === '/drift') return clone({ drifted: false, status: 'healthy', desired_commit: project.desired_commit ?? '', observed_commit: project.observed_commit ?? '', active_commit: project.observed_commit ?? '', active_release_id: project.active_release_id, runtime_healthy: true, checked_at: now, nodes: project.node_ids.map((nodeID) => ({ node_id: nodeID, node_name: nodes.find((item) => item.id === nodeID)?.name ?? nodeID, status: 'healthy' as const, drifted: false, active_release_id: project.active_release_id, active_commit: project.observed_commit, health_summary: '[{"State":"running","Health":"healthy"}]', checked_at: now })) } satisfies CDDrift) as T
-    if (suffix === '/releases') return clone(releases.map((release) => ({ ...release, project_id: project.id }))) as T
+    if (suffix === '/releases') return clone(project.active_release_id ? releases.map((release) => ({ ...release, project_id: project.id })) : []) as T
     return {} as T
   }
 

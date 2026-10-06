@@ -130,7 +130,7 @@ export function ContinuousDeliveryDetailPage() {
         </Tabs>
         {view === 'Overview' && isGit && <CDOverview configuration={configuration} drift={driftQuery.data} releases={releasesQuery.data} zh={zh} />}
         {view === 'Releases' && isGit && (releasesQuery.isPending ? <LoadingState label={zh ? '正在加载 Release' : 'Loading releases'} /> : <ReleasePanel configuration={configuration} releases={releasesQuery.data} pendingReleaseID={releaseAction.isPending ? releaseAction.variables?.release.id : undefined} zh={zh} onAction={(release, operation) => void runReleaseAction(release, operation)} />)}
-        {view === 'Settings' && <CDSettings projectName={projectName} configuration={configuration} zh={zh} onSaved={(value) => { client.setQueryData(['delivery-configuration', projectName], value); void client.invalidateQueries({ queryKey: ['delivery-projects'] }); setNotice(zh ? '持续交付配置已保存。' : 'Continuous delivery configuration saved.'); if (value.configured) setView('Overview') }} />}
+        {view === 'Settings' && <CDSettings projectName={projectName} configuration={configuration} zh={zh} onSaved={(value) => { client.setQueryData(['delivery-configuration', projectName], value); void client.invalidateQueries({ queryKey: ['delivery-projects'] }); setNotice(zh ? '持续交付配置已保存。' : 'Continuous delivery configuration saved.'); if (value.configured && !value.webhook_secret) setView('Overview') }} />}
       </div>
     </ResourceFrame>
   </div>

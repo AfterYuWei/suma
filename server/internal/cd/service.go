@@ -182,6 +182,35 @@ var validProjectName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 func (s *Service) CreateProject(ctx context.Context, name string) (Project, error) {
 	return s.CreateProjectOnNodes(ctx, name, []string{"local"})
 }
+
+// CreateConfiguredProject saves the project, targets and encrypted credentials
+// together. No scheduler can observe an incompletely configured new project.
+func (s *Service) CreateConfiguredProject(ctx context.Context, name string, input ConfigureInput) (Project, Configuration, error) {
+	var project Project
+	var configuration Configuration
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		credentials := gitrepo.NewCredentialService(tx, s.secrets)
+		service := NewService(tx, s.git, credentials, s.compose, s.tasks, s.audit, s.secrets)
+		if s.registries != nil {
+			service.SetRegistryCredentials(credentialrepo.NewRegistryService(tx, s.secrets))
+		}
+		created, err := service.CreateProjectOnNodes(ctx, name, input.NodeIDs)
+		if err != nil {
+			return err
+		}
+		configuration, err = service.Configure(ctx, created.Name, input)
+		if err != nil {
+			return err
+		}
+		project, err = service.GetProject(ctx, created.Name)
+		return err
+	})
+	if err != nil {
+		return Project{}, Configuration{}, err
+	}
+	return project, configuration, nil
+}
+
 func (s *Service) CreateProjectOnNodes(ctx context.Context, name string, nodeIDs []string) (Project, error) {
 	if !validProjectName.MatchString(name) {
 		return Project{}, errors.New("invalid project name")

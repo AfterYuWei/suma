@@ -27,6 +27,7 @@ const ComposeDetailPage = lazy(() => import('./pages/compose-detail').then((modu
 const ProjectCreatePage = lazy(() => import('./pages/project-create').then((module) => ({ default: module.ProjectCreatePage })))
 const ProjectTakeoverPage = lazy(() => import('./pages/project-takeover').then((module) => ({ default: module.ProjectTakeoverPage })))
 const ContinuousDeliveryDetailPage = lazy(() => import('./pages/continuous-delivery-detail').then((module) => ({ default: module.ContinuousDeliveryDetailPage })))
+const ContinuousDeliveryCreatePage = lazy(() => import('./pages/continuous-delivery-create').then((module) => ({ default: module.ContinuousDeliveryCreatePage })))
 const deferred = (Component: ComponentType) => () => <Suspense fallback={<div role="status" className="grid min-h-72 place-items-center gap-2 text-muted-foreground"><Spinner /><span className="text-sm">Loading module</span></div>}><Component /></Suspense>
 
 const rootRoute = createRootRoute({ component: () => <AuthGate><TimeZoneProvider><AppShell><Outlet /></AppShell></TimeZoneProvider></AuthGate> })
@@ -45,6 +46,7 @@ const projectTakeoverRoute = createRoute({ getParentRoute: () => rootRoute, path
 const composeRoute = createRoute({ getParentRoute: () => rootRoute, path: '/compose', beforeLoad: () => { throw redirect({ to: '/projects' }) } })
 const composeDetailRoute = createRoute({ getParentRoute: () => rootRoute, path: '/compose/$projectName', beforeLoad: ({ params }) => { throw redirect({ to: '/projects/$backend/$projectName', params: { backend: 'compose', projectName: params.projectName } }) } })
 const continuousDeliveryRoute = createRoute({ getParentRoute: () => rootRoute, path: '/continuous-delivery', component: ContinuousDeliveryPage })
+const continuousDeliveryCreateRoute = createRoute({ getParentRoute: () => rootRoute, path: '/continuous-delivery/new/project', component: deferred(ContinuousDeliveryCreatePage) })
 const continuousDeliveryDetailRoute = createRoute({ getParentRoute: () => rootRoute, path: '/continuous-delivery/$projectName', component: deferred(ContinuousDeliveryDetailPage) })
 const aiRoute = createRoute({ getParentRoute: () => rootRoute, path: '/ai-operations', component: AIWorkbench })
 const notificationsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/notifications', component: NotificationInbox })
@@ -52,7 +54,7 @@ const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/set
 const authenticationRoute = createRoute({ getParentRoute: () => rootRoute, path: '/authentication', component: AuthenticationPage })
 const nodesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/nodes', component: NodesPage })
 const accountRoute = createRoute({ getParentRoute: () => rootRoute, path: '/account', component: AccountPage })
-const router = createRouter({ routeTree: rootRoute.addChildren([overviewRoute, containersRoute, containerDetailRoute, imagesRoute, networksRoute, volumesRoute, tasksRoute, auditRoute, projectsRoute, projectCreateRoute, projectDetailRoute, projectTakeoverRoute, composeRoute, composeDetailRoute, continuousDeliveryRoute, continuousDeliveryDetailRoute, authenticationRoute, nodesRoute, settingsRoute, accountRoute, aiRoute, notificationsRoute]) })
+const router = createRouter({ routeTree: rootRoute.addChildren([overviewRoute, containersRoute, containerDetailRoute, imagesRoute, networksRoute, volumesRoute, tasksRoute, auditRoute, projectsRoute, projectCreateRoute, projectDetailRoute, projectTakeoverRoute, composeRoute, composeDetailRoute, continuousDeliveryRoute, continuousDeliveryCreateRoute, continuousDeliveryDetailRoute, authenticationRoute, nodesRoute, settingsRoute, accountRoute, aiRoute, notificationsRoute]) })
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 5_000, retry: 1 } } })
 
 declare module '@tanstack/react-router' { interface Register { router: typeof router } }

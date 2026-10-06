@@ -63,6 +63,10 @@ export interface CDConfigureInput {
 	registry_credential_ids: number[]
 }
 
+export interface CreatedDeliveryProject extends DeliveryProject {
+  configuration: CDConfiguration
+}
+
 export interface CDDrift {
   drifted: boolean
   status: 'healthy' | 'degraded' | 'unknown'
@@ -184,7 +188,7 @@ export function normalizedCDConfiguration(configuration: CDConfiguration): CDCon
     reconcile_mode: configuration.reconcile_mode || 'manual',
     sync_interval_seconds: configuration.sync_interval_seconds || 300,
     deployment_timeout: configuration.deployment_timeout || 120,
-	node_ids: configuration.node_ids?.length ? configuration.node_ids : ['local'],
+	node_ids: configuration.node_ids ?? ['local'],
 	registry_credential_ids: configuration.registry_credential_ids || [],
   }
 }
