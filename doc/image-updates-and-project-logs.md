@@ -3,7 +3,7 @@
 ## 使用
 
 - 镜像页：点击「检查镜像更新」检查当前节点，或使用镜像行的检查按钮限定单镜像。检查对话框可按仓库选择已授权给节点的认证中心凭据，也可以匿名访问；关闭窗口后 Task 继续运行，可在任务中心取消。详情按引用分别显示平台、远端 manifest digest、时间及受影响实例。
-- Project 服务页：检查仅覆盖该项目已部署容器的原始镜像引用。没有部署的服务没有本地运行版本。发现更新后，镜像页可进入现有拉取流程；已接管 Project 可进入现有「拉取并重建」审阅与确认流程；CD 实例链接至交付项目。
+- Project 服务页：统一展示服务／镜像、状态、资源和端口摘要，镜像检测状态跟随对应容器；点击服务行或使用 Enter／Space 展开容器身份、创建时间、全部 IPv4／IPv6／TCP／UDP 映射及镜像平台、检测时间和摘要。多副本分别展示，未部署服务保留提示，记录超过当前每页数量后显示分页。校验／保存只在配置页显示。检查仅覆盖该项目已部署容器的原始镜像引用。发现更新后，已接管 Project 可使用顶部「拉取并重建」进入现有审阅与确认流程；展开详情保留容器与 CD 交付项目链接。
 - 镜像 → 镜像更新：配置当前节点的定时检测和仓库凭据；切换顶部节点选择器即可编辑对应策略。定时检测默认关闭，默认间隔 6 小时，可选 1/6/24 小时。启用后立即尝试一次；节点离线或已有检查时跳过周期。手动检查不移动定时计划。并发编辑冲突后须重新加载策略。设置页不再提供镜像更新入口；命令面板及旧 `/settings#image-updates` 书签会进入 `/images#image-updates`。
 - Project 日志页：已接管和外部 Compose 项目均支持。默认聚合普通服务的最新 200 行；可选服务、实例、one-off、stdout/stderr/TTY，设置 100–5000 行、实时或历史时间范围，并搜索、暂停、清空、返回最新、下载当前已加载且符合筛选的文本。
 
@@ -49,6 +49,7 @@ npm --prefix web run lint
 npm --prefix web run typecheck
 npm --prefix web test
 npm --prefix web run test:browser
+npm --prefix web run test:project-services
 npm --prefix web run build
 npm --prefix web run build:demo
 bash doc/operations-smoke.sh

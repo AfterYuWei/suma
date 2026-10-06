@@ -383,7 +383,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     const nodeID = nodeMatch[1]
     const suffix = nodeMatch[2] || ''
     const containers = nodeContainers(nodeID)
-    const operation = operationsDemo(nodeID, suffix, method, body, url, images)
+    const operation = operationsDemo(nodeID, suffix, method, body, url, images, containers)
     if (operation.handled) return clone(operation.value) as T
     if (suffix === '/tasks') return clone(tasks.filter((item) => item.scope === 'node' && item.node_id === nodeID)) as T
     if (/^\/tasks\/[^/]+\/logs$/.test(suffix)) return clone([{ id: 1, level: 'info', message: 'Task accepted by SUMA task service', created_at: earlier }, { id: 2, level: 'info', message: 'Docker operation completed successfully', created_at: now }]) as T

@@ -3,7 +3,6 @@ import { useDateTime } from '../lib/time-zone'
 import { useImageUpdates } from '../features/image-updates/hooks'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Link,
   useBlocker,
   useNavigate,
   useParams,
@@ -41,21 +40,10 @@ import {
 } from '../components/ui/dialog'
 import { ErrorState } from '../components/ui/error-state'
 import { LoadingState } from '../components/ui/loading-state'
-import { ListPagination } from '../components/ui/list-pagination'
-import { useListPagination } from '../components/ui/use-list-pagination'
 import { Progress } from '../components/ui/progress'
 import { Spinner } from '../components/ui/spinner'
 import { StatusBadge } from '../components/ui/status-badge'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow
-} from '../components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
-import { TooltipHint } from '../components/ui/tooltip-hint'
 import { confirmExternalProjectCleanup } from '../features/compose/external-project-cleanup'
 import {
   confirmDockerSocketMount,
@@ -65,7 +53,7 @@ import { confirmManagedProjectRemoval } from '../features/compose/managed-projec
 import { TakeoverWarningDialog } from '../features/compose/takeover-warning-dialog'
 import type { Project } from '../features/compose/types'
 import { ProjectLogs } from '../features/project-logs/project-logs'
-import { ImageUpdateCheck, ImageUpdateDetails, UpdateStatus } from '../features/image-updates/image-updates'
+import { ProjectServices } from '../components/docker/project-services'
 import { useLogAutoScroll } from '../features/containers/use-log-auto-scroll'
 import type {
   ContainerMetrics,
@@ -93,7 +81,6 @@ import {
 import { registerProjectNavigationGuard } from '../lib/project-navigation-guard'
 import { ApiError } from '../lib/api'
 import { configKeys, type ConfigPath } from '../features/compose/document'
-import type { ImageUpdateResult } from '../features/image-updates/types'
 type View = 'Files' | 'Services' | 'Logs'
 interface ComposeTask {
   id: string
@@ -119,8 +106,6 @@ const statusTone = (status: string) =>
     : status === 'degraded'
       ? 'warning'
       : 'neutral'
-const stateTone = (state: string) =>
-  state === 'running' ? 'success' : 'neutral'
 
 export function ComposeDetailPage() {
   const { backend, projectName } = useParams({
@@ -573,27 +558,28 @@ export function ComposeDetailPage() {
 
   const headerActions = (
     <div className="flex flex-wrap items-center gap-2">
-      <StatusBadge tone={statusTone(project.status)}>
-        {project.status}
-      </StatusBadge>
       {project.managed && (
         <>
-          <Button
-            variant="outline"
-            disabled={pendingConfiguration || operationActive || validate.isPending || !!review}
-            onClick={() => void validateFiles()}
-          >
-            {validate.isPending ? <Spinner /> : <FileCheck2 />}
-            {zh ? '校验' : 'Validate'}
-          </Button>
-          <Button
-            variant="outline"
-            disabled={pendingConfiguration || operationActive || save.isPending || !dirty || !!review}
-            onClick={() => void saveFiles()}
-          >
-            {save.isPending ? <Spinner /> : <Save />}
-            {zh ? '保存' : 'Save'}
-          </Button>
+          {view === 'Files' && (
+            <>
+              <Button
+                variant="outline"
+                disabled={pendingConfiguration || operationActive || validate.isPending || !!review}
+                onClick={() => void validateFiles()}
+              >
+                {validate.isPending ? <Spinner /> : <FileCheck2 />}
+                {zh ? '校验' : 'Validate'}
+              </Button>
+              <Button
+                variant="outline"
+                disabled={pendingConfiguration || operationActive || save.isPending || !dirty || !!review}
+                onClick={() => void saveFiles()}
+              >
+                {save.isPending ? <Spinner /> : <Save />}
+                {zh ? '保存' : 'Save'}
+              </Button>
+            </>
+          )}
           <Button
             disabled={pendingConfiguration || operationActive || validate.isPending || !!review}
             onClick={() => void deploy()}
@@ -671,6 +657,7 @@ export function ComposeDetailPage() {
       </Button>
       <ResourceFrame
         title={projectName}
+        lead={<StatusBadge tone={statusTone(project.status)}>{zh ? ({ running: '运行中', stopped: '已停止', degraded: '部分异常' }[project.status] ?? project.status) : project.status}</StatusBadge>}
         detail={
           project.managed
             ? dirty
@@ -842,14 +829,18 @@ export function ComposeDetailPage() {
           )}
 
           {view === 'Services' && (
-            <div className="flex flex-col gap-4"><div className="flex justify-end"><ImageUpdateCheck nodeID={nodeID} target={{ project_name: projectName }} /></div><ImageUpdateDetails rows={imageUpdates.data?.results || []} zh={zh} />{project.managed && imageUpdates.data?.results.some(row => row.pull_required || row.recreate_required) && <Button className="self-start" variant="outline" disabled={pendingConfiguration || operationActive || validate.isPending || !!review} onClick={() => void deploy()}>{zh ? '拉取并重建' : 'Pull & recreate'}</Button>}<Services
+            <ProjectServices
+              key={`${nodeID}/${projectName}`}
+              nodeID={nodeID}
+              projectName={projectName}
               rows={services.data}
               updates={imageUpdates.data?.results || []}
               declared={project.managed ? configKeys(project.compose, ['services']) : []}
               loading={services.isPending}
               error={services.error?.message}
+              updateError={imageUpdates.error?.message}
               zh={zh}
-            /></div>
+            />
           )}
           {view === 'Logs' && <ProjectLogs key={`${nodeID}/${projectName}`} nodeID={nodeID} projectName={projectName} />}
         </div>
@@ -1196,180 +1187,5 @@ function ComposeActionDialog({
         </DialogContent>
       )}
     </Dialog>
-  )
-}
-
-const servicePorts = (row: ContainerSummary) => {
-  if (!row.ports.length) return '—'
-  const values = row.ports
-    .slice(0, 3)
-    .map((port) =>
-      port.public_port
-        ? `${port.ip || '0.0.0.0'}:${port.public_port} → ${port.private_port}/${port.type}`
-        : `${port.private_port}/${port.type}`
-    )
-  return `${values.join(', ')}${row.ports.length > 3 ? ` +${row.ports.length - 3}` : ''}`
-}
-const serviceMemory = (bytes: number) =>
-  !bytes
-    ? '—'
-    : bytes >= 1024 ** 3
-      ? `${(bytes / 1024 ** 3).toFixed(2)} GB`
-      : `${(bytes / 1024 ** 2).toFixed(0)} MB`
-const serviceUptime = (seconds: number, zh: boolean) =>
-  !seconds
-    ? '—'
-    : seconds >= 86400
-      ? `${Math.floor(seconds / 86400)} ${zh ? '天' : 'd'}`
-      : seconds >= 3600
-        ? `${Math.floor(seconds / 3600)} ${zh ? '小时' : 'h'}`
-        : `${Math.max(1, Math.floor(seconds / 60))} ${zh ? '分钟' : 'm'}`
-const serviceState = (state: string, zh: boolean) =>
-  zh
-    ? ({
-        running: '运行中',
-        paused: '已暂停',
-        restarting: '重启中',
-        exited: '已停止',
-        dead: '异常',
-        created: '已创建'
-      }[state] ?? state)
-    : state
-
-function Services({
-  rows,
-  updates,
-  declared,
-  loading,
-  error,
-  zh
-}: {
-  rows?: ContainerSummary[]
-  updates: ImageUpdateResult[]
-  declared: string[]
-  loading: boolean
-  error?: string
-  zh: boolean
-}) {
-  const { formatDateTime } = useDateTime()
-
-  const pagination = useListPagination(rows ?? [])
-  if (loading)
-    return (
-      <LoadingState
-        compact
-        label={zh ? '正在加载项目服务' : 'Loading project services'}
-      />
-    )
-  if (error) return <ErrorState description={error} />
-  return (
-    <>
-      <Table className="w-full">
-        <TableHeader>
-          <TableRow>
-            <TableHead className="min-w-[190px]">
-              {zh ? '服务 / 容器' : 'Service / container'}
-            </TableHead>
-            <TableHead>{zh ? '镜像' : 'Image'}</TableHead>
-            <TableHead className="min-w-[140px]">
-              {zh ? '状态 / 运行时间' : 'State / uptime'}
-            </TableHead>
-            <TableHead className="min-w-[120px]">
-              {zh ? '资源' : 'Resources'}
-            </TableHead>
-            <TableHead className="min-w-[190px]">
-              {zh ? '端口' : 'Ports'}
-            </TableHead>
-            <TableHead className="min-w-[150px]">
-              {zh ? '创建时间' : 'Created'}
-            </TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {(rows ?? []).length === 0 && (
-            <TableRow>
-              <TableCell
-                colSpan={6}
-                className="h-24 text-center text-muted-foreground"
-              >
-                {zh
-                  ? '项目尚未创建容器，请先启动项目。'
-                  : 'No containers have been created. Start the project first.'}
-              </TableCell>
-            </TableRow>
-          )}
-          {declared.filter(name => !(rows || []).some(row => row.labels['com.docker.compose.service'] === name)).map(name => <TableRow key={`undeployed/${name}`}><TableCell>{name}</TableCell><TableCell colSpan={5} className="text-xs text-muted-foreground">{zh ? '尚未部署 · 没有本地运行版本可检测' : 'Not deployed · no local runtime version to check'}</TableCell></TableRow>)}
-          {pagination.items.map((row) => (
-            <TableRow key={row.id}>
-              <TableCell>
-                <div className="flex flex-col gap-0.5">
-                  <span className="font-medium">
-                    {row.labels['com.docker.compose.service'] || row.name}
-                  </span>
-                  <Link
-                    to="/containers/$containerId"
-                    params={{ containerId: row.id }}
-                    className="text-xs text-muted-foreground hover:text-foreground hover:underline"
-                  >
-                    {row.name}
-                  </Link>
-                  <span className="font-mono text-[11px] text-muted-foreground">
-                    {row.id.slice(0, 12)}
-                    {row.labels['com.docker.compose.container-number']
-                      ? ` · #${row.labels['com.docker.compose.container-number']}`
-                      : ''}
-                  </span>
-                </div>
-              </TableCell>
-              <TableCell>
-                <TooltipHint content={row.image}>
-                  <span className="block max-w-72 truncate text-muted-foreground">
-                    {row.image}
-                  </span>
-                </TooltipHint>
-                <UpdateStatus rows={updates.filter(update => update.containers.some(container => container.container_id === row.id))} zh={zh} />
-              </TableCell>
-              <TableCell>
-                <div className="flex flex-col items-start gap-1">
-                  <StatusBadge tone={stateTone(row.state)}>
-                    {serviceState(row.state, zh)}
-                  </StatusBadge>
-                  <TooltipHint content={row.status}>
-                    <span className="max-w-40 truncate text-xs text-muted-foreground">
-                      {serviceUptime(row.uptime_seconds, zh)}
-                    </span>
-                  </TooltipHint>
-                </div>
-              </TableCell>
-              <TableCell>
-                {row.state === 'running' ? (
-                  <div className="flex flex-col">
-                    <span className="tabular-nums">
-                      CPU {row.cpu_percent.toFixed(1)}%
-                    </span>
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                      {serviceMemory(row.memory_bytes)}
-                    </span>
-                  </div>
-                ) : (
-                  '—'
-                )}
-              </TableCell>
-              <TableCell className="font-mono text-xs">
-                <TooltipHint content={servicePorts(row)}>
-                  <span className="block max-w-64 truncate">
-                    {servicePorts(row)}
-                  </span>
-                </TooltipHint>
-              </TableCell>
-              <TableCell className="text-xs text-muted-foreground tabular-nums">
-                {formatDateTime(row.created)}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-      <ListPagination {...pagination} zh={zh} />
-    </>
   )
 }

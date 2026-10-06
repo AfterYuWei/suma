@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
     "test": "vitest run src",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "test:project-services": "playwright test -c playwright.project-services.config.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
