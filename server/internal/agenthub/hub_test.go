@@ -43,6 +43,7 @@ func TestAgentProxyCarriesLargeHalfClosedStream(t *testing.T) {
 		}
 	}()
 	upgrade := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	controlReady := make(chan error, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ws, err := upgrade.Upgrade(w, r, nil)
 		if err != nil {
@@ -50,6 +51,7 @@ func TestAgentProxyCarriesLargeHalfClosedStream(t *testing.T) {
 		}
 		if r.URL.Path == "/control" {
 			done, err := hub.Attach("edge", ws)
+			controlReady <- err
 			if err == nil {
 				<-done
 			}
@@ -65,6 +67,14 @@ func TestAgentProxyCarriesLargeHalfClosedStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer control.Close()
+	select {
+	case err := <-controlReady:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Agent control connection did not register")
+	}
 	go func() {
 		for {
 			_, payload, err := control.ReadMessage()
@@ -122,6 +132,7 @@ func TestAgentDisconnectClosesActiveProxyStream(t *testing.T) {
 	}
 	defer hub.Close()
 	upgrade := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	controlReady := make(chan error, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ws, err := upgrade.Upgrade(w, r, nil)
 		if err != nil {
@@ -129,6 +140,7 @@ func TestAgentDisconnectClosesActiveProxyStream(t *testing.T) {
 		}
 		if r.URL.Path == "/control" {
 			done, err := hub.Attach("edge", ws)
+			controlReady <- err
 			if err == nil {
 				<-done
 			}
@@ -143,6 +155,14 @@ func TestAgentDisconnectClosesActiveProxyStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer control.Close()
+	select {
+	case err := <-controlReady:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Agent control connection did not register")
+	}
 	endpoint, err := hub.Endpoint("edge")
 	if err != nil {
 		t.Fatal(err)

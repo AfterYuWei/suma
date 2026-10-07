@@ -3,6 +3,7 @@ package compose
 import (
 	"context"
 	"errors"
+	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/task"
 	"github.com/suma/suma/server/internal/testutil"
 	"io"
@@ -23,6 +24,25 @@ func configurationService(t *testing.T, runner Runner) *Service {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		var rows []database.Task
+		if err := db.WithContext(ctx).Select("id").Find(&rows).Error; err != nil {
+			t.Error("list configuration tasks before cleanup", err)
+			return
+		}
+		for _, row := range rows {
+			s.tasks.Cancel(row.ID)
+		}
+		// Work releases the Project reservation before Task commits its result.
+		// Join every worker while the database and Compose files still exist.
+		for _, row := range rows {
+			if err := s.tasks.Wait(ctx, row.ID); err != nil {
+				t.Error("wait for configuration task cleanup", err)
+			}
+		}
+	})
 	return s
 }
 func TestConfigurationConcurrentRevisionSaves(t *testing.T) {
@@ -281,8 +301,18 @@ func TestConfigurationDeploymentRechecksNodeBindPolicy(t *testing.T) {
 	if _, err := s.ActionWithRevision(context.Background(), "app", "up", p.Revision); err == nil {
 		t.Fatal("unconfirmed socket deployment accepted")
 	}
-	if _, err := s.ActionWithRevision(context.Background(), "app", "up", p.Revision, true); err != nil {
+	operation, err := s.ActionWithRevision(context.Background(), "app", "up", p.Revision, true)
+	if err != nil {
 		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.tasks.Wait(ctx, operation.ID); err != nil {
+		t.Fatal(err)
+	}
+	result, err := s.tasks.Get(ctx, operation.ID)
+	if err != nil || result.Status != task.StatusSuccess {
+		t.Fatalf("confirmed socket deployment failed: status=%s error=%v", result.Status, err)
 	}
 	remote := s.ForNode("remote", "Remote", &configurationRunner{}, emptyContainers{}, false)
 	p, err = remote.Create(context.Background(), "remoteapp", "services: {app: {image: nginx, volumes: [./data:/data]}}\n", "")
@@ -291,6 +321,44 @@ func TestConfigurationDeploymentRechecksNodeBindPolicy(t *testing.T) {
 	}
 	if _, err := remote.ActionWithRevision(context.Background(), "remoteapp", "up", p.Revision); err == nil {
 		t.Fatal("relative remote bind deployment accepted")
+	}
+}
+
+func TestConfigurationFixtureJoinsActiveTaskBeforeDatabaseCleanup(t *testing.T) {
+	var tasks *task.Service
+	var deploymentID string
+	t.Cleanup(func() {
+		if tasks != nil {
+			tasks.Cancel(deploymentID)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = tasks.Wait(ctx, deploymentID)
+		}
+	})
+	t.Run("active_deployment", func(t *testing.T) {
+		r := &configurationRunner{entered: make(chan struct{}), release: make(chan struct{})}
+		s := configurationService(t, r)
+		tasks = s.tasks
+		p, err := s.Create(context.Background(), "app", "services: {app: {image: nginx}}\n", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		deployment, err := s.ActionWithRevision(context.Background(), "app", "up", p.Revision)
+		if err != nil {
+			t.Fatal(err)
+		}
+		deploymentID = deployment.ID
+		select {
+		case <-r.entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("deployment did not start")
+		}
+		// Return with work still active, as can happen when an assertion fails.
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := tasks.Wait(ctx, deploymentID); err != nil {
+		t.Fatal("configuration fixture left its Task active after database cleanup", err)
 	}
 }
 func TestConfigurationTaskOutputAndErrorsRedactCandidateSecrets(t *testing.T) {
