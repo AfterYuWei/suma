@@ -18,6 +18,7 @@ import (
 )
 
 type ReviewedConfig struct {
+	DockerSocket bool              `json:"docker_socket"`
 	TargetHash   string            `json:"target_hash"`
 	Revision     string            `json:"revision,omitempty"`
 	ConfigHash   string            `json:"config_hash"`
@@ -36,6 +37,12 @@ func configHash(raw string) string {
 	return hex.EncodeToString(sum[:])
 }
 func (r *CLIRunner) Review(ctx context.Context, spec ExecutionSpec, resolve ImageResolver) (ReviewedConfig, error) {
+	return r.reviewConfirmed(ctx, spec, resolve, false)
+}
+func (r *CLIRunner) ReviewConfirmed(ctx context.Context, spec ExecutionSpec, resolve ImageResolver, allowSocket bool) (ReviewedConfig, error) {
+	return r.reviewConfirmed(ctx, spec, resolve, allowSocket)
+}
+func (r *CLIRunner) reviewConfirmed(ctx context.Context, spec ExecutionSpec, resolve ImageResolver, allowSocket bool) (ReviewedConfig, error) {
 	remote := r.target != nil && (r.target.RemoteSources || !strings.HasPrefix(r.target.Host, "unix://"))
 	files := spec.Files
 	if len(files) == 0 {
@@ -53,7 +60,7 @@ func (r *CLIRunner) Review(ctx context.Context, spec ExecutionSpec, resolve Imag
 		}
 		// Check raw source before interpolation. An Agent's local proxy socket
 		// must retain remote bind rules even though its transport is unix://.
-		if err := ValidateComposeBindMounts(string(body), remote, false); err != nil {
+		if err := ValidateComposeBindMounts(string(body), remote, allowSocket); err != nil {
 			return ReviewedConfig{}, err
 		}
 	}
@@ -62,7 +69,7 @@ func (r *CLIRunner) Review(ctx context.Context, spec ExecutionSpec, resolve Imag
 		return ReviewedConfig{}, err
 	}
 	// Remote bind validation also rejects unapproved Docker socket access.
-	if err := ValidateComposeBindMounts(raw, remote, false); err != nil {
+	if err := ValidateComposeBindMounts(raw, remote, allowSocket); err != nil {
 		return ReviewedConfig{}, err
 	}
 	var cfg map[string]any
@@ -77,7 +84,7 @@ func (r *CLIRunner) Review(ctx context.Context, spec ExecutionSpec, resolve Imag
 	if err != nil {
 		return ReviewedConfig{}, err
 	}
-	review := ReviewedConfig{TargetHash: r.reviewedTargetHash(), ConfigHash: configHash(raw), Images: map[string]string{}, SourceHashes: hashes, Services: map[string]any{}}
+	review := ReviewedConfig{DockerSocket: ValidateComposeBindMounts(raw, remote, false) != nil, TargetHash: r.reviewedTargetHash(), ConfigHash: configHash(raw), Images: map[string]string{}, SourceHashes: hashes, Services: map[string]any{}}
 	for name, entry := range services {
 		service, ok := entry.(map[string]any)
 		if !ok {
@@ -248,7 +255,7 @@ func reviewedSources(projectDir string, cfg map[string]any) (map[string]string, 
 	}
 	return hashes, sources, nil
 }
-func (s *Service) ReviewUpdate(ctx context.Context, name string, resolve ImageResolver) (ReviewedConfig, error) {
+func (s *Service) ReviewUpdate(ctx context.Context, name string, resolve ImageResolver, allowSocket ...bool) (ReviewedConfig, error) {
 	unlock := s.lockProject(name)
 	defer unlock()
 	project, err := s.managedProject(name)
@@ -262,7 +269,18 @@ func (s *Service) ReviewUpdate(ctx context.Context, name string, resolve ImageRe
 	if !ok {
 		return ReviewedConfig{}, errors.New("reviewed Compose runner unavailable")
 	}
-	review, err := runner.Review(ctx, ExecutionSpec{ProjectName: name, ProjectDir: project.Path}, resolve)
+	var review ReviewedConfig
+	if len(allowSocket) > 0 && allowSocket[0] {
+		confirmed, ok := s.runner.(interface {
+			ReviewConfirmed(context.Context, ExecutionSpec, ImageResolver, bool) (ReviewedConfig, error)
+		})
+		if !ok {
+			return ReviewedConfig{}, errors.New("confirmed reviewed runner unavailable")
+		}
+		review, err = confirmed.ReviewConfirmed(ctx, ExecutionSpec{ProjectName: name, ProjectDir: project.Path}, resolve, true)
+	} else {
+		review, err = runner.Review(ctx, ExecutionSpec{ProjectName: name, ProjectDir: project.Path}, resolve)
+	}
 	review.Revision = project.Revision
 	return review, err
 }

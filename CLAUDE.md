@@ -23,7 +23,7 @@ make docker-up        # build + run the production container (port 8080)
 make help             # full command list
 ```
 
-Overrides: `make dev DEV_HOST=0.0.0.0 DEV_WEB_PORT=3000 DEV_API_PORT=9080`. Vite proxies `/api` and `/ws` to `SUMA_DEV_API` (default `http://127.0.0.1:8081`). The dev server runs with cwd `server/`, so `SUMA_DATA_ROOT` defaults to `server/data`. Every `SUMA_*` env var and its default is in `server/internal/config/config.go`.
+Run `make local-config` and fill in the root `.env.local` PostgreSQL connection once; native startup and tests read it automatically, with process environment values taking precedence. The template uses `127.0.0.1:5432/suma`. Overrides: `make dev DEV_HOST=0.0.0.0 DEV_WEB_PORT=3000 DEV_API_PORT=9080`. Vite proxies `/api` and `/ws` to `SUMA_DEV_API` (default `http://127.0.0.1:8081`). The dev server runs with cwd `server/`, so `SUMA_DATA_ROOT` defaults to `server/data`. Startup settings and defaults live in `server/internal/config/config.go`; private file discovery and `SUMA_ENV_FILE` live in `local.go`.
 
 Single Go test / package (a real `-run` prefix, matches two policy tests):
 
@@ -56,11 +56,11 @@ Always use `-buildvcs=false` for Go builds. Lint is `oxlint`, not ESLint. There 
 - `api.Dependencies` fields are optional and nil-guarded (`if deps.Nodes != nil { ... }`), which is how tests build a router with only the services under test.
 - `internal/app/app.go` composes services at startup and starts the background loops: CD database-only recovery, node status probes every 30s (`node/service.go`), the CD reconciler every 15s (`cd/reconciler.go`), and shadow-preview recovery across enabled nodes.
 
-SQLite (GORM, `internal/database`) stores **only** SUMA-owned state: users, sessions, settings, node definitions, credential grants, Compose/CD metadata, releases, tasks, audit records. Container/image/network/volume/status data is always read live from Docker — never mirror it into SQLite.
+PostgreSQL (GORM, `internal/database`) stores **only** SUMA-owned state: users, sessions, settings, node definitions, credential grants, Compose/CD metadata, releases, tasks, audit records. Container/image/network/volume/status data is always read live from Docker — never mirror it into PostgreSQL.
 
 Every Docker resource operation resolves through an explicit node runtime. A runtime client is captured when work starts, so disabling/updating a node blocks new work without killing in-flight tasks. Long operations go through `internal/task` (pending/running/success/failed/canceled + streamed logs, scoped `control_plane` or `node`); user-visible mutations go through `internal/audit`. WebSocket handlers (logs, stats, exec, task output) must cancel their context and close the Docker stream on disconnect.
 
-Tests: the router tests use a `fakeEngine` implementing `docker.Engine`, a `t.TempDir()` SQLite file via `database.Open`, and `secret.Open` on a temp key; the adapter tests run against an `httptest` fake Docker API. Follow that pattern rather than reaching for a live daemon.
+Tests: the router tests use a `fakeEngine` implementing `docker.Engine`, a per-test PostgreSQL schema via `testutil.Open` and required `SUMA_TEST_DATABASE_DSN`, and `secret.Open` on a temp key; the adapter tests run against an `httptest` fake Docker API. Follow that pattern rather than reaching for a live daemon.
 
 ## Projects, Compose, and Continuous Delivery
 
@@ -88,7 +88,7 @@ Creating or deleting one never touches the other. Compose is merely a deployment
 
 ## Security invariants
 
-Sessions are opaque, hashed server-side, in HttpOnly SameSite cookies; passwords are bcrypt; the first user becomes administrator. Secrets (Git/registry credentials, SSH keys, Docker TLS material, webhook secrets) are AES-GCM encrypted in SQLite under the key at `SUMA_SECRET_KEY_FILE` (mode `0600`) — losing it makes stored credentials unrecoverable. Credential material is passed to subprocesses through `0700` temp dirs / `0600` files removed on completion, failure, or cancellation. Never log passwords, tokens, secrets, or sensitive env values; mask likely secrets in API/UI output. Destructive actions require explicit confirmation and are audited — volume deletion and Project cleanup require typing the exact name. Validate identifiers and paths: Compose files stay under the Compose root, delivery files stay inside the detached worktree after symlink resolution. Clone URLs are HTTPS/SSH only, no embedded passwords. Plaintext Docker TCP is rejected unless its endpoint is loopback, a private-network IP, or a Tailscale IP, and the API requires typed endpoint confirmation before saving it.
+Sessions are opaque, hashed server-side, in HttpOnly SameSite cookies; passwords are bcrypt; the first user becomes administrator. Secrets (Git/registry credentials, SSH keys, Docker TLS material, webhook secrets) are AES-GCM encrypted in PostgreSQL under the key at `SUMA_SECRET_KEY_FILE` (mode `0600`) — losing it makes stored credentials unrecoverable. Credential material is passed to subprocesses through `0700` temp dirs / `0600` files removed on completion, failure, or cancellation. Never log passwords, tokens, secrets, or sensitive env values; mask likely secrets in API/UI output. Destructive actions require explicit confirmation and are audited — volume deletion and Project cleanup require typing the exact name. Validate identifiers and paths: Compose files stay under the Compose root, delivery files stay inside the detached worktree after symlink resolution. Clone URLs are HTTPS/SSH only, no embedded passwords. Plaintext Docker TCP is rejected unless its endpoint is loopback, a private-network IP, or a Tailscale IP, and the API requires typed endpoint confirmation before saving it.
 
 ## Working conventions
 

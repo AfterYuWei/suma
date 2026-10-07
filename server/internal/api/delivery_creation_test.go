@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"github.com/suma/suma/server/internal/testutil"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -23,7 +24,7 @@ func newDeliveryCreationHarness(t *testing.T) projectHTTPHarness {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "api.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

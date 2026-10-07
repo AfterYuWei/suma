@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/suma/suma/server/internal/testutil"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -202,7 +203,7 @@ func TestCredentialNamesAreUnique(t *testing.T) {
 func newCredentialTestService(t *testing.T) (*gorm.DB, *CredentialService) {
 	t.Helper()
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

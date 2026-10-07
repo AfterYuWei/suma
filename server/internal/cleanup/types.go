@@ -117,6 +117,7 @@ type Usage struct {
 	VolumeBytes      *int64 `json:"volume_bytes"`
 }
 type CacheOptions struct {
+	Until         time.Time
 	RetentionDays int
 	ReservedBytes int64
 }

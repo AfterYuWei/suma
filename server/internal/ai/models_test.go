@@ -120,109 +120,23 @@ func TestDiscoverModelsRejectsUnsafeAndMalformedResponsesWithoutLeakingSecrets(t
 	}
 }
 
-func TestLegacyStoredModelAndPrivateHTTPAreMigrated(t *testing.T) {
+func TestInvalidStoredProtocolFailsStartupWithoutMigration(t *testing.T) {
 	s, _, _ := aiFixture(t)
 	cfg := s.Settings()
-	cfg.Endpoint = "http://127.0.0.1:11434/v1"
-	cfg.AllowPrivate = true
-	var legacy map[string]any
-	if json.Unmarshal([]byte(marshal(cfg)), &legacy) != nil {
-		t.Fatal("encode failed")
-	}
-	delete(legacy, "models")
-	delete(legacy, "allow_insecure")
-	if err := s.db.Model(&database.Setting{}).Where("key = ?", "internal.ai.settings").Update("value", marshal(legacy)).Error; err != nil {
-		t.Fatal(err)
-	}
-	s.Stop()
-	restarted, err := NewService(s.db, s.secrets, s.tasks, Dependencies{Model: &scriptedModel{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer restarted.Stop()
-	loaded := restarted.Settings()
-	if !reflect.DeepEqual(loaded.Models, []string{"test"}) || !loaded.AllowInsecure || !loaded.AllowPrivate || !loaded.HasSecret || !loaded.Enabled || !loaded.ToolCapable || loaded.Protocol != ProtocolResponses || loaded.Version != cfg.Version {
-		t.Fatal("legacy configuration was lost", loaded)
-	}
-}
-
-func TestRemovedProtocolMigrationDisablesAIAndInvalidatesPendingOperations(t *testing.T) {
-	s, executions, _ := aiFixture(t)
-	cfg := s.Settings()
-	cfg.Protocol = "chat_completions"
+	cfg.Protocol = "unsupported"
 	if err := s.db.Model(&database.Setting{}).Where("key = ?", "internal.ai.settings").Update("value", marshal(cfg)).Error; err != nil {
 		t.Fatal(err)
 	}
-	for _, status := range []string{"awaiting_approval", "queued", "completed"} {
-		if err := s.db.Create(&database.AIOperation{ID: "legacy-" + status, Status: status}).Error; err != nil {
-			t.Fatal(err)
-		}
-	}
 	s.Stop()
-	restarted, err := NewService(s.db, s.secrets, s.tasks, Dependencies{Model: &scriptedModel{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(restarted.Stop)
-	loaded := restarted.Settings()
-	if loaded.Protocol != ProtocolResponses || loaded.Enabled || loaded.ToolCapable || loaded.Version != cfg.Version+1 || !loaded.HasSecret || loaded.Endpoint != cfg.Endpoint || !reflect.DeepEqual(loaded.Models, cfg.Models) || restarted.key != "model-secret" {
-		t.Fatal("removed protocol was not safely migrated", loaded)
-	}
-	var stored database.Setting
-	if err := s.db.First(&stored, "key = ?", "internal.ai.settings").Error; err != nil {
-		t.Fatal(err)
-	}
-	var persisted Settings
-	if json.Unmarshal([]byte(stored.Value), &persisted) != nil || persisted.Protocol != ProtocolResponses || persisted.Enabled || persisted.ToolCapable || persisted.Version != loaded.Version {
-		t.Fatal("migration was not persisted")
-	}
-	for _, status := range []string{"awaiting_approval", "queued", "completed"} {
-		var operation database.AIOperation
-		if err := s.db.First(&operation, "id = ?", "legacy-"+status).Error; err != nil {
-			t.Fatal(err)
-		}
-		if status != "completed" && operation.Status != "invalidated" || status == "completed" && operation.Status != "completed" {
-			t.Fatal("operation state was not preserved", operation)
-		}
-	}
-	if _, err = restarted.Start(context.Background(), RunInput{NodeID: "local", Question: "diagnose"}, Actor{UserID: 1, Source: "site"}); !errors.Is(err, ErrDisabled) {
-		t.Fatal("migrated AI remained active", err)
-	}
-	restarted.Stop()
-	again, err := NewService(s.db, s.secrets, s.tasks, Dependencies{Model: &scriptedModel{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer again.Stop()
-	if again.Settings().Version != loaded.Version || executions.Load() != 0 {
-		t.Fatal("migration repeated or executed operations")
-	}
-}
-
-func TestRemovedProtocolMigrationRollsBackOnInvalidationFailure(t *testing.T) {
-	s, _, _ := aiFixture(t)
-	cfg := s.Settings()
-	cfg.Protocol = "chat_completions"
-	if err := s.db.Model(&database.Setting{}).Where("key = ?", "internal.ai.settings").Update("value", marshal(cfg)).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := s.db.Create(&database.AIOperation{ID: "pending-migration", Status: "awaiting_approval"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := s.db.Exec("CREATE TRIGGER reject_protocol_migration BEFORE UPDATE ON ai_operations WHEN NEW.status = 'invalidated' BEGIN SELECT RAISE(ABORT, 'invalidation failed'); END").Error; err != nil {
-		t.Fatal(err)
-	}
-	s.Stop()
-	if restarted, err := NewService(s.db, s.secrets, s.tasks, Dependencies{Model: &scriptedModel{}}); err == nil {
+	if restarted, err := NewService(s.db, s.secrets, s.tasks, Dependencies{}); err == nil {
 		restarted.Stop()
-		t.Fatal("failed migration allowed startup")
+		t.Fatal("invalid protocol silently migrated")
 	}
 	var stored database.Setting
-	if err := s.db.First(&stored, "key = ?", "internal.ai.settings").Error; err != nil {
-		t.Fatal(err)
-	}
+	s.db.First(&stored, "key = ?", "internal.ai.settings")
 	var persisted Settings
-	if json.Unmarshal([]byte(stored.Value), &persisted) != nil || persisted.Protocol != "chat_completions" || persisted.Version != cfg.Version || !persisted.Enabled {
-		t.Fatal("failed migration changed settings")
+	_ = json.Unmarshal([]byte(stored.Value), &persisted)
+	if persisted.Protocol != "unsupported" {
+		t.Fatal("startup modified invalid settings")
 	}
 }

@@ -70,7 +70,7 @@ Credential types are:
 
 A credential may also contain a custom CA certificate for an internal HTTPS Git service. SUMA does not provide a skip-TLS-verification switch.
 
-Sensitive fields are encrypted with AES-GCM before SQLite storage. A 32-byte key is loaded from `SUMA_SECRET_KEY_FILE`; when absent it is generated atomically with file mode `0600`. The database stores only ciphertext and a non-secret fingerprint. API responses expose metadata but never plaintext.
+Sensitive fields are encrypted with AES-GCM before PostgreSQL storage. A 32-byte key is loaded from `SUMA_SECRET_KEY_FILE`; when absent it is generated atomically with file mode `0600`. The database stores only ciphertext and a non-secret fingerprint. API responses expose metadata but never plaintext.
 
 For each Git operation SUMA creates a private temporary directory, writes only the needed AskPass, CA, SSH key, and `known_hosts` files, disables terminal prompts with `GIT_TERMINAL_PROMPT=0`, and removes the directory afterward. Known secrets are redacted from captured Git output. A token is never embedded in the stored or logged clone URL.
 
@@ -178,7 +178,7 @@ successful release selected -> new rollback release -> rolling_back
 
 Approval and rejection are synchronous state changes. Approval does not start delivery. The deploy endpoint accepts an explicitly `approved` release or retries a previously approved `failed` release. Auto mode proceeds directly from its newly prepared release without requiring a user approval record.
 
-Drift is reported per current target and aggregated as `healthy`, `degraded`, or `unknown`. No active release, a commit mismatch, or missing/not-running/unhealthy containers is a confirmed degraded state. An unreachable or indeterminate target is unknown and does not by itself set `drifted`; a confirmed failure takes precedence when degraded and unknown nodes coexist. Runtime container truth is read from Docker and is not mirrored into SQLite as desired state. Project-level active Release/commit is persisted only while all current targets agree.
+Drift is reported per current target and aggregated as `healthy`, `degraded`, or `unknown`. No active release, a commit mismatch, or missing/not-running/unhealthy containers is a confirmed degraded state. An unreachable or indeterminate target is unknown and does not by itself set `drifted`; a confirmed failure takes precedence when degraded and unknown nodes coexist. Runtime container truth is read from Docker and is not mirrored into PostgreSQL as desired state. Project-level active Release/commit is persisted only while all current targets agree.
 
 Failed-node remediation never accepts a client-provided node list. Retry selects failed/interrupted/auto-rolled-back snapshots and targets the original Release. Rollback selects only failed targets with a previous Release and restores each node independently, so different nodes may end at different releases without creating a synthetic Release. Both paths use one control-plane parent Task, node child Tasks, Attempts, project serialization, and control-plane plus per-node Audits.
 
@@ -223,7 +223,7 @@ The production image includes Git, OpenSSH client tools, CA certificates, Docker
 - Keep Git repositories free of plaintext deployment secrets; use named/external secret facilities appropriate to the deployment.
 - Use named volumes for writable data; Git delivery rejects writable or out-of-worktree bind mounts.
 - Review Compose privileges, host mounts, devices, ports, and Docker socket mounts before automatic delivery.
-- Back up SQLite, `secret.key`, and required release/worktree data as one controlled recovery set.
+- Back up PostgreSQL, `secret.key`, and required release/worktree data as one controlled recovery set.
 - Treat access to SUMA and `/var/run/docker.sock` as root-equivalent host access.
 
 ## Delivery guarantees and non-guarantees

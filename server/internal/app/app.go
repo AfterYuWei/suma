@@ -56,8 +56,11 @@ type App struct {
 }
 
 func New(logger *slog.Logger) (*App, error) {
-	cfg := config.Load()
-	db, err := database.Open(cfg.DatabasePath)
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	db, err := database.Open(cfg.DatabaseDSN)
 	if err != nil {
 		return nil, err
 	}
@@ -183,11 +186,11 @@ func New(logger *slog.Logger) (*App, error) {
 		},
 		Resolver: registry.Adapter{}, Credentials: registryCredentials,
 	})
-	controlled := aiRuntime{db: db, nodes: nodes, compose: compose, runner: runner, cd: continuousDelivery, cleanup: cleanupService, tasks: taskService, registries: registryCredentials, imageUpdates: imageUpdates}
-	assistant, err := ai.NewService(db, secretStore, taskService, ai.Dependencies{Audit: auditService, Read: controlled.Read, Query: controlled.Query, Freeze: controlled.Freeze, Execute: controlled.Execute, Emit: notifications.Emit, ActorValid: func(ctx context.Context, a ai.Actor) error {
+	controlled := aiRuntime{secrets: secretStore, db: db, nodes: nodes, compose: compose, runner: runner, cd: continuousDelivery, cleanup: cleanupService, tasks: taskService, registries: registryCredentials, imageUpdates: imageUpdates}
+	assistant, err := ai.NewService(db, secretStore, taskService, ai.Dependencies{Audit: auditService, Read: controlled.Read, Check: controlled.Check, Resources: controlled.Resources, Verify: controlled.Verify, Draft: controlled.Draft, Query: controlled.Query, Freeze: controlled.Freeze, Execute: controlled.Execute, Emit: notifications.Emit, ActorValid: func(ctx context.Context, a ai.Actor) error {
 		if a.BindingID != "" {
 			binding, err := notifications.ValidateBinding(ctx, a.UserID, a.BindingID)
-			if err != nil || binding.ExternalUserID != a.ExternalUserID {
+			if err != nil || binding.ExternalUserID != a.ExternalUserID || binding.ChatID != a.ChatID {
 				return ai.ErrScope
 			}
 			return nil
@@ -199,6 +202,7 @@ func New(logger *slog.Logger) (*App, error) {
 	}
 	notifications.SetEventHandler(assistant.OnEvent)
 	notifications.SetChatHandler(chatOperations(notifications, assistant))
+	assistant.SetChatDelivery(chatWorkflowDelivery(notifications, assistant))
 	notifications.Start()
 	imageUpdates.Start()
 	projectLogs := projectLogsService(nodes, compose, runner, db)
@@ -207,7 +211,7 @@ func New(logger *slog.Logger) (*App, error) {
 	cleanupService.Start()
 	recoveryContext, recoveryCancel := context.WithCancel(context.Background())
 	fileService := containerfiles.NewService(db, secretStore)
-	application := &App{notifications: notifications, ai: assistant, imageUpdates: imageUpdates, projectLogs: projectLogs, cleanup: cleanupService, logger: logger, engine: engine, nodes: nodes, agents: agents, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{Notifications: notifications, AI: assistant, ImageUpdates: imageUpdates, ProjectLogs: projectLogs, Cleanup: cleanupService, Engine: engine, Containers: engine, Files: fileService, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: applicationSettings, Monitor: monitorService.NewService(engine, cfg.DatabasePath), System: systemService.NewService(engine, taskService), Nodes: nodes, Agents: agents, AgentPublicURL: cfg.AgentPublicURL, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
+	application := &App{notifications: notifications, ai: assistant, imageUpdates: imageUpdates, projectLogs: projectLogs, cleanup: cleanupService, logger: logger, engine: engine, nodes: nodes, agents: agents, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{Notifications: notifications, AI: assistant, ImageUpdates: imageUpdates, ProjectLogs: projectLogs, Cleanup: cleanupService, Engine: engine, Containers: engine, Files: fileService, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: applicationSettings, Monitor: monitorService.NewService(engine, cfg.DataRoot), System: systemService.NewService(engine, taskService), Nodes: nodes, Agents: agents, AgentPublicURL: cfg.AgentPublicURL, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
 	application.recoveryWG.Add(1)
 	go func() {
 		defer application.recoveryWG.Done()

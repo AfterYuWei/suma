@@ -5,6 +5,7 @@ import (
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/node"
 	"github.com/suma/suma/server/internal/secret"
+	"github.com/suma/suma/server/internal/testutil"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ import (
 func TestOperationRuntimeFingerprint(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "app.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

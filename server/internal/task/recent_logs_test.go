@@ -2,7 +2,7 @@ package task
 
 import (
 	"context"
-	"path/filepath"
+	"github.com/suma/suma/server/internal/testutil"
 	"strings"
 	"testing"
 	"time"
@@ -11,7 +11,7 @@ import (
 )
 
 func TestRecentLogsRespectNodeTimeAndBounds(t *testing.T) {
-	db, err := database.Open(filepath.Join(t.TempDir(), "logs.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

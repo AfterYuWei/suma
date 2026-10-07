@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/suma/suma/server/internal/testutil"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -44,7 +45,7 @@ func (m *scriptedModel) Complete(_ context.Context, _ Settings, _ string, _ []Mo
 func aiFixture(t *testing.T) (*Service, *atomic.Int32, *atomic.Bool) {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := database.Open(filepath.Join(dir, "ai.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,6 +67,8 @@ func aiFixture(t *testing.T) (*Service, *atomic.Int32, *atomic.Bool) {
 			state = "changed"
 		}
 		return Snapshot{RuntimeKey: state, Fingerprint: state, Description: "Restart frozen container", Impact: "Service interruption; separate approval needed for recovery", Details: json.RawMessage(`{"state":"running"}`)}, nil
+	}, Verify: func(context.Context, database.AIOperation, Snapshot) (Verification, error) {
+		return Verification{Satisfied: true, Summary: "Verified"}, nil
 	}, Execute: func(_ context.Context, row database.AIOperation, s Snapshot, report task.Reporter) error {
 		executions.Add(1)
 		return nil
@@ -95,8 +98,8 @@ func completedRun(t *testing.T, s *Service) Run {
 	until := time.Now().Add(3 * time.Second)
 	for time.Now().Before(until) {
 		row, err := s.Run(context.Background(), run.ID)
-		if err == nil && row.Status != "running" {
-			if row.Status != "completed" {
+		if err == nil && row.Status != "running" && row.Status != "queued" {
+			if row.Status != "waiting_approval" {
 				t.Fatal(row.Error)
 			}
 			return row
@@ -119,7 +122,7 @@ func TestDiagnosisUntrustedEvidenceAndConcurrentApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Decide(context.Background(), op.ID, Decision{Approve: true, ReviewToken: "modified"}, Actor{UserID: 1}); !errors.Is(err, ErrConflict) {
+	if _, err = s.Decide(context.Background(), op.ID, Decision{RequestID: id(), Approve: true, ReviewToken: "modified"}, Actor{UserID: 1}); !errors.Is(err, ErrConflict) {
 		t.Fatal("modified preview approved", err)
 	}
 	var wg sync.WaitGroup
@@ -128,7 +131,7 @@ func TestDiagnosisUntrustedEvidenceAndConcurrentApproval(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := s.Decide(context.Background(), op.ID, Decision{Approve: true, ReviewToken: op.ReviewToken}, Actor{UserID: 1, Source: "site"}); err == nil {
+			if _, err := s.Decide(context.Background(), op.ID, Decision{RequestID: id(), Approve: true, ReviewToken: op.ReviewToken}, Actor{UserID: 1, Source: "site"}); err == nil {
 				approved.Add(1)
 			}
 		}()
@@ -167,7 +170,7 @@ func TestChangedRuntimeExpiredAndDisabledProposalsNeverExecute(t *testing.T) {
 				cfg.Enabled = false
 				s.SaveSettings(context.Background(), SettingsInput{Settings: cfg}, Actor{UserID: 1})
 			}
-			if _, err := s.Decide(context.Background(), op.ID, Decision{Approve: true, ReviewToken: op.ReviewToken}, Actor{UserID: 1}); err == nil {
+			if _, err := s.Decide(context.Background(), op.ID, Decision{RequestID: id(), Approve: true, ReviewToken: op.ReviewToken}, Actor{UserID: 1}); err == nil {
 				t.Fatal("invalid approval accepted")
 			}
 			if count.Load() != 0 {
@@ -181,10 +184,10 @@ func TestApprovalRollsBackWhenGlobalAuditCannotBeWritten(t *testing.T) {
 	s, executions, _ := aiFixture(t)
 	run := completedRun(t, s)
 	op, _ := s.Operation(context.Background(), run.Result.OperationIDs[0])
-	if err := s.db.Exec("CREATE TRIGGER reject_ai_approval_audit BEFORE INSERT ON audit_logs WHEN NEW.action = 'ai.queued' BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END").Error; err != nil {
+	if err := s.db.Exec("CREATE FUNCTION reject_ai_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action = 'ai.queued' THEN RAISE EXCEPTION 'audit unavailable'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_ai_approval_audit BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION reject_ai_audit()").Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Decide(context.Background(), op.ID, Decision{ReviewToken: op.ReviewToken, Approve: true}, Actor{UserID: 1}); err == nil {
+	if _, err := s.Decide(context.Background(), op.ID, Decision{RequestID: id(), ReviewToken: op.ReviewToken, Approve: true}, Actor{UserID: 1}); err == nil {
 		t.Fatal("approval survived failed audit")
 	}
 	op, _ = s.Operation(context.Background(), op.ID)
@@ -198,7 +201,7 @@ func TestRejectedOperationAppearsInGlobalAndAIAudit(t *testing.T) {
 	s, executions, _ := aiFixture(t)
 	run := completedRun(t, s)
 	op, _ := s.Operation(context.Background(), run.Result.OperationIDs[0])
-	if _, err := s.Decide(context.Background(), op.ID, Decision{ReviewToken: op.ReviewToken}, Actor{UserID: 1, Source: "site", IP: "127.0.0.1"}); err != nil {
+	if _, err := s.Decide(context.Background(), op.ID, Decision{RequestID: id(), ReviewToken: op.ReviewToken}, Actor{UserID: 1, Source: "site", IP: "127.0.0.1"}); err != nil {
 		t.Fatal(err)
 	}
 	var global database.AuditLog

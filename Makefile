@@ -6,7 +6,7 @@ DEV_API_PORT ?= 8081
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install dev web-dev server-dev check web-check server-check build web-build server-build docker-up docker-down docker-logs
+.PHONY: help install local-config dev web-dev server-dev check web-check server-check build web-build server-build docker-up docker-down docker-logs db-up db-down
 
 help: ## 显示可用命令
 	@awk 'BEGIN {FS = ":.*## "; printf "SUMA commands:\n\n"} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -14,6 +14,10 @@ help: ## 显示可用命令
 install: ## 安装前端依赖并下载 Go 模块
 	cd web && npm ci
 	cd server && go mod download
+
+local-config: ## 创建本地私密配置模板（保留已有文件）
+	@if [ ! -e .env.local ]; then (umask 077; set -C; cat .env.local.example > .env.local); fi
+	@echo 'Edit .env.local with your PostgreSQL credentials; make dev and tests read it automatically.'
 
 dev: ## 同时启动前后端开发服务（Ctrl+C 停止）
 	$(MAKE) --no-print-directory -j2 web-dev server-dev
@@ -52,3 +56,9 @@ docker-down: ## 停止生产容器（保留持久化数据）
 
 docker-logs: ## 持续查看 SUMA 容器日志
 	docker compose logs -f suma
+
+db-up: ## 启动本机开发 PostgreSQL（仅 loopback 端口）
+	docker compose -f docker-compose.yml -f compose.dev.yml up -d postgres
+
+db-down: ## 停止开发 PostgreSQL，保留数据卷
+	docker compose -f docker-compose.yml -f compose.dev.yml stop postgres

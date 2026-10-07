@@ -3,13 +3,13 @@ package node
 import (
 	"context"
 	"errors"
+	"github.com/suma/suma/server/internal/testutil"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"github.com/suma/suma/server/internal/agenthub"
 	"github.com/suma/suma/server/internal/agentwire"
 	"github.com/suma/suma/server/internal/database"
@@ -19,7 +19,7 @@ import (
 
 func agentTestService(t *testing.T) *Service {
 	t.Helper()
-	db, err := database.Open(filepath.Join(t.TempDir(), "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,8 +130,8 @@ func TestAgentEnrollmentIsSingleUseAndRevocable(t *testing.T) {
 	if err := service.AuthenticateAgent(ctx, issued.NodeID, secret, agentwire.ProtocolVersion); err != nil {
 		t.Fatalf("enrollment expiry invalidated the persistent credential: %v", err)
 	}
-	// Reopening the SQLite database simulates a control-plane restart.
-	reopened, err := database.Open(service.db.Dialector.(*sqlite.Dialector).DSN)
+	// Reopening the PostgreSQL connection simulates a control-plane restart.
+	reopened, err := database.Open(database.ConnectionDSN(service.db))
 	if err != nil {
 		t.Fatal(err)
 	}

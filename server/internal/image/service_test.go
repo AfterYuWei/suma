@@ -3,8 +3,8 @@ package image
 import (
 	"context"
 	"errors"
+	"github.com/suma/suma/server/internal/testutil"
 	"io"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -78,7 +78,7 @@ func stream(lines ...string) io.ReadCloser {
 
 func newTestService(t *testing.T, adapter Adapter) (*Service, *gorm.DB) {
 	t.Helper()
-	db, err := database.Open(filepath.Join(t.TempDir(), "image.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,6 +5,7 @@ package compose_test
 import (
 	"context"
 	"fmt"
+	"github.com/suma/suma/server/internal/testutil"
 	"io"
 	"os"
 	"path/filepath"
@@ -29,7 +30,7 @@ func TestRealDockerComposePullActionReportsProgress(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +97,7 @@ func TestRealDockerProjectTakeover(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +217,7 @@ func TestRealDockerExternalProjectCleanup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "cleanup.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +339,7 @@ func TestRealDockerTCPProjectTakeover(t *testing.T) {
 	}
 	runner := baseRunner.ForTarget(compose.Target{NodeID: "tcp-smoke", NodeName: "TCP Smoke", Host: host, TLSRequired: true, CA: ca, Certificate: certificate, PrivateKey: privateKey})
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

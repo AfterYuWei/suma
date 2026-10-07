@@ -4,7 +4,22 @@ This file records the completed MVP implementation. Every checked phase was veri
 
 ## Current work
 
-- [x] 全局 AI 运维与 Markdown 工作台：导航置于 Docker 资源之上，不跟随全局节点／Group，默认全部授权节点并支持跨节点连续追问；每次读取／提案明确运行时且保留节点证据和审计。工作台逐轮切换已配置模型、记录实际模型，非默认模型独立验证工具能力；AI 设置明确默认模型，通知渠道和自动诊断始终使用该默认项。回复支持安全 Markdown／GFM 及宽表格／代码块内部滚动。验证：服务及认证 HTTP 回归覆盖跨节点读取／提案运行时、未知模型拒绝、逐轮模型持久化、渠道／自动诊断默认项、非默认模型工具探针、授权撤销和历史范围；46 项 AI 设置／会话／通知／工作台浏览器场景通过，覆盖中英文、深浅主题、390px／1440px、跨节点连续追问、模型切换／新会话／重载、草稿保护和安全 Markdown，启动空白的两项场景独立重跑通过。Web lint／typecheck／生产及 demo 构建、Go test／build、AI race 检查、只读真实 Docker 镜像冒烟及全局 AI → 显式 Unix 运行时 → 节点／容器证据冒烟均通过（2026-10-06）；仅保留原有共享 UI／构建警告。复现说明：`doc/notifications-and-ai-operations.md`。
+- [x] 本地数据库配置改用私密 `.env.local`（2026-10-07）：原生启动与测试自动读取 `127.0.0.1:5432/suma`，保留部署环境优先级，配置解析错误脱敏；`make local-config` 创建权限为 `0600` 的模板并保留已有配置，私密文件排除 Git 与镜像构建上下文；补充 `/Data` 与 `server/data/` 文件职责说明。验证：配置读取／嵌套工作目录／引号与变量引用／shell 文本不执行／错误与进程环境隔离通过；使用用户提供的真实本地 PostgreSQL 完成所有 Go 服务与认证 HTTP 回归及构建，Config／Database／App race 通过；Unix、mTLS TCP、HTTPS/WSS Agent 独立 Docker Compose 与 AI 审核冒烟全部通过（45.995s）。宿主机磁盘不足导致的首轮失败在清理可重建缓存后完整重跑通过；后续检查使用临时内存编译目录。测试 schema、独立 Engine 和临时内存目录均已清理，现有数据库部署与文件保留。
+
+- [x] Eino ADK 与 PostgreSQL 全面替换（2026-10-07）：统一工作台／绑定聊天／自动诊断，缺目标时结构化询问，上下文确定目标，Docker 与 Compose 写操作逐步审核、Task 执行后验证，失败暂停、修改任务使旧提案失效。使用 Eino v0.9.21、PostgreSQL 18.6，删除 SQLite 与旧数据迁移，空库初始化。
+  - [x] PostgreSQL 驱动、配置、SQL 基线、部署和全部数据库测试替换。验证：真实 PostgreSQL 的空库／重开／大小写唯一索引／事务／时间与字节字段／现有服务和 HTTP 回归通过；缺少 DSN 明确启动失败且错误脱敏。
+  - [x] Eino 模型适配、检查点、节点／资源澄清、会话／计划／事件、恢复与预算。验证：无目标不读取 Docker、身份与范围、重复回答／审批、任务调整、检查点提交故障和版本失效、暂停后重启恢复、模型兼容与累计预算回归通过。
+  - [x] Docker／Compose 动作目录、完整预览、确认字段、执行及结果验证。验证：逐动作服务与认证 HTTP、失败暂停、配置和运行时变化失效、秘密引用保护、根目录／远程挂载约束、独立保存与部署、人工名称／风险确认回归通过。
+  - [x] 工作台／通知渠道／自动诊断统一接入。验证：36 项浏览器场景通过，覆盖中英文／深浅主题／390px 和 1440px、选择／调整／审核／历史重载／模型位置／安全 Markdown；认证 WebSocket 测试验证断开后按序号补发，渠道与自动诊断服务回归通过。
+  - [x] 删除旧 AI 引擎与历史兼容，更新工程规则、文档及部署。验证：Go test／build、Web lint／typecheck／build、AI／数据库／App／Compose／API／Task race、最终容器镜像构建全部通过；仅保留原有共享 UI 与构建警告。
+
+  部署验收：临时 Compose 项目使用 PostgreSQL 18.6 空库完成初始化、认证 API 和加密 AI 配置保存；数据库与控制平面重启以及数据库容器重建后均可读取原配置。真实 Docker 验收使用一次性 Engine，Unix、mTLS TCP、HTTPS/WSS Agent 三种连接均通过，包含审核后的 Compose 与“绑定通知 → Eino 提案 → 单项审批 → 实际重启 → 状态验证”。测试未依赖业务 Docker 资源；测试项目与资源按测试清理流程移除。
+
+  复现与运行要求：[Eino／PostgreSQL 运行说明](doc/eino-postgresql.md)。原生服务需要 `SUMA_DATABASE_DSN`；测试需要专用 `SUMA_TEST_DATABASE_DSN`；Compose 需要 `SUMA_POSTGRES_PASSWORD`。当前基线只初始化空库，不迁移旧开发数据。
+
+- [x] AI 工作台布局调整：入口回到运维菜单，模型选择移到输入框底部发送按钮左边，菜单向上展开。验证：22 项既有工作台与会话浏览器回归通过，覆盖运维分组归属、逐轮模型切换／发送／草稿保留／历史重载、中英文／深浅主题／390px 和 1440px；八种组合实测模型选择与发送按钮同一行且位于左侧，桌面与手机截图已检查。Web lint／typecheck／生产构建、Go test／build 及只读真实 Docker `TestRealDockerGlobalAIWorkbenchReadOnly` 冒烟通过（2026-10-07）；仅保留原有共享 UI／构建警告。复现：`cd web && npx playwright test e2e/ai-workbench.spec.ts e2e/ai-chat.spec.ts`。
+
+- [x] 全局 AI 运维与 Markdown 工作台：导航置于运维菜单（2026-10-07 调整），不跟随全局节点／Group，默认全部授权节点并支持跨节点连续追问；每次读取／提案明确运行时且保留节点证据和审计。工作台逐轮切换已配置模型、记录实际模型，非默认模型独立验证工具能力；AI 设置明确默认模型，通知渠道和自动诊断始终使用该默认项。回复支持安全 Markdown／GFM 及宽表格／代码块内部滚动。验证：服务及认证 HTTP 回归覆盖跨节点读取／提案运行时、未知模型拒绝、逐轮模型持久化、渠道／自动诊断默认项、非默认模型工具探针、授权撤销和历史范围；46 项 AI 设置／会话／通知／工作台浏览器场景通过，覆盖中英文、深浅主题、390px／1440px、跨节点连续追问、模型切换／新会话／重载、草稿保护和安全 Markdown，启动空白的两项场景独立重跑通过。Web lint／typecheck／生产及 demo 构建、Go test／build、AI race 检查、只读真实 Docker 镜像冒烟及全局 AI → 显式 Unix 运行时 → 节点／容器证据冒烟均通过（2026-10-06）；仅保留原有共享 UI／构建警告。复现说明：`doc/notifications-and-ai-operations.md`。
 
 - [x] Agent 配对后长期凭据：10 分钟单次配对令牌与持久凭据分离，支持重启／断网后自动重连，显式撤销及手动刷新立即断开旧身份，安全迁移旧凭据并更新中英文界面与部署说明。验证：旧库迁移移除凭据到期字段、延续正常过期身份并保留撤销／刷新失效、重复迁移、数据库重开、并发单次配对、HTTP 令牌到期后重连及双通道撤销拒绝、握手期间撤销的 race 回归均通过；Go test／build、Web lint／typecheck／build、两项中英文浏览器配对／刷新确认／撤销场景通过。当前源码临时镜像的真实 Docker Agent 冒烟通过，涵盖移除令牌后的持久身份重建／重启、Compose／CD／日志／统计／终端、撤销／重新配对与切回 Unix；测试资源及临时镜像已清理（2026-10-06）。复现：`npx playwright test -c playwright.project-services.config.ts agent-credentials.spec.ts`；`SUMA_RUN_DOCKER_SMOKE=1 SUMA_AGENT_SMOKE_IMAGE=<current-agent-image> go test -tags dockersmoke ./internal/api -run TestRealDockerAgentInPlaceComposeReconnectAndRevoke -count=1`。
 

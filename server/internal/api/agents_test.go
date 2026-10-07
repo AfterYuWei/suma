@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/suma/suma/server/internal/testutil"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -30,7 +31,7 @@ import (
 func TestAgentRevocationDuringControlHandshake(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +140,7 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 	})}
 	go func() { _ = engine.Serve(listener) }()
 	defer engine.Close()
-	db, err := database.Open(filepath.Join(root, "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

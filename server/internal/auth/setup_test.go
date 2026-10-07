@@ -3,17 +3,15 @@ package auth
 import (
 	"context"
 	"errors"
-	"path/filepath"
+	"github.com/suma/suma/server/internal/testutil"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/suma/suma/server/internal/database"
 )
 
 func TestInitializationKeyLifecycle(t *testing.T) {
 	ctx := context.Background()
-	db, err := database.Open(filepath.Join(t.TempDir(), "setup.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

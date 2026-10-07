@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/suma/suma/server/internal/testutil"
 	"net"
 	"net/http"
 	"os"
@@ -43,7 +44,7 @@ func projectConfigurationTransportSmoke(t *testing.T, transport, unixHost string
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "project.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +154,7 @@ func projectConfigurationTransportSmoke(t *testing.T, transport, unixHost string
 	}
 	h := projectHTTPHarness{router: NewRouter(Dependencies{Engine: &fakeEngine{}, Nodes: nodes, Auth: authentication, Audit: audit.NewService(db), Tasks: tasks, Compose: projects, ComposeRunner: runner}), cookie: &http.Cookie{Name: sessionCookie, Value: token}, db: db, compose: projects}
 	operationsTransportSmoke(t, ctx, root, unixHost, nodeID, transport, db, nodes, adapter, tasks, authentication, current, h.cookie)
- notificationAITransportSmoke(t,ctx,root,nodeID,transport,db,nodes,adapter,tasks,authentication,current)
+	notificationAITransportSmoke(t, ctx, root, nodeID, transport, db, nodes, adapter, tasks, authentication, current)
 	name := fmt.Sprintf("visual-%s-%d", transport, time.Now().UnixNano())
 	path := "/api/v1/nodes/" + nodeID + "/projects"
 	content := "# visual source\nservices:\n  app:\n    image: alpine:3.24\n    command: [sleep, '300']\n    environment:\n      APP_VALUE: ${APP_VALUE}\n    volumes:\n      - data:/data\n    healthcheck:\n      test: [CMD, 'true']\n      interval: 1s\n    cpus: 0.25\n    mem_limit: 32M\n    x-preserved: value\nvolumes:\n  data: {}\n"

@@ -3,9 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"github.com/suma/suma/server/internal/testutil"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,13 +13,12 @@ import (
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/auth"
 	"github.com/suma/suma/server/internal/config"
-	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/settings"
 	"github.com/suma/suma/server/internal/task"
 )
 
 func TestSettingsTimezoneHTTP(t *testing.T) {
-	db, err := database.Open(filepath.Join(t.TempDir(), "timezone.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -31,7 +31,7 @@ func TestGuestQueryCannotEnterDiagnosisProposalOrApproval(t *testing.T) {
 	if _, err := s.Start(ctx, RunInput{NodeID: "local", Question: "restart"}, guest); !errors.Is(err, ErrScope) {
 		t.Fatal("guest started model diagnosis", err)
 	}
-	if _, err := s.propose(ctx, database.AIRun{NodeID: "local"}, guest, OperationRequest{Action: "container.restart", ResourceID: "frozen-container"}); !errors.Is(err, ErrScope) {
+	if _, err := s.Start(ctx, RunInput{NodeID: "local", Question: "restart"}, guest); !errors.Is(err, ErrScope) {
 		t.Fatal("guest created proposal", err)
 	}
 	if _, err := s.Decide(ctx, "fake", Decision{Approve: true}, guest); !errors.Is(err, ErrScope) {

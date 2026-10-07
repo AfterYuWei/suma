@@ -41,10 +41,11 @@ type Service struct {
 	mu          sync.RWMutex
 	subscribers map[string]map[chan Event]struct{}
 	cancels     map[string]context.CancelFunc
+	done        map[string]chan struct{}
 }
 
 func NewService(db *gorm.DB) *Service {
-	return &Service{db: db, subscribers: map[string]map[chan Event]struct{}{}, cancels: map[string]context.CancelFunc{}}
+	return &Service{db: db, subscribers: map[string]map[chan Event]struct{}{}, cancels: map[string]context.CancelFunc{}, done: map[string]chan struct{}{}}
 }
 
 func (s *Service) RecoverInterrupted(ctx context.Context) error {
@@ -109,6 +110,7 @@ func (s *Service) startWithID(scope, nodeID, nodeName, taskType, name string, wo
 	ctx, cancel := context.WithCancel(context.Background())
 	s.mu.Lock()
 	s.cancels[id] = cancel
+	s.done[id] = make(chan struct{})
 	s.mu.Unlock()
 	go s.run(ctx, row, func(ctx context.Context, report Reporter) error { return work(ctx, id, report) })
 	return row, nil
@@ -121,6 +123,10 @@ func (s *Service) run(ctx context.Context, row database.Task, work Work) {
 			cancel()
 		}
 		delete(s.cancels, row.ID)
+		if done := s.done[row.ID]; done != nil {
+			close(done)
+			delete(s.done, row.ID)
+		}
 		s.mu.Unlock()
 	}()
 	now := time.Now()
@@ -272,7 +278,7 @@ func (s *Service) RecentLogsForNode(ctx context.Context, nodeID, id string, sinc
 	var rows []database.TaskLog
 	err := s.db.WithContext(ctx).Model(&database.TaskLog{}).
 		Select("id, task_id, level, substr(message, 1, ?) AS message, created_at", bytes).
-		Where("task_id = ? AND julianday(created_at) >= julianday(?)", id, since.UTC()).
+		Where("task_id = ? AND created_at >= ?", id, since.UTC()).
 		Order("created_at DESC, id DESC").Limit(lines).Find(&rows).Error
 	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
 		rows[i], rows[j] = rows[j], rows[i]
@@ -329,4 +335,21 @@ func randomID() (string, error) {
 	}
 	encoded := hex.EncodeToString(value)
 	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32], nil
+}
+
+// Wait joins an already launched Task, including its final result transaction.
+// It never starts or replays work and returns immediately for finished Tasks.
+func (s *Service) Wait(ctx context.Context, id string) error {
+	s.mu.RLock()
+	done := s.done[id]
+	s.mu.RUnlock()
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

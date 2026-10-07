@@ -10,19 +10,19 @@ import (
 
 type stubEngine struct{}
 
-func (stubEngine) Ping(context.Context) error            { return nil }
+func (stubEngine) Ping(context.Context) error { return nil }
 func (stubEngine) Info(context.Context) (docker.Info, error) {
 	return docker.Info{
-		ID: "engine-1",
-		Name: "suma-smoke",
-		ServerVersion: "27.5.1",
+		ID:              "engine-1",
+		Name:            "suma-smoke",
+		ServerVersion:   "27.5.1",
 		OperatingSystem: "Ubuntu 24.04 LTS",
-		Containers: 5,
-		Running: 3,
-		Stopped: 2,
-		Images: 12,
-		CPUs: runtime.NumCPU(),
-		MemoryBytes: 8 << 30,
+		Containers:      5,
+		Running:         3,
+		Stopped:         2,
+		Images:          12,
+		CPUs:            runtime.NumCPU(),
+		MemoryBytes:     8 << 30,
 	}, nil
 }
 func (stubEngine) Close() error { return nil }

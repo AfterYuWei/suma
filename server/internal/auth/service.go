@@ -272,7 +272,7 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uint, input ProfileI
 		updated.Username, updated.Nickname, updated.Email = input.Username, input.Nickname, input.Email
 		return tx.Model(&updated).Updates(map[string]any{"username": updated.Username, "nickname": updated.Nickname, "email": updated.Email}).Error
 	})
-	if err != nil && strings.Contains(strings.ToLower(err.Error()), "unique constraint") {
+	if err != nil && errors.Is(err, gorm.ErrDuplicatedKey) {
 		err = ErrIdentityConflict
 	}
 	return userView(updated), err

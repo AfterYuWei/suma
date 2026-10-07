@@ -2,6 +2,7 @@ package compose
 
 import (
 	"context"
+	"github.com/suma/suma/server/internal/testutil"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,7 +12,6 @@ import (
 	"time"
 
 	containerdomain "github.com/suma/suma/server/internal/container"
-	"github.com/suma/suma/server/internal/database"
 	projectdomain "github.com/suma/suma/server/internal/project"
 	"github.com/suma/suma/server/internal/task"
 )
@@ -133,7 +133,7 @@ func (runner *shadowRunner) LogsRelease(_ context.Context, _ ExecutionSpec, _ in
 
 func TestShadowPreviewUsesTemporaryProjectAndCleanupTask(t *testing.T) {
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

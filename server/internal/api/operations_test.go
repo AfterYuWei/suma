@@ -7,14 +7,13 @@ import (
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/auth"
 	"github.com/suma/suma/server/internal/credential"
-	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/imageupdate"
 	"github.com/suma/suma/server/internal/projectlogs"
 	"github.com/suma/suma/server/internal/task"
+	"github.com/suma/suma/server/internal/testutil"
 	"gorm.io/gorm"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -45,7 +44,7 @@ func (operationResolver) Resolve(context.Context, string, imageupdate.Platform, 
 	return imageupdate.Remote{ConfigDigest: "new"}, nil
 }
 func TestOperationsHTTPAndWebSocketIsolation(t *testing.T) {
-	db, err := database.Open(filepath.Join(t.TempDir(), "api.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

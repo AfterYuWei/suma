@@ -1,14 +1,14 @@
 package config
 
 import (
-	"os"
 	"path/filepath"
 	"time"
 )
 
 type Config struct {
 	Address        string
-	DatabasePath   string
+	DatabaseDSN    string
+	DataRoot       string
 	DockerHost     string
 	ComposeRoot    string
 	BackupRoot     string
@@ -23,11 +23,17 @@ type Config struct {
 	AgentPublicURL string
 }
 
-func Load() Config {
+func Load() (Config, error) {
+	values, err := ReadEnvironment()
+	if err != nil {
+		return Config{}, err
+	}
+	env := values.Get
 	dataRoot := env("SUMA_DATA_ROOT", "./data")
 	return Config{
 		Address:        env("SUMA_ADDRESS", ":8080"),
-		DatabasePath:   env("SUMA_DATABASE", filepath.Join(dataRoot, "suma.db")),
+		DatabaseDSN:    env("SUMA_DATABASE_DSN", ""),
+		DataRoot:       dataRoot,
 		DockerHost:     env("SUMA_DOCKER_HOST", "unix:///var/run/docker.sock"),
 		ComposeRoot:    env("SUMA_COMPOSE_ROOT", filepath.Join(dataRoot, "compose")),
 		BackupRoot:     env("SUMA_BACKUP_ROOT", filepath.Join(dataRoot, "backups")),
@@ -40,12 +46,5 @@ func Load() Config {
 		TrustedProxies: env("SUMA_TRUSTED_PROXIES", ""),
 		SessionMaxAge:  24 * time.Hour,
 		AgentPublicURL: env("SUMA_AGENT_PUBLIC_URL", ""),
-	}
-}
-
-func env(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return fallback
+	}, nil
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/suma/suma/server/internal/testutil"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,7 +16,7 @@ import (
 
 func testService(t *testing.T) *Service {
 	t.Helper()
-	db, err := database.Open(filepath.Join(t.TempDir(), "auth.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +33,7 @@ func TestTOTPMatchesRFC6238SHA1Vector(t *testing.T) {
 func TestTwoFactorSetupLoginRecoveryAndDisable(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "auth.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

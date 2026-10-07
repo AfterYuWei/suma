@@ -182,6 +182,9 @@ func (a *Adapter) Check(ctx context.Context, c Channel, m Secrets) (map[string]a
 }
 func telegramButtons(message Message) any {
 	rows := []any{}
+	for _, choice := range message.Choices {
+		rows = append(rows, []any{map[string]string{"text": choice.Label, "callback_data": "input:" + choice.Token}})
+	}
 	if message.ApprovalToken != "" {
 		rows = append(rows, []any{map[string]string{"text": "批准 / Approve", "callback_data": "approve:" + message.ApprovalToken}, map[string]string{"text": "拒绝 / Reject", "callback_data": "reject:" + message.ApprovalToken}})
 	} else if message.ApproveID != "" {
@@ -197,6 +200,9 @@ func feishuCard(message Message) map[string]any {
 	buttons := []any{}
 	button := func(text, kind string, value map[string]string) map[string]any {
 		return map[string]any{"tag": "button", "text": map[string]string{"tag": "plain_text", "content": text}, "type": kind, "behaviors": []any{map[string]any{"type": "callback", "value": value}}}
+	}
+	for _, choice := range message.Choices {
+		buttons = append(buttons, button(choice.Label, "default", map[string]string{"action": "input", "token": choice.Token}))
 	}
 	if message.ApprovalToken != "" {
 		buttons = append(buttons, button("批准 / Approve", "primary", map[string]string{"action": "approve", "token": message.ApprovalToken}), button("拒绝 / Reject", "danger", map[string]string{"action": "reject", "token": message.ApprovalToken}))
@@ -232,7 +238,7 @@ func (a *Adapter) Send(ctx context.Context, c Channel, m Secrets, message Messag
 			part := string(runes[:n])
 			runes = runes[n:]
 			body := map[string]any{"chat_id": c.Config.ChatID, "text": part, "link_preview_options": map[string]bool{"is_disabled": true}}
-			if len(runes) == 0 && (message.ApproveID != "" || message.ApprovalToken != "" || message.URL != "") {
+			if len(runes) == 0 && (message.ApproveID != "" || message.ApprovalToken != "" || message.URL != "" || len(message.Choices) > 0) {
 				body["reply_markup"] = telegramButtons(message)
 			}
 			result, err := a.request(ctx, "POST", "https://api.telegram.org/bot"+m.Token+"/sendMessage", body, "", false, m)

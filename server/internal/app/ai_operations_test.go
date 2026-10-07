@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"github.com/suma/suma/server/internal/testutil"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,7 +14,7 @@ import (
 
 func TestAIDigestPullUsesFrozenAuthorizedRegistryMapping(t *testing.T) {
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "test.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

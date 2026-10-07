@@ -3,6 +3,7 @@ package compose
 import (
 	"context"
 	"encoding/json"
+	"github.com/suma/suma/server/internal/testutil"
 	"io"
 	"os"
 	"path/filepath"
@@ -20,7 +21,7 @@ import (
 
 func TestCreateComposeDoesNotCreateDeliveryProject(t *testing.T) {
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +43,7 @@ func TestCreateComposeDoesNotCreateDeliveryProject(t *testing.T) {
 
 func TestCreateRequiresLowercaseNativeComposeProjectName(t *testing.T) {
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +113,7 @@ func TestManagedProjectsIgnoreMixedCaseDirectories(t *testing.T) {
 
 func TestListSummariesOmitsComposeContentAndSourcePaths(t *testing.T) {
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +211,7 @@ func (service *cleanupContainers) CleanupComposeProject(_ context.Context, name 
 }
 
 func TestCleanupExternalProjectRequiresExactNameAndRunsAsTask(t *testing.T) {
-	db, err := database.Open(filepath.Join(t.TempDir(), "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +347,7 @@ type forceRemoveRunner struct {
 }
 
 func TestBatchActionReturnsPerProjectTasks(t *testing.T) {
-	db, err := database.Open(filepath.Join(t.TempDir(), "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

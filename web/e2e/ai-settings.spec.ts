@@ -186,21 +186,11 @@ test('switching defaults clears previous connection verification and adding alte
   expect((await savedSettings(page)).tool_capable).toBe(true)
 })
 
-test('removed protocol is rejected by settings and legacy demo configuration starts disabled', async ({ page }) => {
-  await setup(page)
-  await page.addInitScript(() => {
-    if (!sessionStorage.getItem('suma-demo-operations')) sessionStorage.setItem('suma-demo-operations', JSON.stringify({
-      serial: 100,
-      settings: { version: 1, enabled: true, protocol: 'chat_completions', endpoint: 'https://example.com/v1', model: 'legacy-model', models: ['legacy-model'], allow_private: false, allow_insecure: false, node_ids: ['local'], auto_events: [], max_concurrent: 2, daily_auto_limit: 20, max_tool_calls: 8, log_lines: 500, log_bytes: 65536, approval_minutes: 15, has_secret: true, tool_capable: true },
-      channels: [], rules: [], deliveries: [], runs: [], operations: [], bindings: [], audits: [], inbox: { items: [], unread: 0 },
-    }))
-  })
-  await page.goto('/settings#ai')
-  await expect(page.getByRole('switch', { name: 'Enable AI operations', exact: true })).not.toBeChecked()
-  await expect(page.getByText('Responses', { exact: true })).toBeVisible()
-  await expect(page.getByRole('combobox', { name: 'Model protocol', exact: true })).toHaveCount(0)
-  const migrated = await savedSettings(page)
-  expect(migrated).toMatchObject({ version: 2, protocol: 'responses', enabled: false, tool_capable: false, endpoint: 'https://example.com/v1', model: 'legacy-model', has_secret: true })
+test('unsupported protocol is rejected without changing settings', async ({ page }) => {
+ await setup(page); await page.goto('/settings#ai')
+ await expect(page.getByText('Responses', { exact: true })).toBeVisible()
+ await expect(page.getByRole('combobox', { name: 'Model protocol', exact: true })).toHaveCount(0)
+ const before = await savedSettings(page)
   const rejected = await page.evaluate(async () => {
     // @ts-expect-error Vite serves the API module to the browser.
     const { api } = await import('/src/lib/api.ts')
@@ -210,5 +200,5 @@ test('removed protocol is rejected by settings and legacy demo configuration sta
   })
   expect(rejected).toMatchObject({ status: 422, message: 'Only Responses protocol is supported' })
   await page.reload()
-  expect((await savedSettings(page)).version).toBe(2)
+  expect((await savedSettings(page)).version).toBe(before.version)
 })

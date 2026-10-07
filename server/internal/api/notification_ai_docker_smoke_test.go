@@ -37,7 +37,7 @@ func (m *smokeAIModel) Complete(ctx context.Context, cfg ai.Settings, key string
 		return ai.ModelReply{Text: "connected"}, nil
 	}
 	if m.calls == 2 {
-		return ai.ModelReply{Calls: []ai.ToolCall{{ID: "probe", Name: "connection_probe", Arguments: json.RawMessage(`{}`)}}}, nil
+		return ai.ModelReply{Calls: []ai.ToolCall{{ID: "probe", Name: "connection_probe", Arguments: json.RawMessage(`{"message":"suma_connection_test"}`)}}}, nil
 	}
 	if m.calls == 3 {
 		raw, _ := json.Marshal(ai.OperationRequest{Action: "container.restart", ResourceID: m.containerID, Parameters: json.RawMessage(`{}`)})
@@ -100,6 +100,15 @@ func notificationAITransportSmoke(t *testing.T, ctx context.Context, root, nodeI
 		sum := sha256.Sum256(raw)
 		view, err := nodes.Get(ctx, id)
 		return ai.Snapshot{RuntimeKey: fmt.Sprintf("%s|%s|%v", view.EngineID, view.Endpoint, view.AgentConnectedAt), Fingerprint: hex.EncodeToString(sum[:]), Description: "Restart test container", Impact: "Test service interrupted", Details: json.RawMessage(raw)}, err
+	}, Verify: func(ctx context.Context, row database.AIOperation, snap ai.Snapshot) (ai.Verification, error) {
+		runtime, err := nodes.Runtime(ctx, row.NodeID)
+		if err != nil {
+			return ai.Verification{}, err
+		}
+		state, err := runtime.AIContainerState(ctx, row.ResourceID)
+		var before map[string]any
+		_ = json.Unmarshal(snap.Details, &before)
+		return ai.Verification{Satisfied: state["status"] == "running" && state["started_at"] != before["started_at"], Summary: "Actual Docker restart verified"}, err
 	}, Execute: func(ctx context.Context, row database.AIOperation, snap ai.Snapshot, report task.Reporter) error {
 		runtime, err := nodes.Runtime(ctx, row.NodeID)
 		if err != nil {
@@ -139,7 +148,7 @@ func notificationAITransportSmoke(t *testing.T, ctx context.Context, root, nodeI
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		latest, _ = assistant.Run(ctx, run.ID)
-		if latest.Status != "running" {
+		if latest.Status != "running" && latest.Status != "queued" {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -152,7 +161,7 @@ func notificationAITransportSmoke(t *testing.T, ctx context.Context, root, nodeI
 	if before["started_at"] != unchanged["started_at"] {
 		t.Fatal("model changed container before approval")
 	}
-	if _, err = assistant.Decide(ctx, op.ID, ai.Decision{Approve: true, ReviewToken: op.ReviewToken}, actor); err != nil {
+	if _, err = assistant.Decide(ctx, op.ID, ai.Decision{RequestID: notification.ID(), Approve: true, ReviewToken: op.ReviewToken}, actor); err != nil {
 		t.Fatal(err)
 	}
 	deadline = time.Now().Add(20 * time.Second)
@@ -187,7 +196,7 @@ func notificationAITransportSmoke(t *testing.T, ctx context.Context, root, nodeI
 	if before["started_at"] == after["started_at"] {
 		t.Fatal("restart did not happen")
 	}
-	if _, err = assistant.Decide(ctx, op.ID, ai.Decision{Approve: true, ReviewToken: op.ReviewToken}, actor); err == nil {
+	if _, err = assistant.Decide(ctx, op.ID, ai.Decision{RequestID: notification.ID(), Approve: true, ReviewToken: op.ReviewToken}, actor); err == nil {
 		t.Fatal("approval replay accepted")
 	}
 	var linked database.Task

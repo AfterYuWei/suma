@@ -75,7 +75,7 @@ func (s *Service) handleWebhook(ctx context.Context, format, hookID string, head
 	}
 	delivery := database.GitWebhookDelivery{Format: format, HookID: hookID, DeliveryID: event.DeliveryID, Event: event.Event, Repository: received, GitRef: event.Ref, CommitSHA: event.Commit, Status: "accepted"}
 	if err := s.db.WithContext(ctx).Create(&delivery).Error; err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
 			return database.Task{}, ErrWebhookDuplicate
 		}
 		return database.Task{}, err

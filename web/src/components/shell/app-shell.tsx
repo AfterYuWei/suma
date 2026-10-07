@@ -30,7 +30,7 @@ import { CommandPalette } from './command-palette'
 
 const navigationSections = [
   { key: 'docker', label: 'Docker', rawLabel: false, items: [{ label: 'containers', path: '/containers', icon: Container }, { label: 'projects', path: '/projects', icon: Layers3 }, { label: 'images', path: '/images', icon: Boxes }, { label: 'networks', path: '/networks', icon: Network }, { label: 'volumes', path: '/volumes', icon: HardDrive }] },
-  { key: 'operations', label: 'operations', rawLabel: true, items: [{ label: 'continuousDelivery', path: '/continuous-delivery', icon: GitPullRequest }, { label: 'authenticationCenter', path: '/authentication', icon: KeyRound }, { label: 'tasks', path: '/tasks', icon: Activity }, { label: 'auditLogs', path: '/audit-logs', icon: FileClock }] },
+  { key: 'operations', label: 'operations', rawLabel: true, items: [{ label: 'aiWorkbench', path: '/ai-operations', icon: Sparkles }, { label: 'continuousDelivery', path: '/continuous-delivery', icon: GitPullRequest }, { label: 'authenticationCenter', path: '/authentication', icon: KeyRound }, { label: 'tasks', path: '/tasks', icon: Activity }, { label: 'auditLogs', path: '/audit-logs', icon: FileClock }] },
   { key: 'system', label: 'system', rawLabel: true, items: [{ label: 'nodes', path: '/nodes', icon: Server }, { label: 'settings', path: '/settings', icon: Settings }] },
 ] as const
 
@@ -96,12 +96,12 @@ export function AppShell({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('keydown', listener)
   }, [commandOpen, setCommandOpen])
 
-  const selectedPath = pathname === '/ai-operations' ? '/ai-operations' : pathname === '/'
+  const selectedPath = pathname === '/'
     ? '/'
     : navigationSections.map((section) => section.items.find((item) => pathname.startsWith(item.path))?.path).find(Boolean) ?? ''
 
   const sections: NavSection[] = [
-    { key: 'overview', label: '', items: [{ key: '/', label: t('overview'), icon: CircleGauge }, { key: '/ai-operations', label: zh ? 'AI 工作台' : 'AI workbench', icon: Sparkles }] },
+    { key: 'overview', label: '', items: [{ key: '/', label: t('overview'), icon: CircleGauge }] },
     ...navigationSections.map((section) => ({
       key: section.key,
       label: section.rawLabel ? t(section.label as TranslationKey) : 'Docker',

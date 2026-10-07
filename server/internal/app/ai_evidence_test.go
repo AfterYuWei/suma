@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/suma/suma/server/internal/testutil"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -74,7 +75,7 @@ func TestAIImageEvidenceReusesCheckAndAffectedServices(t *testing.T) {
 		}
 	}))
 	defer engine.Close()
-	db, err := database.Open(filepath.Join(root, "image.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +158,7 @@ func (r *cleanupEvidenceRuntime) CleanupInventory(context.Context) (cleanup.Inve
 func TestAICleanupEvidenceExplainsProtectionWithoutDeleting(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "evidence.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

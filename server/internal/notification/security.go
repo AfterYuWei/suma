@@ -10,7 +10,7 @@ import (
 // Authentication failures contain no submitted credentials. Five failures from
 // the same identity or IP within five minutes trigger a deduplicated alert.
 func (s *Service) LoginFailed(ctx context.Context, identity, ip string) {
-	query := s.db.WithContext(ctx).Model(&database.LoginLog{}).Where("success = ? AND julianday(created_at) > julianday(?)", false, s.deps.Now().Add(-5*time.Minute))
+	query := s.db.WithContext(ctx).Model(&database.LoginLog{}).Where("success = ? AND created_at > ?", false, s.deps.Now().Add(-5*time.Minute))
 	var byIdentity, byIP int64
 	if identity != "" {
 		query.WithContext(ctx).Where("username = ?", identity).Count(&byIdentity)

@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"github.com/suma/suma/server/internal/testutil"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -10,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/suma/suma/server/internal/ai"
 	"github.com/suma/suma/server/internal/auth"
 	"github.com/suma/suma/server/internal/database"
@@ -28,7 +31,7 @@ func (workbenchModel) Complete(_ context.Context, cfg ai.Settings, _ string, _ [
 
 func TestGlobalAIWorkbenchHTTPModelScopeAuthAndHistory(t *testing.T) {
 	dir := t.TempDir()
-	db, err := database.Open(filepath.Join(dir, "workbench.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,57 +73,86 @@ func TestGlobalAIWorkbenchHTTPModelScopeAuthAndHistory(t *testing.T) {
 		router.ServeHTTP(res, req)
 		return res
 	}
+
+	create := request("POST", "/ai/conversations", "{}", "http://suma.test", true)
+	var conversation struct{ Data ai.Conversation }
+	if create.Code != 200 || json.Unmarshal(create.Body.Bytes(), &conversation) != nil {
+		t.Fatal(create.Code, create.Body.String())
+	}
+	path := "/ai/conversations/" + conversation.Data.ID + "/messages"
 	for _, check := range []struct {
 		body, origin string
 		authorized   bool
 		status       int
 	}{
-		{`{"question":"Global"}`, "http://suma.test", false, 401},
-		{`{"question":"Global"}`, "http://foreign.test", true, 403},
-		{`{"question":"Unauthorized node","node_id":"foreign"}`, "http://suma.test", true, 403},
-		{`{"question":"Unknown model","model":"unconfigured"}`, "http://suma.test", true, 422},
-		{`{"question":"Unknown fields","model_id":"alternate"}`, "http://suma.test", true, 400},
+		{`{"question":"task","request_id":"unauth"}`, "http://suma.test", false, 401},
+		{`{"question":"task","request_id":"origin"}`, "http://foreign.test", true, 403},
+		{`{"question":"task","request_id":"scope","context":{"node_ids":["foreign"]}}`, "http://suma.test", true, 403},
+		{`{"question":"task","request_id":"model","model":"unconfigured"}`, "http://suma.test", true, 422},
+		{`{"question":"task","request_id":"unknown","model_id":"alternate"}`, "http://suma.test", true, 400},
 	} {
-		res := request("POST", "/ai/runs", check.body, check.origin, check.authorized)
+		res := request("POST", path, check.body, check.origin, check.authorized)
 		if res.Code != check.status {
 			t.Fatal(check, res.Code, res.Body.String())
 		}
 	}
-	var parent string
-	for _, model := range []string{"alternate", "default"} {
-		res := request("POST", "/ai/runs", `{"question":"Compare authorized nodes","model":"`+model+`","parent_id":"`+parent+`"}`, "http://suma.test", true)
+	for i, model := range []string{"alternate", "default"} {
+		res := request("POST", path, `{"question":"Explain Docker","request_id":"turn-`+fmt.Sprint(i)+`","model":"`+model+`","context":{"node_ids":["local"]}}`, "http://suma.test", true)
 		if res.Code != 202 {
 			t.Fatal(res.Code, res.Body.String())
 		}
 		var reply struct{ Data ai.Run }
-		if err = json.Unmarshal(res.Body.Bytes(), &reply); err != nil {
-			t.Fatal(err)
+		if json.Unmarshal(res.Body.Bytes(), &reply) != nil {
+			t.Fatal("decode run")
 		}
-		if reply.Data.Model != model || reply.Data.NodeID != "" || reply.Data.ParentID != parent {
+		if reply.Data.Model != model || reply.Data.ConversationID != conversation.Data.ID {
 			t.Fatal(reply.Data)
 		}
-		parent = reply.Data.ID
-		deadline := time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			current, err := assistant.Run(context.Background(), parent)
+		until := time.Now().Add(3 * time.Second)
+		for time.Now().Before(until) {
+			row, err := assistant.Run(context.Background(), reply.Data.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if current.Status != "running" {
-				if current.Status != "completed" {
-					t.Fatal(current)
-				}
+			if row.Status == "completed" {
 				break
+			}
+			if row.Status == "failed" {
+				t.Fatal(row.Error)
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
-	res := request("GET", "/ai/runs", "", "http://suma.test", true)
-	var history struct{ Data []ai.Run }
-	if err = json.Unmarshal(res.Body.Bytes(), &history); err != nil {
+	res := request("GET", "/ai/conversations/"+conversation.Data.ID, "", "http://suma.test", true)
+	var detail struct{ Data ai.Conversation }
+	if json.Unmarshal(res.Body.Bytes(), &detail) != nil || res.Code != 200 || len(detail.Data.Runs) != 2 || len(detail.Data.Messages) != 4 {
+		t.Fatal(res.Code, res.Body.String())
+	}
+	live := httptest.NewServer(router)
+	defer live.Close()
+	headers := http.Header{"Origin": []string{live.URL}, "Cookie": []string{sessionCookie + "=" + token}}
+	socketURL := strings.Replace(live.URL, "http://", "ws://", 1) + "/ws/ai/conversations/" + conversation.Data.ID
+	socket, _, err := websocket.DefaultDialer.Dial(socketURL+"?after=0", headers)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Code != 200 || len(history.Data) != 2 || assistant.Settings().Model != "default" {
-		t.Fatal(res.Code, res.Body.String())
+	_ = socket.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var firstEvent ai.WorkflowEvent
+	if err = socket.ReadJSON(&firstEvent); err != nil {
+		t.Fatal(err)
+	}
+	_ = socket.Close()
+	resumed, _, err := websocket.DefaultDialer.Dial(socketURL+"?after="+fmt.Sprint(firstEvent.Seq), headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resumed.Close()
+	_ = resumed.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var nextEvent ai.WorkflowEvent
+	if err = resumed.ReadJSON(&nextEvent); err != nil || nextEvent.Seq != firstEvent.Seq+1 {
+		t.Fatal("event replay duplicated or skipped a sequence", err)
+	}
+	if request("POST", "/ai/runs", `{}`, "http://suma.test", true).Code != 404 {
+		t.Fatal("legacy run creation endpoint retained")
 	}
 }

@@ -1,250 +1,93 @@
-package database
+package database_test
 
 import (
-	"path/filepath"
+	"context"
+	"errors"
+	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/testutil"
+	"gorm.io/gorm"
+	"strings"
 	"testing"
 	"time"
-
-	"github.com/glebarez/sqlite"
-	"gorm.io/gorm"
 )
 
-type legacyUser struct {
-	ID           uint   `gorm:"primaryKey"`
-	Username     string `gorm:"uniqueIndex;size:64;not null"`
-	PasswordHash string `gorm:"not null"`
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-}
-
-func (legacyUser) TableName() string { return "users" }
-
-func TestOpenMigratesDatabase(t *testing.T) {
-	db, err := Open(filepath.Join(t.TempDir(), "suma.db"))
+func TestPostgresBaselineAndReopen(t *testing.T) {
+	dsn := testutil.DSN(t)
+	db, err := database.Open(dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !db.Migrator().HasTable(&User{}) || !db.Migrator().HasTable(&Task{}) || !db.Migrator().HasTable(&NodeGroup{}) || !db.Migrator().HasTable(&NodeGroupNode{}) {
-		t.Fatal("expected core tables to be migrated")
+	defer func() { p, _ := db.DB(); _ = p.Close() }()
+	for _, model := range database.Models() {
+		if !db.Migrator().HasTable(model) {
+			t.Errorf("missing table for %T", model)
+		}
 	}
-}
-
-type legacyAgentCredential struct {
-	NodeID     string `gorm:"primaryKey;size:64"`
-	SecretHash string `gorm:"size:64;not null"`
-	ExpiresAt  time.Time
-	RevokedAt  *time.Time
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-}
-
-func (legacyAgentCredential) TableName() string { return "agent_credentials" }
-
-func TestOpenMigratesPersistentAgentCredentialsWithoutRevivingInvalidatedOnes(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "legacy-agent.db")
-	legacy, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	if db.Migrator().HasTable("ai_audits") {
+		t.Fatal("duplicate AI audit table must not exist")
+	}
+	row := database.User{Username: "retained", Email: "User@Example.test", PasswordHash: "fixture"}
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := database.Open(dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := legacy.AutoMigrate(&AgentEnrollment{}, &legacyAgentCredential{}); err != nil {
-		t.Fatal(err)
+	defer func() { p, _ := reopened.DB(); _ = p.Close() }()
+	var found database.User
+	if err := reopened.First(&found, row.ID).Error; err != nil || found.Username != row.Username {
+		t.Fatal("reopen lost PostgreSQL state")
 	}
-	now := time.Now().UTC()
-	for _, item := range []struct {
-		id       string
-		deadline time.Time
-		revoked  bool
-	}{
-		{"expired", now.Add(-time.Hour), false},
-		{"valid", now.Add(time.Minute), false},
-		{"revoked", now.Add(-time.Hour), true},
-		{"refreshed", now.Add(-time.Hour), false},
-		{"canceled", now.Add(-time.Hour), false},
-	} {
-		credential := legacyAgentCredential{NodeID: item.id, SecretHash: "hash-" + item.id, ExpiresAt: item.deadline}
-		if item.revoked {
-			credential.RevokedAt = &now
-		}
-		if err := legacy.Create(&credential).Error; err != nil {
-			t.Fatal(err)
-		}
-		if item.id == "canceled" {
-			continue
-		}
-		enrollment := AgentEnrollment{NodeID: item.id, TokenHash: "token-hash-" + item.id, ExpiresAt: item.deadline, ConsumedAt: &now}
-		if item.id == "refreshed" {
-			enrollment.ExpiresAt = now.Add(10 * time.Minute)
-			enrollment.ConsumedAt = nil
-		}
-		if err := legacy.Create(&enrollment).Error; err != nil {
-			t.Fatal(err)
-		}
+	var groups int64
+	reopened.Model(&database.NodeGroup{}).Count(&groups)
+	if groups != 1 {
+		t.Fatal("default group duplicated")
 	}
-	legacySQL, err := legacy.DB()
-	if err != nil {
-		t.Fatal(err)
+	if err := reopened.Create(&database.User{Username: "other", Email: "user@example.test", PasswordHash: "fixture"}).Error; !errors.Is(err, gorm.ErrDuplicatedKey) {
+		t.Fatal("case-insensitive email uniqueness was not enforced")
 	}
-	if err := legacySQL.Close(); err != nil {
-		t.Fatal(err)
-	}
-	for range 2 {
-		db, err := Open(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if db.Migrator().HasColumn(&AgentCredential{}, "expires_at") {
-			t.Fatal("credential expiry column survived migration")
-		}
-		var credentials []AgentCredential
-		if err := db.Find(&credentials).Error; err != nil {
-			t.Fatal(err)
-		}
-		if len(credentials) != 5 {
-			t.Fatalf("migration lost credentials: %d", len(credentials))
-		}
-		for _, credential := range credentials {
-			wantRevoked := credential.NodeID != "expired" && credential.NodeID != "valid"
-			if (credential.RevokedAt != nil) != wantRevoked || credential.SecretHash != "hash-"+credential.NodeID {
-				t.Fatalf("migration changed credential identity or revocation for %s", credential.NodeID)
-			}
-			if credential.NodeID == "revoked" && !credential.RevokedAt.Equal(now) {
-				t.Fatal("migration changed existing revocation time")
-			}
-		}
-		sqlDB, err := db.DB()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := sqlDB.Close(); err != nil {
-			t.Fatal(err)
-		}
+	if err := reopened.Create(&database.NodeGroup{Name: "default"}).Error; !errors.Is(err, gorm.ErrDuplicatedKey) {
+		t.Fatal("case-insensitive group uniqueness was not enforced")
 	}
 }
 
-func TestOpenMigratesLegacyUserProfileColumns(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "legacy.db")
-	legacy, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+func TestPostgresRollbackAndTimeByteFields(t *testing.T) {
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := legacy.AutoMigrate(&legacyUser{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := legacy.Create(&legacyUser{Username: "admin", PasswordHash: "hash"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	sqlDB, err := legacy.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := sqlDB.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	db, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, column := range []string{"nickname", "email", "avatar_data", "avatar_mime", "avatar_updated_at"} {
-		if !db.Migrator().HasColumn(&User{}, column) {
-			t.Fatalf("missing migrated users.%s", column)
+	sentinel := errors.New("rollback")
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		returnErr := tx.Create(&database.Setting{Key: "rollback", Value: "fixture"}).Error
+		if returnErr != nil {
+			return returnErr
 		}
-	}
-	var user User
-	if err := db.First(&user).Error; err != nil {
-		t.Fatal(err)
-	}
-	if user.Username != "admin" || user.Email != "" || user.Nickname != "" {
-		t.Fatalf("legacy user changed during migration: %#v", user)
-	}
-}
-
-func TestOpenBackfillsNodeGroupsOnce(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "legacy-nodes.db")
-	legacy, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := legacy.AutoMigrate(&Node{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := legacy.Create(&Node{ID: "edge", Name: "Edge", ConnectionType: "unix", Endpoint: "unix:///edge.sock", TLSMode: "disabled", AllowedBindRootsJSON: "[]", Enabled: true}).Error; err != nil {
-		t.Fatal(err)
-	}
-	sqlDB, err := legacy.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := sqlDB.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	db, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var group NodeGroup
-	if err := db.Where("is_default = ?", true).First(&group).Error; err != nil {
+		return sentinel
+	}); !errors.Is(err, sentinel) {
 		t.Fatal(err)
 	}
 	var count int64
-	if err := db.Model(&NodeGroupNode{}).Where("group_id = ? AND node_id = ?", group.ID, "edge").Count(&count).Error; err != nil || count != 1 {
-		t.Fatalf("default membership count = %d, err = %v", count, err)
+	db.Model(&database.Setting{}).Where("key = ?", "rollback").Count(&count)
+	if count != 0 {
+		t.Fatal("transaction did not roll back")
 	}
-	if err := db.Delete(&group).Error; err != nil {
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	row := database.FileRevision{NodeID: "node", ContainerID: "container", Path: "/test", Ciphertext: []byte{0, 255, 1}, CreatedAt: at}
+	if err := db.Create(&row).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := migrateNodeGroups(db); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Model(&NodeGroup{}).Count(&count).Error; err != nil || count != 0 {
-		t.Fatalf("one-time migration recreated deleted default group: count=%d err=%v", count, err)
+	var found database.FileRevision
+	if err := db.WithContext(context.Background()).Where("created_at >= ?", at).First(&found).Error; err != nil || !found.CreatedAt.Equal(at) || string(found.Ciphertext) != string(row.Ciphertext) {
+		t.Fatal("PostgreSQL byte/time round trip failed")
 	}
 }
 
-func TestScopedHistoryMigrationBackfillsDeliveryStateIdempotently(t *testing.T) {
-	db, err := Open(filepath.Join(t.TempDir(), "history.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	project := DeliveryProject{Name: "production", ReconcileMode: "manual"}
-	if err := db.Create(&project).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Create(&DeliveryProjectNode{ProjectID: project.ID, NodeID: "edge"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	release := DeliveryRelease{ProjectID: project.ID, CommitSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Status: "succeeded"}
-	if err := db.Create(&release).Error; err != nil {
-		t.Fatal(err)
-	}
-	deployment := DeliveryReleaseDeployment{ReleaseID: release.ID, NodeID: "edge", NodeName: "Edge", TaskID: "node-task", Status: "succeeded", HealthSummary: "healthy"}
-	if err := db.Create(&deployment).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Create(&Task{ID: "cd-parent", Scope: "node", NodeID: "local", NodeName: "Local", Type: "cd.deploy", Name: "deploy", Status: "success"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Create(&AuditLog{Scope: "node", NodeID: "local", NodeName: "Local", Action: "settings.update", Result: "success"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := migrateNodeScopesAndDeliveryHistory(db); err != nil {
-		t.Fatal(err)
-	}
-	if err := migrateNodeScopesAndDeliveryHistory(db); err != nil {
-		t.Fatal(err)
-	}
-	var attemptCount int64
-	_ = db.Model(&DeliveryDeploymentAttempt{}).Where("deployment_id = ?", deployment.ID).Count(&attemptCount).Error
-	var state DeliveryTargetState
-	stateErr := db.Where("project_id = ? AND node_id = ?", project.ID, "edge").First(&state).Error
-	var parent Task
-	_ = db.First(&parent, "id = ?", "cd-parent").Error
-	var audit AuditLog
-	_ = db.First(&audit, "action = ?", "settings.update").Error
-	var updatedProject DeliveryProject
-	_ = db.First(&updatedProject, project.ID).Error
-	if attemptCount != 1 || stateErr != nil || state.ActiveReleaseID == nil || *state.ActiveReleaseID != release.ID || parent.Scope != "control_plane" || parent.NodeID != "" || audit.Scope != "control_plane" || audit.NodeID != "" || updatedProject.ActiveCommit != release.CommitSHA {
-		t.Fatalf("backfill mismatch: attempts=%d state=%#v parent=%#v audit=%#v project=%#v err=%v", attemptCount, state, parent, audit, updatedProject, stateErr)
+func TestPostgresConfigurationErrorsArePrivate(t *testing.T) {
+	for _, dsn := range []string{"", "postgres://user:private-password@%invalid/db"} {
+		_, err := database.Open(dsn)
+		if err == nil || strings.Contains(err.Error(), "private-password") {
+			t.Fatal("configuration error missing or exposes credentials")
+		}
 	}
 }

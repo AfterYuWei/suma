@@ -35,6 +35,8 @@ type Settings struct {
 	MaxConcurrent     int      `json:"max_concurrent"`
 	DailyAutoLimit    int      `json:"daily_auto_limit"`
 	MaxToolCalls      int      `json:"max_tool_calls"`
+	MaxIterations     int      `json:"max_iterations"`
+	MaxOperations     int      `json:"max_operations"`
 	LogLines          int      `json:"log_lines"`
 	LogBytes          int      `json:"log_bytes"`
 	ApprovalMinutes   int      `json:"approval_minutes"`
@@ -63,32 +65,36 @@ type Actor struct {
 	IP             string
 }
 type RunInput struct {
+	ConversationID string `json:"conversation_id,omitempty"`
 	NodeID         string `json:"node_id"`
 	Model          string `json:"model,omitempty"`
 	ResourceNodeID string `json:"resource_node_id,omitempty"`
 	Question       string `json:"question"`
 	ResourceType   string `json:"resource_type,omitempty"`
 	ResourceID     string `json:"resource_id,omitempty"`
-	ParentID       string `json:"parent_id,omitempty"`
 	EventID        string `json:"event_id,omitempty"`
 }
 type ToolArgs struct {
 	NodeID string `json:"node_id,omitempty"`
 	Kind   string `json:"kind,omitempty"`
 	ID     string `json:"id,omitempty"`
+	Query  string `json:"query,omitempty"`
+	Cursor string `json:"cursor,omitempty"`
 }
 type OperationRequest struct {
+	StepID     string          `json:"step_id,omitempty"`
 	NodeID     string          `json:"node_id,omitempty"`
 	Action     string          `json:"action"`
 	ResourceID string          `json:"resource_id"`
 	Parameters json.RawMessage `json:"parameters"`
 }
 type Snapshot struct {
-	RuntimeKey  string          `json:"runtime_key"`
-	Fingerprint string          `json:"fingerprint"`
-	Description string          `json:"description"`
-	Impact      string          `json:"impact"`
-	Details     json.RawMessage `json:"details"`
+	RuntimeKey    string          `json:"runtime_key"`
+	Fingerprint   string          `json:"fingerprint"`
+	Description   string          `json:"description"`
+	Impact        string          `json:"impact"`
+	Details       json.RawMessage `json:"details"`
+	Confirmations []Confirmation  `json:"confirmations,omitempty"`
 }
 type Evidence struct {
 	NodeID      string    `json:"node_id,omitempty"`
@@ -106,19 +112,28 @@ type Result struct {
 }
 type Run struct {
 	database.AIRun
-	Result Result `json:"result"`
+	Result        Result       `json:"result"`
+	TargetNodeIDs []string     `json:"target_node_ids"`
+	Steps         []PlanStep   `json:"steps"`
+	Interaction   *Interaction `json:"interaction,omitempty"`
 }
 type Operation struct {
 	database.AIOperation
-	Parameters  json.RawMessage `json:"parameters"`
-	Snapshot    Snapshot        `json:"snapshot"`
-	ReviewToken string          `json:"review_token"`
+	Parameters    json.RawMessage `json:"parameters"`
+	Snapshot      Snapshot        `json:"snapshot"`
+	ReviewToken   string          `json:"review_token"`
+	Confirmations []Confirmation  `json:"confirmations"`
+	Verification  json.RawMessage `json:"verification"`
 }
 type Decision struct {
-	ReviewToken string `json:"review_token"`
-	Approve     bool   `json:"approve"`
+	ReviewToken   string            `json:"review_token"`
+	Approve       bool              `json:"approve"`
+	RequestID     string            `json:"request_id,omitempty"`
+	Confirmations map[string]string `json:"confirmations,omitempty"`
 }
 type Dependencies struct {
+	Check      func(context.Context, string, ToolArgs, Actor) (database.Task, error)
+	Deliver    func(context.Context, Actor, WorkflowEvent, Run) error
 	Audit      *audit.Service
 	Now        func() time.Time
 	Model      Model
@@ -128,6 +143,9 @@ type Dependencies struct {
 	ActorValid func(context.Context, Actor) error
 	Query      func(context.Context, string) (QuerySummary, error)
 	Emit       event.Sink
+	Resources  func(context.Context, string, ToolArgs) ([]ResourceOption, error)
+	Verify     func(context.Context, database.AIOperation, Snapshot) (Verification, error)
+	Draft      func(context.Context, string, DraftInput) (DraftResult, error)
 }
 type ToolCall struct {
 	ID        string
@@ -155,5 +173,5 @@ type Model interface {
 }
 
 func DefaultSettings() Settings {
-	return Settings{Protocol: ProtocolResponses, Endpoint: "https://api.openai.com/v1", Models: []string{}, NodeIDs: []string{}, AutoEvents: []string{}, MaxConcurrent: 2, DailyAutoLimit: 20, MaxToolCalls: 8, LogLines: 500, LogBytes: 64 << 10, ApprovalMinutes: 15}
+	return Settings{Protocol: ProtocolResponses, Endpoint: "https://api.openai.com/v1", Models: []string{}, NodeIDs: []string{}, AutoEvents: []string{}, MaxConcurrent: 2, DailyAutoLimit: 20, MaxToolCalls: 8, MaxIterations: 40, MaxOperations: 20, LogLines: 500, LogBytes: 64 << 10, ApprovalMinutes: 15}
 }

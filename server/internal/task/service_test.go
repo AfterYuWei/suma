@@ -3,13 +3,13 @@ package task
 import (
 	"context"
 	"github.com/suma/suma/server/internal/database"
-	"path/filepath"
+	"github.com/suma/suma/server/internal/testutil"
 	"testing"
 	"time"
 )
 
 func TestTaskLifecycle(t *testing.T) {
-	db, err := database.Open(filepath.Join(t.TempDir(), "tasks.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestTaskLifecycle(t *testing.T) {
 }
 
 func TestTaskStepsAreUpserted(t *testing.T) {
-	db, err := database.Open(filepath.Join(t.TempDir(), "task-steps.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestTaskStepsAreUpserted(t *testing.T) {
 }
 
 func TestUpdateProgressDoesNotAppendTaskLog(t *testing.T) {
-	db, err := database.Open(filepath.Join(t.TempDir(), "task-progress.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

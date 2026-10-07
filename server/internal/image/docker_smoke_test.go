@@ -4,8 +4,8 @@ package image_test
 
 import (
 	"context"
+	"github.com/suma/suma/server/internal/testutil"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -30,7 +30,7 @@ func TestRealDockerPullPersistsLayerProgress(t *testing.T) {
 	if err := adapter.Ping(ctx); err != nil {
 		t.Fatal(err)
 	}
-	db, err := database.Open(filepath.Join(t.TempDir(), "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

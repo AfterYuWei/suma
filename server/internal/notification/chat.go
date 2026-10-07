@@ -508,3 +508,16 @@ func (s *Service) ValidateChatActor(ctx context.Context, user uint, bindingID st
 	_, err := s.ValidateBinding(ctx, user, bindingID)
 	return err
 }
+
+// Input commands can be corrected without burning their one-use token. The
+// caller consumes it only after the workflow accepts the validated answer.
+func (s *Service) PeekAction(ctx context.Context, in Incoming, b database.NotificationBinding) (string, error) {
+	if _, err := s.ValidateBinding(ctx, b.UserID, b.ID); err != nil {
+		return "", err
+	}
+	var row database.NotificationAction
+	if err := s.db.WithContext(ctx).Where("token_hash = ? AND binding_id = ? AND channel_id = ? AND chat_id = ? AND consumed_at IS NULL AND expires_at > ?", hash(in.OperationID), b.ID, in.ChannelID, in.ChatID, s.deps.Now()).First(&row).Error; err != nil {
+		return "", ErrConflict
+	}
+	return row.OperationID, nil
+}

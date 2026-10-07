@@ -3,7 +3,7 @@ package cleanup
 import (
 	"context"
 	"errors"
-	"path/filepath"
+	"github.com/suma/suma/server/internal/testutil"
 	"sync"
 	"testing"
 	"time"
@@ -73,7 +73,7 @@ func (f *fakeRuntime) CleanupPruneCache(_ context.Context, opts CacheOptions) (C
 }
 func fixture(t *testing.T, f *fakeRuntime) (*Service, Actor) {
 	t.Helper()
-	db, err := database.Open(filepath.Join(t.TempDir(), "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

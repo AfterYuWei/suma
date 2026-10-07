@@ -23,7 +23,7 @@ type Service struct {
 }
 
 func NewService(db *gorm.DB, cfg config.Config) *Service {
-	return &Service{db: db, defaults: map[string]string{"general.server_name": "SUMA", "general.language": "en", "general.timezone": "system", "docker.compose_command": cfg.ComposeCommand, "storage.compose_root": cfg.ComposeRoot, "storage.data_root": strings.TrimSuffix(cfg.DatabasePath, "/suma.db"), "storage.backup_root": cfg.BackupRoot, "security.browser_origin": cfg.BrowserOrigin, "security.trusted_proxies": cfg.TrustedProxies, "appearance.theme": "system", "registry.default": ""}}
+	return &Service{db: db, defaults: map[string]string{"general.server_name": "SUMA", "general.language": "en", "general.timezone": "system", "docker.compose_command": cfg.ComposeCommand, "storage.compose_root": cfg.ComposeRoot, "storage.data_root": cfg.DataRoot, "storage.backup_root": cfg.BackupRoot, "security.browser_origin": cfg.BrowserOrigin, "security.trusted_proxies": cfg.TrustedProxies, "appearance.theme": "system", "registry.default": ""}}
 }
 
 func (s *Service) LoadSecurity(ctx context.Context) error {

@@ -71,23 +71,41 @@ Save this as `docker-compose.yml`:
 
 ```yaml
 services:
+  postgres:
+    image: postgres:18.6
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: suma
+      POSTGRES_DB: suma
+      POSTGRES_PASSWORD: ${SUMA_POSTGRES_PASSWORD:?Set a random hexadecimal password}
+    volumes:
+      - suma-postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U suma -d suma"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
   suma:
-    image: ghcr.io/afteryuwei/suma:stable # pin a version tag like :0.1.0 for fixed releases
+    image: ghcr.io/afteryuwei/suma:stable
     container_name: suma
     restart: unless-stopped
-    ports:
-      - "8080:8080"
+    ports: ["8080:8080"]
+    environment:
+      SUMA_DATABASE_DSN: postgres://suma:${SUMA_POSTGRES_PASSWORD:?Set a random hexadecimal password}@postgres:5432/suma?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
-      # The in-container data root is fixed to /Data (baked in as ENV SUMA_DATA_ROOT=/Data);
-      # no environment variable needed. Keep both sides of the mount at the same path so
-      # relative bind mounts inside delivered projects resolve on the host daemon.
       - /Data:/Data
       - /var/run/docker.sock:/var/run/docker.sock
+volumes:
+  suma-postgres:
 ```
 
 Start it:
 
 ```bash
+# .env: SUMA_POSTGRES_PASSWORD=<random hexadecimal password, at least 32 characters>
 mkdir -p /Data && docker compose up -d
 ```
 
@@ -95,15 +113,18 @@ To store data on another disk: make `/Data` a symlink to a target partition, or 
 
 ### Option 2: docker run
 
+Provision an empty PostgreSQL 18.6 database and write `SUMA_DATABASE_DSN` to a private `suma.env` file passed with `--env-file`. Verify server identity with TLS for remote databases. Missing DSNs, unavailable databases and failed migrations stop startup. Old development data is not migrated.
+
 ```bash
 mkdir -p /Data
 
 docker run -d --name suma \
   --restart unless-stopped \
   -p 8080:8080 \
+  --env-file ./suma.env \
   -v /Data:/Data \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/afteryuwei/suma:v0.1.0
+  ghcr.io/afteryuwei/suma:stable
 ```
 
 ### First use
@@ -115,6 +136,8 @@ Open `http://<host-ip>:8080`, create the administrator account, and sign in.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SUMA_DATA_ROOT` | `/Data` (baked into the production image; bare-metal runs default to `./data`) | Root for data and credentials; all other paths derive from it by default |
+| `SUMA_DATABASE_DSN` | Required | PostgreSQL URL; never display or log credentials |
+| `SUMA_ENV_FILE` | Discover `.env.local` | Select a private startup configuration file; `-` disables file loading; process environment takes precedence |
 | `SUMA_ADDRESS` | `:8080` | Listen address (map the host port accordingly) |
 | `SUMA_COOKIE_SECURE` | `false` | Optional force-on override; HTTPS browser access automatically uses Secure cookies |
 | `SUMA_BROWSER_ORIGIN` | empty | Optional advanced origin restriction; normally the request host and port are checked automatically |
@@ -137,6 +160,9 @@ Open `http://<host-ip>:8080`, create the administrator account, and sign in.
 git clone https://github.com/AfterYuWei/suma.git
 cd suma
 make install       # install frontend deps and Go modules
+make local-config  # create .env.local and fill in your existing PostgreSQL credentials
+# Native startup and tests read .env.local automatically (127.0.0.1:5432/suma).
+# Optional bundled dev database: configure .env, run make db-up, use port 55432 in .env.local.
 make dev           # local development mode (web 5173 / server 8081)
 make docker-up     # build and start the production container
 ```
@@ -155,7 +181,7 @@ Quality checks: `make check` (backend `go test ./...` + `go build ./...`; fronte
 
 ### Deploy the Agent with Docker
 
-The Compose file generated on the Nodes page already includes the one-time token in the `SUMA_AGENT_TOKEN` environment variable. Copy it to the Agent host as `docker-compose.yml`; do not commit a file containing the token. Enrollment tokens expire after 10 minutes and can be used only once. The paired Agent credential remains valid until revoked or replaced; token expiry does not affect automatic reconnection after Agent or control-plane restarts. Keep the suma-agent-data volume. Upgrades preserve normally paired legacy credentials, including those past their former deadline, while previously revoked or manually invalidated credentials remain invalid. If writing Compose manually, replace the placeholder below. The SUMA address must be reachable from the Agent over HTTPS. Your reverse proxy must allow WebSocket upgrades and long-lived connections. For a private CA, mount its PEM file read-only and set `SUMA_AGENT_CA_FILE`; TLS verification cannot be disabled.
+The Compose file generated on the Nodes page already includes the one-time token in the `SUMA_AGENT_TOKEN` environment variable. Copy it to the Agent host as `docker-compose.yml`; do not commit a file containing the token. Enrollment tokens expire after 10 minutes and can be used only once. The paired Agent credential remains valid until revoked or replaced; token expiry does not affect automatic reconnection after Agent or control-plane restarts. Keep the suma-agent-data volume. If writing Compose manually, replace the placeholder below. The SUMA address must be reachable from the Agent over HTTPS. Your reverse proxy must allow WebSocket upgrades and long-lived connections. For a private CA, mount its PEM file read-only and set `SUMA_AGENT_CA_FILE`; TLS verification cannot be disabled.
 
 ```yaml
 services:
@@ -179,7 +205,9 @@ Run `docker compose up -d` and verify the node is online. You can then remove `S
 
 ## Data and backups
 
-- `/Data` holds the SQLite database, local Compose projects, Delivery Project Git worktrees, and the credential-encryption key `secret.key`
+- PostgreSQL state lives in the `suma-postgres` volume. `/Data` independently holds Compose projects, Git worktrees and the credential-encryption key `secret.key`
+- `/Data/compose/` contains managed Compose YAML, environment files and SUMA project metadata; `/Data/gitops/` contains CD repositories and revision worktrees; `/Data/backups/` is reserved and has no automated backup job
+- Users, nodes, settings, AI / notification configuration, audit, Tasks and Agent checkpoints live in PostgreSQL. Native `.env.local` startup configuration lives in the project root
 - Back up the whole directory before upgrades or migrations; losing `secret.key` makes stored credentials undecryptable
 
 ## Documentation
@@ -187,6 +215,7 @@ Run `docker compose up -d` and verify the node is online. You can then remove `S
 - [PLANS.md](../../PLANS.md): feature progress and pre-launch verification log
 - [ARCHITECTURE.md](../../ARCHITECTURE.md): architecture overview
 - [API.md](../../API.md): REST / WebSocket API reference
+- [Eino / PostgreSQL operations](eino-postgresql.md): initialization, Agent recovery, approvals, channels and verification commands
 - [CD-DESIGN.md](../../CD-DESIGN.md): continuous delivery design model
 
 ## Scheduled Docker storage cleanup

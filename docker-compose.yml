@@ -1,4 +1,18 @@
 services:
+  postgres:
+    image: postgres:18.6
+    restart: "no"
+    environment:
+      POSTGRES_USER: suma
+      POSTGRES_DB: suma
+      POSTGRES_PASSWORD: ${SUMA_POSTGRES_PASSWORD:?Set SUMA_POSTGRES_PASSWORD in .env}
+    volumes:
+      - suma-postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U suma -d suma"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
   suma:
     container_name: suma
     build: .
@@ -9,8 +23,15 @@ services:
     environment:
       SUMA_ADDRESS: ":8080"
       SUMA_DOCKER_HOST: "unix:///var/run/docker.sock"
+      SUMA_DATABASE_DSN: postgres://suma:${SUMA_POSTGRES_PASSWORD:?Set SUMA_POSTGRES_PASSWORD in .env}@postgres:5432/suma?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       # 生产镜像数据根目录固定为 /Data（镜像内 ENV SUMA_DATA_ROOT=/Data）。
       # bind 源必须在宿主机 daemon 可见的同一路径下。
       - /Data:/Data
       - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  suma-postgres:

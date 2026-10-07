@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/suma/suma/server/internal/testutil"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -131,7 +132,7 @@ func cleanupTransportSmoke(t *testing.T, transport, unixHost string) {
 	dangling := commit("")
 	tagged := commit(marker + ":retained")
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

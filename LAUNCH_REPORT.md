@@ -1,3 +1,5 @@
+> 此文件记录早期上线验收。当前 Eino ADK／PostgreSQL 切换及验证以 [PLANS.md](PLANS.md) 和 [运行说明](doc/eino-postgresql.md) 为准。
+
 # SUMA 上线与验收报告
 
 ## 当前 V2 验收结论（2026-09-23）

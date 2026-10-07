@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/suma/suma/server/internal/testutil"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -47,7 +48,7 @@ func (f *fakeEngine) Close() error { return nil }
 
 func testRouter(t *testing.T, engine docker.Engine) *gin.Engine {
 	t.Helper()
-	db, err := database.Open(filepath.Join(t.TempDir(), "api.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +147,7 @@ func TestLegacyGitCredentialRouteIsRemoved(t *testing.T) {
 
 func TestAuthenticationCenterCredentialHTTP(t *testing.T) {
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "api.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +219,7 @@ func TestUnknownAPIEndpointReturnsJSONInsteadOfSPA(t *testing.T) {
 
 func TestTaskAndAuditNodeScopesAreIsolated(t *testing.T) {
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "scopes.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +294,7 @@ func TestTaskAndAuditNodeScopesAreIsolated(t *testing.T) {
 
 func TestNodeGroupHTTPAndFleetFiltering(t *testing.T) {
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "groups-api.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +375,7 @@ func TestNodeGroupHTTPAndFleetFiltering(t *testing.T) {
 }
 
 func TestAuthenticationLifecycle(t *testing.T) {
-	db, err := database.Open(filepath.Join(t.TempDir(), "auth-lifecycle.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -433,7 +434,7 @@ func TestAuthenticationLifecycle(t *testing.T) {
 
 func TestTwoFactorAuthenticationHTTP(t *testing.T) {
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "two-factor.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -533,8 +534,7 @@ func testTOTPCode(t *testing.T, encodedSecret string, at time.Time) string {
 }
 
 func TestAccountProfilePasswordAndAvatarHTTP(t *testing.T) {
-	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "account.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -708,7 +708,7 @@ func newProjectHTTPHarness(t *testing.T) projectHTTPHarness {
 	t.Cleanup(engine.Close)
 
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "api.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

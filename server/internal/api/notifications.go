@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"errors"
+	"github.com/gorilla/websocket"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -235,20 +237,40 @@ func registerNotificationRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps De
 		}
 		success(c, gin.H{"models": models})
 	})
-	routes.GET("/runs", func(c *gin.Context) {
-		result, err := service.Runs(c.Request.Context())
+	routes.GET("/conversations", func(c *gin.Context) {
+		rows, err := service.Conversations(c.Request.Context(), actor(c))
 		if err != nil {
 			operationsFailure(c, err)
 			return
 		}
-		success(c, result)
+		success(c, rows)
 	})
-	routes.POST("/runs", func(c *gin.Context) {
-		var in ai.RunInput
+	routes.POST("/conversations", func(c *gin.Context) {
+		var in ai.ConversationInput
 		if !bindCleanup(c, &in) {
 			return
 		}
-		row, err := service.Start(c.Request.Context(), in, actor(c))
+		row, err := service.CreateConversation(c.Request.Context(), in, actor(c))
+		if err != nil {
+			operationsFailure(c, err)
+			return
+		}
+		success(c, row)
+	})
+	routes.GET("/conversations/:id", func(c *gin.Context) {
+		row, err := service.Conversation(c.Request.Context(), c.Param("id"), actor(c))
+		if err != nil {
+			operationsFailure(c, err)
+			return
+		}
+		success(c, row)
+	})
+	routes.POST("/conversations/:id/messages", func(c *gin.Context) {
+		var in ai.MessageInput
+		if !bindCleanup(c, &in) {
+			return
+		}
+		row, err := service.PostMessage(c.Request.Context(), c.Param("id"), in, actor(c))
 		if err != nil {
 			operationsFailure(c, err)
 			return
@@ -256,7 +278,27 @@ func registerNotificationRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps De
 		c.JSON(202, envelope{Code: 0, Message: "success", Data: row})
 	})
 	routes.GET("/runs/:id", func(c *gin.Context) {
-		row, err := service.Run(c.Request.Context(), c.Param("id"))
+		row, err := service.RunAs(c.Request.Context(), c.Param("id"), actor(c))
+		if err != nil {
+			operationsFailure(c, err)
+			return
+		}
+		success(c, row)
+	})
+	routes.POST("/runs/:id/inputs", func(c *gin.Context) {
+		var in ai.InputAnswer
+		if !bindCleanup(c, &in) {
+			return
+		}
+		row, err := service.AnswerInput(c.Request.Context(), c.Param("id"), in, actor(c))
+		if err != nil {
+			operationsFailure(c, err)
+			return
+		}
+		success(c, row)
+	})
+	routes.POST("/runs/:id/cancel", func(c *gin.Context) {
+		row, err := service.CancelRun(c.Request.Context(), c.Param("id"), actor(c))
 		if err != nil {
 			operationsFailure(c, err)
 			return
@@ -299,19 +341,30 @@ func registerNotificationRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps De
 		}
 		success(c, result)
 	})
-	router.GET("/ws/ai/runs/:id", requireAuth(deps.Auth), func(c *gin.Context) {
-		if _, err := service.Run(c.Request.Context(), c.Param("id")); err != nil {
+	router.GET("/ws/ai/conversations/:id", requireAuth(deps.Auth), func(c *gin.Context) {
+		key := c.Param("id")
+		who := actor(c)
+		if _, err := service.Conversation(c.Request.Context(), key, who); err != nil {
 			operationsFailure(c, err)
+			return
+		}
+		after, err := strconv.ParseUint(c.DefaultQuery("after", "0"), 10, 64)
+		if err != nil {
+			operationsFailure(c, ai.ErrInvalid)
 			return
 		}
 		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
 			return
 		}
-		defer conn.Close()
 		ctx, cancel := context.WithCancel(c.Request.Context())
-		defer cancel()
+		done := make(chan struct{})
+		defer func() { cancel(); conn.Close(); <-done }()
+		conn.SetReadLimit(16384)
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		conn.SetPongHandler(func(string) error { return conn.SetReadDeadline(time.Now().Add(60 * time.Second)) })
 		go func() {
+			defer close(done)
 			defer cancel()
 			for {
 				if _, _, err := conn.ReadMessage(); err != nil {
@@ -319,24 +372,33 @@ func registerNotificationRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps De
 				}
 			}
 		}()
-		ticker := time.NewTicker(time.Second)
+		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
+		ping := time.NewTicker(20 * time.Second)
+		defer ping.Stop()
 		for {
-			run, err := service.Run(ctx, c.Param("id"))
+			events, err := service.Events(ctx, key, after, who)
 			if err != nil {
 				return
 			}
-			conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-			if conn.WriteJSON(run) != nil {
-				return
+			for _, entry := range events {
+				conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				if conn.WriteJSON(entry) != nil {
+					return
+				}
+				after = entry.Seq
 			}
-			if run.Status != "running" {
-				return
+			if len(events) == 200 {
+				continue
 			}
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+			case <-ping.C:
+				if conn.WriteControl(websocket.PingMessage, []byte("suma"), time.Now().Add(5*time.Second)) != nil {
+					return
+				}
 			}
 		}
 	})

@@ -10,6 +10,7 @@ import (
 	"github.com/suma/suma/server/internal/notification"
 	"github.com/suma/suma/server/internal/secret"
 	"github.com/suma/suma/server/internal/task"
+	"github.com/suma/suma/server/internal/testutil"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -25,7 +26,7 @@ func (notificationSender) Send(context.Context, notification.Channel, notificati
 }
 func TestNotificationAndAIAuthenticatedHTTP(t *testing.T) {
 	dir := t.TempDir()
-	db, err := database.Open(filepath.Join(dir, "test.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +61,7 @@ func TestNotificationAndAIAuthenticatedHTTP(t *testing.T) {
 		router.ServeHTTP(res, req)
 		return res
 	}
-	for _, path := range []string{"/notifications/channels", "/notifications/inbox", "/notification-bindings", "/ai/settings", "/ai/operations", "/ai/runs", "/ai/audit", "/audit-logs"} {
+	for _, path := range []string{"/notifications/channels", "/notifications/inbox", "/notification-bindings", "/ai/settings", "/ai/operations", "/ai/conversations", "/ai/audit", "/audit-logs"} {
 		if r := request("GET", path, "", false); r.Code != 401 {
 			t.Fatalf("unprotected %s: %d", path, r.Code)
 		}
@@ -76,7 +77,10 @@ func TestNotificationAndAIAuthenticatedHTTP(t *testing.T) {
 	if r.Code != 200 {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	r = request("POST", "/ai/runs", `{"node_id":"local","question":"restart"}`, true)
+	var conv struct{ Data ai.Conversation }
+	createdConv := request("POST", "/ai/conversations", `{}`, true)
+	_ = json.Unmarshal(createdConv.Body.Bytes(), &conv)
+	r = request("POST", "/ai/conversations/"+conv.Data.ID+"/messages", `{"request_id":"disabled","question":"restart"}`, true)
 	if r.Code != 403 {
 		t.Fatal("disabled AI accepted diagnosis", r.Code)
 	}

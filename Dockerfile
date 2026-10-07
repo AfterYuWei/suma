@@ -11,7 +11,7 @@ COPY server/go.mod server/go.sum ./
 RUN go mod download
 COPY server/ ./
 COPY --from=web-build /web/dist ./webui/dist
-RUN CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-s -w" -o /suma ./cmd/suma
+RUN --mount=type=tmpfs,target=/tmp CGO_ENABLED=0 GOCACHE=/tmp/go-cache go build -buildvcs=false -trimpath -ldflags="-s -w" -o /suma ./cmd/suma
 
 FROM docker:29-cli
 RUN apk add --no-cache ca-certificates tzdata docker-cli-compose git openssh-client

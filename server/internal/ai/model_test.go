@@ -36,7 +36,7 @@ func TestResponsesModelTextAndToolConversation(t *testing.T) {
 				if payload.Input[1]["type"] != "function_call" || payload.Input[1]["call_id"] != "prior-call" || payload.Input[2]["type"] != "function_call_output" || payload.Input[2]["call_id"] != "prior-call" || payload.Input[2]["output"] != "online" {
 					t.Fatal("Responses tool conversation lost its correlation", payload.Input)
 				}
-				if payload.Tools[0]["type"] != "function" || payload.Tools[0]["name"] != "read_status" || payload.Tools[0]["parameters"] == nil {
+				if payload.Tools[0]["type"] != "function" || payload.Tools[0]["name"] != "list_nodes" || payload.Tools[0]["parameters"] == nil {
 					t.Fatal("Responses tool definition is invalid", payload.Tools)
 				}
 				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(output))}, nil
@@ -47,7 +47,7 @@ func TestResponsesModelTextAndToolConversation(t *testing.T) {
 			{Role: "assistant", Calls: []ToolCall{{ID: "prior-call", Name: "read_status", Arguments: json.RawMessage(`{"kind":"node","id":"local"}`)}}},
 			{Role: "tool", CallID: "prior-call", Text: "online"},
 		}
-		reply, err := m.Complete(context.Background(), Settings{Protocol: ProtocolResponses, Endpoint: "https://example.com/v1", Model: "test"}, "KEY", messages, tools())
+		reply, err := m.Complete(context.Background(), Settings{Protocol: ProtocolResponses, Endpoint: "https://example.com/v1", Model: "test"}, "KEY", messages, workflowTools())
 		if err != nil || reply.Tokens != 10 {
 			t.Fatal(reply, err)
 		}

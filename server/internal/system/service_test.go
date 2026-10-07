@@ -3,7 +3,7 @@ package system
 import (
 	"context"
 	"errors"
-	"path/filepath"
+	"github.com/suma/suma/server/internal/testutil"
 	"testing"
 	"time"
 
@@ -30,7 +30,7 @@ func (p *recordingPruner) Prune(ctx context.Context, report task.Reporter) error
 
 func newTestService(t *testing.T, pruner Adapter) (*Service, *gorm.DB) {
 	t.Helper()
-	db, err := database.Open(filepath.Join(t.TempDir(), "system.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

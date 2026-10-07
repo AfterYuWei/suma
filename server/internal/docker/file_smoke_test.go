@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/suma/suma/server/internal/testutil"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,7 +22,6 @@ import (
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/auth"
 	"github.com/suma/suma/server/internal/containerfiles"
-	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/docker"
 	"github.com/suma/suma/server/internal/node"
 	"github.com/suma/suma/server/internal/secret"
@@ -67,7 +67,7 @@ func TestContainerFileEditingRealDocker(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer adapter.Close()
-	db, err := database.Open(filepath.Join(root, "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

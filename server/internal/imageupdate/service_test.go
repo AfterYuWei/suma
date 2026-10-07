@@ -8,8 +8,8 @@ import (
 	"github.com/suma/suma/server/internal/credential"
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/task"
+	"github.com/suma/suma/server/internal/testutil"
 	"gorm.io/gorm"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,7 +35,7 @@ func (f resolverFunc) Resolve(ctx context.Context, r string, p Platform, m crede
 }
 func testService(t *testing.T, resolver Resolver) (*Service, *fakeRuntime, *gorm.DB) {
 	t.Helper()
-	db, err := database.Open(filepath.Join(t.TempDir(), "checks.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"github.com/suma/suma/server/internal/testutil"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -36,7 +37,7 @@ func (httpCleanupRuntime) CleanupPruneCache(context.Context, cleanup.CacheOption
 }
 func TestCleanupHTTPAuthorizationValidationAndIsolation(t *testing.T) {
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

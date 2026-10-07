@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/suma/suma/server/internal/testutil"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -35,7 +36,7 @@ func (r *recorder) Send(_ context.Context, c Channel, _ Secrets, m Message) (str
 func fixture(t *testing.T) (*Service, *gorm.DB, *recorder, *time.Time) {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := database.Open(filepath.Join(dir, "test.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +93,7 @@ func TestSecretsDedupDurableDeliveryAndUnread(t *testing.T) {
 	if inbox.Unread != 0 {
 		t.Fatal("read state not persisted")
 	}
-	// New service instance drains the same SQLite outbox after a restart.
+	// New service instance drains the same PostgreSQL outbox after a restart.
 	recovered := NewService(db, s.secrets, Dependencies{Sender: sender, Now: func() time.Time { return *now }})
 	if err := recovered.Tick(context.Background()); err != nil {
 		t.Fatal(err)

@@ -26,6 +26,7 @@ func (s *Service) Launch(row database.Task, work Work) {
 		return
 	}
 	s.cancels[row.ID] = cancel
+	s.done[row.ID] = make(chan struct{})
 	s.mu.Unlock()
 	go s.run(ctx, row, work)
 }

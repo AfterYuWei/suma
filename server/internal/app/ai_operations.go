@@ -23,11 +23,13 @@ import (
 	nodeService "github.com/suma/suma/server/internal/node"
 	"github.com/suma/suma/server/internal/projectlogs"
 	"github.com/suma/suma/server/internal/redact"
+	"github.com/suma/suma/server/internal/secret"
 	"github.com/suma/suma/server/internal/task"
 	"gorm.io/gorm"
 )
 
 type aiRuntime struct {
+	secrets      *secret.Store
 	db           *gorm.DB
 	nodes        *nodeService.Service
 	compose      *composeService.Service
@@ -201,6 +203,18 @@ func (r aiRuntime) Read(ctx context.Context, nodeID, name string, args ai.ToolAr
 			updates.Results = filtered
 		}
 		e.Content = jsonText(map[string]any{"local": local, "updates": updates, "note": "Uses existing registry checks and current Docker references; unchecked or stale results do not prove a new version"})
+	case "network":
+		row, err := runtime.InspectNetwork(ctx, args.ID)
+		if err != nil {
+			return e, err
+		}
+		e.Content = jsonText(row)
+	case "volume":
+		row, err := runtime.InspectVolume(ctx, args.ID)
+		if err != nil {
+			return e, err
+		}
+		e.Content = jsonText(row)
 	case "project":
 		svc, err := r.project(ctx, nodeID)
 		if err != nil {
@@ -210,7 +224,15 @@ func (r aiRuntime) Read(ctx context.Context, nodeID, name string, args ai.ToolAr
 		if err != nil {
 			return e, err
 		}
-		e.Content = jsonText(map[string]any{"name": project.Name, "revision": project.Revision, "services": project.Services, "containers": project.Containers, "can_manage": project.CanManage})
+		if !project.CanManage {
+			draft, err := svc.BuildTakeoverDraft(ctx, project.Name)
+			if err != nil {
+				return e, err
+			}
+			e.Content = jsonText(map[string]any{"name": project.Name, "can_manage": false, "takeover_fingerprint": draft.Fingerprint, "compose": agentConfig(draft.Compose)})
+			break
+		}
+		e.Content = jsonText(map[string]any{"name": project.Name, "revision": project.Revision, "services": project.Services, "containers": project.Containers, "can_manage": project.CanManage, "compose": agentConfig(project.Compose)})
 	default:
 		return e, ai.ErrInvalid
 	}
@@ -237,6 +259,9 @@ func (r aiRuntime) Freeze(ctx context.Context, nodeID string, req ai.OperationRe
 		return img.ID, err
 	}
 	var details any
+	if hasExtendedAction(req.Action) {
+		return r.freezeExtended(ctx, nodeID, req, snap)
+	}
 	if strings.HasPrefix(req.Action, "container.") {
 		if !emptyParameters(req.Parameters) {
 			return snap, ai.ErrInvalid
@@ -265,7 +290,7 @@ func (r aiRuntime) Freeze(ctx context.Context, nodeID string, req ai.OperationRe
 				return snap, err
 			}
 			snap.Impact = "Downloads the fixed image digest, consumes storage and bandwidth, and does not recreate containers. Rebuild requires separate approval."
-		case "project.update":
+		case "project.up", "project.update":
 			if !emptyParameters(req.Parameters) {
 				return snap, ai.ErrInvalid
 			}
@@ -273,7 +298,14 @@ func (r aiRuntime) Freeze(ctx context.Context, nodeID string, req ai.OperationRe
 			if err != nil {
 				return snap, err
 			}
-			review, err := svc.ReviewUpdate(ctx, req.ResourceID, resolve)
+			project, e := svc.Get(ctx, req.ResourceID)
+			if e != nil {
+				return snap, e
+			}
+			if e = svc.ValidateAgentSources(req.ResourceID, project.Compose); e != nil {
+				return snap, e
+			}
+			review, err := svc.ReviewUpdate(ctx, req.ResourceID, resolve, true)
 			if err != nil {
 				return snap, err
 			}
@@ -282,8 +314,11 @@ func (r aiRuntime) Freeze(ctx context.Context, nodeID string, req ai.OperationRe
 				return snap, err
 			}
 			details = map[string]any{"review": review, "state_hash": stateHash(state)}
+			if review.DockerSocket {
+				snap.Confirmations = append(snap.Confirmations, ai.Confirmation{Key: "docker_socket", Label: "Docker socket grants full Engine control", Warning: "Socket access gives full control of the Docker Engine", Checkbox: true})
+			}
 			snap.Impact = "Recreates services from existing configuration with fixed local image IDs. Service interruption is possible; no implicit pull/build or automatic rollback. Recovery is a separate proposal."
-		case "cd.deploy", "cd.rollback":
+		case "cd.deploy", "cd.retry", "cd.rollback":
 			if !emptyParameters(req.Parameters) {
 				return snap, ai.ErrInvalid
 			}
@@ -312,6 +347,7 @@ func (r aiRuntime) Freeze(ctx context.Context, nodeID string, req ai.OperationRe
 			}
 			details = review
 			snap.Impact = "Permanently removes only the frozen stopped containers, unused images and networks. Rechecks references/protection before every deletion. Volumes and build cache are excluded. Deleted resources have no automatic undo."
+			snap.Confirmations = []ai.Confirmation{{Key: "name", Label: "Type the node name to confirm cleanup", Expected: node.Name, Warning: "Frozen resources are permanently deleted and have no automatic recovery"}}
 		default:
 			return snap, ai.ErrInvalid
 		}
@@ -340,6 +376,9 @@ func (r aiRuntime) Execute(ctx context.Context, row database.AIOperation, snap a
 		return img.ID, err
 	}
 	report(5, "Revalidated approved target")
+	if hasExtendedAction(row.Action) {
+		return r.executeExtended(ctx, row, snap, report)
+	}
 	switch row.Action {
 	case "container.start":
 		return runtime.Start(ctx, row.ResourceID)
@@ -384,7 +423,7 @@ func (r aiRuntime) Execute(ctx context.Context, row database.AIOperation, snap a
 				report(50, msg.Status)
 			}
 		}
-	case "project.update":
+	case "project.up", "project.update":
 		var data struct {
 			Review composeService.ReviewedConfig `json:"review"`
 		}
@@ -396,7 +435,7 @@ func (r aiRuntime) Execute(ctx context.Context, row database.AIOperation, snap a
 			return err
 		}
 		return svc.ApplyUpdateReviewed(ctx, row.ResourceID, data.Review, report)
-	case "cd.deploy", "cd.rollback":
+	case "cd.deploy", "cd.retry", "cd.rollback":
 		var review cdService.ReviewedRelease
 		if json.Unmarshal(snap.Details, &review) != nil {
 			return ai.ErrInvalid
@@ -460,4 +499,12 @@ func (r aiRuntime) pullConfiguration(ctx context.Context, nodeID, ref string, de
 func emptyParameters(raw json.RawMessage) bool {
 	var fields map[string]json.RawMessage
 	return json.Unmarshal(raw, &fields) == nil && fields != nil && len(fields) == 0
+}
+
+func agentConfig(content string) string {
+	out, err := composeService.AgentConfig(content)
+	if err != nil {
+		return "Configuration unavailable"
+	}
+	return out
 }

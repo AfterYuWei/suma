@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/suma/suma/server/internal/testutil"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -99,7 +100,7 @@ func (r *fakeRuntime) RunFileCommand(_ context.Context, _ string, script string,
 func newHarness(t *testing.T) (*Service, *fakeRuntime) {
 	t.Helper()
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

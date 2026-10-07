@@ -76,22 +76,41 @@ SUMA 是一个面向多节点 Docker 管理的单体控制平面：通过一个 
 
 ```yaml
 services:
+  postgres:
+    image: postgres:18.6
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: suma
+      POSTGRES_DB: suma
+      POSTGRES_PASSWORD: ${SUMA_POSTGRES_PASSWORD:?Set a random hexadecimal password}
+    volumes:
+      - suma-postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U suma -d suma"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
   suma:
-    image: ghcr.io/afteryuwei/suma:stable # 固定版本请改用具体 tag，如 :0.1.0
+    image: ghcr.io/afteryuwei/suma:stable
     container_name: suma
     restart: unless-stopped
-    ports:
-      - "8080:8080"
+    ports: ["8080:8080"]
+    environment:
+      SUMA_DATABASE_DSN: postgres://suma:${SUMA_POSTGRES_PASSWORD:?Set a random hexadecimal password}@postgres:5432/suma?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
-      # 容器内数据根目录固定为 /Data（镜像内置 SUMA_DATA_ROOT=/Data），无需显式设置环境变量。
-      # 挂载两侧保持同名路径，保证交付项目的相对 bind mount 在宿主机 daemon 可解析。
       - /Data:/Data
       - /var/run/docker.sock:/var/run/docker.sock
+volumes:
+  suma-postgres:
 ```
 
 启动：
 
 ```bash
+# .env: SUMA_POSTGRES_PASSWORD=<random hexadecimal password, at least 32 characters>
 mkdir -p /Data && docker compose up -d
 ```
 
@@ -99,15 +118,18 @@ mkdir -p /Data && docker compose up -d
 
 ### 方式二：docker run
 
+先准备空 PostgreSQL 18.6 数据库，将完整 `SUMA_DATABASE_DSN` 写入私密 `suma.env` 文件，通过 `--env-file` 传入容器；远程数据库使用验证服务器身份的 TLS。启动缺少 DSN、数据库不可用或迁移失败时会明确失败。不迁移旧开发数据。
+
 ```bash
 mkdir -p /Data
 
 docker run -d --name suma \
   --restart unless-stopped \
   -p 8080:8080 \
+  --env-file ./suma.env \
   -v /Data:/Data \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/afteryuwei/suma:v0.1.0
+  ghcr.io/afteryuwei/suma:stable
 ```
 
 ### 首次使用
@@ -125,6 +147,8 @@ docker logs suma 2>&1 | sed -n 's/.*"msg":"SUMA initialization key".*"setup_toke
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `SUMA_DATA_ROOT` | `/Data`（生产镜像内置；裸机运行默认 `./data`） | 数据与凭据根目录，其余路径默认派生 |
+| `SUMA_DATABASE_DSN` | 必填 | PostgreSQL URL；不得写入日志或显示密码 |
+| `SUMA_ENV_FILE` | 自动发现 `.env.local` | 指定私密启动配置文件；`-` 禁用文件读取；进程环境值优先 |
 | `SUMA_ADDRESS` | `:8080` | 服务监听地址（改端口需同步映射宿主端口） |
 | `SUMA_COOKIE_SECURE` | `false` | 可选的强制开启开关；HTTPS 浏览器访问时自动设置 Secure Cookie |
 | `SUMA_BROWSER_ORIGIN` | 空 | 可选的高级来源限制初值；通常无需设置，默认按当前请求主机和端口校验 |
@@ -149,6 +173,9 @@ docker logs suma 2>&1 | sed -n 's/.*"msg":"SUMA initialization key".*"setup_toke
 git clone https://github.com/AfterYuWei/suma.git
 cd suma
 make install       # 安装前后端依赖
+make local-config  # 创建 .env.local；填写现有 PostgreSQL 的用户名和密码
+# .env.local 默认使用 127.0.0.1:5432/suma，启动与测试自动读取，无需 export。
+# 如需项目提供的开发数据库：配置 .env 后 make db-up，并将 .env.local 端口改为 55432。
 make dev           # 本地开发模式（前端 5173 / 后端 8081）
 make docker-up     # 构建并后台启动生产容器
 ```
@@ -180,7 +207,7 @@ npm run build:demo
 
 ### Agent Docker 部署
 
-节点页生成的 Compose 已将配对令牌填入 `SUMA_AGENT_TOKEN` 环境变量，可直接复制到 Agent 主机保存为 `docker-compose.yml`；不要将含令牌的配置提交到代码仓库。令牌首次成功使用后立即失效，Agent 连接成功后会自动更新节点状态。配对后的 Agent 凭据长期有效，保存在 `suma-agent-data` 数据卷中；令牌到期不会影响重连。只要保留数据卷，Agent 或 SUMA 重启、网络断开后都可自动恢复连接。升级后，旧版正常配对的凭据自动转为长期有效；已撤销或被手动刷新作废的凭据仍然失效。手写配置时替换下方占位符。SUMA 地址必须是 Agent 可访问的 HTTPS 地址；反向代理需支持 WebSocket 升级与长连接。私有 CA 可只读挂载到容器并设置 `SUMA_AGENT_CA_FILE`，不能跳过证书校验。
+节点页生成的 Compose 已将配对令牌填入 `SUMA_AGENT_TOKEN` 环境变量，可直接复制到 Agent 主机保存为 `docker-compose.yml`；不要将含令牌的配置提交到代码仓库。令牌首次成功使用后立即失效，Agent 连接成功后会自动更新节点状态。配对后的 Agent 凭据长期有效，保存在 `suma-agent-data` 数据卷中；令牌到期不会影响重连。只要保留数据卷，Agent 或 SUMA 重启、网络断开后都可自动恢复连接。手写配置时替换下方占位符。SUMA 地址必须是 Agent 可访问的 HTTPS 地址；反向代理需支持 WebSocket 升级与长连接。私有 CA 可只读挂载到容器并设置 `SUMA_AGENT_CA_FILE`，不能跳过证书校验。
 
 ```yaml
 services:
@@ -204,12 +231,15 @@ volumes:
 
 ## 数据与备份
 
-- `/Data` 目录包含 SQLite 数据库、本地 Compose 项目、Delivery Project 的 Git 工作区与凭据加密密钥 `secret.key`
-- 升级或迁移前先备份整个数据目录；`secret.key` 丢失将导致已存凭据无法解密
+- PostgreSQL 业务状态保存在 `suma-postgres` 数据卷；`/Data` 独立保存 Compose、Git 工作区和凭据加密密钥 `secret.key`
+- `/Data/compose/` 保存托管 Compose 项目的 YAML、环境文件和 SUMA 项目元信息；`/Data/gitops/` 保存 CD 仓库与修订工作区；`/Data/backups/` 是保留目录，当前没有自动备份任务
+- 用户、节点、应用设置、AI／通知配置、审计、Task 和 Agent 检查点均保存在 PostgreSQL；本地 `.env.local` 是项目根目录下的启动配置，不写入 `/Data`
+- 升级前将 PostgreSQL 与 `/Data` 作为同一恢复集合保存；`secret.key` 丢失将导致已存凭据无法解密
 
 ## 文档
 
 - [PLANS.md](PLANS.md)：功能进度与上线验证记录
 - [ARCHITECTURE.md](ARCHITECTURE.md)：架构说明
 - [API.md](API.md)：REST / WebSocket API 参考
+- [Eino／PostgreSQL 运行说明](doc/eino-postgresql.md)：初始化、Agent 恢复、审核、渠道与验证命令
 - [CD-DESIGN.md](CD-DESIGN.md)：持续交付设计模型

@@ -5,6 +5,7 @@ package cd
 import (
 	"context"
 	"fmt"
+	"github.com/suma/suma/server/internal/testutil"
 	"io"
 	"os"
 	"path/filepath"
@@ -32,7 +33,7 @@ func TestRealDockerCDDeliveryRollback(t *testing.T) {
 	defer cancel()
 
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +115,7 @@ func TestRealDockerMultiNodeConsistency(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

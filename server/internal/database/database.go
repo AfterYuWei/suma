@@ -1,210 +1,104 @@
 package database
 
 import (
+	"context"
+	"database/sql"
+	"embed"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"github.com/jackc/pgx/v5/stdlib"
+	"io"
+	"log"
+	"sort"
 	"strings"
 	"time"
 
-	"github.com/glebarez/sqlite"
+	"github.com/jackc/pgx/v5"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
+	"gorm.io/gorm/logger"
 )
 
-const nodeGroupsMigrationKey = "migration.node_groups_v1"
+//go:embed migrations/*.sql
+var migrations embed.FS
 
-func Open(path string) (*gorm.DB, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return nil, fmt.Errorf("create data directory: %w", err)
+// Open initializes PostgreSQL. Errors never include a DSN or query parameters.
+func Open(dsn string) (*gorm.DB, error) {
+	if strings.TrimSpace(dsn) == "" {
+		return nil, errors.New("SUMA_DATABASE_DSN is required")
 	}
-	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	connection, parseErr := pgx.ParseConfig(dsn)
+	if parseErr != nil {
+		return nil, errors.New("invalid PostgreSQL connection configuration")
+	}
+	if connection.ConnectTimeout == 0 {
+		connection.ConnectTimeout = 10 * time.Second
+	}
+	connectorPool := sql.OpenDB(stdlib.GetConnector(*connection))
+	db, err := gorm.Open(postgres.New(postgres.Config{DSN: dsn, Conn: connectorPool}), &gorm.Config{TranslateError: true, Logger: logger.New(log.New(io.Discard, "", 0), logger.Config{LogLevel: logger.Silent, ParameterizedQueries: true})})
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err)
+		_ = connectorPool.Close()
+		return nil, errors.New("connect to PostgreSQL failed; check database address, TLS and credentials")
 	}
-	if err := db.AutoMigrate(&User{}, &Session{}, &LoginChallenge{}, &TwoFactorEnrollment{}, &TwoFactorRecoveryCode{}, &PasskeyCredential{}, &WebAuthnCeremony{}, &Setting{}, &ImageUpdatePolicy{}, &ImageUpdateRegistryCredential{}, &CleanupPolicy{}, &CleanupRun{}, &SchemaMigration{}, &Node{}, &AgentEnrollment{}, &AgentCredential{}, &NodeGroup{}, &NodeGroupNode{}, &DockerTLSCredential{}, &DockerTLSCredentialNode{}, &GitCredentialNode{}, &RegistryCredentialNode{}, &DeliveryProject{}, &DeliveryProjectNode{}, &DeliveryProjectRegistryCredential{}, &DeliveryTargetState{}, &GitCredential{}, &DeliveryProjectGitCredential{}, &RegistryCredential{}, &DeliveryRelease{}, &DeliveryReleaseDeployment{}, &DeliveryDeploymentAttempt{}, &GitWebhookDelivery{}, &Task{}, &TaskLog{}, &TaskStep{}, &AuditLog{}, &FileRevision{}, &LoginLog{}, &NotificationChannel{}, &NotificationRule{}, &NotificationEvent{}, &NotificationRead{}, &NotificationDelivery{}, &NotificationBinding{}, &NotificationIncoming{}, &NotificationChat{}, &NotificationAction{}, &AIRun{}, &AIOperation{}, &AIAudit{}); err != nil {
-		return nil, fmt.Errorf("migrate sqlite: %w", err)
+	pool, err := db.DB()
+	if err != nil {
+		return nil, errors.New("initialize PostgreSQL connection pool failed")
 	}
-	if err := migrateAgentCredentials(db); err != nil {
-		return nil, fmt.Errorf("migrate Agent credentials: %w", err)
-	}
-	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_node_groups_name_nocase ON node_groups(name COLLATE NOCASE)").Error; err != nil {
-		return nil, fmt.Errorf("create node group name index: %w", err)
-	}
-	if err := migrateNodeGroups(db); err != nil {
-		return nil, fmt.Errorf("migrate node groups: %w", err)
-	}
-	if err := migrateNodeScopesAndDeliveryHistory(db); err != nil {
-		return nil, fmt.Errorf("backfill scoped history: %w", err)
+	pool.SetMaxOpenConns(20)
+	pool.SetMaxIdleConns(5)
+	pool.SetConnMaxLifetime(30 * time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err = migrate(ctx, db); err != nil {
+		_ = pool.Close()
+		return nil, fmt.Errorf("initialize PostgreSQL schema: %w", err)
 	}
 	return db, nil
 }
 
-func migrateAgentCredentials(db *gorm.DB) error {
-	if !db.Migrator().HasColumn(&AgentCredential{}, "expires_at") {
-		return nil
+func migrate(ctx context.Context, db *gorm.DB) error {
+	entries, err := migrations.ReadDir("migrations")
+	if err != nil {
+		return errors.New("read database migrations failed")
 	}
-	return db.Transaction(func(tx *gorm.DB) error {
-		// Legacy credentials inherited their enrollment deadline. Promote those
-		// credentials even if that deadline elapsed, but preserve invalidation by
-		// a manual token refresh (which changed the deadline or enrollment).
-		if err := tx.Exec(`UPDATE agent_credentials SET revoked_at = ?
-			WHERE revoked_at IS NULL AND NOT EXISTS (
-				SELECT 1 FROM agent_enrollments e
-				WHERE e.node_id = agent_credentials.node_id AND e.consumed_at IS NOT NULL
-				AND e.expires_at = agent_credentials.expires_at
-			)`, time.Now()).Error; err != nil {
-			return err
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Independent test schemas have independent locks.
+		if tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(current_database() || ':' || current_schema(), 0))").Error != nil {
+			return errors.New("acquire schema migration lock failed")
 		}
-		return tx.Migrator().DropColumn(&AgentCredential{}, "expires_at")
-	})
-}
-
-func migrateNodeGroups(db *gorm.DB) error {
-	return db.Transaction(func(tx *gorm.DB) error {
-		var marker SchemaMigration
-		if err := tx.Where("key = ?", nodeGroupsMigrationKey).First(&marker).Error; err == nil {
-			return nil
-		} else if err != gorm.ErrRecordNotFound {
-			return err
+		if tx.Exec("CREATE TABLE IF NOT EXISTS schema_migrations (key varchar(128) PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())").Error != nil {
+			return errors.New("initialize migration ledger failed")
 		}
-
-		var group NodeGroup
-		if err := tx.Where("is_default = ?", true).First(&group).Error; err == gorm.ErrRecordNotFound {
-			group = NodeGroup{Name: "Default", Description: "", IsDefault: true}
-			if err := tx.Create(&group).Error; err != nil {
-				return err
-			}
-		} else if err != nil {
-			return err
-		}
-
-		var nodes []Node
-		if err := tx.Find(&nodes).Error; err != nil {
-			return err
-		}
-		for _, node := range nodes {
-			membership := NodeGroupNode{GroupID: group.ID, NodeID: node.ID}
-			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&membership).Error; err != nil {
-				return err
-			}
-		}
-		return tx.Create(&SchemaMigration{Key: nodeGroupsMigrationKey, AppliedAt: time.Now()}).Error
-	})
-}
-
-func migrateNodeScopesAndDeliveryHistory(db *gorm.DB) error {
-	return db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&Task{}).Where("type IN ?", []string{"cd.sync", "cd.deploy", "cd.rollback"}).Updates(map[string]any{"scope": "control_plane", "node_id": "", "node_name": ""}).Error; err != nil {
-			return err
-		}
-		controlActions := []string{"login", "account.", "settings.", "node.", "git.", "registry.", "docker_tls.", "cd."}
-		for _, prefix := range controlActions {
-			query := "action = ?"
-			value := prefix
-			if strings.HasSuffix(prefix, ".") {
-				query, value = "action LIKE ?", prefix+"%"
-			}
-			if err := tx.Model(&AuditLog{}).Where(query, value).Updates(map[string]any{"scope": "control_plane", "node_id": "", "node_name": ""}).Error; err != nil {
-				return err
-			}
-		}
-		var deployments []DeliveryReleaseDeployment
-		if err := tx.Find(&deployments).Error; err != nil {
-			return err
-		}
-		for _, deployment := range deployments {
-			var count int64
-			if err := tx.Model(&DeliveryDeploymentAttempt{}).Where("deployment_id = ?", deployment.ID).Count(&count).Error; err != nil {
-				return err
-			}
-			if count == 0 {
-				attempt := DeliveryDeploymentAttempt{DeploymentID: deployment.ID, Operation: "deploy", TargetReleaseID: deployment.ReleaseID, TaskID: deployment.TaskID, Status: deployment.Status, FailureReason: deployment.FailureReason, HealthSummary: deployment.HealthSummary, StartedAt: deployment.StartedAt, FinishedAt: deployment.FinishedAt, CreatedAt: deployment.CreatedAt, UpdatedAt: deployment.UpdatedAt}
-				if attempt.CreatedAt.IsZero() {
-					attempt.CreatedAt = time.Now()
-				}
-				if err := tx.Create(&attempt).Error; err != nil {
-					return err
-				}
-			}
-		}
-		if err := backfillDeliveryTargetStates(tx); err != nil {
-			return err
-		}
-		return nil
-	})
-}
-
-func backfillDeliveryTargetStates(tx *gorm.DB) error {
-	var projects []DeliveryProject
-	if err := tx.Find(&projects).Error; err != nil {
-		return err
-	}
-	for _, project := range projects {
-		var targets []DeliveryProjectNode
-		if err := tx.Where("project_id = ?", project.ID).Find(&targets).Error; err != nil {
-			return err
-		}
-		for _, target := range targets {
-			var count int64
-			if err := tx.Model(&DeliveryTargetState{}).Where("project_id = ? AND node_id = ?", project.ID, target.NodeID).Count(&count).Error; err != nil || count > 0 {
-				if err != nil {
-					return err
-				}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
 				continue
 			}
-			var deployment DeliveryReleaseDeployment
-			err := tx.Table("delivery_release_deployments AS d").Select("d.*").Joins("JOIN delivery_releases r ON r.id = d.release_id").Where("r.project_id = ? AND d.node_id = ? AND d.status IN ?", project.ID, target.NodeID, []string{"succeeded", "rolled_back"}).Order("d.updated_at DESC, d.id DESC").First(&deployment).Error
-			if err == gorm.ErrRecordNotFound {
+			var count int64
+			if tx.Model(&SchemaMigration{}).Where("key = ?", entry.Name()).Count(&count).Error != nil {
+				return errors.New("read schema migration ledger failed")
+			}
+			if count > 0 {
 				continue
 			}
+			raw, err := migrations.ReadFile("migrations/" + entry.Name())
 			if err != nil {
-				return err
+				return fmt.Errorf("read migration %s failed", entry.Name())
 			}
-			activeID := deployment.ReleaseID
-			if deployment.Status == "rolled_back" && deployment.PreviousReleaseID != nil {
-				activeID = *deployment.PreviousReleaseID
+			if tx.Exec(string(raw)).Error != nil {
+				return fmt.Errorf("apply migration %s failed", entry.Name())
 			}
-			var release DeliveryRelease
-			if err := tx.First(&release, activeID).Error; err != nil {
-				continue
-			}
-			state := DeliveryTargetState{ProjectID: project.ID, NodeID: target.NodeID, ActiveReleaseID: &activeID, ObservedCommit: release.CommitSHA, HealthSummary: deployment.HealthSummary}
-			if err := tx.Create(&state).Error; err != nil {
-				return err
+			if tx.Create(&SchemaMigration{Key: entry.Name(), AppliedAt: time.Now().UTC()}).Error != nil {
+				return errors.New("record schema migration failed")
 			}
 		}
-		if len(targets) > 0 {
-			var states []DeliveryTargetState
-			if err := tx.Where("project_id = ?", project.ID).Find(&states).Error; err != nil {
-				return err
-			}
-			var activeID *uint
-			uniform := len(states) == len(targets)
-			for _, state := range states {
-				if state.ActiveReleaseID == nil {
-					uniform = false
-					continue
-				}
-				if activeID == nil {
-					id := *state.ActiveReleaseID
-					activeID = &id
-				} else if *activeID != *state.ActiveReleaseID {
-					uniform = false
-				}
-			}
-			values := map[string]any{"active_release_id": nil, "active_commit": ""}
-			if uniform && activeID != nil {
-				var release DeliveryRelease
-				if err := tx.First(&release, *activeID).Error; err == nil {
-					values["active_release_id"] = *activeID
-					values["active_commit"] = release.CommitSHA
-				}
-			}
-			if err := tx.Model(&DeliveryProject{}).Where("id = ?", project.ID).Updates(values).Error; err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+		return nil
+	})
 }
+
+// Models is used only by schema generation and contract tests, not startup.
+func Models() []any {
+	return []any{&User{}, &Session{}, &LoginChallenge{}, &TwoFactorEnrollment{}, &TwoFactorRecoveryCode{}, &PasskeyCredential{}, &WebAuthnCeremony{}, &Setting{}, &ImageUpdatePolicy{}, &ImageUpdateRegistryCredential{}, &CleanupPolicy{}, &CleanupRun{}, &Node{}, &AgentEnrollment{}, &AgentCredential{}, &NodeGroup{}, &NodeGroupNode{}, &DockerTLSCredential{}, &DockerTLSCredentialNode{}, &GitCredentialNode{}, &RegistryCredentialNode{}, &DeliveryProject{}, &DeliveryProjectNode{}, &DeliveryProjectRegistryCredential{}, &DeliveryTargetState{}, &GitCredential{}, &DeliveryProjectGitCredential{}, &RegistryCredential{}, &DeliveryRelease{}, &DeliveryReleaseDeployment{}, &DeliveryDeploymentAttempt{}, &GitWebhookDelivery{}, &Task{}, &TaskLog{}, &TaskStep{}, &AuditLog{}, &FileRevision{}, &LoginLog{}, &NotificationChannel{}, &NotificationRule{}, &NotificationEvent{}, &NotificationRead{}, &NotificationDelivery{}, &NotificationBinding{}, &NotificationIncoming{}, &NotificationChat{}, &NotificationAction{}, &AIRun{}, &AIOperation{}, &AIConversation{}, &AIMessage{}, &AIPlanStep{}, &AIInteraction{}, &AICheckpoint{}, &AIToolCall{}, &AIWorkflowEvent{}, &AIComposeDraft{}}
+}
+
+func ConnectionDSN(db *gorm.DB) string { return db.Dialector.(*postgres.Dialector).DSN }

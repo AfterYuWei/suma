@@ -3,20 +3,19 @@ package compose
 import (
 	"context"
 	"errors"
+	"github.com/suma/suma/server/internal/task"
+	"github.com/suma/suma/server/internal/testutil"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/suma/suma/server/internal/database"
-	"github.com/suma/suma/server/internal/task"
 )
 
 func configurationService(t *testing.T, runner Runner) *Service {
 	t.Helper()
-	db, err := database.Open(filepath.Join(t.TempDir(), "test.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

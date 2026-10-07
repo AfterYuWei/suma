@@ -632,6 +632,9 @@ func (s *Service) execute(taskCtx context.Context, node Node, preview Preview, r
 			if err := appendOutcome(o); err != nil {
 				return err
 			}
+			if run.Trigger == "ai_reviewed" && o.Status != "deleted" && o.Reason != "not_found" {
+				return errors.New("reviewed cleanup paused because a frozen candidate failed or became protected")
+			}
 			if errors.Is(e, ErrUnavailable) {
 				return ErrUnavailable
 			}

@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"github.com/suma/suma/server/internal/testutil"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -57,7 +58,7 @@ func TestPrepareRequiresPlaintextEndpointConfirmation(t *testing.T) {
 }
 
 func TestTLSCredentialIsEncryptedAndRedacted(t *testing.T) {
-	db, err := database.Open(filepath.Join(t.TempDir(), "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +94,7 @@ func TestTLSCredentialIsEncryptedAndRedacted(t *testing.T) {
 }
 
 func TestNodeGroupsSupportMultipleAndNoGroupMemberships(t *testing.T) {
-	db, err := database.Open(filepath.Join(t.TempDir(), "groups.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

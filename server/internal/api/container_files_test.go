@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"github.com/suma/suma/server/internal/testutil"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -10,7 +11,6 @@ import (
 
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/auth"
-	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/node"
 	"github.com/suma/suma/server/internal/secret"
 	"github.com/suma/suma/server/internal/task"
@@ -18,7 +18,7 @@ import (
 
 func TestContainerFileRoutesAuthenticateAndResolveNode(t *testing.T) {
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "api.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

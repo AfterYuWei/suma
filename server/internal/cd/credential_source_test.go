@@ -2,6 +2,7 @@ package cd
 
 import (
 	"context"
+	"github.com/suma/suma/server/internal/testutil"
 	"path/filepath"
 	"testing"
 
@@ -13,7 +14,7 @@ import (
 
 func TestProjectCredentialCanMoveToAuthenticationCenter(t *testing.T) {
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

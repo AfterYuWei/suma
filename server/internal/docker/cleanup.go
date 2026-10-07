@@ -325,7 +325,11 @@ func (a *Adapter) CleanupPruneCache(ctx context.Context, opts cleanup.CacheOptio
 	if !cap.BuildCache {
 		return cleanup.CacheReport{}, cleanup.ErrUnavailable
 	}
-	options := build.CachePruneOptions{All: false, Filters: filters.NewArgs(filters.Arg("until", fmt.Sprintf("%dh", opts.RetentionDays*24)))}
+	until := fmt.Sprintf("%dh", opts.RetentionDays*24)
+	if !opts.Until.IsZero() {
+		until = opts.Until.UTC().Format(time.RFC3339Nano)
+	}
+	options := build.CachePruneOptions{All: false, Filters: filters.NewArgs(filters.Arg("until", until))}
 	if apiAtLeast(cap.API, 1, 48) {
 		options.ReservedSpace = opts.ReservedBytes
 	} else {

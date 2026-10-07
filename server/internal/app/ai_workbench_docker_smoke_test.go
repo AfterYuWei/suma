@@ -5,6 +5,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"github.com/suma/suma/server/internal/testutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -45,7 +46,7 @@ func TestRealDockerGlobalAIWorkbenchReadOnly(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "global-ai.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +91,7 @@ func TestRealDockerGlobalAIWorkbenchReadOnly(t *testing.T) {
 	if _, err = assistant.TestModel(ctx); err != nil {
 		t.Fatal(err)
 	}
-	run, err := assistant.Start(ctx, ai.RunInput{Question: "Inspect authorized Docker status without changing anything"}, ai.Actor{UserID: 1})
+	run, err := assistant.Start(ctx, ai.RunInput{Question: "Inspect all nodes without changing anything"}, ai.Actor{UserID: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +100,7 @@ func TestRealDockerGlobalAIWorkbenchReadOnly(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if run.Status != "running" {
+		if run.Status != "running" && run.Status != "queued" {
 			break
 		}
 		select {
@@ -112,7 +113,7 @@ func TestRealDockerGlobalAIWorkbenchReadOnly(t *testing.T) {
 	if model.container != "" {
 		expected++
 	}
-	if run.Status != "completed" || run.NodeID != "" || len(run.Result.Evidence) != expected || len(run.Result.OperationIDs) != 0 {
+	if run.Status != "completed" || run.NodeID != "local" || len(run.Result.Evidence) != expected || len(run.Result.OperationIDs) != 0 {
 		t.Fatal("global diagnosis did not remain read-only", run.Status, run.Error)
 	}
 	for _, evidence := range run.Result.Evidence {

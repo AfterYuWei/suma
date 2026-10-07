@@ -11,7 +11,7 @@ import (
 )
 
 // RecordAI writes to the canonical audit log, including inside an approval's
-// operation/Task transaction. The legacy AIAudit table is read only for import.
+// operation/Task transaction. AI audit entries are stored only in the global audit log.
 func (s *Service) RecordAI(ctx context.Context, tx *gorm.DB, entry database.AIAudit) error {
 	row, err := aiEntry(ctx, tx, entry)
 	if err != nil {
@@ -97,40 +97,4 @@ func (s *Service) ListAI(ctx context.Context, limit int) ([]database.AIAudit, er
 		entries = append(entries, entry)
 	}
 	return entries, err
-}
-
-// ImportLegacyAI preserves timestamps and uses the old ID as a unique import
-// key. Repeated restarts never duplicate historical entries.
-func (s *Service) ImportLegacyAI(ctx context.Context) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var last uint
-		for {
-			var entries []database.AIAudit
-			if err := tx.Where("id > ?", last).Order("id ASC").Limit(100).Find(&entries).Error; err != nil {
-				return err
-			}
-			if len(entries) == 0 {
-				return nil
-			}
-			for _, entry := range entries {
-				last = entry.ID
-				var exists int64
-				if err := tx.Model(&database.AuditLog{}).Where("legacy_ai_audit_id = ?", entry.ID).Count(&exists).Error; err != nil {
-					return err
-				}
-				if exists > 0 {
-					continue
-				}
-				row, err := aiEntry(ctx, tx, entry)
-				if err != nil {
-					return err
-				}
-				oldID := entry.ID
-				row.LegacyAIAuditID = &oldID
-				if err := s.RecordTx(ctx, tx, &row); err != nil {
-					return err
-				}
-			}
-		}
-	})
 }

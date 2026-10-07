@@ -3,11 +3,11 @@ package api
 import (
 	"context"
 	"crypto/tls"
+	"github.com/suma/suma/server/internal/testutil"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -25,7 +25,7 @@ import (
 )
 
 func TestSecurityBoundarySettingsApplyImmediately(t *testing.T) {
-	db, err := database.Open(filepath.Join(t.TempDir(), "security.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func (terminalOnlyContainers) Terminal(context.Context, string, uint, uint) (con
 }
 
 func TestWebSocketTerminalHandshakeAndEcho(t *testing.T) {
-	db, err := database.Open(filepath.Join(t.TempDir(), "terminal.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

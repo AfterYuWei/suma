@@ -3,6 +3,8 @@ package compose
 import (
 	"context"
 	"encoding/json"
+	"github.com/goccy/go-yaml"
+	containerdomain "github.com/suma/suma/server/internal/container"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,9 +12,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/goccy/go-yaml"
-	containerdomain "github.com/suma/suma/server/internal/container"
 )
 
 type reconstructionRunner struct {

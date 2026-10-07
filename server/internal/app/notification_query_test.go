@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"github.com/suma/suma/server/internal/testutil"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -31,7 +32,7 @@ func (m forbiddenGuestModel) Complete(context.Context, ai.Settings, string, []ai
 func TestGuestChatQueryNeverReturnsPrivacyOrApprovalControls(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "chat.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

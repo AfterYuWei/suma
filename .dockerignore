@@ -1,6 +1,9 @@
 .git
 .agents
 .codex
+.env
+.env.*
+suma.env
 web/node_modules
 web/dist
 server/data

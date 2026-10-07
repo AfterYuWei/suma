@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"github.com/suma/suma/server/internal/testutil"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ import (
 )
 
 func TestExpectedRebuildDoesNotHideUnrelatedContainerFailure(t *testing.T) {
-	db, err := database.Open(filepath.Join(t.TempDir(), "events.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +29,7 @@ func TestExpectedRebuildDoesNotHideUnrelatedContainerFailure(t *testing.T) {
 
 func TestOnlyCompleteLoginEmitsNotificationAndNewIPOnce(t *testing.T) {
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "events.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}

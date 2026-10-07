@@ -96,7 +96,12 @@ type Incoming struct {
 	OperationID string
 }
 type ChatHandler func(Incoming, database.NotificationBinding)
+type InteractionChoice struct {
+	Label string
+	Token string
+}
 type Message struct {
+	Choices       []InteractionChoice
 	Text          string
 	ApproveID     string
 	OperationID   string

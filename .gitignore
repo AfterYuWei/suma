@@ -16,7 +16,9 @@ server/bin/
 # Local environment and secrets
 .env
 .env.*
+suma.env
 !.env.example
+!.env.local.example
 *.pem
 *.key
 

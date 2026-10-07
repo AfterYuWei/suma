@@ -6,7 +6,7 @@ type User struct {
 	ID                 uint   `gorm:"primaryKey"`
 	Username           string `gorm:"uniqueIndex;size:64;not null"`
 	Nickname           string `gorm:"size:64;not null;default:''"`
-	Email              string `gorm:"uniqueIndex;collate:nocase;size:254;not null;default:''"`
+	Email              string `gorm:"size:254;not null;default:''"`
 	PasswordHash       string `gorm:"not null"`
 	AvatarData         []byte
 	AvatarMIME         string `gorm:"size:32;not null;default:''"`
@@ -176,7 +176,7 @@ type AgentCredential struct {
 // runtime state and are not an execution or authorization boundary.
 type NodeGroup struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
-	Name        string    `gorm:"uniqueIndex;collate:nocase;size:128;not null" json:"name"`
+	Name        string    `gorm:"size:128;not null" json:"name"`
 	Description string    `gorm:"size:512;not null;default:''" json:"description"`
 	IsDefault   bool      `gorm:"index;not null;default:false" json:"is_default"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -436,27 +436,26 @@ type TaskStep struct {
 }
 
 type AuditLog struct {
-	ID              uint      `gorm:"primaryKey" json:"id"`
-	Scope           string    `gorm:"size:24;not null;default:node;index" json:"scope"`
-	NodeID          string    `gorm:"size:64;not null;default:'';index" json:"node_id,omitempty"`
-	NodeName        string    `gorm:"size:128" json:"node_name,omitempty"`
-	UserID          *uint     `gorm:"index" json:"user_id,omitempty"`
-	Action          string    `gorm:"size:64;not null;index" json:"action"`
-	ResourceType    string    `gorm:"size:64" json:"resource_type"`
-	ResourceName    string    `json:"resource_name"`
-	IP              string    `gorm:"size:64" json:"ip"`
-	Result          string    `gorm:"size:16;not null" json:"result"`
-	TaskID          string    `gorm:"size:36;index" json:"task_id,omitempty"`
-	ReleaseID       *uint     `gorm:"index" json:"release_id,omitempty"`
-	Source          string    `gorm:"size:24;index" json:"source,omitempty"`
-	RunID           string    `gorm:"size:64;index" json:"run_id,omitempty"`
-	OperationID     string    `gorm:"size:64;index" json:"operation_id,omitempty"`
-	BindingID       string    `gorm:"size:64" json:"binding_id,omitempty"`
-	ExternalUserID  string    `json:"external_user_id,omitempty"`
-	ChatID          string    `json:"chat_id,omitempty"`
-	Details         string    `json:"details,omitempty"`
-	LegacyAIAuditID *uint     `gorm:"uniqueIndex" json:"-"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID             uint      `gorm:"primaryKey" json:"id"`
+	Scope          string    `gorm:"size:24;not null;default:node;index" json:"scope"`
+	NodeID         string    `gorm:"size:64;not null;default:'';index" json:"node_id,omitempty"`
+	NodeName       string    `gorm:"size:128" json:"node_name,omitempty"`
+	UserID         *uint     `gorm:"index" json:"user_id,omitempty"`
+	Action         string    `gorm:"size:64;not null;index" json:"action"`
+	ResourceType   string    `gorm:"size:64" json:"resource_type"`
+	ResourceName   string    `json:"resource_name"`
+	IP             string    `gorm:"size:64" json:"ip"`
+	Result         string    `gorm:"size:16;not null" json:"result"`
+	TaskID         string    `gorm:"size:36;index" json:"task_id,omitempty"`
+	ReleaseID      *uint     `gorm:"index" json:"release_id,omitempty"`
+	Source         string    `gorm:"size:24;index" json:"source,omitempty"`
+	RunID          string    `gorm:"size:64;index" json:"run_id,omitempty"`
+	OperationID    string    `gorm:"size:64;index" json:"operation_id,omitempty"`
+	BindingID      string    `gorm:"size:64" json:"binding_id,omitempty"`
+	ExternalUserID string    `json:"external_user_id,omitempty"`
+	ChatID         string    `json:"chat_id,omitempty"`
+	Details        string    `json:"details,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 // FileRevision contains SUMA-owned encrypted editor history, never Docker state.

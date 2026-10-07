@@ -11,6 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"github.com/suma/suma/server/internal/testutil"
 	"io"
 	"math/big"
 	"net"
@@ -62,7 +63,7 @@ func TestRealDockerAgentInPlaceComposeReconnectAndRevoke(t *testing.T) {
 	docker("image", "inspect", image)
 	gin.SetMode(gin.TestMode)
 	root := t.TempDir()
-	db, err := database.Open(filepath.Join(root, "suma.db"))
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,10 +347,6 @@ func TestRealDockerAgentInPlaceComposeReconnectAndRevoke(t *testing.T) {
 			}
 			var row database.Task
 			if err := db.Where("id = ?", id).First(&row).Error; err != nil {
-				if strings.Contains(err.Error(), "SQLITE_BUSY") || strings.Contains(err.Error(), "database is locked") {
-					time.Sleep(100 * time.Millisecond)
-					continue
-				}
 				t.Fatal(err)
 			}
 			if row.Status == want {

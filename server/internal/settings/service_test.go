@@ -2,6 +2,7 @@ package settings
 
 import (
 	"context"
+	"github.com/suma/suma/server/internal/testutil"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,7 +15,7 @@ import (
 func testConfig() config.Config {
 	return config.Config{
 		Address:        ":8080",
-		DatabasePath:   "/var/lib/suma/suma.db",
+		DataRoot:       "/var/lib/suma",
 		DockerHost:     "unix:///var/run/docker.sock",
 		ComposeRoot:    "/srv/compose",
 		BackupRoot:     "/srv/backups",
@@ -25,7 +26,7 @@ func testConfig() config.Config {
 
 func openDatabase(t *testing.T, path string) *gorm.DB {
 	t.Helper()
-	db, err := database.Open(path)
+	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +114,7 @@ func TestUpdatePersistsUpsertsAndReturnsMerged(t *testing.T) {
 	requireSetting(t, second, "general.server_name", "Renamed")
 	requireSetting(t, second, "general.timezone", "Asia/Shanghai")
 
-	reopened := NewService(openDatabase(t, path), testConfig())
+	reopened := NewService(reopenDatabase(t, db), testConfig())
 	stored, err := reopened.Get(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -172,15 +173,15 @@ func TestUpdateAfterRestartUsesRecomputedDataRootDefault(t *testing.T) {
 	ctx := context.Background()
 
 	cfg := config.Config{}
-	cfg.DatabasePath = "/var/lib/suma/suma.db"
+	cfg.DataRoot = "/var/lib/suma"
 	first := NewService(openDatabase(t, path), cfg)
 	if _, err := first.Update(ctx, map[string]string{"storage.compose_root": "/custom/compose"}); err != nil {
 		t.Fatal(err)
 	}
 
 	cfg2 := config.Config{}
-	cfg2.DatabasePath = "/mnt/newdata/suma.db"
-	reopened := NewService(openDatabase(t, path), cfg2)
+	cfg2.DataRoot = "/mnt/newdata"
+	reopened := NewService(reopenDatabase(t, first.db), cfg2)
 	values, err := reopened.Get(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -207,4 +208,14 @@ func TestTimezoneValidationIsAtomic(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+}
+
+func reopenDatabase(t *testing.T, previous *gorm.DB) *gorm.DB {
+	t.Helper()
+	db, err := database.Open(database.ConnectionDSN(previous))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pool, _ := db.DB(); _ = pool.Close() })
+	return db
 }

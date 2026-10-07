@@ -35,19 +35,19 @@ func TestConversationReadsAreBoundedAndCarryPriorContext(t *testing.T) {
 		}
 		return ModelReply{Calls: []ToolCall{{ID: "read", Name: "read_logs", Arguments: json.RawMessage(`{"kind":"container","id":"frozen-container"}`)}}}, nil
 	})
-	run, err := s.Start(context.Background(), RunInput{NodeID: "local", Question: "What should I check next?", ParentID: parent.ID}, Actor{UserID: 1})
+	run, err := s.Start(context.Background(), RunInput{NodeID: "local", Question: "What should I check next?", ConversationID: parent.ConversationID}, Actor{UserID: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	until := time.Now().Add(3 * time.Second)
 	for time.Now().Before(until) {
 		latest, _ := s.Run(context.Background(), run.ID)
-		if latest.Status != "running" {
+		if latest.Status != "running" && latest.Status != "queued" {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if reads.Load() != int32(s.Settings().MaxToolCalls) || calls.Load() > int32(s.Settings().MaxToolCalls+9) {
+	if reads.Load() != int32(s.Settings().MaxToolCalls) || calls.Load() > int32(s.Settings().MaxIterations) {
 		t.Fatal("unbounded reads/iterations", reads.Load(), calls.Load())
 	}
 	latest, _ := s.Run(context.Background(), run.ID)
@@ -79,13 +79,13 @@ func TestScopeRevocationCancelsDiagnosisAndInvalidatesPendingApproval(t *testing
 	if _, err := s.SaveSettings(context.Background(), SettingsInput{Settings: cfg}, Actor{UserID: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Decide(context.Background(), op.ID, Decision{Approve: true, ReviewToken: op.ReviewToken}, Actor{UserID: 1}); err == nil {
+	if _, err := s.Decide(context.Background(), op.ID, Decision{RequestID: id(), Approve: true, ReviewToken: op.ReviewToken}, Actor{UserID: 1}); err == nil {
 		t.Fatal("revoked node approval allowed")
 	}
 	until := time.Now().Add(2 * time.Second)
 	for time.Now().Before(until) {
 		latest, _ := s.Run(context.Background(), run.ID)
-		if latest.Status == "canceled" {
+		if latest.Status == "paused" {
 			if count.Load() != 0 {
 				t.Fatal("mutation executed")
 			}
@@ -106,7 +106,7 @@ func TestAutoBudgetUsesUTCAndRevokedBindingNeverApproves(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := s.Decide(context.Background(), op.ID, Decision{Approve: true, ReviewToken: op.ReviewToken}, Actor{UserID: 1, BindingID: "revoked", Source: "chat"}); !errors.Is(err, ErrScope) {
+	if _, err := s.Decide(context.Background(), op.ID, Decision{RequestID: id(), Approve: true, ReviewToken: op.ReviewToken}, Actor{UserID: 1, BindingID: "revoked", Source: "chat"}); !errors.Is(err, ErrScope) {
 		t.Fatal(err)
 	}
 	if count.Load() != 0 {

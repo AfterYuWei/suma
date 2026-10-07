@@ -19,6 +19,9 @@ func Text(value string) string {
 	value = bearer.ReplaceAllString(value, "${1} [REDACTED]")
 	value = assignments.ReplaceAllStringFunc(value, func(match string) string {
 		parts := assignments.FindStringSubmatch(match)
+		if strings.Contains(parts[2], "__SUMA_SECRET_REF_") {
+			return match
+		}
 		replacement := "[REDACTED]"
 		if strings.HasPrefix(parts[2], `"`) {
 			replacement = `"[REDACTED]"`

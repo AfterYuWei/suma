@@ -1,0 +1,43 @@
+name: engineering-check
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.6
+        env:
+          POSTGRES_USER: suma_test
+          POSTGRES_PASSWORD: isolated-ci-only
+          POSTGRES_DB: suma_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U suma_test -d suma_test"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      SUMA_TEST_DATABASE_DSN: postgres://suma_test:isolated-ci-only@127.0.0.1:5432/suma_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: make check
+      - run: go test -race ./internal/ai ./internal/database ./internal/app ./internal/compose ./internal/api
+        working-directory: server
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      - run: npx playwright test e2e/ai-workbench.spec.ts e2e/ai-chat.spec.ts e2e/ai-settings.spec.ts
+        working-directory: web

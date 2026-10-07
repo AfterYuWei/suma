@@ -9,7 +9,7 @@ import (
 const dataRootKey = "SUMA_DATA_ROOT"
 
 var configEnvKeys = []string{
-	"SUMA_ADDRESS", "SUMA_DATABASE", "SUMA_DOCKER_HOST", "SUMA_COMPOSE_ROOT",
+	"SUMA_ADDRESS", "SUMA_DATABASE_DSN", "SUMA_DOCKER_HOST", "SUMA_COMPOSE_ROOT",
 	"SUMA_BACKUP_ROOT", "SUMA_COMPOSE_COMMAND", "SUMA_GIT_COMMAND",
 	"SUMA_GIT_ROOT", "SUMA_SECRET_KEY_FILE", "SUMA_COOKIE_SECURE", dataRootKey,
 	"SUMA_BROWSER_ORIGIN", "SUMA_TRUSTED_PROXIES",
@@ -17,20 +17,30 @@ var configEnvKeys = []string{
 
 func clearConfigEnv(t *testing.T) {
 	t.Helper()
+	t.Setenv("SUMA_ENV_FILE", "-")
 	for _, key := range configEnvKeys {
 		t.Setenv(key, "")
 	}
 }
 
+func loadTestConfig(t *testing.T) Config {
+	t.Helper()
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
 func TestLoadDefaults(t *testing.T) {
 	clearConfigEnv(t)
-	cfg := Load()
+	cfg := loadTestConfig(t)
 	dataRoot := "./data"
 	rows := []struct {
 		name, got, want string
 	}{
 		{"address", cfg.Address, ":8080"},
-		{"database path", cfg.DatabasePath, filepath.Join(dataRoot, "suma.db")},
+		{"database DSN is required", cfg.DatabaseDSN, ""},
 		{"docker host", cfg.DockerHost, "unix:///var/run/docker.sock"},
 		{"compose root", cfg.ComposeRoot, filepath.Join(dataRoot, "compose")},
 		{"backup root", cfg.BackupRoot, filepath.Join(dataRoot, "backups")},
@@ -61,7 +71,7 @@ func TestLoadEnvironmentOverrides(t *testing.T) {
 		want             string
 	}{
 		{"listen address", "SUMA_ADDRESS", "127.0.0.1:9099", func(c Config) string { return c.Address }, "127.0.0.1:9099"},
-		{"database override ignores data root", "SUMA_DATABASE", "/tmp/other.sqlite", func(c Config) string { return c.DatabasePath }, "/tmp/other.sqlite"},
+		{"database DSN", "SUMA_DATABASE_DSN", "postgres://localhost/suma?sslmode=disable", func(c Config) string { return c.DatabaseDSN }, "postgres://localhost/suma?sslmode=disable"},
 		{"docker host", "SUMA_DOCKER_HOST", "tcp://10.0.0.5:2376", func(c Config) string { return c.DockerHost }, "tcp://10.0.0.5:2376"},
 		{"compose root", "SUMA_COMPOSE_ROOT", "/srv/compose", func(c Config) string { return c.ComposeRoot }, "/srv/compose"},
 		{"backup root", "SUMA_BACKUP_ROOT", "/srv/backups", func(c Config) string { return c.BackupRoot }, "/srv/backups"},
@@ -76,7 +86,7 @@ func TestLoadEnvironmentOverrides(t *testing.T) {
 		t.Run(row.name, func(t *testing.T) {
 			clearConfigEnv(t)
 			t.Setenv(row.key, row.value)
-			cfg := Load()
+			cfg := loadTestConfig(t)
 			if got := row.pick(cfg); got != row.want {
 				t.Fatalf("%s = %q, want %q", row.key, got, row.want)
 			}
@@ -99,7 +109,7 @@ func TestLoadCookieSecure(t *testing.T) {
 		t.Run(row.name, func(t *testing.T) {
 			clearConfigEnv(t)
 			t.Setenv("SUMA_COOKIE_SECURE", row.value)
-			cfg := Load()
+			cfg := loadTestConfig(t)
 			if cfg.CookieSecure != row.want {
 				t.Fatalf("CookieSecure = %v, want %v (input %q)", cfg.CookieSecure, row.want, row.value)
 			}
@@ -110,12 +120,12 @@ func TestLoadCookieSecure(t *testing.T) {
 func TestLoadDataRootDerivedPaths(t *testing.T) {
 	clearConfigEnv(t)
 	t.Setenv(dataRootKey, "/opt/suma-data")
-	cfg := Load()
+	cfg := loadTestConfig(t)
 	root := "/opt/suma-data"
 	rows := []struct {
 		name, got, want string
 	}{
-		{"database", cfg.DatabasePath, filepath.Join(root, "suma.db")},
+		{"data root", cfg.DataRoot, root},
 		{"compose root", cfg.ComposeRoot, filepath.Join(root, "compose")},
 		{"backup root", cfg.BackupRoot, filepath.Join(root, "backups")},
 		{"git root", cfg.GitRoot, filepath.Join(root, "gitops")},
