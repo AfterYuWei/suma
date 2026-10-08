@@ -30,8 +30,12 @@ type Target struct {
 	Name   string `json:"name"`
 }
 type ConnectionStatus struct {
-	State string `json:"state"`
-	Error string `json:"error,omitempty"`
+	State             string     `json:"state"`
+	Error             string     `json:"error,omitempty"`
+	MessageCount      uint64     `json:"message_count"`
+	LastMessageAt     *time.Time `json:"last_message_at,omitempty"`
+	LastMessageResult string     `json:"last_message_result,omitempty"`
+	DiscoveryError    string     `json:"discovery_error,omitempty"`
 }
 type Secrets struct {
 	Endpoint      string `json:"endpoint,omitempty"`
@@ -96,15 +100,16 @@ type CatalogEntry struct {
 	TitleEN  string `json:"title_en"`
 }
 type Incoming struct {
-	ID          string
-	ChannelID   string
-	UserID      string
-	Name        string
-	ChatID      string
-	Private     bool
-	Text        string
-	Action      string
-	OperationID string
+	ID            string
+	ChannelID     string
+	UserID        string
+	Name          string
+	ChatID        string
+	Private       bool
+	Text          string
+	Action        string
+	OperationID   string
+	DiscoveryOnly bool
 }
 type ChatHandler func(Incoming, database.NotificationBinding)
 type InteractionChoice struct {

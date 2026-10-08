@@ -10,9 +10,6 @@ import (
 	"time"
 
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
-	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
-	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
-	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/outbound"
@@ -165,14 +162,23 @@ func (s *Service) HandleIncoming(ctx context.Context, in Incoming) error {
 	return s.handleIncoming(ctx, in, "")
 }
 func (s *Service) handleIncoming(ctx context.Context, in Incoming, generation string) error {
+	return s.handleIncomingObserved(ctx, in, generation, nil)
+}
+func (s *Service) handleIncomingObserved(ctx context.Context, in Incoming, generation string, observed *feishuMessageObservation) error {
 	if in.ID == "" || in.UserID == "" || in.ChatID == "" {
 		return ErrInvalid
 	}
 	c, duplicate, err := s.discoverIncoming(ctx, in, generation)
 	if err != nil {
+		if observed != nil {
+			observed.record("storage_error", "The message event arrived, but its conversation could not be saved")
+		}
 		return err
 	}
-	if duplicate || !c.Config.Interactive {
+	if observed != nil && in.Action == "" {
+		observed.record("discovered", "")
+	}
+	if duplicate || in.DiscoveryOnly || !c.Config.Interactive {
 		return nil
 	}
 	return s.handleChat(ctx, c, in)
@@ -279,7 +285,8 @@ func (s *Service) startChatLocked(c Channel) {
 	}
 	ctx, cancel := context.WithCancel(s.ctx)
 	generation := ID()
-	s.connections[c.ID] = connectionEntry{generation: generation, ConnectionStatus: ConnectionStatus{State: "connecting"}}
+	observed := &feishuMessageObservation{now: s.deps.Now}
+	s.connections[c.ID] = connectionEntry{generation: generation, messages: observed, ConnectionStatus: ConnectionStatus{State: "connecting"}}
 	previousDone := s.chatDone[c.ID]
 	done := make(chan struct{})
 	s.chatDone[c.ID] = done
@@ -308,13 +315,13 @@ func (s *Service) startChatLocked(c Channel) {
 			state.Error = hide(state.Error, m)
 			s.connectionState(c.ID, generation, state)
 		}
-		incoming := func(in Incoming) error { return s.handleIncoming(ctx, in, generation) }
+		incoming := func(in Incoming) error { return s.handleIncomingObserved(ctx, in, generation, observed) }
 		if c.Provider == "feishu_app" {
-			connect := s.deps.FeishuConnect
-			if connect == nil {
-				connect = s.feishu
+			if s.deps.FeishuConnect != nil {
+				s.deps.FeishuConnect(ctx, c, m, status, incoming)
+			} else {
+				s.feishu(ctx, c, m, status, incoming, observed)
 			}
-			connect(ctx, c, m, status, incoming)
 			return
 		}
 		a, ok := s.deps.Sender.(*Adapter)
@@ -447,7 +454,7 @@ func (quietSDKLogger) Error(context.Context, ...interface{}) {}
 func (s *Service) chatError(id, message string) {
 	s.error(s.db.Model(&database.NotificationChannel{}).Where("id = ?", id).UpdateColumn("last_error", message).Error)
 }
-func (s *Service) feishu(ctx context.Context, c Channel, m Secrets, status func(ConnectionStatus), incoming func(Incoming) error) {
+func (s *Service) feishu(ctx context.Context, c Channel, m Secrets, status func(ConnectionStatus), incoming func(Incoming) error, observed *feishuMessageObservation) {
 	// A bounded queue keeps Feishu callbacks below the three-second response deadline.
 	var botID atomic.Value
 	botID.Store("")
@@ -489,79 +496,19 @@ func (s *Service) feishu(ctx context.Context, c Channel, m Secrets, status func(
 		}
 	}()
 	defer func() { <-done }()
-	handler := dispatcher.NewEventDispatcher("", "").OnP2MessageReceiveV1(func(_ context.Context, e *larkim.P2MessageReceiveV1) error {
-		if e == nil || e.Event == nil || e.Event.Message == nil || e.Event.Sender == nil || e.Event.Sender.SenderId == nil {
-			return nil
-		}
-		msg, sender := e.Event.Message, e.Event.Sender
-		if ptr(sender.TenantKey) == "" || ptr(sender.SenderId.OpenId) == "" || ptr(msg.ChatId) == "" || ptr(msg.MessageId) == "" {
-			return nil
-		}
-		if ptr(sender.SenderType) != "user" || ptr(msg.MessageType) != "text" {
-			return nil
-		}
-		private := ptr(msg.ChatType) == "p2p"
-		if !private {
-			mentioned := false
-			for _, mention := range msg.Mentions {
-				id := botID.Load().(string)
-				if mention != nil && mention.Id != nil && ptr(mention.Id.OpenId) == id && id != "" {
-					mentioned = true
-				}
-			}
-			if !mentioned {
-				return nil
-			}
-		}
-		var content struct {
-			Text string `json:"text"`
-		}
-		if json.Unmarshal([]byte(ptr(msg.Content)), &content) != nil {
-			return nil
-		}
-		for _, mention := range msg.Mentions {
-			if mention != nil {
-				content.Text = strings.ReplaceAll(content.Text, ptr(mention.Key), "")
-			}
-		}
-		in := Incoming{ID: ptr(msg.MessageId), ChannelID: c.ID, UserID: ptr(sender.TenantKey) + ":" + ptr(sender.SenderId.OpenId), ChatID: ptr(msg.ChatId), Private: private, Text: content.Text, Name: ptr(sender.SenderId.OpenId)}
-		if !private {
-			in.Name = in.ChatID
-		}
+	handler := feishuEventHandler(c, func() string { return botID.Load().(string) }, func(in Incoming) error {
 		select {
 		case queue <- in:
 			return nil
 		default:
 			return errors.New("SUMA incoming queue is busy")
 		}
-	}).OnP2CardActionTrigger(func(_ context.Context, e *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
-		if e == nil || e.Event == nil || e.Event.Operator == nil || e.Event.Action == nil || e.Event.Context == nil {
-			return nil, nil
-		}
-		if ptr(e.Event.Operator.TenantKey) == "" || e.Event.Operator.OpenID == "" || e.Event.Context.OpenChatID == "" {
-			return nil, nil
-		}
-		action, _ := e.Event.Action.Value["action"].(string)
-		op, _ := e.Event.Action.Value["operation_id"].(string)
-		if action == "approve" || action == "reject" {
-			op, _ = e.Event.Action.Value["token"].(string)
-		}
-		key := ""
-		if e.EventV2Base != nil && e.EventV2Base.Header != nil {
-			key = e.EventV2Base.Header.EventID
-		}
-		in := Incoming{ID: key, ChannelID: c.ID, UserID: ptr(e.Event.Operator.TenantKey) + ":" + e.Event.Operator.OpenID, ChatID: e.Event.Context.OpenChatID, Action: action, OperationID: op, Name: e.Event.Operator.OpenID}
-		select {
-		case queue <- in:
-			return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "info", Content: "请求已接收，请查看机器人回复 / Request received"}}, nil
-		default:
-			return nil, errors.New("SUMA incoming queue is busy")
-		}
-	})
-	handler.Config.Logger = quietSDKLogger{}
+	}, func(result string) { observed.record(result, "") })
 	for ctx.Err() == nil {
 		client := larkws.NewClient(c.Config.AppID, m.Token, larkws.WithEventHandler(handler), larkws.WithLogger(quietSDKLogger{}), larkws.WithLogLevel(larkcore.LogLevelError), larkws.WithHttpClient(outbound.Client(false)))
 		client.SetOnReady(func() { status(ConnectionStatus{State: "connected"}) })
+		client.SetOnReconnected(func() { status(ConnectionStatus{State: "connected"}) })
+		client.SetOnReconnecting(func() { status(ConnectionStatus{State: "reconnecting"}) })
 		client.SetOnError(func(error) {
 			status(ConnectionStatus{State: "reconnecting", Error: "Feishu connection interrupted; reconnecting"})
 		})

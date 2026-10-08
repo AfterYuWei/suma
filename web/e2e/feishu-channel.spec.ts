@@ -1,5 +1,32 @@
 import { expect, test } from '@playwright/test'
 
+test('connected Feishu distinguishes missing events, storage failures and successful discovery', async ({ page }) => {
+ await page.addInitScript(() => { sessionStorage.setItem('suma-demo-session','1');localStorage.setItem('suma-language','zh-CN');localStorage.setItem('suma-node','local') })
+ await page.goto('/settings#notifications');await page.getByRole('button',{name:'添加通知渠道',exact:true}).click()
+ const sheet=page.getByRole('dialog',{name:'配置通知渠道',exact:true})
+ await sheet.getByLabel('App ID',{exact:true}).fill('cli_event_state');await sheet.getByLabel('App Secret',{exact:true}).fill('demo-only-secret')
+ await sheet.getByRole('button',{name:'保存渠道',exact:true}).click();await expect(sheet.getByLabel('App Secret',{exact:true})).toHaveValue('')
+ const reception = async (result: 'missing' | 'error' | 'discovered') => page.evaluate(async result => {
+  // @ts-expect-error Vite exposes the demo modules in the browser.
+  const {api}=await import('/src/lib/api.ts')
+  // @ts-expect-error Vite exposes the demo modules in the browser.
+  const {setDemoFeishuReception}=await import('/src/features/operations/mock.ts')
+  const channels=await api('/notifications/channels'), channel=channels.find((item:{config:{app_id:string}})=>item.config.app_id==='cli_event_state')
+  setDemoFeishuReception(channel.id,{connection:{state:'connected',message_count:result==='missing'?0:1,last_message_at:result==='missing'?undefined:'2026-10-08T04:00:00Z',last_message_result:result==='error'?'storage_error':result==='discovered'?'discovered':undefined,discovery_error:result==='error'?'Conversation storage failed':undefined},chats:result==='discovered'?[{chat_id:'oc_real_format',name:'Admin',private:true}]:[]})
+ },result)
+ await reception('missing')
+ await expect(sheet.getByText('连接已建立，但尚未收到消息事件。请在飞书发布包含权限和“接收消息”订阅的新版本，确认生效后重新发消息。',{exact:true})).toBeVisible()
+ await expect(sheet.getByRole('status',{name:'连接状态',exact:true})).toContainText('已连接')
+ await reception('error')
+ await expect(sheet.getByRole('alert')).toContainText('消息事件已收到，但保存会话失败')
+ await expect(sheet.getByText('已收到 1 次消息事件',{exact:false})).toBeVisible()
+ await reception('discovered')
+ await expect(sheet.getByRole('checkbox',{name:'私聊 · Admin',exact:true})).toBeVisible()
+ await expect(sheet.getByRole('checkbox',{name:'私聊 · Admin',exact:true})).not.toBeChecked()
+ await expect(sheet.getByRole('alert')).toHaveCount(0)
+ await expect(sheet.getByText('会话已识别。',{exact:true})).toBeVisible()
+})
+
 for (const width of [390, 1440]) for (const language of ['en-US', 'zh-CN']) for (const theme of ['dark', 'light']) {
  test(`Feishu single page ${language} ${theme} ${width}`, async ({ page }) => {
   await page.addInitScript(({ language, theme }) => { sessionStorage.setItem('suma-demo-session', '1'); localStorage.setItem('suma-language', language); localStorage.setItem('suma-theme', theme); localStorage.setItem('suma-node', 'local') }, { language, theme })

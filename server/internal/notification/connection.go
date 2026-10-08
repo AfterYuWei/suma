@@ -4,13 +4,45 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/suma/suma/server/internal/redact"
 )
 
 type connectionEntry struct {
 	generation string
+	messages   *feishuMessageObservation
 	ConnectionStatus
+}
+
+// SDK callbacks only take this short-lived memory lock, never the service's
+// database lock: event acknowledgement must stay below Feishu's deadline.
+type feishuMessageObservation struct {
+	mu     sync.Mutex
+	now    func() time.Time
+	count  uint64
+	lastAt *time.Time
+	result string
+	error  string
+}
+
+func (o *feishuMessageObservation) record(result, reason string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if result == "received" {
+		o.count++
+		at := o.now().UTC()
+		o.lastAt = &at
+	}
+	o.result, o.error = result, redact.Bounded(reason, 512)
+}
+func (o *feishuMessageObservation) status(state ConnectionStatus) ConnectionStatus {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	state.MessageCount, state.LastMessageAt = o.count, o.lastAt
+	state.LastMessageResult, state.DiscoveryError = o.result, o.error
+	return state
 }
 
 func needsConnection(c Channel) bool {
@@ -28,6 +60,9 @@ func (s *Service) Connection(ctx context.Context, id string) (ConnectionStatus, 
 		return ConnectionStatus{}, fmt.Errorf("%w: connection status is available for Feishu applications", ErrInvalid)
 	}
 	if entry, ok := s.connections[id]; ok {
+		if entry.messages != nil {
+			return entry.messages.status(entry.ConnectionStatus), nil
+		}
 		return entry.ConnectionStatus, nil
 	}
 	return ConnectionStatus{State: "stopped"}, nil

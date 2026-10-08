@@ -1,5 +1,5 @@
 export interface ChannelTarget { chat_id: string; name: string }
-export interface ConnectionStatus { state: 'stopped' | 'connecting' | 'connected' | 'reconnecting' | 'error'; error?: string }
+export interface ConnectionStatus { state: 'stopped' | 'connecting' | 'connected' | 'reconnecting' | 'error'; error?: string; message_count?: number; last_message_at?: string; last_message_result?: string; discovery_error?: string }
 export interface ChannelConfig { endpoint: string; chat_id: string; app_id: string; targets?: ChannelTarget[]; language: string; timezone: string; allow_private: boolean; interactive: boolean; public_url: string }
 export interface Channel { id: string; name: string; provider: string; enabled: boolean; version: number; config: ChannelConfig; has_secrets: boolean; last_error?: string; last_sent_at?: string }
 export interface RuleConfig { events: string[]; severities: string[]; node_ids: string[]; group_ids: number[]; projects: string[]; channel_ids: string[]; channel_targets?: Record<string, string[]>; fallback_chat_id?: string; fallback_id: string; mode: string; timezone: string; digest_hour: number; quiet_start: string; quiet_end: string; muted_until?: string | null; recovery: boolean; template: string }
