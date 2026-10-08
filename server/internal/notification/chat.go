@@ -20,6 +20,16 @@ import (
 
 var ErrBinding = errors.New("chat identity is not bound or has been revoked")
 
+// UnboundMessage explains how to complete site-confirmed binding without
+// issuing a code in chat or attaching any operation controls.
+func UnboundMessage(text string) Message {
+	return Message{Text: "尚未完成 SUMA 账号绑定或站内确认，当前仅可查询安全摘要。详细诊断、日志和操作请先绑定。 / Your SUMA account binding is incomplete or unconfirmed. Only safe summaries are available; bind your account for diagnosis, logs and operations.\n\n" + text + "\n\n" +
+		"绑定步骤 / Binding steps:\n" +
+		"1. 登录 SUMA → 设置 → AI 运维 → 聊天账号绑定与操作白名单，选择当前机器人渠道，点击“生成绑定码”（10 分钟有效、仅可使用一次）。 / Sign in to SUMA → Settings → AI operations → Chat identity binding & operator allowlist. Select this bot's channel and click Generate binding code (single-use, valid for 10 minutes).\n" +
+		"2. 在此机器人的私聊中发送 /bind CODE，将 CODE 替换为绑定码；请勿在群聊提交。 / Send /bind CODE privately to this bot, replacing CODE with your binding code. Do not send it in a group.\n" +
+		"3. 返回 SUMA 上述页面，核对平台身份，点击“确认并加入操作白名单”，然后重新提问。已提交绑定码的账号请完成这一步。 / Return to the same SUMA page, verify the platform identity, click Confirm and allow operations, then ask again. If you already sent the code, complete this step."}
+}
+
 func (s *Service) Bindings(ctx context.Context, user uint) ([]database.NotificationBinding, error) {
 	rows := []database.NotificationBinding{}
 	err := s.db.WithContext(ctx).Where("user_id = ?", user).Order("created_at DESC").Find(&rows).Error
@@ -213,11 +223,10 @@ func (s *Service) handleChat(ctx context.Context, c Channel, in Incoming) error 
 	text := strings.TrimSpace(in.Text)
 	if strings.HasPrefix(text, "/bind ") {
 		err = s.claimBinding(ctx, in, strings.TrimSpace(strings.TrimPrefix(text, "/bind ")))
-		answer := "已识别平台账号，请回到 SUMA 确认绑定。 / Return to SUMA to confirm your identity."
 		if err != nil {
-			answer = err.Error()
+			return s.Reply(ctx, in, UnboundMessage(err.Error()))
 		}
-		return s.Reply(ctx, in, Message{Text: answer})
+		return s.Reply(ctx, in, Message{Text: "已识别平台账号，尚需站内确认。请返回 SUMA → 设置 → AI 运维 → 聊天账号绑定与操作白名单，核对平台身份并点击“确认并加入操作白名单”，然后重新提问。 / Your platform identity is recognized and awaits site confirmation. Return to SUMA → Settings → AI operations → Chat identity binding & operator allowlist, verify the platform identity, click Confirm and allow operations, then ask again."})
 	}
 	if strings.HasPrefix(text, "/approve ") {
 		in.Action = "preview"
@@ -247,10 +256,10 @@ func (s *Service) handleChat(ctx context.Context, c Channel, in Incoming) error 
 			if err := s.deps.Audit.RecordAI(ctx, s.db, database.AIAudit{Action: "chat_access", Source: "chat", ExternalUserID: in.UserID, ChatID: in.ChatID, Resource: "operation", Result: "denied"}); err != nil {
 				return err
 			}
-			return s.Reply(ctx, in, Message{Text: "不在操作白名单中，只能查询安全状态摘要。 / Read-only access: previews, approvals and changes require a site-confirmed identity."})
+			return s.Reply(ctx, in, UnboundMessage("不在操作白名单中，只能查询安全状态摘要。 / Read-only access: previews, approvals and changes require a site-confirmed identity."))
 		}
 		if !s.allowGuestQuery(in) {
-			return s.Reply(ctx, in, Message{Text: "查询过于频繁，请稍后重试。 / Too many queries; try again shortly."})
+			return s.Reply(ctx, in, UnboundMessage("查询过于频繁，请稍后重试。 / Too many queries; try again shortly."))
 		}
 	}
 	s.mu.Lock()

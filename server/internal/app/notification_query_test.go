@@ -92,6 +92,11 @@ func TestGuestChatQueryNeverReturnsPrivacyOrApprovalControls(t *testing.T) {
 		t.Fatal("guest approval not denied")
 	}
 	for _, message := range sender.messages {
+		for _, step := range []string{"尚未完成 SUMA 账号绑定或站内确认", "Settings → AI operations", "生成绑定码", "10 minutes", "/bind CODE", "Do not send it in a group", "确认并加入操作白名单", "then ask again"} {
+			if !strings.Contains(message.Text, step) {
+				t.Fatal("unbound reply omitted the account reminder or binding steps", step)
+			}
+		}
 		if message.OperationID != "" || message.ApproveID != "" || message.ApprovalToken != "" || message.URL != "" || len(message.Events) != 0 {
 			t.Fatal("guest received private details or action controls")
 		}
@@ -205,9 +210,26 @@ func TestFeishuGuestNaturalLanguageQueriesTheNamedNode(t *testing.T) {
 	if strings.Contains(sender.messages[1].Text, "ganzhou") || strings.Contains(sender.messages[1].Text, "remote-01") {
 		t.Fatal("guest clarification enumerated private node entries")
 	}
+	for _, message := range sender.messages {
+		if !strings.Contains(message.Text, "尚未完成 SUMA 账号绑定或站内确认") || !strings.Contains(message.Text, "/bind CODE") || !strings.Contains(message.Text, "确认并加入操作白名单") {
+			t.Fatal("Feishu summary or clarification omitted binding instructions")
+		}
+	}
 	var audits []database.AuditLog
 	if err := db.Where("action = ?", "ai.query").Order("id ASC").Find(&audits).Error; err != nil || len(audits) != 2 || audits[0].NodeID != "remote-01" || audits[0].Result != "success" || audits[1].Result != "denied" || audits[1].NodeID != "" {
 		t.Fatal("query audit lost the resolved node or recorded an unverified target", audits, err)
+	}
+	cfg = assistant.Settings()
+	cfg.Enabled = false
+	if _, err := assistant.SaveSettings(ctx, ai.SettingsInput{Settings: cfg}, ai.Actor{UserID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	in.ID, in.UserID = "disabled-ai", "tenant:disabled-ai-guest"
+	if err := notify.HandleIncoming(ctx, in); err != nil || len(reads) != 1 || len(sender.messages) != 3 {
+		t.Fatal("disabled AI performed a query or lost the guest response", err)
+	}
+	if !strings.Contains(sender.messages[2].Text, "Safe status is unavailable") || !strings.Contains(sender.messages[2].Text, "/bind CODE") || !strings.Contains(sender.messages[2].Text, "确认并加入操作白名单") {
+		t.Fatal("unavailable query omitted binding instructions")
 	}
 	// Notification-only mode still discovers conversations without querying AI.
 	c.Config.Interactive = false
@@ -215,7 +237,7 @@ func TestFeishuGuestNaturalLanguageQueriesTheNamedNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	in.ID, in.UserID, in.Text = "message-3", "tenant:notify-only", "发送ganzhou节点的信息给我"
-	if err := notify.HandleIncoming(ctx, in); err != nil || len(reads) != 1 || len(sender.messages) != 2 {
+	if err := notify.HandleIncoming(ctx, in); err != nil || len(reads) != 1 || len(sender.messages) != 3 {
 		t.Fatal("notification-only mode queried a node or replied", err)
 	}
 	for _, model := range []any{&database.AIRun{}, &database.AIOperation{}, &database.Task{}} {

@@ -86,7 +86,7 @@ func (r aiRuntime) Query(ctx context.Context, nodeID string) (ai.QuerySummary, e
 }
 
 func chatQuery(ctx context.Context, notify *notification.Service, assistant *ai.Service, in notification.Incoming) {
-	reply := func(text string) { _ = notify.Reply(ctx, in, notification.Message{Text: text}) }
+	reply := func(text string) { _ = notify.Reply(ctx, in, notification.UnboundMessage(text)) }
 	if in.Action != "" {
 		reply("不在操作白名单中，只能查询安全状态摘要。 / Read-only access: operation previews and approvals are unavailable.")
 		return
@@ -111,6 +111,5 @@ func chatQuery(ctx context.Context, notify *notification.Service, assistant *ai.
 	if out.MissingContainers || out.MissingImages || out.MissingCleanup {
 		answer += "\n部分数据不可用，不能推断缺失数据。 / Partial data unavailable; missing data is not evidence."
 	}
-	answer += "\n此账号仅能查询摘要；隐私、日志、配置、任务输出和所有变更均不可访问。 / This identity can query summaries only; private data, logs, configuration, task output and all changes are inaccessible."
 	reply(answer)
 }

@@ -4,6 +4,8 @@ This file records the completed MVP implementation. Every checked phase was veri
 
 ## Current work
 
+- [x] 未绑定聊天账号提醒与绑定步骤（2026-10-08）：摘要、查询错误／澄清、权限拒绝、频率限制及无效绑定回复统一提示站内生成绑定码、私聊提交、回站确认；成功提交后明确尚需站内确认。验证：隔离 PostgreSQL 消息回归覆盖摘要／澄清／不可用／权限拒绝／频率限制的中英文完整步骤、群聊拒绝后私聊提交、站内确认前无操作权限、绑定码不回显、隐私与通知模式；完整 Go test／build、Notification／App race、Web lint／typecheck／build 通过。独立真实 Docker 节点查询及 Unix／mTLS TCP／HTTPS-WSS Agent 逐项审批重启冒烟通过（47.081s）。同步 API 与使用文档；真实飞书端更新后的回复验收仍需专用应用／会话条件。
+
 - [x] 修复飞书未绑定身份按节点名称查询（2026-10-08）：解析“发送ganzhou节点的信息给我”等明确名称／ID，保留授权范围与数字摘要，目标不明先澄清，避免误用默认节点。验证：隔离 PostgreSQL 回归覆盖双节点路由、中英文名称／完整 ID、命令空格／tab、相似名称、未授权／停用／歧义／删除、隐私、去重、审计与通知模式；完整 Go test／build、AI／App race、Web lint／typecheck／build 和 22 项飞书／通知 AI 浏览器回归通过。独立 Docker 冒烟通过真实飞书处理路径按名称选择 Unix 运行时并读取容器／镜像摘要（发送器替身、无模型／提案／Task），既有 Unix／mTLS TCP／HTTPS-WSS Agent 审核重启回归通过（49.185s）。同步 API、使用文档和冒烟脚本；真实飞书端更新后的查询验收仍待专用应用／会话条件。
 
 - [x] 修复三项 CI 异步测试竞争（2026-10-07）：AI 预算测试等待 Run 结束后验证实际与持久化预算及完整脱敏证据，增加超过原三秒等待窗口的慢读取回归；Agent 流测试等待控制连接注册；Compose fixture 在清理数据库前取消并等待 Task 的最终写入，确认 Docker socket 审核后的执行结果。验证：复现 AI 提前断言及 Agent `broken pipe`；运行中 Task 回归证实旧 Compose fixture 未等待退出。PostgreSQL 18.6 下 AI 预算 race 重复 10 轮、Compose 审核／清理 race 重复 30 轮、Agent Hub 全组 race 重复 100 轮全部通过；Go test／build、CI 原命令的 AI／Database／App／Compose／API race 全部通过；Unix／mTLS TCP／HTTPS-WSS Agent 独立 Docker 冒烟通过（45.290s）。测试 schema 无遗留，临时数据库与私密连接文件已清理。

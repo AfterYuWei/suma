@@ -184,7 +184,7 @@ func TestRetryFallbackAndSuppression(t *testing.T) {
 	}
 }
 func TestBindingIdentityRevocationAndSingleUseActions(t *testing.T) {
-	s, db, _, _ := fixture(t)
+	s, db, sender, _ := fixture(t)
 	db.Create(&database.User{Username: "admin", PasswordHash: "test"})
 	c, err := s.SaveChannel(context.Background(), "", ChannelInput{Name: "chat", Provider: "telegram", Enabled: true, Config: Config{Interactive: true, Timezone: "UTC", Language: "en-US"}, Secrets: &Secrets{Token: "123:secret"}})
 	if err != nil {
@@ -195,7 +195,12 @@ func TestBindingIdentityRevocationAndSingleUseActions(t *testing.T) {
 		t.Fatal(err)
 	}
 	group := Incoming{ID: "1", ChannelID: c.ID, UserID: "42", ChatID: "group", Private: false, Text: "/bind " + code}
-	s.HandleIncoming(context.Background(), group)
+	if err := s.HandleIncoming(context.Background(), group); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.sent) != 1 || !strings.Contains(sender.sent[0].Text, "/bind CODE") || !strings.Contains(sender.sent[0].Text, "Do not send it in a group") || strings.Contains(sender.sent[0].Text, code) {
+		t.Fatal("group binding rejection omitted private-chat instructions or echoed the code")
+	}
 	if err = s.ConfirmBinding(context.Background(), 1, b.ID); err == nil {
 		t.Fatal("group bound identity")
 	}
@@ -205,6 +210,12 @@ func TestBindingIdentityRevocationAndSingleUseActions(t *testing.T) {
 	private.ChatID = "private"
 	if err = s.HandleIncoming(context.Background(), private); err != nil {
 		t.Fatal(err)
+	}
+	if len(sender.sent) != 2 || !strings.Contains(sender.sent[1].Text, "尚需站内确认") || !strings.Contains(sender.sent[1].Text, "确认并加入操作白名单") || strings.Contains(sender.sent[1].Text, code) {
+		t.Fatal("submitted binding code did not explain the remaining site confirmation")
+	}
+	if _, err := s.ValidateBinding(context.Background(), 1, b.ID); err == nil {
+		t.Fatal("submitting the code bypassed site confirmation")
 	}
 	if err = s.ConfirmBinding(context.Background(), 1, b.ID); err != nil {
 		t.Fatal(err)

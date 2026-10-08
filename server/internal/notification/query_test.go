@@ -3,6 +3,7 @@ package notification
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,6 +76,11 @@ func TestUnboundPendingAndRevokedIdentitiesOnlyReachSafeQueries(t *testing.T) {
 		t.Fatal("revoked identity reached operation handler")
 	}
 	for _, message := range sender.sent {
+		for _, step := range []string{"尚未完成 SUMA 账号绑定或站内确认", "Settings → AI operations", "生成绑定码", "10 minutes", "/bind CODE", "Do not send it in a group", "确认并加入操作白名单", "then ask again"} {
+			if !strings.Contains(message.Text, step) {
+				t.Fatal("guest denial or rate limit omitted binding instructions", step)
+			}
+		}
 		if message.ApprovalToken != "" || message.OperationID != "" || message.ApproveID != "" {
 			t.Fatal("guest received approval controls")
 		}
