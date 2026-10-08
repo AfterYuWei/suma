@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Image-update / aggregate-log smoke plus existing Project deployment smoke.
+# Image-update, aggregate-log, reviewed deployment and guest chat-query smoke.
 # Only this disposable daemon and its anonymous volumes are removed on exit.
 project_smoke_root=$(mktemp -d /tmp/suma-project-live.XXXXXX)
 project_smoke_daemon="suma-project-isolated-$(date +%s)-$$"
@@ -37,5 +37,5 @@ SUMA_PROJECT_SMOKE_CERTS="$project_smoke_root/certs/client" \
 SUMA_PROJECT_SMOKE_DIND="$project_smoke_daemon" \
 SUMA_AGENT_SMOKE_IMAGE="${SUMA_AGENT_SMOKE_IMAGE:-suma-agent:env-only-smoke}" \
 GOCACHE="${SUMA_PROJECT_SMOKE_GO_CACHE:-/tmp/suma-project-go-cache}" \
-go -C server test -tags dockersmoke ./internal/api \
-  -run '^TestRealDockerProjectConfigurationTransports$' -count=1 -timeout 9m -v
+go -C server test -tags dockersmoke ./internal/api ./internal/app \
+  -run '^(TestRealDockerProjectConfigurationTransports|TestRealDockerGuestChatQueryNamedNode)$' -count=1 -timeout 9m -v

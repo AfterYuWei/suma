@@ -4,6 +4,8 @@ This file records the completed MVP implementation. Every checked phase was veri
 
 ## Current work
 
+- [x] 修复飞书未绑定身份按节点名称查询（2026-10-08）：解析“发送ganzhou节点的信息给我”等明确名称／ID，保留授权范围与数字摘要，目标不明先澄清，避免误用默认节点。验证：隔离 PostgreSQL 回归覆盖双节点路由、中英文名称／完整 ID、命令空格／tab、相似名称、未授权／停用／歧义／删除、隐私、去重、审计与通知模式；完整 Go test／build、AI／App race、Web lint／typecheck／build 和 22 项飞书／通知 AI 浏览器回归通过。独立 Docker 冒烟通过真实飞书处理路径按名称选择 Unix 运行时并读取容器／镜像摘要（发送器替身、无模型／提案／Task），既有 Unix／mTLS TCP／HTTPS-WSS Agent 审核重启回归通过（49.185s）。同步 API、使用文档和冒烟脚本；真实飞书端更新后的查询验收仍待专用应用／会话条件。
+
 - [x] 修复三项 CI 异步测试竞争（2026-10-07）：AI 预算测试等待 Run 结束后验证实际与持久化预算及完整脱敏证据，增加超过原三秒等待窗口的慢读取回归；Agent 流测试等待控制连接注册；Compose fixture 在清理数据库前取消并等待 Task 的最终写入，确认 Docker socket 审核后的执行结果。验证：复现 AI 提前断言及 Agent `broken pipe`；运行中 Task 回归证实旧 Compose fixture 未等待退出。PostgreSQL 18.6 下 AI 预算 race 重复 10 轮、Compose 审核／清理 race 重复 30 轮、Agent Hub 全组 race 重复 100 轮全部通过；Go test／build、CI 原命令的 AI／Database／App／Compose／API race 全部通过；Unix／mTLS TCP／HTTPS-WSS Agent 独立 Docker 冒烟通过（45.290s）。测试 schema 无遗留，临时数据库与私密连接文件已清理。
 
 - [x] 本地数据库配置改用私密 `.env.local`（2026-10-07）：原生启动与测试自动读取 `127.0.0.1:5432/suma`，保留部署环境优先级，配置解析错误脱敏；`make local-config` 创建权限为 `0600` 的模板并保留已有配置，私密文件排除 Git 与镜像构建上下文；补充 `/Data` 与 `server/data/` 文件职责说明。验证：配置读取／嵌套工作目录／引号与变量引用／shell 文本不执行／错误与进程环境隔离通过；使用用户提供的真实本地 PostgreSQL 完成所有 Go 服务与认证 HTTP 回归及构建，Config／Database／App race 通过；Unix、mTLS TCP、HTTPS/WSS Agent 独立 Docker Compose 与 AI 审核冒烟全部通过（45.995s）。宿主机磁盘不足导致的首轮失败在清理可重建缓存后完整重跑通过；后续检查使用临时内存编译目录。测试 schema、独立 Engine 和临时内存目录均已清理，现有数据库部署与文件保留。

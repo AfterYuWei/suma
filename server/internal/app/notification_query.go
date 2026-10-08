@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -90,22 +91,11 @@ func chatQuery(ctx context.Context, notify *notification.Service, assistant *ai.
 		reply("不在操作白名单中，只能查询安全状态摘要。 / Read-only access: operation previews and approvals are unavailable.")
 		return
 	}
-	cfg := assistant.Settings()
-	nodeID := ""
-	text := strings.TrimSpace(in.Text)
-	if strings.HasPrefix(text, "/node ") {
-		parts := strings.Fields(text)
-		if len(parts) >= 2 {
-			nodeID = parts[1]
-		}
-	} else if len(cfg.NodeIDs) == 1 {
-		nodeID = cfg.NodeIDs[0]
-	}
-	if nodeID == "" {
-		reply("只读查询请使用 /node 节点ID 查询状态。 / For read-only status use /node NODE_ID status.")
+	out, err := assistant.QueryTextAs(ctx, in.Text, ai.Actor{Source: "chat", ExternalUserID: in.UserID, ChatID: in.ChatID})
+	if errors.Is(err, ai.ErrQueryTarget) {
+		reply("请明确一个已启用且已授权的节点名称或 ID，例如“查询 节点名称 的状态”或 /node NODE_ID status。名称不唯一时请使用节点 ID。 / Specify one enabled, authorized node by name or ID, for example: show NODE_NAME status or /node NODE_ID status. Use its ID if the name is ambiguous.")
 		return
 	}
-	out, err := assistant.QueryAs(ctx, nodeID, ai.Actor{Source: "chat", ExternalUserID: in.UserID, ChatID: in.ChatID})
 	if err != nil {
 		reply("当前无法查询该授权节点的安全摘要。 / Safe status is unavailable for this authorized node.")
 		return

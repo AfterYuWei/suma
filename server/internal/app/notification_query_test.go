@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"github.com/suma/suma/server/internal/testutil"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +12,7 @@ import (
 	"github.com/suma/suma/server/internal/notification"
 	"github.com/suma/suma/server/internal/secret"
 	"github.com/suma/suma/server/internal/task"
+	"github.com/suma/suma/server/internal/testutil"
 )
 
 type querySender struct{ messages []notification.Message }
@@ -123,5 +123,105 @@ func TestGuestChatQueryNeverReturnsPrivacyOrApprovalControls(t *testing.T) {
 	part, err := assistant.Audits(ctx)
 	if err != nil || len(part) != 2 || part[0].ID != records[1].ID || part[1].ID != records[0].ID {
 		t.Fatal("guest audit did not use the shared AI subset", part, err)
+	}
+}
+
+func TestFeishuGuestNaturalLanguageQueriesTheNamedNode(t *testing.T) {
+	ctx := context.Background()
+	db, err := testutil.Open(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := secret.Open(filepath.Join(t.TempDir(), "key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&database.User{Username: "admin", PasswordHash: "fixture"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	nodes := []database.Node{{ID: "local", Name: "Local", Enabled: true}, {ID: "remote-01", Name: "ganzhou", Enabled: true}}
+	if err := db.Create(&nodes).Error; err != nil {
+		t.Fatal(err)
+	}
+	var reads []string
+	assistant, err := ai.NewService(db, store, task.NewService(db), ai.Dependencies{
+		Model: forbiddenGuestModel{t},
+		Query: func(_ context.Context, id string) (ai.QuerySummary, error) {
+			reads = append(reads, id)
+			out := ai.QuerySummary{Available: true}
+			out.Containers.Total, out.Containers.Running = 9, 8
+			out.Images.Total = 12
+			return out, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer assistant.Stop()
+	cfg := assistant.Settings()
+	cfg.Enabled, cfg.Model, cfg.NodeIDs = true, "model", []string{"local", "remote-01"}
+	if _, err := assistant.SaveSettings(ctx, ai.SettingsInput{Settings: cfg}, ai.Actor{UserID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	sender := &querySender{}
+	notify := notification.NewService(db, store, notification.Dependencies{Sender: sender})
+	c, err := notify.SaveChannel(ctx, "", notification.ChannelInput{Name: "Feishu", Provider: "feishu_app", Enabled: true, Config: notification.Config{AppID: "cli_guest_query", Interactive: true, Language: "zh-CN", Timezone: "Asia/Shanghai"}, Secrets: &notification.Secrets{Token: "private-app-secret"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	notify.SetChatHandler(chatOperations(notify, assistant))
+	in := notification.Incoming{ID: "message-1", ChannelID: c.ID, UserID: "tenant:guest", ChatID: "oc_private", Private: true, Text: "发送ganzhou节点的信息给我"}
+	if err := notify.HandleIncoming(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if len(reads) != 1 || reads[0] != "remote-01" || len(sender.messages) != 1 {
+		t.Fatal("Feishu did not query the requested node", reads, sender.messages)
+	}
+	message := sender.messages[0]
+	for _, value := range []string{"Read-only safe status", "Containers: 9", "running 8", "Images: 12"} {
+		if !strings.Contains(message.Text, value) {
+			t.Fatal("Feishu did not return the named node's safe status", message.Text)
+		}
+	}
+	for _, value := range []string{"ganzhou", "remote-01", "private-app-secret", in.Text} {
+		if strings.Contains(message.Text, value) {
+			t.Fatal("guest query exposed directory entries, secrets or raw input")
+		}
+	}
+	if message.OperationID != "" || message.ApprovalToken != "" || message.URL != "" {
+		t.Fatal("guest query received operation controls")
+	}
+	if err := notify.HandleIncoming(ctx, in); err != nil || len(reads) != 1 || len(sender.messages) != 1 {
+		t.Fatal("duplicate Feishu message repeated a query", err)
+	}
+	// A different guest avoids the existing per-identity query rate limit.
+	in.ID, in.UserID, in.Text = "message-2", "tenant:another-guest", "发送ganzhou2节点的信息给我"
+	if err := notify.HandleIncoming(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if len(reads) != 1 || len(sender.messages) != 2 || !strings.Contains(sender.messages[1].Text, "Specify one enabled, authorized node") {
+		t.Fatal("unknown target did not ask for clarification before Docker reads", reads, sender.messages)
+	}
+	if strings.Contains(sender.messages[1].Text, "ganzhou") || strings.Contains(sender.messages[1].Text, "remote-01") {
+		t.Fatal("guest clarification enumerated private node entries")
+	}
+	var audits []database.AuditLog
+	if err := db.Where("action = ?", "ai.query").Order("id ASC").Find(&audits).Error; err != nil || len(audits) != 2 || audits[0].NodeID != "remote-01" || audits[0].Result != "success" || audits[1].Result != "denied" || audits[1].NodeID != "" {
+		t.Fatal("query audit lost the resolved node or recorded an unverified target", audits, err)
+	}
+	// Notification-only mode still discovers conversations without querying AI.
+	c.Config.Interactive = false
+	if _, err := notify.SaveChannel(ctx, c.ID, notification.ChannelInput{Name: c.Name, Provider: c.Provider, Enabled: true, Version: c.Version, Config: c.Config}); err != nil {
+		t.Fatal(err)
+	}
+	in.ID, in.UserID, in.Text = "message-3", "tenant:notify-only", "发送ganzhou节点的信息给我"
+	if err := notify.HandleIncoming(ctx, in); err != nil || len(reads) != 1 || len(sender.messages) != 2 {
+		t.Fatal("notification-only mode queried a node or replied", err)
+	}
+	for _, model := range []any{&database.AIRun{}, &database.AIOperation{}, &database.Task{}} {
+		var count int64
+		if err := db.Model(model).Count(&count).Error; err != nil || count != 0 {
+			t.Fatal("guest natural-language request entered the AI task or proposal pipeline", err)
+		}
 	}
 }
