@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Copy, Trash2 } from 'lucide-react'
 import { Button } from '../../components/ui/button'
@@ -9,10 +9,11 @@ import { useI18n } from '../../lib/i18n'
 import { useDateTime } from '../../lib/time-zone'
 import { Check, Choice, ErrorText, Field } from './common'
 import { channelPlatforms, useOpsText } from './helpers'
-import type { Channel, ChannelConfig, ChannelTarget, ConnectionStatus } from './types'
+import type { AISettings, Channel, ChannelConfig, ChannelTarget, ConnectionStatus } from './types'
+import { ChatAIStatus } from './chat-ai-status'
 
 const newConfig = (language: string, timezone: string): ChannelConfig => ({ endpoint: '', chat_id: '', app_id: '', targets: [], language, timezone, allow_private: false, interactive: false, public_url: '' })
-type ChannelAction = { kind: 'save' | 'check' | 'test'; chatID?: string }
+type ChannelAction = { kind: 'save' | 'check' | 'test' | 'configure'; chatID?: string }
 type Chat = { chat_id: string; name: string; private: boolean }
 class ChannelActionError extends Error {
  constructor(readonly stage: ChannelAction['kind'], message: string) { super(message) }
@@ -20,6 +21,7 @@ class ChannelActionError extends Error {
 
 export function ChannelEditor({ row, onDone, onSubscribe }: { row?: Channel; onDone: () => void; onSubscribe: (channel: Channel) => void }) {
  const t = useOpsText(), { language } = useI18n(), { timeZone, formatDateTime } = useDateTime(), client = useQueryClient()
+ const navigate = useNavigate()
  const normalize = (config?: ChannelConfig) => ({ ...newConfig(language, timeZone), ...config, targets: config?.targets || [] })
  const [provider, setProvider] = useState(row?.provider || 'feishu_app'), [name, setName] = useState(row?.name || t('飞书机器人', 'Feishu bot'))
  const [enabled, setEnabled] = useState(row?.enabled ?? true), [cfg, setCfg] = useState<ChannelConfig>(normalize(row?.config)), [saved, setSaved] = useState(row)
@@ -55,6 +57,7 @@ export function ChannelEditor({ row, onDone, onSubscribe }: { row?: Channel; onD
    }
   },
   onSuccess: (_, { kind, chatID }) => {
+   if (kind === 'configure') { onDone(); void navigate({ to: '/settings', hash: 'ai' }) }
    if (kind === 'check') setCredentialMessage(t('凭证有效；连接和消息发送需分别验证。', 'Credentials verified. Connection and delivery are verified separately.'))
    if (kind === 'test') setTestResults(previous => ({ ...previous, [chatID || 'default']: { success: true, message: t('测试消息已发送', 'Test message sent') } }))
   },
@@ -72,6 +75,7 @@ export function ChannelEditor({ row, onDone, onSubscribe }: { row?: Channel; onD
  }
  const chats = useQuery({ queryKey: ['notification-chats', saved?.id], queryFn: () => api<Chat[]>(`/notifications/channels/${saved?.id}/chats`), enabled: !!saved && !identityChanged && (isFeishu || cfg.interactive), refetchInterval: 2000 })
  const connection = useQuery({ queryKey: ['notification-connection', saved?.id], queryFn: () => api<ConnectionStatus>(`/notifications/channels/${saved?.id}/connection`), enabled: !!saved && isFeishu && !identityChanged, refetchInterval: 2000 })
+ const ai = useQuery({ queryKey: ['ai-settings'], queryFn: () => api<AISettings>('/ai/settings'), enabled: isBot && cfg.interactive, refetchInterval: isBot && cfg.interactive ? 3000 : false })
  const labels: Record<ConnectionStatus['state'], string> = { stopped: t('未连接', 'Stopped'), connecting: t('连接中', 'Connecting'), connected: t('已连接', 'Connected'), reconnecting: t('重新连接中', 'Reconnecting'), error: t('连接失败', 'Connection failed') }
  const toggleTarget = (target: ChannelTarget) => {
   update('targets', targets.some(item => item.chat_id === target.chat_id) ? targets.filter(item => item.chat_id !== target.chat_id) : [...targets, target])
@@ -101,7 +105,7 @@ export function ChannelEditor({ row, onDone, onSubscribe }: { row?: Channel; onD
     </Field><ErrorText error={chats.error} />
    </>}
    {provider === 'telegram' && <><Field label={t('通知会话 ID', 'Notification chat ID')} hint={t('开启聊天能力后私聊或在群内 @ 机器人，也可手动填写会话 ID。', 'Enable chat to discover private chats or group mentions, or enter a chat ID.')}><Input value={cfg.chat_id} onChange={event => update('chat_id', event.target.value)} /></Field>{chats.data?.map(chat => <Button key={chat.chat_id} variant="ghost" onClick={() => update('chat_id', chat.chat_id)}>{chat.name} · {chat.chat_id}</Button>)}</>}
-   {isBot && <details className="space-y-3"><summary className="cursor-pointer text-sm">{t('AI 聊天与审批（可选）', 'AI chat and approvals (optional)')}</summary><Check label={t('启用聊天诊断和审批', 'Enable chat diagnosis and approvals')} checked={cfg.interactive} onChange={value => update('interactive', value)} />{cfg.interactive && <><p className="text-xs text-muted-foreground">{t('非白名单用户只能查询安全状态和数量摘要。操作需要站内身份绑定，每项变更仍需审核。', 'Other users can query safe status and counts only. Operations require a site-confirmed identity and individual approval.')}</p>{isFeishu && <p className="break-words text-xs">{t('飞书回调配置中使用长连接接收，并订阅', 'Use a persistent connection for callbacks and subscribe to')} <code>card.action.trigger</code></p>}<Link to="/settings" hash="ai" className="text-sm underline">{t('配置 AI 与身份绑定', 'Configure AI and identity binding')}</Link></>}</details>}
+   {isBot && <details className="space-y-3"><summary className="cursor-pointer text-sm">{t('AI 聊天与审批（可选）', 'AI chat and approvals (optional)')}</summary><Check label={t('启用聊天诊断和审批', 'Enable chat diagnosis and approvals')} checked={cfg.interactive} onChange={value => update('interactive', value)} />{cfg.interactive && <><ChatAIStatus settings={ai.data} /><ErrorText error={ai.error} /><p className="text-xs text-muted-foreground">{t('非白名单用户只能查询安全状态和数量摘要。操作需要站内身份绑定，每项变更仍需审核。', 'Other users can query safe status and counts only. Operations require a site-confirmed identity and individual approval.')}</p>{isFeishu && <p className="break-words text-xs">{t('飞书回调配置中使用长连接接收，并订阅', 'Use a persistent connection for callbacks and subscribe to')} <code>card.action.trigger</code></p>}<Link to="/settings" hash="ai" aria-disabled={!canSave || !enabled || action.isPending} className={`text-sm underline ${!canSave || !enabled || action.isPending ? 'text-muted-foreground' : ''}`} onClick={event => { event.preventDefault(); if (canSave && enabled && !action.isPending) action.mutate({ kind: 'configure' }) }}>{t('配置 AI 与身份绑定', 'Configure AI and identity binding')}</Link><p className="text-xs text-muted-foreground">{enabled ? t('进入 AI 设置前会先保存当前渠道，之后可生成绑定码。', 'This channel is saved before opening AI settings, so you can generate a binding code there.') : t('请先启用此渠道，再配置 AI 与身份绑定。', 'Enable this channel before configuring AI and identity binding.')}</p></>}</details>}
    <details className="space-y-3"><summary className="cursor-pointer text-sm">{t('高级选项', 'Advanced options')}</summary>
     {isFeishu && <><Field label={t('手填会话 ID', 'Manual chat ID')}><Input value={manualID} onChange={event => setManualID(event.target.value)} placeholder="oc_…" maxLength={128} /></Field><Field label={t('会话备注（可选）', 'Recipient name (optional)')}><Input value={manualName} onChange={event => setManualName(event.target.value)} maxLength={128} /></Field><Button variant="outline" size="sm" disabled={!manualID.trim() || targets.some(target => target.chat_id === manualID.trim())} onClick={() => { update('targets', [...targets, { chat_id: manualID.trim(), name: manualName.trim() || manualID.trim() }]); setManualID(''); setManualName('') }}>{t('添加接收目标', 'Add recipient')}</Button></>}
     <Choice label={t('消息语言', 'Message language')} value={cfg.language} options={[[ 'zh-CN', '中文' ], [ 'en-US', 'English' ]]} onChange={value => update('language', value)} /><Field label={t('IANA 时区', 'IANA timezone')}><Input value={cfg.timezone} onChange={event => update('timezone', event.target.value)} /></Field><Field label={t('SUMA 公网地址（可选）', 'SUMA public URL (optional)')}><Input value={cfg.public_url} onChange={event => update('public_url', event.target.value)} placeholder="https://suma.example.com" /></Field>

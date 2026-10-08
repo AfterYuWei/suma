@@ -25,7 +25,7 @@ var ErrBinding = errors.New("chat identity is not bound or has been revoked")
 func UnboundMessage(text string) Message {
 	return Message{Text: "尚未完成 SUMA 账号绑定或站内确认，当前仅可查询安全摘要。详细诊断、日志和操作请先绑定。 / Your SUMA account binding is incomplete or unconfirmed. Only safe summaries are available; bind your account for diagnosis, logs and operations.\n\n" + text + "\n\n" +
 		"绑定步骤 / Binding steps:\n" +
-		"1. 登录 SUMA → 设置 → AI 运维 → 聊天账号绑定与操作白名单，选择当前机器人渠道，点击“生成绑定码”（10 分钟有效、仅可使用一次）。 / Sign in to SUMA → Settings → AI operations → Chat identity binding & operator allowlist. Select this bot's channel and click Generate binding code (single-use, valid for 10 minutes).\n" +
+		"1. 登录 SUMA → 设置 → AI 运维，配置默认模型、授权节点，开启并保存“启用 AI 运维”；在“聊天账号绑定与操作白名单”选择当前机器人渠道，点击“生成绑定码”（10 分钟有效、仅可使用一次）。 / Sign in to SUMA → Settings → AI operations. Configure the default model, authorize nodes, enable and save AI operations. In Chat identity binding & operator allowlist, select this bot's channel and click Generate binding code (single-use, valid for 10 minutes).\n" +
 		"2. 在此机器人的私聊中发送 /bind CODE，将 CODE 替换为绑定码；请勿在群聊提交。 / Send /bind CODE privately to this bot, replacing CODE with your binding code. Do not send it in a group.\n" +
 		"3. 返回 SUMA 上述页面，核对平台身份，点击“确认并加入操作白名单”，然后重新提问。已提交绑定码的账号请完成这一步。 / Return to the same SUMA page, verify the platform identity, click Confirm and allow operations, then ask again. If you already sent the code, complete this step."}
 }

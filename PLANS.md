@@ -4,6 +4,8 @@ This file records the completed MVP implementation. Every checked phase was veri
 
 ## Current work
 
+- [x] AI 聊天上手流程优化（2026-10-08）：禁用回复说明全局 AI 的配置／授权／启用／保存步骤，渠道和绑定页显示已保存状态；配置入口先保存渠道再跳转，自动选中唯一渠道、复制绑定命令并明确各绑定状态。验证：隔离 PostgreSQL 复现已绑定且站内确认后全局 AI 关闭，回复中英文启用步骤并说明无需重绑，不读取 Docker／调用模型／创建 Run 或 Task，保留绑定；未绑定与通知模式回归通过。44 项模型设置／飞书／通知／新上手流程浏览器场景通过，涵盖中英文、深浅、390px／1440px、开关保存前后状态、私聊命令复制、站内确认、保存失败保留草稿与阻止跳转；四项新中文场景的测试控件名称修正后完整重跑通过，代表性截图已核对。完整 Go test／build、Web lint／typecheck／build、Notification／App race 及独立真实 Docker 节点查询和 Unix／mTLS TCP／HTTPS-WSS Agent 审批重启冒烟通过（46.904s）。API、使用文档与演示绑定确认状态同步；真实飞书端新流程仍需专用应用／会话验收。
+
 - [x] 未绑定聊天账号提醒与绑定步骤（2026-10-08）：摘要、查询错误／澄清、权限拒绝、频率限制及无效绑定回复统一提示站内生成绑定码、私聊提交、回站确认；成功提交后明确尚需站内确认。验证：隔离 PostgreSQL 消息回归覆盖摘要／澄清／不可用／权限拒绝／频率限制的中英文完整步骤、群聊拒绝后私聊提交、站内确认前无操作权限、绑定码不回显、隐私与通知模式；完整 Go test／build、Notification／App race、Web lint／typecheck／build 通过。独立真实 Docker 节点查询及 Unix／mTLS TCP／HTTPS-WSS Agent 逐项审批重启冒烟通过（47.081s）。同步 API 与使用文档；真实飞书端更新后的回复验收仍需专用应用／会话条件。
 
 - [x] 修复飞书未绑定身份按节点名称查询（2026-10-08）：解析“发送ganzhou节点的信息给我”等明确名称／ID，保留授权范围与数字摘要，目标不明先澄清，避免误用默认节点。验证：隔离 PostgreSQL 回归覆盖双节点路由、中英文名称／完整 ID、命令空格／tab、相似名称、未授权／停用／歧义／删除、隐私、去重、审计与通知模式；完整 Go test／build、AI／App race、Web lint／typecheck／build 和 22 项飞书／通知 AI 浏览器回归通过。独立 Docker 冒烟通过真实飞书处理路径按名称选择 Unix 运行时并读取容器／镜像摘要（发送器替身、无模型／提案／Task），既有 Unix／mTLS TCP／HTTPS-WSS Agent 审核重启回归通过（49.185s）。同步 API、使用文档和冒烟脚本；真实飞书端更新后的查询验收仍待专用应用／会话条件。

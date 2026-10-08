@@ -97,7 +97,11 @@ func chatQuery(ctx context.Context, notify *notification.Service, assistant *ai.
 		return
 	}
 	if err != nil {
-		reply("当前无法查询该授权节点的安全摘要。 / Safe status is unavailable for this authorized node.")
+		if !assistant.Settings().Enabled {
+			reply(chatAIDisabledText)
+		} else {
+			reply("当前无法查询该授权节点的安全摘要。 / Safe status is unavailable for this authorized node.")
+		}
 		return
 	}
 	availability := "不可用 / unavailable"

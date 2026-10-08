@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -13,6 +14,15 @@ import (
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/notification"
 )
+
+const chatAIDisabledText = "SUMA 的全局 AI 运维尚未启用。账号绑定和渠道聊天开关不会自动启用 AI。 / Global AI operations are off. Account binding and channel chat do not enable AI automatically.\n1. 登录 SUMA → 设置 → AI 运维，配置默认模型并授权要查询的节点。 / Open SUMA → Settings → AI operations, configure the default model and authorize the target node.\n2. 开启“启用 AI 运维”，点击“保存 AI 设置”，然后“测试连接”。 / Turn on Enable AI operations, click Save AI settings, then Test connection.\n3. 保存后重新发送原问题；已绑定账号无需重复绑定。 / After saving, send your question again. Confirmed accounts do not need to bind again."
+
+func chatAIError(err error) string {
+	if errors.Is(err, ai.ErrDisabled) {
+		return chatAIDisabledText
+	}
+	return err.Error()
+}
 
 func chatOperations(notify *notification.Service, assistant *ai.Service) notification.ChatHandler {
 	return func(in notification.Incoming, b database.NotificationBinding) {
@@ -27,7 +37,7 @@ func chatOperations(notify *notification.Service, assistant *ai.Service) notific
 		if in.Action == "approve" || in.Action == "reject" {
 			opID, err := notify.ConsumeApproval(ctx, in, b)
 			if err != nil {
-				reply("Approval denied: " + err.Error())
+				reply("Approval denied: " + chatAIError(err))
 				return
 			}
 			op, err := assistant.Operation(ctx, opID)
@@ -35,7 +45,7 @@ func chatOperations(notify *notification.Service, assistant *ai.Service) notific
 				op, err = assistant.Decide(ctx, opID, ai.Decision{RequestID: notification.ID(), ReviewToken: op.ReviewToken, Approve: in.Action == "approve"}, actor)
 			}
 			if err != nil {
-				reply("Approval denied: " + err.Error())
+				reply("Approval denied: " + chatAIError(err))
 				return
 			}
 			reply(op.ID + ": " + op.Status)
@@ -44,7 +54,7 @@ func chatOperations(notify *notification.Service, assistant *ai.Service) notific
 		if in.Action == "preview" {
 			op, err := assistant.Operation(ctx, in.OperationID)
 			if err != nil {
-				reply(err.Error())
+				reply(chatAIError(err))
 				return
 			}
 			message := notification.Message{Text: assistant.PreviewText(op)}
@@ -60,7 +70,7 @@ func chatOperations(notify *notification.Service, assistant *ai.Service) notific
 				}
 			}
 			if err != nil {
-				reply(err.Error())
+				reply(chatAIError(err))
 				return
 			}
 			_ = notify.Reply(ctx, in, message)
@@ -70,7 +80,7 @@ func chatOperations(notify *notification.Service, assistant *ai.Service) notific
 		if text == "/cancel" {
 			conversation, err := assistant.CreateConversation(ctx, ai.ConversationInput{}, actor)
 			if err != nil {
-				reply(err.Error())
+				reply(chatAIError(err))
 				return
 			}
 			if conversation.CurrentRunID == "" {
@@ -78,7 +88,7 @@ func chatOperations(notify *notification.Service, assistant *ai.Service) notific
 				return
 			}
 			if _, err = assistant.CancelRun(ctx, conversation.CurrentRunID, actor); err != nil {
-				reply(err.Error())
+				reply(chatAIError(err))
 			} else {
 				reply("已取消后续步骤，已执行结果保留。 / Remaining steps canceled; executed results are retained.")
 			}
@@ -95,7 +105,7 @@ func chatOperations(notify *notification.Service, assistant *ai.Service) notific
 			}
 			payload, err := notify.PeekAction(ctx, in, b)
 			if err != nil {
-				reply(err.Error())
+				reply(chatAIError(err))
 				return
 			}
 			parts := strings.Split(payload, ":")
@@ -129,7 +139,7 @@ func chatOperations(notify *notification.Service, assistant *ai.Service) notific
 				}
 			}
 			if _, err = assistant.AnswerInput(ctx, run.ID, answer, actor); err != nil {
-				reply(err.Error())
+				reply(chatAIError(err))
 			} else {
 				_, _ = notify.ConsumeApproval(ctx, in, b)
 				reply("已记录选择，继续任务。 / Selection recorded; resuming the task.")
@@ -150,7 +160,7 @@ func chatOperations(notify *notification.Service, assistant *ai.Service) notific
 		}
 		run, err := assistant.Start(ctx, ai.RunInput{NodeID: nodeID, Question: text}, actor)
 		if err != nil {
-			reply(err.Error())
+			reply(chatAIError(err))
 			return
 		}
 		reply("任务已开始 / Task started: " + run.ID)

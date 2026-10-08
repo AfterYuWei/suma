@@ -89,7 +89,8 @@ export function mockOperations(path: string, method: string, body: Record<string
  if (path === '/ai/audit') return audits.map(a => ({ ...a, id: 100000 + Number(a.id) }))
  if (path === '/notification-bindings' && method === 'GET') return bindings
  if (path === '/notification-bindings' && method === 'POST') { const row: Binding = { id: identifier(), channel_id: String(body.channel_id), status: 'pending', chat_id: '', external_name: '', external_user_id: '', expires_at: new Date(Date.now() + 600000).toISOString() }; bindings.push(row); return { binding: row, code: identifier() } }
- if (path.startsWith('/notification-bindings/')) return {}
+ if (/^\/notification-bindings\/[^/]+\/confirm$/.test(path) && method === 'POST') { const row = bindings.find(binding => binding.id === path.split('/')[2]); if (!row || row.status !== 'claimed' || Date.parse(row.expires_at) <= Date.now()) conflict(); row!.status = 'active'; return {} }
+ if (/^\/notification-bindings\/[^/]+$/.test(path) && method === 'DELETE') { const row = bindings.find(binding => binding.id === path.split('/')[2]); if (row) row.status = 'revoked'; return {} }
  return undefined
 }
 const storageKey = 'suma-demo-operations-v2'

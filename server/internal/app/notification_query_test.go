@@ -149,8 +149,19 @@ func TestFeishuGuestNaturalLanguageQueriesTheNamedNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	var reads []string
+	sender := &querySender{}
+	notify := notification.NewService(db, store, notification.Dependencies{Sender: sender})
 	assistant, err := ai.NewService(db, store, task.NewService(db), ai.Dependencies{
 		Model: forbiddenGuestModel{t},
+		ActorValid: func(ctx context.Context, actor ai.Actor) error {
+			if actor.Source == "chat" {
+				binding, err := notify.ValidateBinding(ctx, actor.UserID, actor.BindingID)
+				if err != nil || binding.ExternalUserID != actor.ExternalUserID || binding.ChatID != actor.ChatID {
+					return ai.ErrScope
+				}
+			}
+			return nil
+		},
 		Query: func(_ context.Context, id string) (ai.QuerySummary, error) {
 			reads = append(reads, id)
 			out := ai.QuerySummary{Available: true}
@@ -168,8 +179,6 @@ func TestFeishuGuestNaturalLanguageQueriesTheNamedNode(t *testing.T) {
 	if _, err := assistant.SaveSettings(ctx, ai.SettingsInput{Settings: cfg}, ai.Actor{UserID: 1}); err != nil {
 		t.Fatal(err)
 	}
-	sender := &querySender{}
-	notify := notification.NewService(db, store, notification.Dependencies{Sender: sender})
 	c, err := notify.SaveChannel(ctx, "", notification.ChannelInput{Name: "Feishu", Provider: "feishu_app", Enabled: true, Config: notification.Config{AppID: "cli_guest_query", Interactive: true, Language: "zh-CN", Timezone: "Asia/Shanghai"}, Secrets: &notification.Secrets{Token: "private-app-secret"}})
 	if err != nil {
 		t.Fatal(err)
@@ -228,8 +237,35 @@ func TestFeishuGuestNaturalLanguageQueriesTheNamedNode(t *testing.T) {
 	if err := notify.HandleIncoming(ctx, in); err != nil || len(reads) != 1 || len(sender.messages) != 3 {
 		t.Fatal("disabled AI performed a query or lost the guest response", err)
 	}
-	if !strings.Contains(sender.messages[2].Text, "Safe status is unavailable") || !strings.Contains(sender.messages[2].Text, "/bind CODE") || !strings.Contains(sender.messages[2].Text, "确认并加入操作白名单") {
+	if !strings.Contains(sender.messages[2].Text, "Global AI operations are off") || !strings.Contains(sender.messages[2].Text, "/bind CODE") || !strings.Contains(sender.messages[2].Text, "确认并加入操作白名单") {
 		t.Fatal("unavailable query omitted binding instructions")
+	}
+	// Reproduce the screenshot's bound-account query while global AI is off.
+	binding, code, err := notify.BeginBinding(ctx, 1, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.ID, in.UserID, in.Text = "bind-while-ai-off", "tenant:bound-guest", "/bind "+code
+	if err := notify.HandleIncoming(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if err := notify.ConfirmBinding(ctx, 1, binding.ID); err != nil {
+		t.Fatal(err)
+	}
+	in.ID, in.Text = "bound-ai-off", "发送ganzhou节点的信息给我"
+	if err := notify.HandleIncoming(ctx, in); err != nil || len(reads) != 1 || len(sender.messages) != 5 {
+		t.Fatal("disabled bound chat queried Docker or lost its response", err)
+	}
+	for _, step := range []string{"全局 AI 运维尚未启用", "Settings → AI operations", "默认模型", "授权", "保存 AI 设置", "Test connection", "无需重复绑定"} {
+		if !strings.Contains(sender.messages[4].Text, step) {
+			t.Fatal("disabled bound chat omitted the actionable setup step", step)
+		}
+	}
+	if strings.Contains(sender.messages[4].Text, "AI operations are disabled") || strings.Contains(sender.messages[4].Text, "生成绑定码") || strings.Contains(sender.messages[4].Text, code) {
+		t.Fatal("disabled bound chat returned an opaque error, requested rebinding or exposed its code")
+	}
+	if _, err := notify.ValidateBinding(ctx, 1, binding.ID); err != nil {
+		t.Fatal("disabled AI lost the valid account binding", err)
 	}
 	// Notification-only mode still discovers conversations without querying AI.
 	c.Config.Interactive = false
@@ -237,7 +273,7 @@ func TestFeishuGuestNaturalLanguageQueriesTheNamedNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	in.ID, in.UserID, in.Text = "message-3", "tenant:notify-only", "发送ganzhou节点的信息给我"
-	if err := notify.HandleIncoming(ctx, in); err != nil || len(reads) != 1 || len(sender.messages) != 3 {
+	if err := notify.HandleIncoming(ctx, in); err != nil || len(reads) != 1 || len(sender.messages) != 5 {
 		t.Fatal("notification-only mode queried a node or replied", err)
 	}
 	for _, model := range []any{&database.AIRun{}, &database.AIOperation{}, &database.Task{}} {
