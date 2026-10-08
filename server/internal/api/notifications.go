@@ -15,6 +15,10 @@ import (
 )
 
 func operationsFailure(c *gin.Context, err error) {
+	if errors.Is(err, gorm.ErrInvalidField) {
+		failure(c, http.StatusServiceUnavailable, 20802, "Database schema is incompatible with this server version; restart the updated SUMA server to apply database upgrades")
+		return
+	}
 	status := http.StatusUnprocessableEntity
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		status = 404

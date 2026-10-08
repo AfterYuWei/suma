@@ -26,6 +26,9 @@ func TestPostgresBaselineAndReopen(t *testing.T) {
 	if db.Migrator().HasTable("ai_audits") {
 		t.Fatal("duplicate AI audit table must not exist")
 	}
+	if !db.Migrator().HasColumn(&database.NotificationDelivery{}, "ChatID") {
+		t.Fatal("delivery recipient column is absent from fresh schema")
+	}
 	row := database.User{Username: "retained", Email: "User@Example.test", PasswordHash: "fixture"}
 	if err := db.Create(&row).Error; err != nil {
 		t.Fatal(err)

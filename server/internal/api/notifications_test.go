@@ -132,6 +132,23 @@ func TestNotificationAndAIAuthenticatedHTTP(t *testing.T) {
 	if r := request("POST", "/notifications/rules", strings.Replace(ruleBody, "oc_group", "oc_unrelated", 1), true); r.Code != 422 {
 		t.Fatal("invalid rule recipient accepted", r.Code)
 	}
+	// This isolated test schema represents an existing installation that has
+	// not yet applied the delivery-recipient column upgrade.
+	if err := db.Exec("ALTER TABLE notification_deliveries DROP COLUMN chat_id").Error; err != nil {
+		t.Fatal(err)
+	}
+	updated := notification.ChannelInput{Name: application.Data.Name, Provider: application.Data.Provider, Enabled: false, Version: application.Data.Version, Config: application.Data.Config}
+	body, err := json.Marshal(updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r = request("PUT", path, string(body), true)
+	if r.Code != 503 || !strings.Contains(r.Body.String(), `"code":20802`) || strings.Contains(r.Body.String(), "invalid field") || strings.Contains(r.Body.String(), "PRIVATE-APP-SECRET") {
+		t.Fatal("schema error was not safe and actionable", r.Code, r.Body.String())
+	}
+	if err := db.Exec("ALTER TABLE notification_deliveries ADD COLUMN chat_id varchar(128)").Error; err != nil {
+		t.Fatal(err)
+	}
 	globalAudit := audit.NewService(db)
 	db.Create(&database.AIRun{ID: "audit-run", NodeID: "local", UserID: 1, Status: "completed"})
 	db.Create(&database.AIOperation{ID: "audit-operation", RunID: "audit-run", NodeID: "local", TaskID: "audit-task", Status: "completed"})

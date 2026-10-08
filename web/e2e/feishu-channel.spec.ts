@@ -1,5 +1,33 @@
 import { expect, test } from '@playwright/test'
 
+test('recipient test reports save failures once and succeeds after schema upgrade', async ({ page }) => {
+ await page.addInitScript(() => { sessionStorage.setItem('suma-demo-session','1');localStorage.setItem('suma-language','zh-CN');localStorage.setItem('suma-node','local') })
+ await page.goto('/settings#notifications');await page.getByRole('button',{name:'添加通知渠道',exact:true}).click()
+ const sheet=page.getByRole('dialog',{name:'配置通知渠道',exact:true})
+ await sheet.getByLabel('App ID',{exact:true}).fill('cli_schema_ui');await sheet.getByLabel('App Secret',{exact:true}).fill('demo-only-secret')
+ await sheet.getByRole('button',{name:'保存渠道',exact:true}).click()
+ await sheet.getByRole('checkbox',{name:'私聊 · Admin',exact:true}).check()
+ const schemaAvailable = (available: boolean) => page.evaluate(async available => {
+  // @ts-expect-error Vite exposes the demo fixture module in the browser.
+  const {setDemoNotificationSchemaAvailable}=await import('/src/features/operations/mock.ts')
+  setDemoNotificationSchemaAvailable(available)
+ },available)
+ await schemaAvailable(false)
+ await sheet.getByRole('button',{name:'发送测试消息',exact:true}).click()
+ await expect(sheet.getByRole('alert')).toHaveCount(1)
+ await expect(sheet.getByRole('alert')).toContainText('SUMA 数据库结构尚未升级')
+ await expect(sheet.getByText('invalid field',{exact:false})).toHaveCount(0)
+ await expect(sheet.getByRole('checkbox',{name:'私聊 · Admin',exact:true})).toBeChecked()
+ let snapshot=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('suma-demo-operations-v2')||'{}'))
+ expect(snapshot.channels[0].config.targets).toHaveLength(0);expect(snapshot.deliveries).toHaveLength(0)
+ await schemaAvailable(true)
+ await sheet.getByRole('button',{name:'发送测试消息',exact:true}).click()
+ await expect(sheet.getByText('私聊 · Admin · 测试消息已发送',{exact:true})).toBeVisible()
+ await expect(sheet.getByRole('alert')).toHaveCount(0)
+ snapshot=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('suma-demo-operations-v2')||'{}'))
+ expect(snapshot.channels[0].config.targets).toHaveLength(1);expect(snapshot.deliveries).toHaveLength(1)
+})
+
 test('connected Feishu distinguishes missing events, storage failures and successful discovery', async ({ page }) => {
  await page.addInitScript(() => { sessionStorage.setItem('suma-demo-session','1');localStorage.setItem('suma-language','zh-CN');localStorage.setItem('suma-node','local') })
  await page.goto('/settings#notifications');await page.getByRole('button',{name:'添加通知渠道',exact:true}).click()

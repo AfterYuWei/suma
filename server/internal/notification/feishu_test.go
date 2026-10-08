@@ -11,6 +11,7 @@ import (
 
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/event"
+	"gorm.io/gorm"
 )
 
 func feishuChannel(t *testing.T, s *Service, app string, targets ...string) Channel {
@@ -24,6 +25,71 @@ func feishuChannel(t *testing.T, s *Service, app string, targets ...string) Chan
 		t.Fatal(err)
 	}
 	return c
+}
+
+func TestFeishuUpgradeAddsRecipientColumnWithoutLosingConfiguration(t *testing.T) {
+	s, db, sender, _ := fixture(t)
+	c := feishuChannel(t, s, "cli_schema")
+	historical := database.NotificationDelivery{ID: "retained-history", ChannelID: c.ID, Status: "sent", Attempts: 2, ProviderMessageID: "previous-receipt", EventIDsJSON: "[]"}
+	if err := db.Create(&historical).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.HandleIncoming(context.Background(), Incoming{ID: "message", ChannelID: c.ID, UserID: "tenant:user", ChatID: "oc_private", Private: true, Name: "Admin"}); err != nil {
+		t.Fatal(err)
+	}
+	// Reproduce the pre-multi-recipient database in this test's private schema.
+	if err := db.Exec("ALTER TABLE notification_deliveries DROP COLUMN chat_id").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Where("key = ?", "0002_notification_delivery_targets.sql").Delete(&database.SchemaMigration{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	c.Config.Targets = []Target{{ChatID: "oc_private", Name: "Admin"}}
+	input := ChannelInput{Name: c.Name, Provider: c.Provider, Enabled: true, Version: c.Version, Config: c.Config}
+	if _, err := s.SaveChannel(context.Background(), c.ID, input); !errors.Is(err, gorm.ErrInvalidField) {
+		t.Fatal("old schema did not reproduce invalid field", err)
+	}
+	before, err := s.Channel(context.Background(), c.ID)
+	if err != nil || before.Version != c.Version || len(before.Config.Targets) != 0 {
+		t.Fatal("failed save changed channel", before.Version, err)
+	}
+	if len(sender.sent) != 0 {
+		t.Fatal("failed save sent a message")
+	}
+	upgraded, err := database.Open(database.ConnectionDSN(db))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { pool, _ := upgraded.DB(); _ = pool.Close() }()
+	if !upgraded.Migrator().HasColumn(&database.NotificationDelivery{}, "ChatID") {
+		t.Fatal("startup did not add recipient column to existing schema")
+	}
+	var retained database.NotificationDelivery
+	if err := upgraded.First(&retained, "id = ?", historical.ID).Error; err != nil || retained.ChannelID != c.ID || retained.Status != "sent" || retained.Attempts != 2 || retained.ProviderMessageID != historical.ProviderMessageID {
+		t.Fatal("upgrade changed historical evidence", err)
+	}
+	saved, err := s.SaveChannel(context.Background(), c.ID, input)
+	if err != nil {
+		t.Fatal("recipient save still failed after upgrade", err)
+	}
+	material, err := s.material(saved)
+	if err != nil || material.Token != "private-app-secret" {
+		t.Fatal("upgrade lost encrypted credential", err)
+	}
+	chats, err := s.Chats(context.Background(), c.ID)
+	if err != nil || len(chats) != 1 || chats[0].ChatID != "oc_private" {
+		t.Fatal("upgrade lost discovered conversation", chats, err)
+	}
+	if err := s.Test(context.Background(), c.ID, "oc_private"); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.sent) != 1 {
+		t.Fatal("explicit test did not send once")
+	}
+	var count int64
+	if err := upgraded.Model(&database.SchemaMigration{}).Where("key = ?", "0002_notification_delivery_targets.sql").Count(&count).Error; err != nil || count != 1 {
+		t.Fatal("upgrade was not recorded once", count, err)
+	}
 }
 func feishuRule(t *testing.T, s *Service, c Channel, mode string, recipients ...string) Rule {
 	t.Helper()

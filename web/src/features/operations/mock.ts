@@ -2,6 +2,8 @@ import { ApiError } from '../../lib/api'
 import type { AIConversationDetail, AIOperation, AIRun, AISettings, Binding, Channel, ChannelConfig, ConnectionStatus, Delivery, Inbox, Rule } from './types'
 const feishuReception = new Map<string, { connection: ConnectionStatus; chats: { chat_id: string; name: string; private: boolean }[] }>()
 export function setDemoFeishuReception(channelID: string, reception: { connection: ConnectionStatus; chats: { chat_id: string; name: string; private: boolean }[] }) { feishuReception.set(channelID, reception) }
+let notificationSchemaAvailable = true
+export function setDemoNotificationSchemaAvailable(available: boolean) { notificationSchemaAvailable = available }
 let serial = 0
 const identifier = () => `demo-ops-${++serial}`
 let settings: AISettings = { version: 0, enabled: false, protocol: 'responses', endpoint: 'https://api.openai.com/v1', model: '', models: [], allow_private: false, allow_insecure: false, node_ids: [], auto_events: [], max_concurrent: 2, daily_auto_limit: 20, max_tool_calls: 8, max_iterations: 40, max_operations: 20, log_lines: 500, log_bytes: 65536, approval_minutes: 15, has_secret: false, tool_capable: false }
@@ -14,6 +16,7 @@ export function mockOperations(path: string, method: string, body: Record<string
  if (path === '/notifications/catalog') return catalog
  if (path === '/notifications/channels' && method === 'GET') return channels
  if (/^\/notifications\/channels(?:\/[^/]+)?$/.test(path) && (method === 'POST' || method === 'PUT')) {
+  if (!notificationSchemaAvailable) throw new ApiError('Database schema is incompatible with this server version', 20802, 503)
   const id = path.split('/')[3], previous = channels.find(c => c.id === id)
   const input = body as unknown as Channel
   if (previous && previous.version !== input.version) conflict()

@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Copy, Trash2 } from 'lucide-react'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
-import { api } from '../../lib/api'
+import { api, ApiError } from '../../lib/api'
 import { useI18n } from '../../lib/i18n'
 import { useDateTime } from '../../lib/time-zone'
 import { Check, Choice, ErrorText, Field } from './common'
@@ -14,6 +14,9 @@ import type { Channel, ChannelConfig, ChannelTarget, ConnectionStatus } from './
 const newConfig = (language: string, timezone: string): ChannelConfig => ({ endpoint: '', chat_id: '', app_id: '', targets: [], language, timezone, allow_private: false, interactive: false, public_url: '' })
 type ChannelAction = { kind: 'save' | 'check' | 'test'; chatID?: string }
 type Chat = { chat_id: string; name: string; private: boolean }
+class ChannelActionError extends Error {
+ constructor(readonly stage: ChannelAction['kind'], message: string) { super(message) }
+}
 
 export function ChannelEditor({ row, onDone, onSubscribe }: { row?: Channel; onDone: () => void; onSubscribe: (channel: Channel) => void }) {
  const t = useOpsText(), { language } = useI18n(), { timeZone, formatDateTime } = useDateTime(), client = useQueryClient()
@@ -29,19 +32,26 @@ export function ChannelEditor({ row, onDone, onSubscribe }: { row?: Channel; onD
  const selectedTest = targets.some(target => target.chat_id === testRecipient) ? testRecipient : targets[0]?.chat_id || ''
  const action = useMutation({
   mutationFn: async ({ kind, chatID }: ChannelAction) => {
-   let current = saved
-   if (dirty || !current) {
-    current = await api<Channel>(`/notifications/channels${current ? `/${current.id}` : ''}`, { method: current ? 'PUT' : 'POST', body: JSON.stringify({ name, provider, enabled, version: current?.version || 0, config: cfg, secrets: { token: secret, signing_key: signing, authorization } }) })
-    setSaved(current); setCfg(normalize(current.config)); setSecret(''); setSigning(''); setAuthorization(''); setSaveMessage(t('渠道已保存', 'Channel saved'))
-    void client.invalidateQueries({ queryKey: ['notification-channels'] }); void client.invalidateQueries({ queryKey: ['notification-chats', current.id] }); void client.invalidateQueries({ queryKey: ['notification-connection', current.id] })
-   }
-   if (kind === 'check') {
-    const result = await api<{ credentials_valid: boolean }>(`/notifications/channels/${current.id}/check`, { method: 'POST' })
-    if (!result.credentials_valid) throw new Error(t('凭证校验未通过', 'Credentials were not verified'))
-   }
-   if (kind === 'test') {
-    if (isFeishu && !current.config.targets?.some(target => target.chat_id === chatID)) throw new Error(t('请选择已配置的测试目标', 'Select a configured test recipient'))
-    await api(`/notifications/channels/${current.id}/test`, { method: 'POST', body: JSON.stringify(isFeishu ? { chat_id: chatID } : {}) })
+   let stage: ChannelAction['kind'] = 'save'
+   try {
+    let current = saved
+    if (dirty || !current) {
+     current = await api<Channel>(`/notifications/channels${current ? `/${current.id}` : ''}`, { method: current ? 'PUT' : 'POST', body: JSON.stringify({ name, provider, enabled, version: current?.version || 0, config: cfg, secrets: { token: secret, signing_key: signing, authorization } }) })
+     setSaved(current); setCfg(normalize(current.config)); setSecret(''); setSigning(''); setAuthorization(''); setSaveMessage(t('渠道已保存', 'Channel saved'))
+     void client.invalidateQueries({ queryKey: ['notification-channels'] }); void client.invalidateQueries({ queryKey: ['notification-chats', current.id] }); void client.invalidateQueries({ queryKey: ['notification-connection', current.id] })
+    }
+    stage = kind
+    if (kind === 'check') {
+     const result = await api<{ credentials_valid: boolean }>(`/notifications/channels/${current.id}/check`, { method: 'POST' })
+     if (!result.credentials_valid) throw new Error(t('凭证校验未通过', 'Credentials were not verified'))
+    }
+    if (kind === 'test') {
+     if (isFeishu && !current.config.targets?.some(target => target.chat_id === chatID)) throw new Error(t('请选择已配置的测试目标', 'Select a configured test recipient'))
+     await api(`/notifications/channels/${current.id}/test`, { method: 'POST', body: JSON.stringify(isFeishu ? { chat_id: chatID } : {}) })
+    }
+   } catch (error) {
+    const message = error instanceof ApiError && error.code === 20802 ? t('SUMA 数据库结构尚未升级，请更新并重启后端完成数据库升级，再保存渠道。', 'The SUMA database schema needs an upgrade. Update and restart the backend, then save this channel again.') : error instanceof Error ? error.message : String(error)
+    throw new ChannelActionError(stage, message)
    }
   },
   onSuccess: (_, { kind, chatID }) => {
@@ -50,7 +60,10 @@ export function ChannelEditor({ row, onDone, onSubscribe }: { row?: Channel; onD
   },
   onError: (error, { kind, chatID }) => {
    if (kind === 'check') setCredentialMessage('')
-   if (kind === 'test') setTestResults(previous => ({ ...previous, [chatID || 'default']: { success: false, message: error.message } }))
+   if (kind === 'test') {
+    if (error instanceof ChannelActionError && error.stage === 'save') setTestResults(previous => { const next = { ...previous }; delete next[chatID || 'default']; return next })
+    else setTestResults(previous => ({ ...previous, [chatID || 'default']: { success: false, message: error.message } }))
+   }
   },
  })
  const update = <K extends keyof ChannelConfig>(key: K, value: ChannelConfig[K]) => {
@@ -102,7 +115,7 @@ export function ChannelEditor({ row, onDone, onSubscribe }: { row?: Channel; onD
     <Button variant="outline" disabled={!canSave || isFeishu && !selectedTest || provider === 'telegram' && !cfg.chat_id.trim()} onClick={() => action.mutate({ kind: 'test', chatID: isFeishu ? selectedTest : undefined })}>{t('发送测试消息', 'Send test message')}</Button>
     {testResult && <p role={testResult.success ? 'status' : 'alert'} className={`break-words text-sm ${testResult.success ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}`}>{isFeishu ? `${targets.find(target => target.chat_id === selectedTest)?.name} · ` : ''}{testResult.message}</p>}
    </div>
-   <ErrorText error={action.error} />
+   <ErrorText error={action.error instanceof ChannelActionError && action.error.stage === 'test' ? undefined : action.error} />
    {saved && <div className="flex flex-wrap gap-2 border-t pt-3"><Button variant="outline" disabled={dirty || isFeishu && !targets.length} onClick={() => onSubscribe(saved)}>{t('选择通知订阅', 'Choose subscriptions')}</Button><Button variant="ghost" onClick={onDone}>{t('完成', 'Done')}</Button></div>}
   </fieldset>
  </div>
