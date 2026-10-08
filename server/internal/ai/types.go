@@ -172,6 +172,12 @@ type Model interface {
 	Complete(context.Context, Settings, string, []ModelMessage, []Tool) (ModelReply, error)
 }
 
+// StreamingModel emits visible output-text deltas. Tool arguments and reasoning
+// stay private until a complete, validated ModelReply is returned.
+type StreamingModel interface {
+	Stream(context.Context, Settings, string, []ModelMessage, []Tool, func(string) error) (ModelReply, error)
+}
+
 func DefaultSettings() Settings {
 	return Settings{Protocol: ProtocolResponses, Endpoint: "https://api.openai.com/v1", Models: []string{}, NodeIDs: []string{}, AutoEvents: []string{}, MaxConcurrent: 2, DailyAutoLimit: 20, MaxToolCalls: 8, MaxIterations: 40, MaxOperations: 20, LogLines: 500, LogBytes: 64 << 10, ApprovalMinutes: 15}
 }

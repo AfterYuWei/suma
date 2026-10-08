@@ -33,20 +33,22 @@ type Dependencies struct {
 	FeishuConnect func(context.Context, Channel, Secrets, func(ConnectionStatus), func(Incoming) error)
 }
 type Service struct {
-	db          *gorm.DB
-	secrets     *secret.Store
-	deps        Dependencies
-	mu          sync.Mutex
-	ctx         context.Context
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
-	chat        ChatHandler
-	onEvent     func(event.Event)
-	expected    map[string]time.Time
-	chatCancel  map[string]context.CancelFunc
-	chatDone    map[string]chan struct{}
-	connections map[string]connectionEntry
-	queryAt     map[string]time.Time
+	db           *gorm.DB
+	secrets      *secret.Store
+	deps         Dependencies
+	mu           sync.Mutex
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	chat         ChatHandler
+	onEvent      func(event.Event)
+	expected     map[string]time.Time
+	chatCancel   map[string]context.CancelFunc
+	chatDone     map[string]chan struct{}
+	connections  map[string]connectionEntry
+	queryAt      map[string]time.Time
+	streamCancel map[string]streamRequest
+	stopped      bool
 }
 
 func NewService(db *gorm.DB, secrets *secret.Store, deps Dependencies) *Service {
@@ -62,7 +64,7 @@ func NewService(db *gorm.DB, secrets *secret.Store, deps Dependencies) *Service 
 	if deps.Audit == nil {
 		deps.Audit = audit.NewService(db)
 	}
-	return &Service{db: db, secrets: secrets, deps: deps, chatCancel: map[string]context.CancelFunc{}, chatDone: map[string]chan struct{}{}, connections: map[string]connectionEntry{}, queryAt: map[string]time.Time{}}
+	return &Service{db: db, secrets: secrets, deps: deps, chatCancel: map[string]context.CancelFunc{}, chatDone: map[string]chan struct{}{}, connections: map[string]connectionEntry{}, queryAt: map[string]time.Time{}, streamCancel: map[string]streamRequest{}}
 }
 func (s *Service) SetChatHandler(h ChatHandler)        { s.mu.Lock(); s.chat = h; s.mu.Unlock() }
 func (s *Service) SetEventHandler(h func(event.Event)) { s.mu.Lock(); s.onEvent = h; s.mu.Unlock() }
@@ -251,6 +253,9 @@ func (s *Service) SaveChannel(ctx context.Context, id string, in ChannelInput) (
 	}
 	if originalToken != previous.Token || originalAppID != in.Config.AppID || !needsConnection(decodeChannel(row)) {
 		s.stopChatLocked(row.ID)
+	}
+	if !in.Config.Interactive {
+		s.cancelStreamsLocked(row.ID, "")
 	}
 	if s.cancel != nil && needsConnection(decodeChannel(row)) {
 		s.startChatLocked(decodeChannel(row))
@@ -687,6 +692,7 @@ func (s *Service) Start() {
 		return
 	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
+	s.stopped = false
 	ctx := s.ctx
 	s.wg.Add(1)
 	s.mu.Unlock()
@@ -720,6 +726,8 @@ func (s *Service) Stop() {
 	s.mu.Lock()
 	cancel := s.cancel
 	s.cancel = nil
+	s.stopped = true
+	s.cancelStreamsLocked("", "")
 	for id := range s.chatCancel {
 		s.stopChatLocked(id)
 	}
@@ -727,8 +735,8 @@ func (s *Service) Stop() {
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel()
-		s.wg.Wait()
 	}
+	s.wg.Wait()
 }
 func (s *Service) Done() <-chan struct{} {
 	s.mu.Lock()

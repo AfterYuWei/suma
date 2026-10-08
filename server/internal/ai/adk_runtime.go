@@ -5,6 +5,7 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"time"
 
@@ -41,21 +42,23 @@ func init() {
 }
 
 type executionFrame struct {
-	s         *Service
-	row       database.AIRun
-	actor     Actor
-	cfg       Settings
-	key       string
-	targets   []string
-	source    string
-	context   TargetContext
-	result    Result
-	summary   string
-	pending   map[string]database.AIInteraction
-	proposals map[string]database.AIOperation
-	calls     map[string]database.AIToolCall
-	steps     map[string]database.AIPlanStep
-	store     *checkpointBuffer
+	s          *Service
+	row        database.AIRun
+	actor      Actor
+	cfg        Settings
+	key        string
+	targets    []string
+	source     string
+	context    TargetContext
+	result     Result
+	summary    string
+	pending    map[string]database.AIInteraction
+	proposals  map[string]database.AIOperation
+	calls      map[string]database.AIToolCall
+	steps      map[string]database.AIPlanStep
+	store      *checkpointBuffer
+	streamAt   time.Time
+	streamText string
 }
 type checkpointBuffer struct {
 	frame  *executionFrame
@@ -303,7 +306,7 @@ func (s *Service) executeFrame(ctx context.Context, row database.AIRun) {
 		finalErr = err
 		return
 	}
-	runner := adk.NewRunner(ctx, adk.RunnerConfig{Agent: agent, EnableStreaming: false, CheckPointStore: f.store})
+	runner := adk.NewRunner(ctx, adk.RunnerConfig{Agent: agent, EnableStreaming: true, CheckPointStore: f.store})
 	var iter *adk.AsyncIterator[*adk.AgentEvent]
 	if row.ResumeTarget != "" {
 		var value any
@@ -333,7 +336,7 @@ func (s *Service) executeFrame(ctx context.Context, row database.AIRun) {
 		if event.Output != nil && event.Output.MessageOutput != nil {
 			mv := event.Output.MessageOutput
 			if mv.Role == schema.Assistant && event.AgentName == "Reasoner" {
-				msg, err := mv.GetMessage()
+				msg, err := f.reasonerMessage(ctx, mv)
 				if err != nil {
 					finalErr = err
 					continue
@@ -359,6 +362,59 @@ func (s *Service) executeFrame(ctx context.Context, row database.AIRun) {
 	if ctx.Err() != nil {
 		finalErr = ctx.Err()
 	}
+}
+
+func (f *executionFrame) reasonerMessage(ctx context.Context, output *adk.MessageVariant) (*schema.Message, error) {
+	if !output.IsStreaming {
+		return output.GetMessage()
+	}
+	defer output.MessageStream.Close()
+	var chunks []*schema.Message
+	var text strings.Builder
+	for {
+		chunk, err := output.MessageStream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if chunk == nil {
+			continue
+		}
+		chunks = append(chunks, chunk)
+		if chunk.Content != "" {
+			text.WriteString(chunk.Content)
+			if err := f.publishOutput(ctx, text.String(), false); err != nil {
+				return nil, err
+			}
+		}
+	}
+	message, err := schema.ConcatMessages(chunks)
+	if err != nil {
+		return nil, err
+	}
+	if len(message.ToolCalls) == 0 && message.Content != "" {
+		if err := f.publishOutput(ctx, message.Content, true); err != nil {
+			return nil, err
+		}
+	}
+	return message, nil
+}
+
+func (f *executionFrame) publishOutput(ctx context.Context, text string, force bool) error {
+	text = f.clean(text, 16000)
+	if text == "" || text == f.streamText || !force && time.Since(f.streamAt) < 500*time.Millisecond {
+		return nil
+	}
+	if err := f.guard(ctx); err != nil {
+		return err
+	}
+	if err := f.progress(ctx, "report", "run.output", StreamOutput{Text: text}); err != nil {
+		return err
+	}
+	f.streamAt, f.streamText = time.Now(), text
+	return nil
 }
 func (f *executionFrame) history(ctx context.Context) []*schema.Message {
 	out := []*schema.Message{}

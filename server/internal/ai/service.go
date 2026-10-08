@@ -84,7 +84,29 @@ func NewService(db *gorm.DB, store *secret.Store, tasks *task.Service, deps Depe
 	if err := db.Model(&database.AIOperation{}).Where("status IN ?", []string{"queued", "running"}).Updates(map[string]any{"status": "interrupted", "result": "SUMA restarted; inspect actual state before creating a new proposal"}).Error; err != nil {
 		return nil, err
 	}
-	db.Model(&database.AIRun{}).Where("status = ?", "running").Updates(map[string]any{"status": "paused", "error": "SUMA restarted; inspect actual state or resume from a saved checkpoint"})
+	var interrupted []database.AIRun
+	if err := db.Where("status = ?", "running").Find(&interrupted).Error; err != nil {
+		return nil, err
+	}
+	for _, run := range interrupted {
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			if run.ConversationID != "" {
+				if err := s.lockConversation(context.Background(), tx, run.ConversationID); err != nil {
+					return err
+				}
+			}
+			changed := tx.Model(&database.AIRun{}).Where("id = ? AND status = ?", run.ID, "running").Updates(map[string]any{"status": "paused", "error": "SUMA restarted; inspect actual state or resume from a saved checkpoint"})
+			if changed.Error != nil || changed.RowsAffected == 0 || run.ConversationID == "" {
+				return changed.Error
+			}
+			return s.eventTx(context.Background(), tx, run.ConversationID, run.ID, "run.paused", map[string]string{"run_id": run.ID})
+		}); err != nil {
+			return nil, err
+		}
+	}
+	if err := db.Model(&database.AIConversation{}).Where("source = ?", "chat").Update("chat_lease_until", nil).Error; err != nil {
+		return nil, err
+	}
 	s.startRuntime()
 	return s, nil
 }

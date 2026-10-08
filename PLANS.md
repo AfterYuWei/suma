@@ -4,6 +4,10 @@ This file records the completed MVP implementation. Every checked phase was veri
 
 ## Current work
 
+- [x] 飞书 AI 真实流式回复（2026-10-08）：参考 OpenClaw 的同卡片更新与收尾，打通 Responses SSE → Eino ADK → 脱敏进度事件 → 飞书 CardKit；正文保留 Markdown，澄清与不可变审批卡片独立。验证：延迟真实 HTTP SSE 证明模型完成前产生正文，隐藏推理／工具参数、要求完整终态、取消关闭上游、JSON 不伪造分片；Eino／完整飞书处理路径验证完成前更新且只有一个回执，跨分片模型密钥／引号凭证／私钥不外泄，空闲生成撤权后取消。平台 API／隔离 PostgreSQL 回归覆盖累计内容与替换、单调序号／稳定 UUID、未知发送结果／收尾失败重试不重复、持久回执／过期事件、部分内容保留、权限兼容／完整回退、审批与不同任务边界、暂停／关闭聊天／删除／换密钥／撤权／关服务取消请求；重启产生暂停收尾事件且不重放变更。完整 Go test／build、AI／App／Notification／Database／Redact race、Web lint／typecheck／build 和 31 项飞书／绑定／通知审批浏览器场景通过；修正受控模型 fixture 的必需工具探针后完整链路和 gates 通过。独立 Docker 实测绑定聊天 → Eino 流式 → 真实 Unix 节点读取 → 同卡片分片及最终更新（模型／发送器替身、无变更），既有 Unix／mTLS TCP／HTTPS-WSS Agent 逐项审批重启回归通过（48.023s）。同步新增回执表、API、权限 JSON、使用文档与冒烟；真实飞书 CardKit 效果及权限发布验收仍待专用应用／会话条件。
+
+  - [ ] 专用飞书应用真实流式验收：发布 cardkit:card:write／im:message:update 权限后，在明确指定的私聊与群聊验证打字效果、同卡片最终文本、取消和独立审批；当前缺少专用应用凭证及测试会话，自动化平台 API 与 Docker 测试不替代该验收。
+
 - [x] AI 聊天上手流程优化（2026-10-08）：禁用回复说明全局 AI 的配置／授权／启用／保存步骤，渠道和绑定页显示已保存状态；配置入口先保存渠道再跳转，自动选中唯一渠道、复制绑定命令并明确各绑定状态。验证：隔离 PostgreSQL 复现已绑定且站内确认后全局 AI 关闭，回复中英文启用步骤并说明无需重绑，不读取 Docker／调用模型／创建 Run 或 Task，保留绑定；未绑定与通知模式回归通过。44 项模型设置／飞书／通知／新上手流程浏览器场景通过，涵盖中英文、深浅、390px／1440px、开关保存前后状态、私聊命令复制、站内确认、保存失败保留草稿与阻止跳转；四项新中文场景的测试控件名称修正后完整重跑通过，代表性截图已核对。完整 Go test／build、Web lint／typecheck／build、Notification／App race 及独立真实 Docker 节点查询和 Unix／mTLS TCP／HTTPS-WSS Agent 审批重启冒烟通过（46.904s）。API、使用文档与演示绑定确认状态同步；真实飞书端新流程仍需专用应用／会话验收。
 
 - [x] 未绑定聊天账号提醒与绑定步骤（2026-10-08）：摘要、查询错误／澄清、权限拒绝、频率限制及无效绑定回复统一提示站内生成绑定码、私聊提交、回站确认；成功提交后明确尚需站内确认。验证：隔离 PostgreSQL 消息回归覆盖摘要／澄清／不可用／权限拒绝／频率限制的中英文完整步骤、群聊拒绝后私聊提交、站内确认前无操作权限、绑定码不回显、隐私与通知模式；完整 Go test／build、Notification／App race、Web lint／typecheck／build 通过。独立真实 Docker 节点查询及 Unix／mTLS TCP／HTTPS-WSS Agent 逐项审批重启冒烟通过（47.081s）。同步 API 与使用文档；真实飞书端更新后的回复验收仍需专用应用／会话条件。

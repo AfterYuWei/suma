@@ -90,3 +90,9 @@ type WorkflowEvent struct {
 	database.AIWorkflowEvent
 	Payload json.RawMessage `json:"payload"`
 }
+
+// StreamOutput contains only the current redacted answer snapshot, never
+// reasoning or incomplete tool arguments.
+type StreamOutput struct {
+	Text string `json:"text"`
+}

@@ -131,7 +131,7 @@ function CopyValue({ label, value }: { label: string; value: string }) {
 }
 function FeishuSetup({ appID, interactive }: { appID: string; interactive: boolean }) {
  const t = useOpsText()
- const permissions = JSON.stringify({ scopes: { tenant: ['im:message:send_as_bot', 'im:message.p2p_msg:readonly', 'im:message.group_at_msg:readonly'], user: [] } }, null, 2)
+ const permissions = JSON.stringify({ scopes: { tenant: ['im:message:send_as_bot', 'im:message.p2p_msg:readonly', 'im:message.group_at_msg:readonly', ...(interactive ? ['cardkit:card:write', 'im:message:update'] : [])], user: [] } }, null, 2)
  return <details className="space-y-3 rounded-md border p-3 text-xs leading-5"><summary className="cursor-pointer text-sm font-medium">{t('飞书平台配置说明', 'Feishu platform setup')}</summary>
   <p>{t('创建企业自建应用，开启机器人能力。复制凭证到 SUMA 并保存，等待长连接显示“已连接”，再在飞书设置长连接接收。', 'Create an internal application and enable its bot. Save the credentials in SUMA and wait for Connected before configuring persistent connections in Feishu.')}</p>
   <a href={`https://open.feishu.cn/app${appID && /^cli_[\w-]+$/.test(appID) ? `/${encodeURIComponent(appID)}` : ''}`} target="_blank" rel="noreferrer" className="underline">{t('打开飞书应用后台', 'Open Feishu application console')}</a>
@@ -139,6 +139,7 @@ function FeishuSetup({ appID, interactive }: { appID: string; interactive: boole
   <p>{t('事件与回调 → 事件配置：使用长连接接收，添加“接收消息”事件。无需公网回调地址。', 'Events & callbacks → Event configuration: receive through a persistent connection and add the receive-message event. No public callback URL is needed.')}</p>
   <CopyValue label={t('消息事件', 'Message event')} value="im.message.receive_v1" />
   {interactive && <CopyValue label={t('审批回调（长连接接收）', 'Approval callback (persistent connection)')} value="card.action.trigger" />}
+  {interactive && <p>{t('AI 回复默认流式更新同一张卡片。开通 cardkit:card:write 并发布应用版本；im:message:update 支持普通卡片兼容更新。未开通时仍会发送完整结果及权限提示。', 'AI replies stream into one card by default. Enable cardkit:card:write and publish the app version; im:message:update supports compatible message-card updates. Without these permissions, the full result and setup guidance are still delivered.')}</p>}
   <p>{t('设置应用可用范围，创建并发布新版本，让权限和事件配置生效。将机器人加入目标群，或在可用范围内私聊机器人。', 'Set application visibility, create and publish a version to apply permissions and event subscriptions. Add the bot to target groups or message it privately within its visibility scope.')}</p>
   <a href="https://open.feishu.cn/document/server-docs/im-v1/message/create" target="_blank" rel="noreferrer" className="underline">{t('飞书发送消息与权限文档', 'Feishu message and permission documentation')}</a>
  </details>

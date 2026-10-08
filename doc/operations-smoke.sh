@@ -38,4 +38,4 @@ SUMA_PROJECT_SMOKE_DIND="$project_smoke_daemon" \
 SUMA_AGENT_SMOKE_IMAGE="${SUMA_AGENT_SMOKE_IMAGE:-suma-agent:env-only-smoke}" \
 GOCACHE="${SUMA_PROJECT_SMOKE_GO_CACHE:-/tmp/suma-project-go-cache}" \
 go -C server test -tags dockersmoke ./internal/api ./internal/app \
-  -run '^(TestRealDockerProjectConfigurationTransports|TestRealDockerGuestChatQueryNamedNode)$' -count=1 -timeout 9m -v
+  -run '^(TestRealDockerProjectConfigurationTransports|TestRealDockerGuestChatQueryNamedNode|TestRealDockerBoundChatStreamsNodeStatus)$' -count=1 -timeout 9m -v

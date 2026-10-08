@@ -18,10 +18,24 @@ import (
 type HTTPModel struct{ Client func(bool) *http.Client }
 
 func (m HTTPModel) Complete(ctx context.Context, cfg Settings, key string, messages []ModelMessage, registered []Tool) (ModelReply, error) {
+	return m.complete(ctx, cfg, key, messages, registered, nil)
+}
+
+func (m HTTPModel) Stream(ctx context.Context, cfg Settings, key string, messages []ModelMessage, registered []Tool, emit func(string) error) (ModelReply, error) {
+	if emit == nil {
+		emit = func(string) error { return nil }
+	}
+	return m.complete(ctx, cfg, key, messages, registered, emit)
+}
+
+func (m HTTPModel) complete(ctx context.Context, cfg Settings, key string, messages []ModelMessage, registered []Tool, emit func(string) error) (ModelReply, error) {
 	if cfg.Protocol != ProtocolResponses {
 		return ModelReply{}, fmt.Errorf("%w: only Responses protocol is supported", ErrInvalid)
 	}
 	payload := map[string]any{"model": cfg.Model, "store": false, "max_output_tokens": 4096}
+	if emit != nil {
+		payload["stream"] = true
+	}
 	definitions := []any{}
 	wire := []any{}
 	for _, msg := range messages {
@@ -54,6 +68,9 @@ func (m HTTPModel) Complete(ctx context.Context, cfg Settings, key string, messa
 		return ModelReply{}, errors.New("invalid model request")
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if emit != nil {
+		req.Header.Set("Accept", "text/event-stream")
+	}
 	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
@@ -62,13 +79,20 @@ func (m HTTPModel) Complete(ctx context.Context, cfg Settings, key string, messa
 		return ModelReply{}, errors.New("model connection failed")
 	}
 	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return ModelReply{}, modelHTTPError(res.StatusCode)
+	}
+	if emit != nil && strings.Contains(strings.ToLower(res.Header.Get("Content-Type")), "text/event-stream") {
+		return readResponsesStream(ctx, res.Body, emit)
+	}
 	raw, err := io.ReadAll(io.LimitReader(res.Body, (1<<20)+1))
 	if err != nil || len(raw) > 1<<20 {
 		return ModelReply{}, errors.New("model response exceeded the size limit")
 	}
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return ModelReply{}, modelHTTPError(res.StatusCode)
-	}
+	return parseModelReply(raw)
+}
+
+func parseModelReply(raw []byte) (ModelReply, error) {
 	var data struct {
 		Status string `json:"status"`
 		Output []struct {

@@ -94,7 +94,7 @@ func (s *Service) ConfirmBinding(ctx context.Context, user uint, id string) erro
 	return nil
 }
 func (s *Service) RevokeBinding(ctx context.Context, user uint, id string) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		r := tx.Model(&database.NotificationBinding{}).Where("id = ? AND user_id = ?", id, user).Update("status", "revoked")
 		if r.Error != nil {
 			return r.Error
@@ -104,6 +104,12 @@ func (s *Service) RevokeBinding(ctx context.Context, user uint, id string) error
 		}
 		return tx.Where("binding_id = ?", id).Delete(&database.NotificationAction{}).Error
 	})
+	if err == nil {
+		s.mu.Lock()
+		s.cancelStreamsLocked("", id)
+		s.mu.Unlock()
+	}
+	return err
 }
 func (s *Service) ValidateBinding(ctx context.Context, user uint, id string) (database.NotificationBinding, error) {
 	var row database.NotificationBinding

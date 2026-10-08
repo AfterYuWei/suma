@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -163,7 +164,9 @@ func chatOperations(notify *notification.Service, assistant *ai.Service) notific
 			reply(chatAIError(err))
 			return
 		}
-		reply("任务已开始 / Task started: " + run.ID)
+		if !notify.SupportsStreaming(ctx, in.ChannelID) {
+			reply("任务已开始 / Task started: " + run.ID)
+		}
 	}
 }
 func chatWorkflowDelivery(notify *notification.Service, assistant *ai.Service) func(context.Context, ai.Actor, ai.WorkflowEvent, ai.Run) error {
@@ -173,13 +176,41 @@ func chatWorkflowDelivery(notify *notification.Service, assistant *ai.Service) f
 			return err
 		}
 		in := notification.Incoming{ChannelID: b.ChannelID, UserID: actor.ExternalUserID, ChatID: actor.ChatID}
+		streaming := notify.SupportsStreaming(ctx, in.ChannelID)
+		stream := func(text, status string, final, incomplete bool) error {
+			return notify.ReplyStream(ctx, in, b, notification.StreamUpdate{Key: run.ID, EventSeq: entry.Seq, Text: text, Status: status, Final: final, Incomplete: incomplete})
+		}
 		message := notification.Message{}
 		switch entry.Type {
+		case "run.queued", "run.output", "tool.started", "tool.completed", "task.progress":
+			if !streaming {
+				return nil
+			}
+			text, status := "", "正在分析请求… / Analyzing your request…"
+			if entry.Type == "run.output" {
+				var output ai.StreamOutput
+				if json.Unmarshal(entry.Payload, &output) != nil {
+					return ai.ErrInvalid
+				}
+				text, status = output.Text, "正在生成回复… / Generating the reply…"
+			} else if entry.Type == "tool.started" {
+				status = "正在收集授权节点的数据… / Collecting data from authorized nodes…"
+			} else if entry.Type == "tool.completed" {
+				status = "正在整理查询结果… / Preparing the result…"
+			} else if entry.Type == "task.progress" {
+				status = "正在执行已审批的步骤… / Executing the approved step…"
+			}
+			return stream(text, status, false, false)
 		case "run.waiting_input":
 			if run.Status != "waiting_input" || run.Interaction == nil {
 				return nil
 			}
 			input := run.Interaction
+			if streaming {
+				if err := stream("需要补充信息，请在下方选择或回答。 / More information is needed; choose or answer below.", "等待回答 / Awaiting your answer", true, false); err != nil {
+					return err
+				}
+			}
 			message.Text = input.Prompt
 			channel, err := notify.Channel(ctx, b.ChannelID)
 			if err != nil {
@@ -210,6 +241,11 @@ func chatWorkflowDelivery(notify *notification.Service, assistant *ai.Service) f
 				return nil
 			}
 			message.Text = run.Result.Summary
+			if streaming {
+				if err := stream("当前步骤需要审批，请在下方打开完整预览。 / This step needs approval; open the full preview below.", "等待审批 / Awaiting approval", true, false); err != nil {
+					return err
+				}
+			}
 			for _, id := range run.Result.OperationIDs {
 				op, err := assistant.Operation(ctx, id)
 				if err == nil && op.Status == "awaiting_approval" {
@@ -217,10 +253,24 @@ func chatWorkflowDelivery(notify *notification.Service, assistant *ai.Service) f
 					message.ApproveID = op.ID
 				}
 			}
-		case "run.completed", "run.failed", "run.paused":
+		case "run.completed", "run.failed", "run.paused", "run.canceled":
 			message.Text = run.Result.Summary
 			if run.Error != "" {
 				message.Text += "\n" + run.Error
+			}
+			if streaming {
+				status := "已完成 / Completed"
+				if entry.Type == "run.failed" {
+					status = "生成失败 / Generation failed"
+				} else if entry.Type == "run.paused" {
+					status = "已暂停 / Paused"
+				} else if entry.Type == "run.canceled" {
+					status = "已取消 / Canceled"
+				}
+				if message.Text == "" {
+					message.Text = status
+				}
+				return stream(message.Text, status, true, run.Error != "" || entry.Type == "run.canceled")
 			}
 		case "operation.completed", "operation.failed", "operation.interrupted":
 			message.Text = "步骤执行结果 / Step result: " + string(entry.Payload)

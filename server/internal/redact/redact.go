@@ -7,11 +7,11 @@ import (
 	"unicode/utf8"
 )
 
-var assignments = regexp.MustCompile(`(?i)((?:[a-z0-9_.-]*(?:password|passwd|token|secret|api[_-]?key|private[_-]?key|access[_-]?key|client[_-]?secret|credential|authorization|cookie)[a-z0-9_.-]*)["']?\s*[=:]\s*)("(?:\\.|[^"\\])*"|'[^'\n]*'|[^\s,;]+)`)
+var assignments = regexp.MustCompile(`(?i)((?:[a-z0-9_.-]*(?:password|passwd|token|secret|api[_-]?key|private[_-]?key|access[_-]?key|client[_-]?secret|credential|authorization|cookie)[a-z0-9_.-]*)["']?\s*[=:]\s*)("(?:\\.|[^"\\])*(?:"|$)|'[^'\n]*(?:'|$)|[^\s,;]+)`)
 var bearer = regexp.MustCompile(`(?i)\b(Bearer|Basic)\s+[A-Za-z0-9+/=_\-.]+`)
 var credentials = regexp.MustCompile(`(https?://)[^\s/@]+:[^\s/@]+@`)
 var webhook = regexp.MustCompile(`(?i)(/bot/v2/hook/|api\.telegram\.org/bot)[A-Za-z0-9_:\-]+`)
-var privateKey = regexp.MustCompile(`(?s)-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----`)
+var privateKey = regexp.MustCompile(`(?s)-----BEGIN [^-]*PRIVATE KEY-----.*?(?:-----END [^-]*PRIVATE KEY-----|$)`)
 var standaloneKey = regexp.MustCompile(`\b(?:sk-[A-Za-z0-9_-]{16,}|(?:AKIA|ASIA)[A-Z0-9]{16}|[0-9]{8,12}:[A-Za-z0-9_-]{30,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b`)
 
 func Text(value string) string {

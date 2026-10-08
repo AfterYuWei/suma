@@ -81,6 +81,7 @@ func (s *Service) connectionState(id, generation string, state ConnectionStatus)
 }
 
 func (s *Service) stopChatLocked(id string) {
+	s.cancelStreamsLocked(id, "")
 	if cancel := s.chatCancel[id]; cancel != nil {
 		cancel()
 		delete(s.chatCancel, id)

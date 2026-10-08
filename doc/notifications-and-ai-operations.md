@@ -42,6 +42,20 @@
 
 **默认只启用通知。** 所有启用的飞书渠道都会建立长连接并识别会话，与 AI 开关无关。AI 关闭时收到消息只记录会话和去重信息，不查询 Docker、不调用模型、不处理身份绑定或审批。开启“AI 聊天与审批”后，再在飞书回调配置中选择长连接并订阅 `card.action.trigger`，通过“配置 AI 与身份绑定”进入站内配置。身份绑定只支持私聊；群成员身份不会自动获得 SUMA 操作权限，每项变更仍需不可变预览与逐项审批。
 
+### 飞书 AI 流式回复
+
+已绑定并站内确认的飞书账号默认收到一张持续更新的回复卡片：先显示处理／读取授权节点状态，再随着模型的 Responses SSE 输出更新正文，最后在同一卡片上关闭生成状态并保留完整结果。Markdown 标题、粗体、代码和表格保留；平台标签不能创建 @ 或审批控件。澄清选项和不可变审批预览独立发送，不跟随正文改写。
+
+开启渠道 AI 能力后，平台配置说明的权限 JSON 追加 `cardkit:card:write` 和 `im:message:update`。前者用于创建及流式更新卡片实体，后者用于普通卡片更新的兼容路径；开通后需发布应用新版本。通知模式仍只需要原三项权限。缺少 CardKit 权限时尝试更新普通卡片；两种更新权限都未生效时，会发送完整结果及权限提示，不把卡片更新失败误报为流式成功。
+
+模型服务需要支持 Responses 的 `stream: true` 与 `text/event-stream`。SUMA 读取真实 `response.output_text.delta`，不会转发模型内部推理或未完成的工具参数；只有收到完成事件并完整校验后，工具才可进入既有受控流程。兼容服务忽略 `stream`、返回完整 JSON 时只显示完整结果，不人为拆字模拟模型流式。
+
+进度正文按累计快照合并，最多约每 500ms 记录一次；投递会合并可替换的进度，保持澄清、审批、终态和不同任务的边界。卡片序号单调递增，发送 UUID、回执和已处理事件序号持久化，重试不会另建一张已发送的卡片；最后一次更新或收尾失败不会推进成功游标。`0003_notification_chat_streams.sql` 在启动时幂等追加回执表，保留已有配置和历史，不导入历史数据库格式。
+
+凭证和私钥跨分片也会先脱敏再保存或投递。失败／取消会标记输出未完成并保留已生成内容；模型上下文取消、身份撤销、渠道暂停／删除／关闭聊天、凭证替换和服务关闭都会取消相应流请求。服务重启将中断的 Run 标为暂停并产生收尾事件，不重放变更。停用或撤权后不继续投递资源详情；重新启用仍需要当前有效身份和范围。
+
+实现参考：[OpenClaw 流式卡片](https://github.com/openclaw/openclaw/blob/main/extensions/feishu/src/streaming-card.ts)、[飞书 CardKit](https://open.feishu.cn/document/cardkit-v1/card/create)、[OpenAI Docs 流式响应](https://developers.openai.com/api/docs/guides/streaming-responses)。
+
 语言、时区、SUMA 详情链接和手填会话 ID 放在高级选项中。密钥更换会撤销原绑定与审批令牌并重建连接；更换 App ID 还会清除原会话及目标。移除目标会停止其未发送投递，关联规则显示目标失效，需要重新选择；无有效目标的规则不能启用。
 
 每个规则、渠道、会话独立生成投递记录与合并批次。某一目标失败只重试该目标，成功目标不会因其他目标失败再次发送；手动重发保留原目标，备用投递使用规则选定的备用目标。发送记录显示接收会话。
@@ -182,7 +196,7 @@ SUMA_PROJECT_SMOKE_GO_CACHE=/tmp/suma-notification-go-cache bash doc/operations-
 
 新增的全局 AI 只读冒烟经真实本地 Unix 运行时读取节点和已有容器证据，并确认不创建提案或 Task，不修改或删除 Docker 资源。
 
-Docker 脚本使用可清理的隔离 Docker 27 daemon，覆盖 Unix、mTLS TCP、HTTPS/WSS Agent；需要本地已有 `docker:27-dind`、`alpine:3.24` 和测试 Agent 镜像，不删除用户资源。包含真实固定镜像 Compose 应用、通知事件、AI 提案、审批、容器重启及重复审批拒绝。额外的 `TestRealDockerGuestChatQueryNamedNode` 通过飞书消息处理路径，在两个授权节点中按“发送ganzhou节点的信息给我”选择真实 Unix 运行时，读取容器和镜像摘要，确认未调用模型、创建提案或 Task；该测试替代发送器，不会向真实飞书发送消息。
+Docker 脚本使用可清理的隔离 Docker 27 daemon，覆盖 Unix、mTLS TCP、HTTPS/WSS Agent；需要本地已有 `docker:27-dind`、`alpine:3.24` 和测试 Agent 镜像，不删除用户资源。包含真实固定镜像 Compose 应用、通知事件、AI 提案、审批、容器重启及重复审批拒绝。额外的 `TestRealDockerGuestChatQueryNamedNode` 通过飞书消息处理路径，在两个授权节点中按“发送ganzhou节点的信息给我”选择真实 Unix 运行时，读取容器和镜像摘要，确认未调用模型、创建提案或 Task。`TestRealDockerBoundChatStreamsNodeStatus` 验证已绑定消息 → Eino → 真实 Unix 节点读取 → 模型完成前和完成后的同一卡片更新；这些测试使用发送器／模型替身，不会向真实飞书发送消息。
 
 真实飞书验收用私有、0600 的 JSON 文件提供 `app_id` 和 `app_secret`，不将秘密写入仓库或命令行：
 

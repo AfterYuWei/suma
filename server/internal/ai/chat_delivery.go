@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/suma/suma/server/internal/database"
+	"gorm.io/gorm"
 )
 
 func (s *Service) SetChatDelivery(callback func(context.Context, Actor, WorkflowEvent, Run) error) {
@@ -16,7 +17,7 @@ func (s *Service) SetChatDelivery(callback func(context.Context, Actor, Workflow
 }
 func (s *Service) deliverChats(ctx context.Context) {
 	defer s.wg.Done()
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
@@ -44,9 +45,12 @@ func (s *Service) deliverChats(ctx context.Context) {
 				continue
 			}
 			var entry database.AIWorkflowEvent
-			if s.db.WithContext(ctx).Where("conversation_id = ? AND seq > ? AND type IN ?", conv.ID, conv.ChatSentSeq, []string{"run.waiting_input", "run.waiting_approval", "run.completed", "run.failed", "run.paused", "operation.completed", "operation.failed", "operation.interrupted"}).Order("seq ASC").First(&entry).Error != nil {
+			if s.db.WithContext(ctx).Where("conversation_id = ? AND seq > ? AND type IN ?", conv.ID, conv.ChatSentSeq, chatEventKinds).Order("seq ASC").First(&entry).Error != nil {
 				_ = s.db.WithContext(ctx).Model(&database.AIConversation{}).Where("id = ? AND chat_sent_seq = ?", conv.ID, conv.ChatSentSeq).Updates(map[string]any{"chat_sent_seq": conv.EventSeq, "chat_lease_until": nil}).Error
 				continue
+			}
+			if isChatProgress(entry.Type) {
+				entry = s.coalesceChatProgress(ctx, entry)
 			}
 			run, err := s.Run(ctx, entry.RunID)
 			var actor Actor
@@ -75,9 +79,36 @@ func (s *Service) deliverChats(ctx context.Context) {
 			}
 			if err == nil {
 				_ = s.db.WithContext(ctx).Model(&database.AIConversation{}).Where("id = ? AND chat_sent_seq = ?", conv.ID, conv.ChatSentSeq).Updates(map[string]any{"chat_sent_seq": entry.Seq, "chat_lease_until": nil}).Error
+			} else if err != ErrScope {
+				_ = s.db.WithContext(ctx).Model(&database.AIConversation{}).Where("id = ? AND chat_sent_seq = ?", conv.ID, conv.ChatSentSeq).Update("chat_lease_until", s.deps.Now().Add(3*time.Second)).Error
 			}
 			// Failed sends retain their durable cursor and lease, then retry. Removing a
 			// binding never falls back to a guest delivery of resource information.
 		}
 	}
+}
+
+var chatProgressKinds = []string{"run.queued", "run.output", "tool.started", "tool.completed", "task.progress"}
+var chatEventKinds = append(append([]string{}, chatProgressKinds...), "run.waiting_input", "run.waiting_approval", "run.completed", "run.failed", "run.paused", "run.canceled", "operation.completed", "operation.failed", "operation.interrupted")
+
+func isChatProgress(kind string) bool { return has(chatProgressKinds, kind) }
+
+// Replaceable snapshots can be merged, but never cross a task boundary or
+// a durable question, approval or terminal event.
+func (s *Service) coalesceChatProgress(ctx context.Context, first database.AIWorkflowEvent) database.AIWorkflowEvent {
+	var barrier database.AIWorkflowEvent
+	query := s.db.WithContext(ctx).Where("conversation_id = ? AND seq > ? AND type IN ? AND (run_id <> ? OR type NOT IN ?)", first.ConversationID, first.Seq, chatEventKinds, first.RunID, chatProgressKinds)
+	err := query.Order("seq ASC").First(&barrier).Error
+	if err != nil && err != gorm.ErrRecordNotFound {
+		return first
+	}
+	query = s.db.WithContext(ctx).Where("conversation_id = ? AND run_id = ? AND seq >= ? AND type IN ?", first.ConversationID, first.RunID, first.Seq, chatProgressKinds)
+	if barrier.Seq > 0 {
+		query = query.Where("seq < ?", barrier.Seq)
+	}
+	var latest database.AIWorkflowEvent
+	if query.Order("seq DESC").First(&latest).Error == nil {
+		return latest
+	}
+	return first
 }

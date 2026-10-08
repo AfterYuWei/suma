@@ -2,6 +2,26 @@ package database
 
 import "time"
 
+// NotificationChatStream stores SUMA's reply receipt and delivery cursor. It
+// never stores provider credentials, model reasoning or approval controls.
+type NotificationChatStream struct {
+	ID           string `gorm:"primaryKey;size:64"`
+	ChannelID    string `gorm:"size:32;index;not null"`
+	BindingID    string `gorm:"size:32;index;not null"`
+	ChatID       string `gorm:"size:128;not null"`
+	IdentityHash string `gorm:"size:64;not null"`
+	CardID       string `gorm:"size:128;not null;default:''"`
+	MessageID    string `gorm:"size:128;not null;default:''"`
+	Mode         string `gorm:"size:16;not null;default:''"`
+	Sequence     uint64 `gorm:"not null;default:0"`
+	EventSeq     uint64 `gorm:"not null;default:0"`
+	Text         string `gorm:"type:text;not null;default:''"`
+	Status       string `gorm:"size:256;not null;default:''"`
+	Closed       bool   `gorm:"not null;default:false"`
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
 type NotificationChannel struct {
 	ID               string     `gorm:"primaryKey;size:64" json:"id"`
 	Name             string     `json:"name"`

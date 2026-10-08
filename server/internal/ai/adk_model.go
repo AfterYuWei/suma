@@ -24,6 +24,10 @@ func (m *ResponsesChatModel) WithTools(tools []*schema.ToolInfo) (model.ToolCall
 	return &copy, nil
 }
 func (m *ResponsesChatModel) Generate(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.Message, error) {
+	return m.generate(ctx, input, nil, opts...)
+}
+
+func (m *ResponsesChatModel) generate(ctx context.Context, input []*schema.Message, emit func(string) error, opts ...model.Option) (*schema.Message, error) {
 	f := m.frame
 	if err := f.guard(ctx); err != nil {
 		return nil, err
@@ -61,6 +65,7 @@ func (m *ResponsesChatModel) Generate(ctx context.Context, input []*schema.Messa
 	}
 	var reply ModelReply
 	var err error
+	started := false
 	for attempt := 0; attempt < 3; attempt++ {
 		if err = f.guard(ctx); err != nil {
 			return nil, err
@@ -69,8 +74,15 @@ func (m *ResponsesChatModel) Generate(ctx context.Context, input []*schema.Messa
 			return nil, ErrBudget
 		}
 		f.row.Iterations++
-		reply, err = f.s.deps.Model.Complete(ctx, f.cfg, f.key, messages, defs)
-		if err == nil || !transientModelError(err) || attempt == 2 {
+		if streaming, ok := f.s.deps.Model.(StreamingModel); ok && emit != nil {
+			reply, err = m.streamModel(ctx, streaming, messages, defs, func(delta string) error {
+				started = started || delta != ""
+				return emit(delta)
+			})
+		} else {
+			reply, err = f.s.deps.Model.Complete(ctx, f.cfg, f.key, messages, defs)
+		}
+		if err == nil || started || !transientModelError(err) || attempt == 2 {
 			break
 		}
 		timer := time.NewTimer(time.Duration(attempt+1) * 250 * time.Millisecond)
@@ -102,12 +114,36 @@ func (m *ResponsesChatModel) Generate(ctx context.Context, input []*schema.Messa
 	return out, nil
 }
 func (m *ResponsesChatModel) Stream(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
-	// Generate-only providers return one complete frame, not fabricated deltas.
-	msg, err := m.Generate(ctx, input, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return schema.StreamReaderFromArray([]*schema.Message{msg}), nil
+	reader, writer := schema.Pipe[*schema.Message](16)
+	go func() {
+		defer writer.Close()
+		var raw, sent string
+		message, err := m.generate(ctx, input, func(delta string) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			raw += delta
+			visible := stableModelText(m.frame, raw)
+			if len(visible) > len(sent) && strings.HasPrefix(visible, sent) {
+				if writer.Send(schema.AssistantMessage(visible[len(sent):], nil), nil) {
+					return context.Canceled
+				}
+				sent = visible
+			}
+			return nil
+		}, opts...)
+		if err != nil {
+			writer.Send(nil, err)
+			return
+		}
+		if !strings.HasPrefix(message.Content, sent) {
+			writer.Send(nil, errors.New("model final output changed after streaming; start a new diagnosis"))
+			return
+		}
+		message.Content = message.Content[len(sent):]
+		writer.Send(message, nil)
+	}()
+	return reader, nil
 }
 func transientModelError(err error) bool {
 	for _, code := range []string{"HTTP 429", "HTTP 502", "HTTP 503", "HTTP 504"} {
