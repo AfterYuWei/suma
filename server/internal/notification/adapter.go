@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -160,7 +159,7 @@ func (a *Adapter) Check(ctx context.Context, c Channel, m Secrets) (map[string]a
 		if bot.ID == 0 {
 			return nil, errors.New("invalid Telegram bot identity")
 		}
-		return map[string]any{"connected": true, "bot_name": bot.Username}, nil
+		return map[string]any{"credentials_valid": true, "bot_name": bot.Username}, nil
 	case "feishu_app":
 		token, err := a.feishuToken(ctx, c, m)
 		if err != nil {
@@ -175,7 +174,7 @@ func (a *Adapter) Check(ctx context.Context, c Channel, m Secrets) (map[string]a
 		if identity, _ := bot["open_id"].(string); identity == "" {
 			return nil, errors.New("invalid Feishu bot identity")
 		}
-		return map[string]any{"connected": true, "bot": bot, "permissions_require_platform_configuration": true}, nil
+		return map[string]any{"credentials_valid": true, "bot": bot, "permissions_require_platform_configuration": true}, nil
 	default:
 		return map[string]any{"connected": false, "requires_test_message": true}, nil
 	}
@@ -257,16 +256,6 @@ func (a *Adapter) Send(ctx context.Context, c Channel, m Secrets, message Messag
 			}
 		}
 		return first, nil
-	case "feishu_webhook":
-		body := map[string]any{"msg_type": "text", "content": map[string]string{"text": message.Text}}
-		if m.SigningKey != "" {
-			stamp := strconv.FormatInt(time.Now().Unix(), 10)
-			mac := hmac.New(sha256.New, []byte(stamp+"\n"+m.SigningKey))
-			body["timestamp"] = stamp
-			body["sign"] = base64.StdEncoding.EncodeToString(mac.Sum(nil))
-		}
-		_, err := a.request(ctx, "POST", m.Endpoint, body, "", false, m)
-		return "", err
 	case "feishu_app":
 		if c.Config.ChatID == "" {
 			return "", errors.New("select a recipient chat before sending a test")

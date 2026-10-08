@@ -15,14 +15,29 @@ export function mockOperations(path: string, method: string, body: Record<string
   const id = path.split('/')[3], previous = channels.find(c => c.id === id)
   const input = body as unknown as Channel
   if (previous && previous.version !== input.version) conflict()
+  if (!['telegram', 'feishu_app', 'webhook'].includes(input.provider)) throw new ApiError('Unsupported notification provider', 20801, 422)
+  if (input.provider === 'feishu_app' && channels.some(channel => channel.id !== id && channel.config.app_id === input.config.app_id)) throw new ApiError('One channel per Feishu application', 20801, 422)
   const cfg = input.config as ChannelConfig, secrets = body.secrets as Record<string, unknown> | undefined
+  if (previous && previous.config.app_id !== cfg.app_id) cfg.targets = []
   const row: Channel = { id: previous?.id || identifier(), name: input.name, provider: input.provider, enabled: input.enabled, version: (previous?.version || 0) + 1, config: { ...cfg, endpoint: '' }, has_secrets: previous?.has_secrets || !!(secrets?.token || cfg.endpoint), last_error: '' }
   if (previous) Object.assign(previous, row); else channels.push(row)
   return row
  }
  if (/^\/notifications\/channels\/[^/]+$/.test(path) && method === 'DELETE') { const index = channels.findIndex(c => c.id === path.split('/')[3]); if (index >= 0) channels.splice(index, 1); return { deleted: true } }
- if (/\/notifications\/channels\/[^/]+\/(test|check)$/.test(path)) { const channel = channels.find(c => c.id === path.split('/')[3]); if (path.endsWith('/test') && channel) deliveries.unshift({ id: identifier(), channel_id: channel.id, status: 'sent', reason: '', attempts: 1, due_at: new Date().toISOString(), created_at: new Date().toISOString() }); return { connected: true, sent: true } }
- if (/\/notifications\/channels\/[^/]+\/chats$/.test(path)) return []
+ if (/\/notifications\/channels\/[^/]+\/(test|check)$/.test(path)) {
+  const channel = channels.find(item => item.id === path.split('/')[3])
+  if (!channel) throw new ApiError('Channel not found', 20801, 404)
+  if (path.endsWith('/check')) return { credentials_valid: true }
+  const chatID = String(body.chat_id || '')
+  if (channel.provider === 'feishu_app' && !channel.config.targets?.some(target => target.chat_id === chatID)) throw new ApiError('Select a configured test recipient', 20801, 422)
+  deliveries.unshift({ id: identifier(), channel_id: channel.id, chat_id: chatID, status: 'sent', reason: '', attempts: 1, due_at: new Date().toISOString(), created_at: new Date().toISOString() })
+  return { sent: true, chat_id: chatID }
+ }
+ if (/\/notifications\/channels\/[^/]+\/connection$/.test(path)) { const channel = channels.find(item => item.id === path.split('/')[3]); return { state: channel?.enabled ? 'connected' : 'stopped' } }
+ if (/\/notifications\/channels\/[^/]+\/chats$/.test(path)) {
+  const channel = channels.find(item => item.id === path.split('/')[3])
+  return channel?.provider === 'feishu_app' && channel.enabled ? [{ chat_id: 'oc_demo_private', name: 'Admin', private: true }, { chat_id: 'oc_demo_group', name: 'Operations', private: false }] : []
+ }
  if (path === '/notifications/rules' && method === 'GET') return rules
  if (/^\/notifications\/rules(?:\/[^/]+)?$/.test(path) && (method === 'PUT' || method === 'POST')) { const id = path.split('/')[3], input = body as unknown as Rule, previous = rules.find(r => r.id === id); if (previous && previous.version !== input.version) conflict(); const row: Rule = { id: previous?.id || identifier(), name: input.name, config: input.config, enabled: input.enabled, version: (previous?.version || 0) + 1 }; if (previous) Object.assign(previous, row); else rules.push(row); return row }
  if (path.startsWith('/notifications/rules/') && method === 'DELETE') { const index = rules.findIndex(r => r.id === path.split('/')[3]); if (index >= 0) rules.splice(index, 1); return {} }

@@ -15,14 +15,23 @@ var ErrConflict = errors.New("configuration changed; reload before saving")
 var ErrInvalid = errors.New("invalid notification configuration")
 
 type Config struct {
-	Endpoint     string `json:"endpoint,omitempty"`
-	ChatID       string `json:"chat_id,omitempty"`
-	AppID        string `json:"app_id,omitempty"`
-	Language     string `json:"language"`
-	Timezone     string `json:"timezone"`
-	AllowPrivate bool   `json:"allow_private"`
-	Interactive  bool   `json:"interactive"`
-	PublicURL    string `json:"public_url,omitempty"`
+	Endpoint     string   `json:"endpoint,omitempty"`
+	ChatID       string   `json:"chat_id,omitempty"`
+	Targets      []Target `json:"targets,omitempty"`
+	AppID        string   `json:"app_id,omitempty"`
+	Language     string   `json:"language"`
+	Timezone     string   `json:"timezone"`
+	AllowPrivate bool     `json:"allow_private"`
+	Interactive  bool     `json:"interactive"`
+	PublicURL    string   `json:"public_url,omitempty"`
+}
+type Target struct {
+	ChatID string `json:"chat_id"`
+	Name   string `json:"name"`
+}
+type ConnectionStatus struct {
+	State string `json:"state"`
+	Error string `json:"error,omitempty"`
 }
 type Secrets struct {
 	Endpoint      string `json:"endpoint,omitempty"`
@@ -44,21 +53,23 @@ type Channel struct {
 	HasSecrets bool   `json:"has_secrets"`
 }
 type RuleConfig struct {
-	Events     []string   `json:"events"`
-	Severities []string   `json:"severities"`
-	NodeIDs    []string   `json:"node_ids"`
-	GroupIDs   []uint     `json:"group_ids"`
-	Projects   []string   `json:"projects"`
-	ChannelIDs []string   `json:"channel_ids"`
-	FallbackID string     `json:"fallback_id,omitempty"`
-	Mode       string     `json:"mode"`
-	Timezone   string     `json:"timezone"`
-	DigestHour int        `json:"digest_hour"`
-	QuietStart string     `json:"quiet_start,omitempty"`
-	QuietEnd   string     `json:"quiet_end,omitempty"`
-	MutedUntil *time.Time `json:"muted_until,omitempty"`
-	Recovery   bool       `json:"recovery"`
-	Template   string     `json:"template,omitempty"`
+	Events         []string            `json:"events"`
+	Severities     []string            `json:"severities"`
+	NodeIDs        []string            `json:"node_ids"`
+	GroupIDs       []uint              `json:"group_ids"`
+	Projects       []string            `json:"projects"`
+	ChannelIDs     []string            `json:"channel_ids"`
+	ChannelTargets map[string][]string `json:"channel_targets,omitempty"`
+	FallbackID     string              `json:"fallback_id,omitempty"`
+	FallbackChatID string              `json:"fallback_chat_id,omitempty"`
+	Mode           string              `json:"mode"`
+	Timezone       string              `json:"timezone"`
+	DigestHour     int                 `json:"digest_hour"`
+	QuietStart     string              `json:"quiet_start,omitempty"`
+	QuietEnd       string              `json:"quiet_end,omitempty"`
+	MutedUntil     *time.Time          `json:"muted_until,omitempty"`
+	Recovery       bool                `json:"recovery"`
+	Template       string              `json:"template,omitempty"`
 }
 type RuleInput struct {
 	Name    string     `json:"name"`

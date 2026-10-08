@@ -125,7 +125,7 @@ CREATE INDEX IF NOT EXISTS "idx_notification_events_dedupe_key" ON "notification
 CREATE INDEX IF NOT EXISTS "idx_notification_events_node_id" ON "notification_events" ("node_id");
 CREATE INDEX IF NOT EXISTS "idx_notification_events_type" ON "notification_events" ("type");
 CREATE TABLE "notification_reads" ("user_id" bigint,"event_id" varchar(64),"read_at" timestamptz,PRIMARY KEY ("user_id","event_id"));
-CREATE TABLE "notification_deliveries" ("id" varchar(64),"channel_id" text,"rule_id" text,"batch_key" text,"event_ids_json" text,"status" text,"reason" text,"attempts" bigint,"due_at" timestamptz,"lease_until" timestamptz,"provider_message_id" text,"created_at" timestamptz,"updated_at" timestamptz,PRIMARY KEY ("id"));
+CREATE TABLE "notification_deliveries" ("id" varchar(64),"channel_id" text,"chat_id" varchar(128),"rule_id" text,"batch_key" text,"event_ids_json" text,"status" text,"reason" text,"attempts" bigint,"due_at" timestamptz,"lease_until" timestamptz,"provider_message_id" text,"created_at" timestamptz,"updated_at" timestamptz,PRIMARY KEY ("id"));
 CREATE INDEX IF NOT EXISTS "idx_notification_deliveries_lease_until" ON "notification_deliveries" ("lease_until");
 CREATE INDEX IF NOT EXISTS "idx_notification_deliveries_due_at" ON "notification_deliveries" ("due_at");
 CREATE INDEX IF NOT EXISTS "idx_notification_deliveries_status" ON "notification_deliveries" ("status");

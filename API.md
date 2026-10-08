@@ -313,14 +313,21 @@ Repeatable isolated Unix/mTLS/Agent verification is documented in [Docker cleanu
 
 All routes require an authenticated session and the usual Origin check for writes. Secrets are write-only; blank fields retain encrypted material. Channel/rule/settings writes carry an optimistic `version`. See [setup, provider permissions and approval behavior](doc/notifications-and-ai-operations.md).
 
+Supported channel providers are `feishu_app`, `telegram` and `webhook`. Feishu custom Webhook robots are unsupported. Each Feishu App ID has one channel and one outbound connection, with `config.targets: [{"chat_id":"oc_...","name":"Operations"}]` (up to 50 unique recipients). Credentials may be saved before targets are configured. Enabled Feishu channels receive events regardless of `interactive`; notification-only messages only discover conversations and never invoke AI, queries, binding or approvals. `config.chat_id` remains the Telegram destination and the adapter's internally resolved single recipient.
+
+Rules retain `config.channel_ids` and store Feishu routing explicitly in `config.channel_targets: {"channel-id":["oc_group","oc_private"]}`. The UI preselects all configured targets when selecting a Feishu channel; the API requires explicit valid recipients for enabled rules. A Feishu fallback uses `fallback_id` plus one `fallback_chat_id`; the fallback must be a different channel. Removed targets suppress pending/retry deliveries and invalidate rule routing. An App ID change clears discovered conversations and configured targets; credential changes revoke bindings and outstanding approval tokens.
+
+Delivery evidence includes `chat_id`. Envelopes, merge/digest batches, retry, manual resend and fallback are independent for each rule/channel/conversation. Runtime connection status is held in memory, not PostgreSQL. The new `chat_id` delivery column is part of the fresh development schema; no historical database migration is provided.
+
 | Method | `/api/v1` path | Behavior |
 | --- | --- | --- |
 | GET | `/notifications/catalog` | Canonical events and rule presets |
 | GET / POST | `/notifications/channels` | List or create a channel |
 | PUT / DELETE | `/notifications/channels/:id` | Edit/pause or delete; identity changes revoke bindings |
-| POST | `/notifications/channels/:id/check` | Check bot credentials (does not prove delivery/callback setup) |
-| POST | `/notifications/channels/:id/test` | Send an explicit test message, including while paused |
-| GET | `/notifications/channels/:id/chats` | Detected chats from incoming platform events |
+| POST | `/notifications/channels/:id/check` | Return `credentials_valid` for bot credentials (does not prove connection/delivery/callback setup) |
+| POST | `/notifications/channels/:id/test` | Send an explicit test, including while paused; Feishu requires `{ "chat_id": "oc_..." }` selecting one configured target |
+| GET | `/notifications/channels/:id/chats` | Detected conversations; Feishu discovery also works with AI chat disabled |
+| GET | `/notifications/channels/:id/connection` | Feishu runtime `{ state, error? }`: stopped, connecting, connected, reconnecting or error; separate from delivery errors |
 | GET / POST | `/notifications/rules` | List or create a routing rule |
 | PUT / DELETE | `/notifications/rules/:id` | Edit or remove a rule |
 | GET | `/notifications/inbox` | Latest 200 historical messages plus total per-user unread count |

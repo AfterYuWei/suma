@@ -26,24 +26,27 @@ type Sender interface {
 	Send(context.Context, Channel, Secrets, Message) (string, error)
 }
 type Dependencies struct {
-	Audit   *audit.Service
-	Sender  Sender
-	Now     func() time.Time
-	OnError func(error)
+	Audit         *audit.Service
+	Sender        Sender
+	Now           func() time.Time
+	OnError       func(error)
+	FeishuConnect func(context.Context, Channel, Secrets, func(ConnectionStatus), func(Incoming) error)
 }
 type Service struct {
-	db         *gorm.DB
-	secrets    *secret.Store
-	deps       Dependencies
-	mu         sync.Mutex
-	ctx        context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
-	chat       ChatHandler
-	onEvent    func(event.Event)
-	expected   map[string]time.Time
-	chatCancel map[string]context.CancelFunc
-	queryAt    map[string]time.Time
+	db          *gorm.DB
+	secrets     *secret.Store
+	deps        Dependencies
+	mu          sync.Mutex
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	chat        ChatHandler
+	onEvent     func(event.Event)
+	expected    map[string]time.Time
+	chatCancel  map[string]context.CancelFunc
+	chatDone    map[string]chan struct{}
+	connections map[string]connectionEntry
+	queryAt     map[string]time.Time
 }
 
 func NewService(db *gorm.DB, secrets *secret.Store, deps Dependencies) *Service {
@@ -59,7 +62,7 @@ func NewService(db *gorm.DB, secrets *secret.Store, deps Dependencies) *Service 
 	if deps.Audit == nil {
 		deps.Audit = audit.NewService(db)
 	}
-	return &Service{db: db, secrets: secrets, deps: deps, chatCancel: map[string]context.CancelFunc{}, queryAt: map[string]time.Time{}}
+	return &Service{db: db, secrets: secrets, deps: deps, chatCancel: map[string]context.CancelFunc{}, chatDone: map[string]chan struct{}{}, connections: map[string]connectionEntry{}, queryAt: map[string]time.Time{}}
 }
 func (s *Service) SetChatHandler(h ChatHandler)        { s.mu.Lock(); s.chat = h; s.mu.Unlock() }
 func (s *Service) SetEventHandler(h func(event.Event)) { s.mu.Lock(); s.onEvent = h; s.mu.Unlock() }
@@ -149,6 +152,7 @@ func (s *Service) SaveChannel(ctx context.Context, id string, in ChannelInput) (
 	}
 	originalToken := previous.Token
 	originalAppID := decodeChannel(row).Config.AppID
+	in.Config.AppID = strings.TrimSpace(in.Config.AppID)
 	if in.Secrets != nil {
 		if in.Secrets.Token != "" {
 			previous.Token = strings.TrimSpace(in.Secrets.Token)
@@ -168,18 +172,16 @@ func (s *Service) SaveChannel(ctx context.Context, id string, in ChannelInput) (
 		if in.Config.Endpoint != "" || !strings.Contains(previous.Token, ":") {
 			return Channel{}, fmt.Errorf("%w: Telegram Bot Token is required", ErrInvalid)
 		}
-	case "feishu_webhook":
-		if err := outbound.Validate(previous.Endpoint, false); err != nil {
-			return Channel{}, err
-		}
-		u, _ := url.Parse(previous.Endpoint)
-		if u.Host != "open.feishu.cn" || !strings.HasPrefix(u.Path, "/open-apis/bot/v2/hook/") {
-			return Channel{}, ErrInvalid
-		}
-		in.Config.Interactive = false
 	case "feishu_app":
-		if !strings.HasPrefix(in.Config.AppID, "cli_") || previous.Token == "" {
+		if !strings.HasPrefix(in.Config.AppID, "cli_") || !validChatID(in.Config.AppID) || previous.Token == "" {
 			return Channel{}, fmt.Errorf("%w: App ID and App Secret are required", ErrInvalid)
+		}
+		in.Config.ChatID = ""
+		if id != "" && originalAppID != in.Config.AppID {
+			in.Config.Targets = nil
+		}
+		if err := validateTargets(in.Config.Targets); err != nil {
+			return Channel{}, err
 		}
 	case "webhook":
 		if err := outbound.Validate(previous.Endpoint, in.Config.AllowPrivate); err != nil {
@@ -201,8 +203,8 @@ func (s *Service) SaveChannel(ctx context.Context, id string, in ChannelInput) (
 				return Channel{}, err
 			}
 			same := in.Provider == "feishu_app" && v.Config.AppID == in.Config.AppID || in.Provider == "telegram" && m.Token == previous.Token
-			if same && in.Config.Interactive && v.Config.Interactive {
-				return Channel{}, fmt.Errorf("%w: one interactive channel per bot; use multiple rules for destinations", ErrInvalid)
+			if same && (in.Provider == "feishu_app" || in.Config.Interactive && v.Config.Interactive) {
+				return Channel{}, fmt.Errorf("%w: one channel per Feishu application; select multiple targets in that channel", ErrInvalid)
 			}
 		}
 	}
@@ -222,6 +224,21 @@ func (s *Service) SaveChannel(ctx context.Context, id string, in ChannelInput) (
 		if err := tx.Save(&row).Error; err != nil {
 			return err
 		}
+		if in.Provider == "feishu_app" && id != "" {
+			ids := targetIDs(in.Config.Targets)
+			pending := tx.Model(&database.NotificationDelivery{}).Where("channel_id = ? AND status IN ?", id, []string{"pending", "retry"})
+			if len(ids) > 0 {
+				pending = pending.Where("chat_id NOT IN ?", ids)
+			}
+			if err := pending.Updates(map[string]any{"status": "suppressed", "reason": "recipient removed or application changed"}).Error; err != nil {
+				return err
+			}
+			if originalAppID != in.Config.AppID {
+				if err := tx.Where("channel_id = ?", id).Delete(&database.NotificationChat{}).Error; err != nil {
+					return err
+				}
+			}
+		}
 		if id != "" && (originalToken != previous.Token || originalAppID != in.Config.AppID) {
 			if err := tx.Model(&database.NotificationBinding{}).Where("channel_id = ?", id).Update("status", "revoked").Error; err != nil {
 				return err
@@ -232,11 +249,10 @@ func (s *Service) SaveChannel(ctx context.Context, id string, in ChannelInput) (
 	}); err != nil {
 		return Channel{}, err
 	}
-	if cancel := s.chatCancel[row.ID]; cancel != nil {
-		cancel()
-		delete(s.chatCancel, row.ID)
+	if originalToken != previous.Token || originalAppID != in.Config.AppID || !needsConnection(decodeChannel(row)) {
+		s.stopChatLocked(row.ID)
 	}
-	if s.ctx != nil && row.Enabled && in.Config.Interactive {
+	if s.cancel != nil && needsConnection(decodeChannel(row)) {
 		s.startChatLocked(decodeChannel(row))
 	}
 	return decodeChannel(row), nil
@@ -254,17 +270,20 @@ func (s *Service) DeleteChannel(ctx context.Context, id string) error {
 		return tx.Model(&database.NotificationBinding{}).Where("channel_id = ?", id).Update("status", "revoked").Error
 	})
 	if err == nil {
-		if cancel := s.chatCancel[id]; cancel != nil {
-			cancel()
-			delete(s.chatCancel, id)
-		}
+		s.stopChatLocked(id)
 	}
 	return err
 }
-func (s *Service) Test(ctx context.Context, id string) error {
+func (s *Service) Test(ctx context.Context, id string, recipients ...string) error {
 	row, err := s.Channel(ctx, id)
 	if err != nil {
 		return err
+	}
+	if row.Provider == "feishu_app" {
+		if len(recipients) != 1 || !hasTarget(row.Config.Targets, recipients[0]) {
+			return fmt.Errorf("%w: select a configured recipient before testing", ErrInvalid)
+		}
+		row.Config.ChatID = recipients[0]
 	}
 	m, err := s.material(row)
 	if err != nil {
@@ -284,7 +303,7 @@ func (s *Service) Check(ctx context.Context, id string) (map[string]any, error) 
 	}
 	a, ok := s.deps.Sender.(*Adapter)
 	if !ok {
-		return map[string]any{"connected": true}, nil
+		return map[string]any{"credentials_valid": true}, nil
 	}
 	return a.Check(ctx, row, m)
 }
@@ -346,9 +365,38 @@ func (s *Service) SaveRule(ctx context.Context, id string, in RuleInput) (Rule, 
 	}
 	for _, channel := range append(append([]string{}, c.ChannelIDs...), c.FallbackID) {
 		if channel != "" {
-			if _, err := s.Channel(ctx, channel); err != nil {
+			row, err := s.Channel(ctx, channel)
+			if err != nil {
 				return Rule{}, ErrInvalid
 			}
+			if row.Provider == "feishu_app" {
+				ids := c.ChannelTargets[channel]
+				if channel == c.FallbackID && !contains(c.ChannelIDs, channel) {
+					ids = []string{c.FallbackChatID}
+				}
+				if in.Enabled && len(ids) == 0 {
+					return Rule{}, fmt.Errorf("%w: select Feishu recipients", ErrInvalid)
+				}
+				seen := map[string]bool{}
+				for _, id := range ids {
+					if in.Enabled && !hasTarget(row.Config.Targets, id) || id != "" && !validChatID(id) || seen[id] {
+						return Rule{}, fmt.Errorf("%w: recipient is missing or duplicated", ErrInvalid)
+					}
+					seen[id] = true
+				}
+			}
+		}
+	}
+	if c.FallbackID != "" && contains(c.ChannelIDs, c.FallbackID) {
+		return Rule{}, fmt.Errorf("%w: fallback must be a different channel", ErrInvalid)
+	}
+	for channel := range c.ChannelTargets {
+		if !contains(c.ChannelIDs, channel) {
+			return Rule{}, ErrInvalid
+		}
+		row, err := s.Channel(ctx, channel)
+		if err != nil || row.Provider != "feishu_app" {
+			return Rule{}, ErrInvalid
 		}
 	}
 	for _, node := range c.NodeIDs {
@@ -465,8 +513,22 @@ func (s *Service) Ingest(ctx context.Context, e event.Event) error {
 			rule := decodeRule(r)
 			if matches(tx, rule.Config, e) {
 				for _, ch := range rule.Config.ChannelIDs {
-					if err := s.queue(tx, rule, ch, e); err != nil {
+					var raw database.NotificationChannel
+					err := tx.First(&raw, "id = ?", ch).Error
+					if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 						return err
+					}
+					if errors.Is(err, gorm.ErrRecordNotFound) {
+						raw.ID = ch
+					}
+					ids := []string{""}
+					if raw.Provider == "feishu_app" || errors.Is(err, gorm.ErrRecordNotFound) && len(rule.Config.ChannelTargets[ch]) > 0 {
+						ids = rule.Config.ChannelTargets[ch]
+					}
+					for _, chatID := range ids {
+						if err := s.queue(tx, rule, decodeChannel(raw), chatID, e); err != nil {
+							return err
+						}
 					}
 				}
 			}
@@ -504,7 +566,8 @@ func matches(tx *gorm.DB, c RuleConfig, e event.Event) bool {
 func urgent(e event.Event) bool {
 	return e.Severity == "critical" || e.Type == "ai.awaiting_approval" || e.Type == "cd.awaiting_approval"
 }
-func (s *Service) queue(tx *gorm.DB, rule Rule, channelID string, e event.Event) error {
+func (s *Service) queue(tx *gorm.DB, rule Rule, channel Channel, chatID string, e event.Event) error {
+	channelID := channel.ID
 	now := s.deps.Now().UTC()
 	due := now
 	status, reason := "pending", ""
@@ -540,9 +603,14 @@ func (s *Service) queue(tx *gorm.DB, rule Rule, channelID string, e event.Event)
 		due = candidate
 	}
 	due = due.UTC()
-	key := rule.ID + "|" + channelID + "|" + e.ID
+	if channel.Provider == "" {
+		status, reason = "suppressed", "channel deleted"
+	} else if channel.Provider == "feishu_app" && !hasTarget(channel.Config.Targets, chatID) {
+		status, reason = "suppressed", "recipient removed or application changed"
+	}
+	key := rule.ID + "|" + channelID + "|" + chatID + "|" + e.ID
 	if !urgent(e) && c.Mode != "immediate" && status == "pending" {
-		key = rule.ID + "|" + channelID + "|" + due.UTC().Format(time.RFC3339)
+		key = rule.ID + "|" + channelID + "|" + chatID + "|" + due.UTC().Format(time.RFC3339)
 	}
 	var row database.NotificationDelivery
 	if err := tx.Where("batch_key = ? AND status = ?", key, "pending").First(&row).Error; err == nil {
@@ -560,7 +628,7 @@ func (s *Service) queue(tx *gorm.DB, rule Rule, channelID string, e event.Event)
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
-	return tx.Create(&database.NotificationDelivery{ID: ID(), ChannelID: channelID, RuleID: rule.ID, BatchKey: key, EventIDsJSON: encode([]string{e.ID}), Status: status, Reason: reason, DueAt: due}).Error
+	return tx.Create(&database.NotificationDelivery{ID: ID(), ChannelID: channelID, ChatID: chatID, RuleID: rule.ID, BatchKey: key, EventIDsJSON: encode([]string{e.ID}), Status: status, Reason: reason, DueAt: due}).Error
 }
 func (s *Service) Inbox(ctx context.Context, userID uint) (Inbox, error) {
 	var rows []database.NotificationEvent
@@ -638,9 +706,12 @@ func (s *Service) Start() {
 	channels, err := s.Channels(ctx)
 	s.error(err)
 	s.mu.Lock()
-	for _, row := range channels {
-		if row.Enabled && row.Config.Interactive {
-			s.startChatLocked(row)
+	if s.cancel != nil {
+		for _, row := range channels {
+			current, err := s.Channel(ctx, row.ID)
+			if err == nil && needsConnection(current) {
+				s.startChatLocked(current)
+			}
 		}
 	}
 	s.mu.Unlock()
@@ -649,8 +720,8 @@ func (s *Service) Stop() {
 	s.mu.Lock()
 	cancel := s.cancel
 	s.cancel = nil
-	for _, stop := range s.chatCancel {
-		stop()
+	for id := range s.chatCancel {
+		s.stopChatLocked(id)
 	}
 	s.chatCancel = map[string]context.CancelFunc{}
 	s.mu.Unlock()
@@ -708,6 +779,13 @@ func (s *Service) deliver(ctx context.Context, row database.NotificationDelivery
 		s.finishDelivery(row.ID, "suppressed", "channel disabled or deleted", now, "")
 		return
 	}
+	if channel.Provider == "feishu_app" {
+		if !hasTarget(channel.Config.Targets, row.ChatID) {
+			s.finishDelivery(row.ID, "suppressed", "recipient removed or application changed", now, "")
+			return
+		}
+		channel.Config.ChatID = row.ChatID
+	}
 	var config RuleConfig
 	if row.RuleID != "" {
 		var raw database.NotificationRule
@@ -716,6 +794,10 @@ func (s *Service) deliver(ctx context.Context, row database.NotificationDelivery
 			return
 		}
 		config = decodeRule(raw).Config
+		if channel.Provider == "feishu_app" && (!contains(config.ChannelIDs, channel.ID) || !contains(config.ChannelTargets[channel.ID], row.ChatID)) {
+			s.finishDelivery(row.ID, "suppressed", "rule recipient removed", now, "")
+			return
+		}
 	}
 	var ids []string
 	_ = json.Unmarshal([]byte(row.EventIDsJSON), &ids)
@@ -754,6 +836,7 @@ func (s *Service) deliver(ctx context.Context, row database.NotificationDelivery
 			fallback := row
 			fallback.ID = ID()
 			fallback.ChannelID = config.FallbackID
+			fallback.ChatID = config.FallbackChatID
 			fallback.RuleID = ""
 			fallback.Status = "pending"
 			fallback.Attempts = 0

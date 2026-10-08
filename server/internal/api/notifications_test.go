@@ -92,6 +92,46 @@ func TestNotificationAndAIAuthenticatedHTTP(t *testing.T) {
 	if strings.Contains(r.Body.String(), "SECRET") {
 		t.Fatal("secret returned in list")
 	}
+	feishu := `{"name":"Feishu","provider":"feishu_app","enabled":false,"config":{"app_id":"cli_http","targets":[{"chat_id":"oc_private","name":"Admin"},{"chat_id":"oc_group","name":"Operations"}],"timezone":"UTC","language":"en-US"},"secrets":{"token":"PRIVATE-APP-SECRET"}}`
+	r = request("POST", "/notifications/channels", feishu, true)
+	if r.Code != 200 || strings.Contains(r.Body.String(), "PRIVATE-APP-SECRET") {
+		t.Fatal("Feishu setup failed or leaked secret", r.Code)
+	}
+	var application struct{ Data notification.Channel }
+	if err := json.Unmarshal(r.Body.Bytes(), &application); err != nil {
+		t.Fatal(err)
+	}
+	path := "/notifications/channels/" + application.Data.ID
+	if r := request("GET", path+"/connection", "", false); r.Code != 401 {
+		t.Fatal("unprotected connection status", r.Code)
+	}
+	if r := request("GET", path+"/connection", "", true); r.Code != 200 || !strings.Contains(r.Body.String(), `"state":"stopped"`) {
+		t.Fatal("paused connection status", r.Code, r.Body.String())
+	}
+	for _, body := range []string{`{}`, `{"chat_id":"oc_unrelated"}`} {
+		if r := request("POST", path+"/test", body, true); r.Code != 422 {
+			t.Fatal("test accepted unspecified/unrelated recipient", r.Code)
+		}
+	}
+	if r := request("POST", path+"/test", `{"chat_id":"oc_group"}`, true); r.Code != 200 || !strings.Contains(r.Body.String(), `"chat_id":"oc_group"`) {
+		t.Fatal("explicit test failed", r.Code)
+	}
+	if r := request("POST", path+"/check", `{}`, true); r.Code != 200 || !strings.Contains(r.Body.String(), `"credentials_valid":true`) {
+		t.Fatal("credential result confused connection status", r.Code)
+	}
+	if r := request("POST", "/notifications/channels", feishu, true); r.Code != 422 {
+		t.Fatal("duplicate application accepted", r.Code)
+	}
+	if r := request("POST", "/notifications/channels", strings.Replace(feishu, `"feishu_app"`, `"feishu_webhook"`, 1), true); r.Code != 422 {
+		t.Fatal("removed provider accepted", r.Code)
+	}
+	ruleBody := `{"name":"Routed","enabled":true,"config":{"events":["container.oom"],"channel_ids":["` + application.Data.ID + `"],"channel_targets":{"` + application.Data.ID + `":["oc_group"]},"timezone":"UTC","mode":"immediate","recovery":true}}`
+	if r := request("POST", "/notifications/rules", ruleBody, true); r.Code != 200 {
+		t.Fatal("explicit rule routing failed", r.Code, r.Body.String())
+	}
+	if r := request("POST", "/notifications/rules", strings.Replace(ruleBody, "oc_group", "oc_unrelated", 1), true); r.Code != 422 {
+		t.Fatal("invalid rule recipient accepted", r.Code)
+	}
 	globalAudit := audit.NewService(db)
 	db.Create(&database.AIRun{ID: "audit-run", NodeID: "local", UserID: 1, Status: "completed"})
 	db.Create(&database.AIOperation{ID: "audit-operation", RunID: "audit-run", NodeID: "local", TaskID: "audit-task", Status: "completed"})

@@ -43,6 +43,7 @@ type NotificationRead struct {
 type NotificationDelivery struct {
 	ID                string     `gorm:"primaryKey;size:64" json:"id"`
 	ChannelID         string     `gorm:"index" json:"channel_id"`
+	ChatID            string     `gorm:"size:128" json:"chat_id,omitempty"`
 	RuleID            string     `json:"rule_id,omitempty"`
 	BatchKey          string     `gorm:"index" json:"-"`
 	EventIDsJSON      string     `json:"-"`

@@ -69,13 +69,21 @@ func registerNotificationRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps De
 			recordAudit(c, deps.Audit, "notification.channel.delete", "notification_channel", c.Param("id"), "success")
 		})
 		routes.POST("/channels/:id/test", func(c *gin.Context) {
+			var in struct {
+				ChatID string `json:"chat_id"`
+			}
+			if c.Request.ContentLength != 0 && !bindCleanup(c, &in) {
+				return
+			}
 			ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 			defer cancel()
-			if err := service.Test(ctx, c.Param("id")); err != nil {
+			if err := service.Test(ctx, c.Param("id"), in.ChatID); err != nil {
+				recordAudit(c, deps.Audit, "notification.channel.test", "notification_channel", c.Param("id"), "failed")
 				operationsFailure(c, err)
 				return
 			}
-			success(c, gin.H{"sent": true})
+			success(c, gin.H{"sent": true, "chat_id": in.ChatID})
+			recordAudit(c, deps.Audit, "notification.channel.test", "notification_channel", c.Param("id"), "success")
 		})
 		routes.POST("/channels/:id/check", func(c *gin.Context) {
 			result, err := service.Check(c.Request.Context(), c.Param("id"))
@@ -87,6 +95,14 @@ func registerNotificationRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps De
 		})
 		routes.GET("/channels/:id/chats", func(c *gin.Context) {
 			result, err := service.Chats(c.Request.Context(), c.Param("id"))
+			if err != nil {
+				operationsFailure(c, err)
+				return
+			}
+			success(c, result)
+		})
+		routes.GET("/channels/:id/connection", func(c *gin.Context) {
+			result, err := service.Connection(c.Request.Context(), c.Param("id"))
 			if err != nil {
 				operationsFailure(c, err)
 				return

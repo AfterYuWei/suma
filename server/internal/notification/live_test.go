@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,6 +22,10 @@ func TestLiveFeishuApplication(t *testing.T) {
 	path := os.Getenv("SUMA_LIVE_FEISHU_CREDENTIALS")
 	if path == "" {
 		t.Skip("private test credentials file required")
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
+		t.Fatal("Feishu test credentials require a private regular file (0600)")
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -55,12 +60,28 @@ func TestLiveFeishuApplication(t *testing.T) {
 	case <-ready:
 		t.Log("real Feishu outbound WebSocket connection ready")
 	}
-	if channel.Config.ChatID == "" {
+	ids := []string{}
+	for _, id := range strings.Split(os.Getenv("SUMA_LIVE_FEISHU_CHAT_IDS"), ",") {
+		id = strings.TrimSpace(id)
+		if id != "" && !contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	if channel.Config.ChatID != "" && !contains(ids, channel.Config.ChatID) {
+		ids = append(ids, channel.Config.ChatID)
+	}
+	if len(ids) == 0 {
 		t.Log("message/card/identity acceptance pending an explicit dedicated test chat")
 		return
 	}
-	if _, err = adapter.Send(ctx, channel, material, Message{Text: "SUMA notification acceptance test. No Docker operation is executed.", ApproveID: "acceptance-preview-only"}); err != nil {
-		t.Fatal("real Feishu test card delivery failed", err)
+	for _, id := range ids {
+		if !validChatID(id) {
+			t.Fatal("invalid dedicated Feishu test conversation")
+		}
+		channel.Config.ChatID = id
+		if _, err = adapter.Send(ctx, channel, material, Message{Text: "SUMA notification acceptance test. No Docker operation is executed.", ApproveID: "acceptance-preview-only"}); err != nil {
+			t.Fatal("real Feishu test card delivery failed", err)
+		}
 	}
-	t.Log("real Feishu interactive test card delivered")
+	t.Logf("real Feishu interactive test card delivered to %d explicit conversations; callback/identity acceptance remains separate", len(ids))
 }

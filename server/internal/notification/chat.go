@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
@@ -161,22 +162,48 @@ func (s *Service) Reply(ctx context.Context, in Incoming, message Message) error
 	return err
 }
 func (s *Service) HandleIncoming(ctx context.Context, in Incoming) error {
+	return s.handleIncoming(ctx, in, "")
+}
+func (s *Service) handleIncoming(ctx context.Context, in Incoming, generation string) error {
 	if in.ID == "" || in.UserID == "" || in.ChatID == "" {
 		return ErrInvalid
 	}
-	c, err := s.Channel(ctx, in.ChannelID)
-	if err != nil || !c.Enabled || !c.Config.Interactive {
-		return ErrBinding
+	c, duplicate, err := s.discoverIncoming(ctx, in, generation)
+	if err != nil {
+		return err
 	}
-	key := c.Provider + "|" + in.ChannelID + "|" + in.ID
-	claim := s.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&database.NotificationIncoming{Key: key, CreatedAt: s.deps.Now()})
-	if claim.Error != nil {
-		return claim.Error
-	}
-	if claim.RowsAffected == 0 {
+	if duplicate || !c.Config.Interactive {
 		return nil
 	}
-	s.error(s.db.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(&database.NotificationChat{ChannelID: c.ID, ChatID: in.ChatID, Name: redact.Bounded(in.Name, 128), Private: in.Private, UpdatedAt: s.deps.Now()}).Error)
+	return s.handleChat(ctx, c, in)
+}
+func (s *Service) discoverIncoming(ctx context.Context, in Incoming, generation string) (Channel, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if generation != "" && s.connections[in.ChannelID].generation != generation {
+		return Channel{}, false, context.Canceled
+	}
+	c, err := s.Channel(ctx, in.ChannelID)
+	if err != nil || !needsConnection(c) {
+		return Channel{}, false, ErrBinding
+	}
+	key := c.Provider + "|" + in.ChannelID + "|" + in.ID
+	duplicate := false
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		claim := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&database.NotificationIncoming{Key: key, CreatedAt: s.deps.Now()})
+		if claim.Error != nil {
+			return claim.Error
+		}
+		duplicate = claim.RowsAffected == 0
+		if duplicate || in.Action != "" {
+			return nil
+		}
+		return tx.Clauses(clause.OnConflict{UpdateAll: true}).Create(&database.NotificationChat{ChannelID: c.ID, ChatID: in.ChatID, Name: redact.Bounded(in.Name, 128), Private: in.Private, UpdatedAt: s.deps.Now()}).Error
+	})
+	return c, duplicate, err
+}
+func (s *Service) handleChat(ctx context.Context, c Channel, in Incoming) error {
+	var err error
 	text := strings.TrimSpace(in.Text)
 	if strings.HasPrefix(text, "/bind ") {
 		err = s.claimBinding(ctx, in, strings.TrimSpace(strings.TrimPrefix(text, "/bind ")))
@@ -251,13 +278,43 @@ func (s *Service) startChatLocked(c Channel) {
 		return
 	}
 	ctx, cancel := context.WithCancel(s.ctx)
+	generation := ID()
+	s.connections[c.ID] = connectionEntry{generation: generation, ConnectionStatus: ConnectionStatus{State: "connecting"}}
+	previousDone := s.chatDone[c.ID]
+	done := make(chan struct{})
+	s.chatDone[c.ID] = done
 	s.chatCancel[c.ID] = cancel
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		defer close(done)
+		defer s.connectionState(c.ID, generation, ConnectionStatus{State: "stopped"})
+		if previousDone != nil {
+			select {
+			case <-previousDone:
+			case <-ctx.Done():
+				return
+			}
+		}
+		if ctx.Err() != nil {
+			return
+		}
 		m, err := s.material(c)
 		if err != nil {
 			s.error(err)
+			return
+		}
+		status := func(state ConnectionStatus) {
+			state.Error = hide(state.Error, m)
+			s.connectionState(c.ID, generation, state)
+		}
+		incoming := func(in Incoming) error { return s.handleIncoming(ctx, in, generation) }
+		if c.Provider == "feishu_app" {
+			connect := s.deps.FeishuConnect
+			if connect == nil {
+				connect = s.feishu
+			}
+			connect(ctx, c, m, status, incoming)
 			return
 		}
 		a, ok := s.deps.Sender.(*Adapter)
@@ -266,8 +323,6 @@ func (s *Service) startChatLocked(c Channel) {
 		}
 		if c.Provider == "telegram" {
 			s.telegram(ctx, a, c, m)
-		} else if c.Provider == "feishu_app" {
-			s.feishu(ctx, c, m)
 		}
 	}()
 }
@@ -392,19 +447,34 @@ func (quietSDKLogger) Error(context.Context, ...interface{}) {}
 func (s *Service) chatError(id, message string) {
 	s.error(s.db.Model(&database.NotificationChannel{}).Where("id = ?", id).UpdateColumn("last_error", message).Error)
 }
-func (s *Service) feishu(ctx context.Context, c Channel, m Secrets) {
+func (s *Service) feishu(ctx context.Context, c Channel, m Secrets, status func(ConnectionStatus), incoming func(Incoming) error) {
 	// A bounded queue keeps Feishu callbacks below the three-second response deadline.
-	botID := ""
-	if adapter, ok := s.deps.Sender.(*Adapter); ok {
-		info, err := adapter.Check(ctx, c, m)
-		if err != nil {
-			s.chatError(c.ID, "Feishu bot identity unavailable")
+	var botID atomic.Value
+	botID.Store("")
+	identityDone := make(chan struct{})
+	go func() {
+		defer close(identityDone)
+		adapter, ok := s.deps.Sender.(*Adapter)
+		if !ok {
 			return
 		}
-		if bot, ok := info["bot"].(map[string]any); ok {
-			botID, _ = bot["open_id"].(string)
+		for ctx.Err() == nil {
+			info, err := adapter.Check(ctx, c, m)
+			if err == nil {
+				if bot, ok := info["bot"].(map[string]any); ok {
+					id, _ := bot["open_id"].(string)
+					if id != "" {
+						botID.Store(id)
+						return
+					}
+				}
+			}
+			if !wait(ctx, 5*time.Second) {
+				return
+			}
 		}
-	}
+	}()
+	defer func() { <-identityDone }()
 	queue := make(chan Incoming, 64)
 	done := make(chan struct{})
 	go func() {
@@ -414,7 +484,7 @@ func (s *Service) feishu(ctx context.Context, c Channel, m Secrets) {
 			case <-ctx.Done():
 				return
 			case in := <-queue:
-				s.error(s.HandleIncoming(ctx, in))
+				s.error(incoming(in))
 			}
 		}
 	}()
@@ -434,7 +504,8 @@ func (s *Service) feishu(ctx context.Context, c Channel, m Secrets) {
 		if !private {
 			mentioned := false
 			for _, mention := range msg.Mentions {
-				if mention != nil && mention.Id != nil && ptr(mention.Id.OpenId) == botID && botID != "" {
+				id := botID.Load().(string)
+				if mention != nil && mention.Id != nil && ptr(mention.Id.OpenId) == id && id != "" {
 					mentioned = true
 				}
 			}
@@ -454,6 +525,9 @@ func (s *Service) feishu(ctx context.Context, c Channel, m Secrets) {
 			}
 		}
 		in := Incoming{ID: ptr(msg.MessageId), ChannelID: c.ID, UserID: ptr(sender.TenantKey) + ":" + ptr(sender.SenderId.OpenId), ChatID: ptr(msg.ChatId), Private: private, Text: content.Text, Name: ptr(sender.SenderId.OpenId)}
+		if !private {
+			in.Name = in.ChatID
+		}
 		select {
 		case queue <- in:
 			return nil
@@ -487,9 +561,9 @@ func (s *Service) feishu(ctx context.Context, c Channel, m Secrets) {
 	handler.Config.Logger = quietSDKLogger{}
 	for ctx.Err() == nil {
 		client := larkws.NewClient(c.Config.AppID, m.Token, larkws.WithEventHandler(handler), larkws.WithLogger(quietSDKLogger{}), larkws.WithLogLevel(larkcore.LogLevelError), larkws.WithHttpClient(outbound.Client(false)))
-		client.SetOnReady(func() { s.chatError(c.ID, "") })
+		client.SetOnReady(func() { status(ConnectionStatus{State: "connected"}) })
 		client.SetOnError(func(error) {
-			s.chatError(c.ID, "Feishu WebSocket disconnected; check application publication and event/callback subscriptions")
+			status(ConnectionStatus{State: "reconnecting", Error: "Feishu connection interrupted; reconnecting"})
 		})
 		err := client.Start(ctx)
 		client.Close()
@@ -497,7 +571,7 @@ func (s *Service) feishu(ctx context.Context, c Channel, m Secrets) {
 			return
 		}
 		if err != nil {
-			s.chatError(c.ID, "Feishu WebSocket connection failed; check App ID, App Secret, released version and long-connection configuration")
+			status(ConnectionStatus{State: "error", Error: "Feishu connection failed; check App ID, App Secret, bot capability and outbound HTTPS/WSS"})
 		}
 		if !wait(ctx, 5*time.Second) {
 			return

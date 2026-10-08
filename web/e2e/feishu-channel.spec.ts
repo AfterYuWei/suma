@@ -1,0 +1,37 @@
+import { expect, test } from '@playwright/test'
+
+for (const width of [390, 1440]) for (const language of ['en-US', 'zh-CN']) for (const theme of ['dark', 'light']) {
+ test(`Feishu single page ${language} ${theme} ${width}`, async ({ page }) => {
+  await page.addInitScript(({ language, theme }) => { sessionStorage.setItem('suma-demo-session', '1'); localStorage.setItem('suma-language', language); localStorage.setItem('suma-theme', theme); localStorage.setItem('suma-node', 'local') }, { language, theme })
+  await page.setViewportSize({ width, height: 900 })
+  const zh = language === 'zh-CN', errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  await page.goto('/settings#notifications'); await page.getByRole('button', { name: zh ? '添加通知渠道' : 'Add channel', exact: true }).click()
+  const sheet = page.getByRole('dialog', { name: zh ? '配置通知渠道' : 'Configure channel', exact: true })
+  await expect(sheet.getByRole('button', { name: zh ? '下一步' : 'Next', exact: true })).toHaveCount(0)
+  await expect(sheet.getByLabel('App ID', { exact: true })).toBeVisible()
+  await expect(sheet.getByText('im:message:send_as_bot', { exact: true })).toHaveCount(0)
+  await sheet.getByLabel('App ID', { exact: true }).fill(`cli_responsive_${width}`)
+  await sheet.getByLabel('App Secret', { exact: true }).fill('demo-only-secret')
+  await sheet.getByRole('button', { name: zh ? '保存渠道' : 'Save channel', exact: true }).click()
+  await expect(sheet.getByRole('status', { name: zh ? '连接状态' : 'Connection status' })).toContainText(zh ? '已连接' : 'Connected')
+  await sheet.getByRole('checkbox', { name: zh ? '私聊 · Admin' : 'Private chat · Admin', exact: true }).check()
+  await sheet.getByRole('checkbox', { name: zh ? '群聊 · Operations' : 'Group chat · Operations', exact: true }).check()
+  await sheet.getByText(zh ? '飞书平台配置说明' : 'Feishu platform setup', { exact: true }).click()
+  await expect(sheet.locator('pre').first()).toContainText('im:message.group_at_msg:readonly')
+  await sheet.getByText(zh ? '飞书平台配置说明' : 'Feishu platform setup', { exact: true }).click()
+  await sheet.getByText(zh ? '高级选项' : 'Advanced options', { exact: true }).click()
+  await sheet.getByLabel(zh ? '手填会话 ID' : 'Manual chat ID', { exact: true }).fill('oc_manual')
+  await sheet.getByLabel(zh ? '会话备注（可选）' : 'Recipient name (optional)', { exact: true }).fill(zh ? '值班群' : 'On-call group')
+  await sheet.getByRole('button', { name: zh ? '添加接收目标' : 'Add recipient', exact: true }).click()
+  await expect(sheet.getByRole('checkbox', { name: zh ? '值班群' : 'On-call group', exact: true })).toBeChecked()
+  await sheet.getByText(zh ? '高级选项' : 'Advanced options', { exact: true }).click()
+  await sheet.getByRole('button', { name: zh ? '发送测试消息' : 'Send test message', exact: true }).click()
+  await expect(sheet.getByText(zh ? '私聊 · Admin · 测试消息已发送' : 'Private chat · Admin · Test message sent', { exact: true })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  expect(await sheet.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
+  await sheet.getByLabel('App ID', { exact: true }).scrollIntoViewIfNeeded()
+  await page.screenshot({ path: `/tmp/suma-feishu-${language}-${theme}-${width}.png`, fullPage: true })
+  expect(errors).toEqual([])
+ })
+}
