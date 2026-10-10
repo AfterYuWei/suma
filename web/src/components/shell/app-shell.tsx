@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import {
-  Bell, Sparkles, Activity, Boxes, CircleGauge, Container, FileClock, FolderTree, GitPullRequest,
+  Bell, Activity, Boxes, CircleGauge, Container, FileClock, FolderTree, GitPullRequest,
   HardDrive, KeyRound, Layers3, Network, PanelLeftClose,
   LogOut, PanelLeftOpen, Search, Server, Settings, UserRound,
 } from 'lucide-react'
@@ -25,12 +25,12 @@ import { TooltipHint } from '../ui/tooltip-hint'
 import { UserAvatar } from '../ui/user-avatar'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/dropdown-menu'
 import { cn } from '@/lib/utils'
-import type { Inbox, AIOperation } from '../../features/operations/types'
+import type { Inbox } from '../../features/notifications/types'
 import { CommandPalette } from './command-palette'
 
 const navigationSections = [
   { key: 'docker', label: 'Docker', rawLabel: false, items: [{ label: 'containers', path: '/containers', icon: Container }, { label: 'projects', path: '/projects', icon: Layers3 }, { label: 'images', path: '/images', icon: Boxes }, { label: 'networks', path: '/networks', icon: Network }, { label: 'volumes', path: '/volumes', icon: HardDrive }] },
-  { key: 'operations', label: 'operations', rawLabel: true, items: [{ label: 'aiWorkbench', path: '/ai-operations', icon: Sparkles }, { label: 'continuousDelivery', path: '/continuous-delivery', icon: GitPullRequest }, { label: 'authenticationCenter', path: '/authentication', icon: KeyRound }, { label: 'tasks', path: '/tasks', icon: Activity }, { label: 'auditLogs', path: '/audit-logs', icon: FileClock }] },
+  { key: 'operations', label: 'operations', rawLabel: true, items: [{ label: 'continuousDelivery', path: '/continuous-delivery', icon: GitPullRequest }, { label: 'authenticationCenter', path: '/authentication', icon: KeyRound }, { label: 'tasks', path: '/tasks', icon: Activity }, { label: 'auditLogs', path: '/audit-logs', icon: FileClock }] },
   { key: 'system', label: 'system', rawLabel: true, items: [{ label: 'nodes', path: '/nodes', icon: Server }, { label: 'settings', path: '/settings', icon: Settings }] },
 ] as const
 
@@ -59,8 +59,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   const nodes = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes'), refetchInterval: 30_000 })
   const groups = useQuery({ queryKey: ['node-groups'], queryFn: () => api<NodeGroup[]>('/node-groups') })
   const inbox = useQuery({ queryKey: ['notification-inbox'], queryFn: () => api<Inbox>('/notifications/inbox'), refetchInterval: 10000 })
- const approvals = useQuery({ queryKey: ['ai-operations'], queryFn: () => api<AIOperation[]>('/ai/operations'), refetchInterval: 10000 })
- const pendingApprovals = approvals.data?.filter(op => op.status === 'awaiting_approval').length || 0
  const session = useQuery({ queryKey: ['session'], queryFn: () => api<User>('/auth/session') })
 
   useEffect(() => {
@@ -204,7 +202,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <PanelLeftOpen />
           </Button>
 
-          {pathname === '/ai-operations' ? <span className="text-sm text-muted-foreground">{zh ? '全局 AI 运维' : 'Global AI operations'}</span> : <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <Select<NodeGroupFilter> value={currentGroupFilter} onValueChange={(value) => value && setCurrentGroupFilter(value)}>
               <SelectTrigger aria-label={zh ? '节点 Group 筛选' : 'Node group filter'} className="w-9 px-2 [&>svg:last-child]:hidden sm:w-40 sm:pl-2.5 sm:[&>svg:last-child]:block">
                 <FolderTree className="text-muted-foreground" />
@@ -259,7 +257,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 {filteredNodes.length === 0 && <div className="px-2 py-3 text-center text-xs text-muted-foreground">{zh ? '此筛选下没有节点' : 'No nodes in this filter'}</div>}
               </SelectContent>
             </Select>
-          </div>}
+          </div>
 
           <div className="ml-auto flex items-center gap-1.5">
             {demoMode && <Badge variant="secondary" className="hidden sm:inline-flex">{zh ? '演示模式' : 'Demo mode'}</Badge>}
@@ -272,7 +270,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             >
               <Search />
             </Button></TooltipHint>
-            <Button size="icon-sm" variant="ghost" aria-label={zh ? '站内消息' : 'Inbox'} nativeButton={false} render={<Link to="/notifications" />} className="relative"><Bell />{!!inbox.data?.unread && <span className="absolute -top-1 -right-1 rounded bg-foreground px-1 text-[10px] text-background">{inbox.data.unread}</span>}</Button><Button size="sm" variant="ghost" nativeButton={false} render={<Link to="/ai-operations" hash="tab=operations" />} aria-label={zh ? '待审核操作' : 'Pending approvals'}><Sparkles /><span className="hidden sm:inline">{zh ? '待审核' : 'Review'}</span>{pendingApprovals}</Button><ThemeToggle />
+            <Button size="icon-sm" variant="ghost" aria-label={zh ? '站内消息' : 'Inbox'} nativeButton={false} render={<Link to="/notifications" />} className="relative"><Bell />{!!inbox.data?.unread && <span className="absolute -top-1 -right-1 rounded bg-foreground px-1 text-[10px] text-background">{inbox.data.unread}</span>}</Button><ThemeToggle />
             {session.data && <DropdownMenu>
               <DropdownMenuTrigger render={<Button variant="ghost" size="sm" className="h-9 gap-2 px-1.5 sm:px-2" aria-label={zh ? '用户菜单' : 'User menu'} />}>
                 <UserAvatar user={session.data} className="size-7" />

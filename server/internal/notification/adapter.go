@@ -181,14 +181,6 @@ func (a *Adapter) Check(ctx context.Context, c Channel, m Secrets) (map[string]a
 }
 func telegramButtons(message Message) any {
 	rows := []any{}
-	for _, choice := range message.Choices {
-		rows = append(rows, []any{map[string]string{"text": choice.Label, "callback_data": "input:" + choice.Token}})
-	}
-	if message.ApprovalToken != "" {
-		rows = append(rows, []any{map[string]string{"text": "批准 / Approve", "callback_data": "approve:" + message.ApprovalToken}, map[string]string{"text": "拒绝 / Reject", "callback_data": "reject:" + message.ApprovalToken}})
-	} else if message.ApproveID != "" {
-		rows = append(rows, []any{map[string]string{"text": "查看并审核 / Review", "callback_data": "preview:" + message.ApproveID}})
-	}
 	if message.URL != "" {
 		rows = append(rows, []any{map[string]string{"text": "在 SUMA 中查看 / Open SUMA", "url": message.URL}})
 	}
@@ -197,17 +189,6 @@ func telegramButtons(message Message) any {
 func feishuCard(message Message) map[string]any {
 	elements := []any{map[string]any{"tag": "markdown", "content": escapeFeishu(message.Text)}}
 	buttons := []any{}
-	button := func(text, kind string, value map[string]string) map[string]any {
-		return map[string]any{"tag": "button", "text": map[string]string{"tag": "plain_text", "content": text}, "type": kind, "behaviors": []any{map[string]any{"type": "callback", "value": value}}}
-	}
-	for _, choice := range message.Choices {
-		buttons = append(buttons, button(choice.Label, "default", map[string]string{"action": "input", "token": choice.Token}))
-	}
-	if message.ApprovalToken != "" {
-		buttons = append(buttons, button("批准 / Approve", "primary", map[string]string{"action": "approve", "token": message.ApprovalToken}), button("拒绝 / Reject", "danger", map[string]string{"action": "reject", "token": message.ApprovalToken}))
-	} else if message.ApproveID != "" {
-		buttons = append(buttons, button("查看并审核 / Review", "default", map[string]string{"action": "preview", "operation_id": message.ApproveID}))
-	}
 	if message.URL != "" {
 		buttons = append(buttons, map[string]any{"tag": "button", "text": map[string]string{"tag": "plain_text", "content": "在 SUMA 中查看 / Open SUMA"}, "behaviors": []any{map[string]string{"type": "open_url", "default_url": message.URL}}})
 	}
@@ -237,7 +218,7 @@ func (a *Adapter) Send(ctx context.Context, c Channel, m Secrets, message Messag
 			part := string(runes[:n])
 			runes = runes[n:]
 			body := map[string]any{"chat_id": c.Config.ChatID, "text": part, "link_preview_options": map[string]bool{"is_disabled": true}}
-			if len(runes) == 0 && (message.ApproveID != "" || message.ApprovalToken != "" || message.URL != "" || len(message.Choices) > 0) {
+			if len(runes) == 0 && message.URL != "" {
 				body["reply_markup"] = telegramButtons(message)
 			}
 			result, err := a.request(ctx, "POST", "https://api.telegram.org/bot"+m.Token+"/sendMessage", body, "", false, m)
@@ -278,7 +259,7 @@ func (a *Adapter) Send(ctx context.Context, c Channel, m Secrets, message Messag
 		}
 		return data.ID, nil
 	case "webhook":
-		_, err := a.request(ctx, "POST", m.Endpoint, map[string]any{"schema_version": 1, "message": message.Text, "events": message.Events, "operation_id": message.OperationID, "url": message.URL}, m.Authorization, c.Config.AllowPrivate, m)
+		_, err := a.request(ctx, "POST", m.Endpoint, map[string]any{"schema_version": 1, "message": message.Text, "events": message.Events, "url": message.URL}, m.Authorization, c.Config.AllowPrivate, m)
 		return "", err
 	default:
 		return "", ErrInvalid

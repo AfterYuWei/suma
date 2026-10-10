@@ -1,4 +1,0 @@
--- Reply receipts and cursors only; existing channels and history are retained.
-CREATE TABLE IF NOT EXISTS "notification_chat_streams" ("id" varchar(64),"channel_id" varchar(32) NOT NULL,"binding_id" varchar(32) NOT NULL,"chat_id" varchar(128) NOT NULL,"identity_hash" varchar(64) NOT NULL,"card_id" varchar(128) NOT NULL DEFAULT '',"message_id" varchar(128) NOT NULL DEFAULT '',"mode" varchar(16) NOT NULL DEFAULT '',"sequence" bigint NOT NULL DEFAULT 0,"event_seq" bigint NOT NULL DEFAULT 0,"text" text NOT NULL DEFAULT '',"status" varchar(256) NOT NULL DEFAULT '',"closed" boolean NOT NULL DEFAULT false,"created_at" timestamptz,"updated_at" timestamptz,PRIMARY KEY ("id"));
-CREATE INDEX IF NOT EXISTS "idx_notification_chat_streams_binding_id" ON "notification_chat_streams" ("binding_id");
-CREATE INDEX IF NOT EXISTS "idx_notification_chat_streams_channel_id" ON "notification_chat_streams" ("channel_id");

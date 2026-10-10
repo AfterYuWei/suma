@@ -3,10 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"github.com/suma/suma/server/internal/ai"
+	"fmt"
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/auth"
-	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/notification"
 	"github.com/suma/suma/server/internal/secret"
 	"github.com/suma/suma/server/internal/task"
@@ -24,7 +23,7 @@ type notificationSender struct{}
 func (notificationSender) Send(context.Context, notification.Channel, notification.Secrets, notification.Message) (string, error) {
 	return "sent", nil
 }
-func TestNotificationAndAIAuthenticatedHTTP(t *testing.T) {
+func TestNotificationAuthenticatedHTTP(t *testing.T) {
 	dir := t.TempDir()
 	db, err := testutil.Open(t)
 	if err != nil {
@@ -43,13 +42,8 @@ func TestNotificationAndAIAuthenticatedHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	tasks := task.NewService(db)
-	assistant, err := ai.NewService(db, store, tasks, ai.Dependencies{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer assistant.Stop()
 	notify := notification.NewService(db, store, notification.Dependencies{Sender: notificationSender{}})
-	router := NewRouter(Dependencies{Auth: authn, Audit: audit.NewService(db), Tasks: tasks, AI: assistant, Notifications: notify})
+	router := NewRouter(Dependencies{Auth: authn, Audit: audit.NewService(db), Tasks: tasks, Notifications: notify})
 	request := func(method, path, body string, authorized bool) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, "/api/v1"+path, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -61,7 +55,7 @@ func TestNotificationAndAIAuthenticatedHTTP(t *testing.T) {
 		router.ServeHTTP(res, req)
 		return res
 	}
-	for _, path := range []string{"/notifications/channels", "/notifications/inbox", "/notification-bindings", "/ai/settings", "/ai/operations", "/ai/conversations", "/ai/audit", "/audit-logs"} {
+	for _, path := range []string{"/notifications/channels", "/notifications/inbox", "/audit-logs"} {
 		if r := request("GET", path, "", false); r.Code != 401 {
 			t.Fatalf("unprotected %s: %d", path, r.Code)
 		}
@@ -76,17 +70,6 @@ func TestNotificationAndAIAuthenticatedHTTP(t *testing.T) {
 	r = request("POST", "/notifications/channels/"+created.Data.ID+"/test", "{}", true)
 	if r.Code != 200 {
 		t.Fatal(r.Code, r.Body.String())
-	}
-	var conv struct{ Data ai.Conversation }
-	createdConv := request("POST", "/ai/conversations", `{}`, true)
-	_ = json.Unmarshal(createdConv.Body.Bytes(), &conv)
-	r = request("POST", "/ai/conversations/"+conv.Data.ID+"/messages", `{"request_id":"disabled","question":"restart"}`, true)
-	if r.Code != 403 {
-		t.Fatal("disabled AI accepted diagnosis", r.Code)
-	}
-	r = request("POST", "/ai/operations/op/decision", `{"approve":true,"review_token":"x","parameters":{"force":true}}`, true)
-	if r.Code != 400 {
-		t.Fatal("mutated approval accepted", r.Code)
 	}
 	r = request("GET", "/notifications/channels", "", true)
 	if strings.Contains(r.Body.String(), "SECRET") {
@@ -132,8 +115,7 @@ func TestNotificationAndAIAuthenticatedHTTP(t *testing.T) {
 	if r := request("POST", "/notifications/rules", strings.Replace(ruleBody, "oc_group", "oc_unrelated", 1), true); r.Code != 422 {
 		t.Fatal("invalid rule recipient accepted", r.Code)
 	}
-	// This isolated test schema represents an existing installation that has
-	// not yet applied the delivery-recipient column upgrade.
+	// An incompatible schema returns a safe fresh-database instruction.
 	if err := db.Exec("ALTER TABLE notification_deliveries DROP COLUMN chat_id").Error; err != nil {
 		t.Fatal(err)
 	}
@@ -149,32 +131,46 @@ func TestNotificationAndAIAuthenticatedHTTP(t *testing.T) {
 	if err := db.Exec("ALTER TABLE notification_deliveries ADD COLUMN chat_id varchar(128)").Error; err != nil {
 		t.Fatal(err)
 	}
-	globalAudit := audit.NewService(db)
-	db.Create(&database.AIRun{ID: "audit-run", NodeID: "local", UserID: 1, Status: "completed"})
-	db.Create(&database.AIOperation{ID: "audit-operation", RunID: "audit-run", NodeID: "local", TaskID: "audit-task", Status: "completed"})
-	if err := globalAudit.RecordAI(context.Background(), db, database.AIAudit{RunID: "audit-run", OperationID: "audit-operation", Action: "execution", Source: "chat", UserID: 1, ExternalUserID: "platform-user", Resource: "container", Result: "completed: AppSecret=private-http-value"}); err != nil {
-		t.Fatal(err)
-	}
+
 	r = request("GET", "/audit-logs", "", true)
-	if r.Code != 200 || !strings.Contains(r.Body.String(), "ai.execution") || !strings.Contains(r.Body.String(), "notification.channel.save") || !strings.Contains(r.Body.String(), "audit-task") || strings.Contains(r.Body.String(), "private-http-value") {
-		t.Fatal("global audit did not include both domains safely", r.Code, r.Body.String())
+	if r.Code != 200 || !strings.Contains(r.Body.String(), "notification.channel.save") {
+		t.Fatal("notification audit missing", r.Code, r.Body.String())
 	}
-	var global struct{ Data []database.AuditLog }
-	json.Unmarshal(r.Body.Bytes(), &global)
-	var globalID uint
-	for _, row := range global.Data {
-		if row.Action == "ai.execution" {
-			globalID = row.ID
+	for _, path := range []string{"/ai/settings", "/ai/settings/test", "/ai/settings/models", "/ai/conversations", "/ai/conversations/old/messages", "/ai/runs/old", "/ai/runs/old/inputs", "/ai/runs/old/cancel", "/ai/operations", "/ai/operations/old/decision", "/ai/audit", "/notification-bindings", "/notification-bindings/old/confirm"} {
+		for _, method := range []string{"GET", "POST", "PUT", "DELETE"} {
+			for _, authorized := range []bool{false, true} {
+				if res := request(method, path, "{}", authorized); res.Code != http.StatusNotFound {
+					t.Fatalf("removed route %s %s returned %d", method, path, res.Code)
+				}
+			}
 		}
 	}
-	r = request("GET", "/ai/audit", "", true)
-	var part struct{ Data []database.AIAudit }
-	json.Unmarshal(r.Body.Bytes(), &part)
-	if r.Code != 200 || len(part.Data) != 1 || part.Data[0].ID != globalID || part.Data[0].TaskID != "audit-task" || strings.Contains(r.Body.String(), "notification.channel.save") || strings.Contains(r.Body.String(), "private-http-value") {
-		t.Fatal("AI audit is not the filtered global record", r.Code, r.Body.String())
+	ws := httptest.NewRequest("GET", "/ws/ai/conversations/old", nil)
+	ws.Header.Set("Origin", "http://example.com")
+	ws.AddCookie(&http.Cookie{Name: sessionCookie, Value: token})
+	result := httptest.NewRecorder()
+	router.ServeHTTP(result, ws)
+	if result.Code != http.StatusNotFound {
+		t.Fatalf("removed websocket returned %d", result.Code)
 	}
-	r = request("GET", "/audit-logs?scope=control_plane", "", true)
-	if strings.Contains(r.Body.String(), "ai.execution") {
-		t.Fatal("node audit appeared in control-plane scope")
+	catalog := request("GET", "/notifications/catalog", "", true)
+	if catalog.Code != 200 || strings.Contains(catalog.Body.String(), `"ai.`) || !strings.Contains(catalog.Body.String(), "cd.awaiting_approval") {
+		t.Fatal("invalid notification catalog", catalog.Code, catalog.Body.String())
+	}
+	// Removed configuration fields are rejected instead of silently enabling behavior.
+	removedConfig := strings.Replace(create, `"timezone":"UTC"`, `"interactive":true,"timezone":"UTC"`, 1)
+	if res := request("POST", "/notifications/channels", removedConfig, true); res.Code != http.StatusBadRequest {
+		t.Fatal("removed channel config accepted", res.Code)
+	}
+	telegram := `{"name":"Telegram","provider":"telegram","enabled":false,"config":{"timezone":"UTC","language":"en-US"},"secrets":{"token":"123:PRIVATE-TOKEN"}}`
+	for _, enabled := range []bool{false, true} {
+		body := telegram
+		if enabled {
+			body = strings.Replace(body, `"timezone":"UTC"`, `"auto_discover":true,"timezone":"UTC"`, 1)
+		}
+		res := request("POST", "/notifications/channels", body, true)
+		if res.Code != 200 || !strings.Contains(res.Body.String(), `"auto_discover":`+fmt.Sprint(enabled)) || strings.Contains(res.Body.String(), "PRIVATE-TOKEN") {
+			t.Fatal("invalid Telegram discovery config", res.Code, res.Body.String())
+		}
 	}
 }

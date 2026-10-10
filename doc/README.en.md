@@ -207,7 +207,7 @@ Run `docker compose up -d` and verify the node is online. You can then remove `S
 
 - PostgreSQL state lives in the `suma-postgres` volume. `/Data` independently holds Compose projects, Git worktrees and the credential-encryption key `secret.key`
 - `/Data/compose/` contains managed Compose YAML, environment files and SUMA project metadata; `/Data/gitops/` contains CD repositories and revision worktrees; `/Data/backups/` is reserved and has no automated backup job
-- Users, nodes, settings, AI / notification configuration, audit, Tasks and Agent checkpoints live in PostgreSQL. Native `.env.local` startup configuration lives in the project root
+- Users, nodes, settings, notification configuration, audit, Tasks and Agent checkpoints live in PostgreSQL. Native `.env.local` startup configuration lives in the project root
 - Back up the whole directory before upgrades or migrations; losing `secret.key` makes stored credentials undecryptable
 
 ## Documentation
@@ -215,7 +215,8 @@ Run `docker compose up -d` and verify the node is online. You can then remove `S
 - [PLANS.md](../../PLANS.md): feature progress and pre-launch verification log
 - [ARCHITECTURE.md](../../ARCHITECTURE.md): architecture overview
 - [API.md](../../API.md): REST / WebSocket API reference
-- [Eino / PostgreSQL operations](eino-postgresql.md): initialization, Agent recovery, approvals, channels and verification commands
+- [PostgreSQL operations](postgresql.md): initialization, storage, configuration and verification commands
+- [Notification center](notifications.md): channels, recipient discovery, rules and delivery verification
 - [CD-DESIGN.md](../../CD-DESIGN.md): continuous delivery design model
 
 ## Scheduled Docker storage cleanup

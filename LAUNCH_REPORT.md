@@ -1,4 +1,4 @@
-> 此文件记录早期上线验收。当前 Eino ADK／PostgreSQL 切换及验证以 [PLANS.md](PLANS.md) 和 [运行说明](doc/eino-postgresql.md) 为准。
+> 此文件记录早期上线验收。当前 PostgreSQL／通知功能及验证以 [PLANS.md](PLANS.md) 和 [运行说明](doc/postgresql.md) 为准。
 
 # SUMA 上线与验收报告
 

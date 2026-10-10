@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Image-update, aggregate-log, reviewed deployment and guest chat-query smoke.
+# Image-update, aggregate-log, Project configuration and notification smoke.
 # Only this disposable daemon and its anonymous volumes are removed on exit.
 project_smoke_root=$(mktemp -d /tmp/suma-project-live.XXXXXX)
 project_smoke_daemon="suma-project-isolated-$(date +%s)-$$"
@@ -27,7 +27,6 @@ docker exec "$project_smoke_daemon" docker info >/dev/null
 project_smoke_port=$(docker inspect --format '{{(index (index .NetworkSettings.Ports "2376/tcp") 0).HostPort}}' "$project_smoke_daemon")
 docker save alpine:3.24 -o "$project_smoke_root/alpine.tar"
 docker exec -i "$project_smoke_daemon" docker load < "$project_smoke_root/alpine.tar" >/dev/null
-docker exec "$project_smoke_daemon" docker run -d --name suma-target-query-smoke alpine:3.24 sleep 600 >/dev/null
 
 GIN_MODE=release \
 SUMA_RUN_OPERATIONS_SMOKE=1 \
@@ -39,4 +38,4 @@ SUMA_PROJECT_SMOKE_DIND="$project_smoke_daemon" \
 SUMA_AGENT_SMOKE_IMAGE="${SUMA_AGENT_SMOKE_IMAGE:-suma-agent:env-only-smoke}" \
 GOCACHE="${SUMA_PROJECT_SMOKE_GO_CACHE:-/tmp/suma-project-go-cache}" \
 go -C server test -tags dockersmoke ./internal/api ./internal/app \
-  -run '^(TestRealDockerProjectConfigurationTransports|TestRealDockerGuestChatQueryNamedNode|TestRealDockerBoundChatStreamsNodeStatus|TestRealDockerAIContainerQueryClarifiesTarget|TestRealDockerAIContainerAliasRequiresConfirmation)$' -count=1 -timeout 9m -v
+  -run '^TestRealDockerProjectConfigurationTransports$' -count=1 -timeout 9m -v

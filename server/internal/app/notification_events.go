@@ -62,7 +62,7 @@ func auditNotifications(db *gorm.DB, notify *notification.Service) func(database
 
 // Observers own cancellable Docker streams per explicit runtime. They persist
 // historical events only; the current resource state stays in Docker.
-func observeNotifications(ctx context.Context, nodes *nodeService.Service, db *gorm.DB, notify *notification.Service, expire func(context.Context)) {
+func observeNotifications(ctx context.Context, nodes *nodeService.Service, db *gorm.DB, notify *notification.Service) {
 	type watcher struct {
 		key    string
 		cancel context.CancelFunc
@@ -81,9 +81,6 @@ func observeNotifications(ctx context.Context, nodes *nodeService.Service, db *g
 		wg.Wait()
 	}()
 	scan := func() {
-		if expire != nil {
-			expire(ctx)
-		}
 		views, err := nodes.List(ctx)
 		if err != nil {
 			return
@@ -253,27 +250,16 @@ func expectedTaskEvent(db *gorm.DB, e event.Event) bool {
 		return false
 	}
 	for _, row := range rows {
-		if strings.HasPrefix(row.Type, "ai.container.") && strings.HasSuffix(row.Name, " "+e.ResourceID) {
+		if e.Project != "" && strings.HasPrefix(row.Type, "compose.") && strings.HasSuffix(row.Name, " "+e.Project) {
 			return true
 		}
-		if e.Project != "" && (strings.HasPrefix(row.Type, "compose.") || row.Type == "ai.project.update") && strings.HasSuffix(row.Name, " "+e.Project) {
-			return true
-		}
-		if e.Project != "" && (strings.HasPrefix(row.Type, "cd.") || strings.HasPrefix(row.Type, "ai.cd.")) {
+		if e.Project != "" && strings.HasPrefix(row.Type, "cd.") {
 			var projectID uint
 			var deployment database.DeliveryReleaseDeployment
 			if db.First(&deployment, "task_id = ? AND node_id = ?", row.ID, e.NodeID).Error == nil {
 				var release database.DeliveryRelease
 				if db.First(&release, deployment.ReleaseID).Error == nil {
 					projectID = release.ProjectID
-				}
-			} else {
-				var op database.AIOperation
-				if db.First(&op, "task_id = ?", row.ID).Error == nil {
-					var release database.DeliveryRelease
-					if db.First(&release, "id = ?", op.ResourceID).Error == nil {
-						projectID = release.ProjectID
-					}
 				}
 			}
 			var project database.DeliveryProject

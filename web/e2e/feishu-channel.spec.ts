@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-test('recipient test reports save failures once and succeeds after schema upgrade', async ({ page }) => {
+test('recipient test reports save failures once and keeps the draft until schema availability is restored', async ({ page }) => {
  await page.addInitScript(() => { sessionStorage.setItem('suma-demo-session','1');localStorage.setItem('suma-language','zh-CN');localStorage.setItem('suma-node','local') })
  await page.goto('/settings#notifications');await page.getByRole('button',{name:'添加通知渠道',exact:true}).click()
  const sheet=page.getByRole('dialog',{name:'配置通知渠道',exact:true})
@@ -9,22 +9,22 @@ test('recipient test reports save failures once and succeeds after schema upgrad
  await sheet.getByRole('checkbox',{name:'私聊 · Admin',exact:true}).check()
  const schemaAvailable = (available: boolean) => page.evaluate(async available => {
   // @ts-expect-error Vite exposes the demo fixture module in the browser.
-  const {setDemoNotificationSchemaAvailable}=await import('/src/features/operations/mock.ts')
+  const {setDemoNotificationSchemaAvailable}=await import('/src/features/notifications/mock.ts')
   setDemoNotificationSchemaAvailable(available)
  },available)
  await schemaAvailable(false)
  await sheet.getByRole('button',{name:'发送测试消息',exact:true}).click()
  await expect(sheet.getByRole('alert')).toHaveCount(1)
- await expect(sheet.getByRole('alert')).toContainText('SUMA 数据库结构尚未升级')
+ await expect(sheet.getByRole('alert')).toContainText('数据库结构与当前 SUMA 版本不兼容')
  await expect(sheet.getByText('invalid field',{exact:false})).toHaveCount(0)
  await expect(sheet.getByRole('checkbox',{name:'私聊 · Admin',exact:true})).toBeChecked()
- let snapshot=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('suma-demo-operations-v2')||'{}'))
+ let snapshot=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('suma-demo-notifications-v1')||'{}'))
  expect(snapshot.channels[0].config.targets).toHaveLength(0);expect(snapshot.deliveries).toHaveLength(0)
  await schemaAvailable(true)
  await sheet.getByRole('button',{name:'发送测试消息',exact:true}).click()
  await expect(sheet.getByText('私聊 · Admin · 测试消息已发送',{exact:true})).toBeVisible()
  await expect(sheet.getByRole('alert')).toHaveCount(0)
- snapshot=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('suma-demo-operations-v2')||'{}'))
+ snapshot=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('suma-demo-notifications-v1')||'{}'))
  expect(snapshot.channels[0].config.targets).toHaveLength(1);expect(snapshot.deliveries).toHaveLength(1)
 })
 
@@ -38,7 +38,7 @@ test('connected Feishu distinguishes missing events, storage failures and succes
   // @ts-expect-error Vite exposes the demo modules in the browser.
   const {api}=await import('/src/lib/api.ts')
   // @ts-expect-error Vite exposes the demo modules in the browser.
-  const {setDemoFeishuReception}=await import('/src/features/operations/mock.ts')
+  const {setDemoFeishuReception}=await import('/src/features/notifications/mock.ts')
   const channels=await api('/notifications/channels'), channel=channels.find((item:{config:{app_id:string}})=>item.config.app_id==='cli_event_state')
   setDemoFeishuReception(channel.id,{connection:{state:'connected',message_count:result==='missing'?0:1,last_message_at:result==='missing'?undefined:'2026-10-08T04:00:00Z',last_message_result:result==='error'?'storage_error':result==='discovered'?'discovered':undefined,discovery_error:result==='error'?'Conversation storage failed':undefined},chats:result==='discovered'?[{chat_id:'oc_real_format',name:'Admin',private:true}]:[]})
  },result)

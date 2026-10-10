@@ -35,9 +35,9 @@ jobs:
       - run: npm ci
         working-directory: web
       - run: make check
-      - run: go test -race ./internal/ai ./internal/database ./internal/app ./internal/compose ./internal/api
+      - run: go test -race ./internal/notification ./internal/database ./internal/app ./internal/compose ./internal/api
         working-directory: server
       - run: npx playwright install --with-deps chromium
         working-directory: web
-      - run: npx playwright test e2e/ai-workbench.spec.ts e2e/ai-chat.spec.ts e2e/ai-settings.spec.ts
+      - run: npx playwright test e2e/notifications.spec.ts e2e/feishu-channel.spec.ts e2e/operations.spec.ts
         working-directory: web

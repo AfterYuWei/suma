@@ -14,7 +14,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/suma/suma/server/internal/agenthub"
-	"github.com/suma/suma/server/internal/ai"
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/auth"
 	cdService "github.com/suma/suma/server/internal/cd"
@@ -44,7 +43,6 @@ const sessionCookie = "suma_session"
 
 type Dependencies struct {
 	Notifications       *notification.Service
-	AI                  *ai.Service
 	ImageUpdates        *imageupdate.Service
 	ProjectLogs         *projectlogs.Service
 	Cleanup             *cleanup.Service
@@ -112,7 +110,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	loginAttempts := newLoginLimiter()
 	setupAttempts := newLoginLimiter()
 	v1 := router.Group("/api/v1")
-	registerNotificationRoutes(router, v1, deps)
+	registerNotificationRoutes(v1, deps)
 	registerImageUpdateRoutes(v1, deps)
 	registerProjectLogRoutes(router, v1, deps)
 

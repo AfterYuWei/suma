@@ -17,8 +17,6 @@ type Event struct {
 	Message      string    `json:"message"`
 	TaskID       string    `json:"task_id,omitempty"`
 	ReleaseID    *uint     `json:"release_id,omitempty"`
-	RunID        string    `json:"run_id,omitempty"`
-	OperationID  string    `json:"operation_id,omitempty"`
 	ActorID      *uint     `json:"actor_id,omitempty"`
 	DedupeKey    string    `json:"-"`
 	Time         time.Time `json:"time"`

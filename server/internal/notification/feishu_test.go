@@ -11,7 +11,6 @@ import (
 
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/event"
-	"gorm.io/gorm"
 )
 
 func feishuChannel(t *testing.T, s *Service, app string, targets ...string) Channel {
@@ -27,70 +26,6 @@ func feishuChannel(t *testing.T, s *Service, app string, targets ...string) Chan
 	return c
 }
 
-func TestFeishuUpgradeAddsRecipientColumnWithoutLosingConfiguration(t *testing.T) {
-	s, db, sender, _ := fixture(t)
-	c := feishuChannel(t, s, "cli_schema")
-	historical := database.NotificationDelivery{ID: "retained-history", ChannelID: c.ID, Status: "sent", Attempts: 2, ProviderMessageID: "previous-receipt", EventIDsJSON: "[]"}
-	if err := db.Create(&historical).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := s.HandleIncoming(context.Background(), Incoming{ID: "message", ChannelID: c.ID, UserID: "tenant:user", ChatID: "oc_private", Private: true, Name: "Admin"}); err != nil {
-		t.Fatal(err)
-	}
-	// Reproduce the pre-multi-recipient database in this test's private schema.
-	if err := db.Exec("ALTER TABLE notification_deliveries DROP COLUMN chat_id").Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Where("key = ?", "0002_notification_delivery_targets.sql").Delete(&database.SchemaMigration{}).Error; err != nil {
-		t.Fatal(err)
-	}
-	c.Config.Targets = []Target{{ChatID: "oc_private", Name: "Admin"}}
-	input := ChannelInput{Name: c.Name, Provider: c.Provider, Enabled: true, Version: c.Version, Config: c.Config}
-	if _, err := s.SaveChannel(context.Background(), c.ID, input); !errors.Is(err, gorm.ErrInvalidField) {
-		t.Fatal("old schema did not reproduce invalid field", err)
-	}
-	before, err := s.Channel(context.Background(), c.ID)
-	if err != nil || before.Version != c.Version || len(before.Config.Targets) != 0 {
-		t.Fatal("failed save changed channel", before.Version, err)
-	}
-	if len(sender.sent) != 0 {
-		t.Fatal("failed save sent a message")
-	}
-	upgraded, err := database.Open(database.ConnectionDSN(db))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { pool, _ := upgraded.DB(); _ = pool.Close() }()
-	if !upgraded.Migrator().HasColumn(&database.NotificationDelivery{}, "ChatID") {
-		t.Fatal("startup did not add recipient column to existing schema")
-	}
-	var retained database.NotificationDelivery
-	if err := upgraded.First(&retained, "id = ?", historical.ID).Error; err != nil || retained.ChannelID != c.ID || retained.Status != "sent" || retained.Attempts != 2 || retained.ProviderMessageID != historical.ProviderMessageID {
-		t.Fatal("upgrade changed historical evidence", err)
-	}
-	saved, err := s.SaveChannel(context.Background(), c.ID, input)
-	if err != nil {
-		t.Fatal("recipient save still failed after upgrade", err)
-	}
-	material, err := s.material(saved)
-	if err != nil || material.Token != "private-app-secret" {
-		t.Fatal("upgrade lost encrypted credential", err)
-	}
-	chats, err := s.Chats(context.Background(), c.ID)
-	if err != nil || len(chats) != 1 || chats[0].ChatID != "oc_private" {
-		t.Fatal("upgrade lost discovered conversation", chats, err)
-	}
-	if err := s.Test(context.Background(), c.ID, "oc_private"); err != nil {
-		t.Fatal(err)
-	}
-	if len(sender.sent) != 1 {
-		t.Fatal("explicit test did not send once")
-	}
-	var count int64
-	if err := upgraded.Model(&database.SchemaMigration{}).Where("key = ?", "0002_notification_delivery_targets.sql").Count(&count).Error; err != nil || count != 1 {
-		t.Fatal("upgrade was not recorded once", count, err)
-	}
-}
 func feishuRule(t *testing.T, s *Service, c Channel, mode string, recipients ...string) Rule {
 	t.Helper()
 	r, err := s.SaveRule(context.Background(), "", RuleInput{Name: "incident", Enabled: true, Config: RuleConfig{Events: []string{"container.oom"}, ChannelIDs: []string{c.ID}, ChannelTargets: map[string][]string{c.ID: recipients}, Mode: mode, Timezone: "UTC", Recovery: true}})
@@ -99,15 +34,12 @@ func feishuRule(t *testing.T, s *Service, c Channel, mode string, recipients ...
 	}
 	return r
 }
-func TestFeishuNotificationOnlyDiscoversWithoutChatOrBinding(t *testing.T) {
+func TestFeishuDiscoveryDeduplicatesWithoutReplyOrSubscription(t *testing.T) {
 	s, db, sender, _ := fixture(t)
 	c := feishuChannel(t, s, "cli_discover")
-	called := false
-	s.SetChatHandler(func(Incoming, database.NotificationBinding) { called = true })
 	for _, in := range []Incoming{
-		{ID: "one", ChatID: "oc_private", Private: true, Text: "/bind arbitrary-secret"},
-		{ID: "two", ChatID: "oc_group", Text: "diagnose containers"},
-		{ID: "three", ChatID: "oc_private", Action: "approve", OperationID: "one-time-secret"},
+		{ID: "one", ChatID: "oc_private", Private: true},
+		{ID: "two", ChatID: "oc_group"},
 	} {
 		in.ChannelID = c.ID
 		in.UserID = "tenant:user"
@@ -120,21 +52,13 @@ func TestFeishuNotificationOnlyDiscoversWithoutChatOrBinding(t *testing.T) {
 		}
 	}
 	chats, err := s.Chats(context.Background(), c.ID)
-	if err != nil || len(chats) != 2 || called || len(sender.sent) != 0 {
-		t.Fatalf("unexpected discovery/chat: %v %v %v", chats, called, err)
-	}
-	for _, chat := range chats {
-		if chat.ChatID == "oc_private" && !chat.Private {
-			t.Fatal("callback overwrote private conversation evidence")
-		}
+	if err != nil || len(chats) != 2 || len(sender.sent) != 0 {
+		t.Fatalf("unexpected discovery: %v %v", chats, err)
 	}
 	var count int64
 	db.Model(&database.NotificationIncoming{}).Count(&count)
-	if count != 3 {
+	if count != 2 {
 		t.Fatal("message deduplication failed", count)
-	}
-	if _, _, err := s.BeginBinding(context.Background(), 1, c.ID); err == nil {
-		t.Fatal("notification-only channel accepted binding", err)
 	}
 	current, _ := s.Channel(context.Background(), c.ID)
 	if len(current.Config.Targets) != 0 {
@@ -144,7 +68,7 @@ func TestFeishuNotificationOnlyDiscoversWithoutChatOrBinding(t *testing.T) {
 	if _, err := s.SaveChannel(context.Background(), c.ID, ChannelInput{Name: c.Name, Provider: c.Provider, Version: c.Version, Config: c.Config}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.HandleIncoming(context.Background(), Incoming{ID: "paused", ChannelID: c.ID, UserID: "u", ChatID: "oc_group"}); !errors.Is(err, ErrBinding) {
+	if err := s.HandleIncoming(context.Background(), Incoming{ID: "paused", ChannelID: c.ID, UserID: "u", ChatID: "oc_group"}); !errors.Is(err, ErrInvalid) {
 		t.Fatal("paused channel accepted message", err)
 	}
 }
@@ -185,8 +109,6 @@ func TestFeishuApplicationUniquenessSecretsAndIdentityChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.Create(&database.NotificationChat{ChannelID: c.ID, ChatID: "oc_a", Name: "original", Private: true})
-	db.Create(&database.NotificationBinding{ID: "bound", ChannelID: c.ID, Status: "active", CodeHash: "binding-hash"})
-	db.Create(&database.NotificationAction{TokenHash: "action-hash", ChannelID: c.ID, BindingID: "bound"})
 	cfg := updated.Config
 	cfg.AppID = "cli_replacement"
 	changed, err := s.SaveChannel(context.Background(), c.ID, ChannelInput{Name: c.Name, Provider: c.Provider, Enabled: true, Version: updated.Version, Config: cfg, Secrets: &Secrets{Token: "replacement-secret"}})
@@ -196,16 +118,6 @@ func TestFeishuApplicationUniquenessSecretsAndIdentityChange(t *testing.T) {
 	chats, _ := s.Chats(context.Background(), c.ID)
 	if len(chats) != 0 {
 		t.Fatal("application change retained discovered chats")
-	}
-	var binding database.NotificationBinding
-	db.First(&binding, "id = ?", "bound")
-	if binding.Status != "revoked" {
-		t.Fatal("binding retained")
-	}
-	var count int64
-	db.Model(&database.NotificationAction{}).Count(&count)
-	if count != 0 {
-		t.Fatal("approval retained")
 	}
 	rows, _ := s.Deliveries(context.Background())
 	for _, row := range rows {

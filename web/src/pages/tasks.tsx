@@ -1,4 +1,3 @@
-import { AIAnalyzeButton } from '../features/operations/workbench'
 import { useDateTime } from '../lib/time-zone'
 import { Fragment, useState } from 'react'
 import { Link, useLocation } from '@tanstack/react-router'
@@ -136,7 +135,7 @@ function TaskLogs({ task }: { task: Task }) {
   const compactedCount = rawLogs.length - visibleLogs.length
   if (logs.isPending) return <LoadingState embedded compact rows={3} label={zh ? '正在加载任务输出' : 'Loading task output'} />
   return (
-    <><AIAnalyzeButton kind="task" id={task.id} nodeID={task.node_id} /><div className="flex max-h-64 flex-col gap-1.5 overflow-y-auto overscroll-contain">
+    <><div className="flex max-h-64 flex-col gap-1.5 overflow-y-auto overscroll-contain">
       {rawLogs.length === 0 && <p className="py-2 text-center text-sm text-muted-foreground">{zh ? '等待任务输出…' : 'Waiting for task output…'}</p>}
       {pagination.items.map((log) => (
         <div key={log.id} className="flex items-baseline gap-3">

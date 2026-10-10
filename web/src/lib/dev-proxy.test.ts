@@ -49,7 +49,7 @@ afterAll(async () => {
 
 function discover(origin: string) {
   return new Promise<{ status: number; body: Record<string, string> }>((resolve, reject) => {
-    const req = request({ hostname: '127.0.0.1', port, path: '/api/v1/ai/settings/models', method: 'POST', agent: false, headers: { Host: browserHost, Origin: origin, 'Content-Type': 'application/json' } }, res => {
+    const req = request({ hostname: '127.0.0.1', port, path: '/api/v1/notifications/channels', method: 'POST', agent: false, headers: { Host: browserHost, Origin: origin, 'Content-Type': 'application/json' } }, res => {
       let body = ''
       res.setEncoding('utf8')
       res.on('data', chunk => { body += chunk })
@@ -62,7 +62,7 @@ function discover(origin: string) {
 
 test('development API proxy preserves the LAN browser Host and Origin for model discovery', async () => {
   const accepted = await discover(browserOrigin)
-  expect(accepted).toEqual({ status: 200, body: { host: browserHost, origin: browserOrigin, path: '/api/v1/ai/settings/models', method: 'POST' } })
+  expect(accepted).toEqual({ status: 200, body: { host: browserHost, origin: browserOrigin, path: '/api/v1/notifications/channels', method: 'POST' } })
   const rejected = await discover('http://unrelated.example.test')
   expect(rejected.status).toBe(403)
   expect(rejected.body).toMatchObject({ host: browserHost, origin: 'http://unrelated.example.test' })

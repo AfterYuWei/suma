@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/event"
 	"github.com/suma/suma/server/internal/outbound"
@@ -26,29 +25,23 @@ type Sender interface {
 	Send(context.Context, Channel, Secrets, Message) (string, error)
 }
 type Dependencies struct {
-	Audit         *audit.Service
 	Sender        Sender
 	Now           func() time.Time
 	OnError       func(error)
 	FeishuConnect func(context.Context, Channel, Secrets, func(ConnectionStatus), func(Incoming) error)
 }
 type Service struct {
-	db           *gorm.DB
-	secrets      *secret.Store
-	deps         Dependencies
-	mu           sync.Mutex
-	ctx          context.Context
-	cancel       context.CancelFunc
-	wg           sync.WaitGroup
-	chat         ChatHandler
-	onEvent      func(event.Event)
-	expected     map[string]time.Time
-	chatCancel   map[string]context.CancelFunc
-	chatDone     map[string]chan struct{}
-	connections  map[string]connectionEntry
-	queryAt      map[string]time.Time
-	streamCancel map[string]streamRequest
-	stopped      bool
+	db              *gorm.DB
+	secrets         *secret.Store
+	deps            Dependencies
+	mu              sync.Mutex
+	ctx             context.Context
+	cancel          context.CancelFunc
+	wg              sync.WaitGroup
+	expected        map[string]time.Time
+	discoveryCancel map[string]context.CancelFunc
+	discoveryDone   map[string]chan struct{}
+	connections     map[string]connectionEntry
 }
 
 func NewService(db *gorm.DB, secrets *secret.Store, deps Dependencies) *Service {
@@ -61,13 +54,8 @@ func NewService(db *gorm.DB, secrets *secret.Store, deps Dependencies) *Service 
 	if deps.Sender == nil {
 		deps.Sender = NewAdapter()
 	}
-	if deps.Audit == nil {
-		deps.Audit = audit.NewService(db)
-	}
-	return &Service{db: db, secrets: secrets, deps: deps, chatCancel: map[string]context.CancelFunc{}, chatDone: map[string]chan struct{}{}, connections: map[string]connectionEntry{}, queryAt: map[string]time.Time{}, streamCancel: map[string]streamRequest{}}
+	return &Service{db: db, secrets: secrets, deps: deps, discoveryCancel: map[string]context.CancelFunc{}, discoveryDone: map[string]chan struct{}{}, connections: map[string]connectionEntry{}}
 }
-func (s *Service) SetChatHandler(h ChatHandler)        { s.mu.Lock(); s.chat = h; s.mu.Unlock() }
-func (s *Service) SetEventHandler(h func(event.Event)) { s.mu.Lock(); s.onEvent = h; s.mu.Unlock() }
 func (s *Service) error(err error) {
 	if err != nil && s.deps.OnError != nil {
 		s.deps.OnError(errors.New(redact.Bounded(err.Error(), 512)))
@@ -179,6 +167,7 @@ func (s *Service) SaveChannel(ctx context.Context, id string, in ChannelInput) (
 			return Channel{}, fmt.Errorf("%w: App ID and App Secret are required", ErrInvalid)
 		}
 		in.Config.ChatID = ""
+		in.Config.AutoDiscover = false
 		if id != "" && originalAppID != in.Config.AppID {
 			in.Config.Targets = nil
 		}
@@ -189,7 +178,7 @@ func (s *Service) SaveChannel(ctx context.Context, id string, in ChannelInput) (
 		if err := outbound.Validate(previous.Endpoint, in.Config.AllowPrivate); err != nil {
 			return Channel{}, err
 		}
-		in.Config.Interactive = false
+		in.Config.AutoDiscover = false
 	default:
 		return Channel{}, ErrInvalid
 	}
@@ -205,7 +194,7 @@ func (s *Service) SaveChannel(ctx context.Context, id string, in ChannelInput) (
 				return Channel{}, err
 			}
 			same := in.Provider == "feishu_app" && v.Config.AppID == in.Config.AppID || in.Provider == "telegram" && m.Token == previous.Token
-			if same && (in.Provider == "feishu_app" || in.Config.Interactive && v.Config.Interactive) {
+			if same && (in.Provider == "feishu_app" || in.Config.AutoDiscover && v.Config.AutoDiscover) {
 				return Channel{}, fmt.Errorf("%w: one channel per Feishu application; select multiple targets in that channel", ErrInvalid)
 			}
 		}
@@ -241,24 +230,15 @@ func (s *Service) SaveChannel(ctx context.Context, id string, in ChannelInput) (
 				}
 			}
 		}
-		if id != "" && (originalToken != previous.Token || originalAppID != in.Config.AppID) {
-			if err := tx.Model(&database.NotificationBinding{}).Where("channel_id = ?", id).Update("status", "revoked").Error; err != nil {
-				return err
-			}
-			return tx.Where("channel_id = ?", id).Delete(&database.NotificationAction{}).Error
-		}
 		return nil
 	}); err != nil {
 		return Channel{}, err
 	}
 	if originalToken != previous.Token || originalAppID != in.Config.AppID || !needsConnection(decodeChannel(row)) {
-		s.stopChatLocked(row.ID)
-	}
-	if !in.Config.Interactive {
-		s.cancelStreamsLocked(row.ID, "")
+		s.stopDiscoveryLocked(row.ID)
 	}
 	if s.cancel != nil && needsConnection(decodeChannel(row)) {
-		s.startChatLocked(decodeChannel(row))
+		s.startDiscoveryLocked(decodeChannel(row))
 	}
 	return decodeChannel(row), nil
 }
@@ -272,10 +252,10 @@ func (s *Service) DeleteChannel(ctx context.Context, id string) error {
 		if err := tx.Model(&database.NotificationDelivery{}).Where("channel_id = ? AND status IN ?", id, []string{"pending", "retry"}).Updates(map[string]any{"status": "suppressed", "reason": "channel deleted"}).Error; err != nil {
 			return err
 		}
-		return tx.Model(&database.NotificationBinding{}).Where("channel_id = ?", id).Update("status", "revoked").Error
+		return tx.Where("channel_id = ?", id).Delete(&database.NotificationChat{}).Error
 	})
 	if err == nil {
-		s.stopChatLocked(id)
+		s.stopDiscoveryLocked(id)
 	}
 	return err
 }
@@ -480,16 +460,10 @@ func (s *Service) Ingest(ctx context.Context, e event.Event) error {
 	e.Message = redact.Bounded(e.Message, 4000)
 	if e.DedupeKey == "" {
 		e.DedupeKey = e.Type + "|" + e.NodeID + "|" + e.ResourceID
-		if e.OperationID != "" {
-			e.DedupeKey += "|" + e.OperationID
-		} else if e.RunID != "" {
-			e.DedupeKey += "|" + e.RunID
-		}
 		if e.Type == "auth.login" {
 			e.DedupeKey += "|" + e.ID
 		}
 	}
-	inserted := false
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var count int64
 		q := tx.Model(&database.NotificationEvent{}).Where("dedupe_key = ?", e.DedupeKey)
@@ -538,14 +512,9 @@ func (s *Service) Ingest(ctx context.Context, e event.Event) error {
 				}
 			}
 		}
-		inserted = true
 		return nil
 	})
-	h := s.onEvent
 	s.mu.Unlock()
-	if err == nil && inserted && h != nil {
-		h(e)
-	}
 	return err
 }
 func matches(tx *gorm.DB, c RuleConfig, e event.Event) bool {
@@ -569,7 +538,7 @@ func matches(tx *gorm.DB, c RuleConfig, e event.Event) bool {
 	return len(c.Projects) == 0 || contains(c.Projects, e.Project)
 }
 func urgent(e event.Event) bool {
-	return e.Severity == "critical" || e.Type == "ai.awaiting_approval" || e.Type == "cd.awaiting_approval"
+	return e.Severity == "critical" || e.Type == "cd.awaiting_approval"
 }
 func (s *Service) queue(tx *gorm.DB, rule Rule, channel Channel, chatID string, e event.Event) error {
 	channelID := channel.ID
@@ -692,7 +661,6 @@ func (s *Service) Start() {
 		return
 	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
-	s.stopped = false
 	ctx := s.ctx
 	s.wg.Add(1)
 	s.mu.Unlock()
@@ -716,7 +684,7 @@ func (s *Service) Start() {
 		for _, row := range channels {
 			current, err := s.Channel(ctx, row.ID)
 			if err == nil && needsConnection(current) {
-				s.startChatLocked(current)
+				s.startDiscoveryLocked(current)
 			}
 		}
 	}
@@ -726,12 +694,10 @@ func (s *Service) Stop() {
 	s.mu.Lock()
 	cancel := s.cancel
 	s.cancel = nil
-	s.stopped = true
-	s.cancelStreamsLocked("", "")
-	for id := range s.chatCancel {
-		s.stopChatLocked(id)
+	for id := range s.discoveryCancel {
+		s.stopDiscoveryLocked(id)
 	}
-	s.chatCancel = map[string]context.CancelFunc{}
+	s.discoveryCancel = map[string]context.CancelFunc{}
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -874,9 +840,6 @@ func (s *Service) render(channel Channel, c RuleConfig, rows []database.Notifica
 		_ = json.Unmarshal([]byte(row.DataJSON), &e)
 		message.Events = append(message.Events, e)
 		path := "/notifications#" + e.ID
-		if e.OperationID != "" {
-			path = "/ai-operations#" + e.OperationID
-		}
 		link := strings.TrimRight(channel.Config.PublicURL, "/") + path
 		title := e.Title
 		if c.Template == "" {
@@ -898,10 +861,6 @@ func (s *Service) render(channel Channel, c RuleConfig, rows []database.Notifica
 			body = strings.ReplaceAll(body, "{{"+key+"}}", value)
 		}
 		text.WriteString(body + "\n\n")
-		if len(rows) == 1 && e.Type == "ai.awaiting_approval" {
-			message.ApproveID = e.OperationID
-			message.OperationID = e.OperationID
-		}
 		if channel.Config.PublicURL != "" {
 			message.URL = link
 		}

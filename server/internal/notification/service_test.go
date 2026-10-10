@@ -60,7 +60,7 @@ func channel(t *testing.T, s *Service) Channel {
 }
 func rule(t *testing.T, s *Service, c Channel, mode string) Rule {
 	t.Helper()
-	r, err := s.SaveRule(context.Background(), "", RuleInput{Name: "test", Enabled: true, Config: RuleConfig{Events: []string{"container.oom", "image.available", "ai.awaiting_approval", "node.recovered"}, ChannelIDs: []string{c.ID}, Mode: mode, Timezone: "Asia/Shanghai", DigestHour: 9, Recovery: true}})
+	r, err := s.SaveRule(context.Background(), "", RuleInput{Name: "test", Enabled: true, Config: RuleConfig{Events: []string{"container.oom", "image.available", "cd.awaiting_approval", "node.recovered"}, ChannelIDs: []string{c.ID}, Mode: mode, Timezone: "Asia/Shanghai", DigestHour: 9, Recovery: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,9 +126,9 @@ func TestQuietUrgencyMergeAndDailyTimezone(t *testing.T) {
 	if len(rows) != 1 || rows[0].DueAt.In(time.FixedZone("CST", 8*3600)).Hour() != 8 {
 		t.Fatal(rows)
 	}
-	s.Ingest(context.Background(), event.Event{Type: "ai.awaiting_approval", OperationID: "op", Message: "review"})
+	s.Ingest(context.Background(), event.Event{Type: "cd.awaiting_approval", Message: "review"})
 	s.Tick(context.Background())
-	if len(sender.sent) != 1 || sender.sent[0].ApproveID != "op" {
+	if len(sender.sent) != 1 || len(sender.sent[0].Events) != 1 || sender.sent[0].Events[0].Type != "cd.awaiting_approval" {
 		t.Fatal("approval did not bypass quiet period")
 	}
 	*now = now.Add(11 * time.Hour)
@@ -181,64 +181,5 @@ func TestRetryFallbackAndSuppression(t *testing.T) {
 	db.Model(&database.NotificationEvent{}).Where("type = ?", "notification.failed").Count(&count)
 	if count != 1 {
 		t.Fatalf("recursive failure events: %d", count)
-	}
-}
-func TestBindingIdentityRevocationAndSingleUseActions(t *testing.T) {
-	s, db, sender, _ := fixture(t)
-	db.Create(&database.User{Username: "admin", PasswordHash: "test"})
-	c, err := s.SaveChannel(context.Background(), "", ChannelInput{Name: "chat", Provider: "telegram", Enabled: true, Config: Config{Interactive: true, Timezone: "UTC", Language: "en-US"}, Secrets: &Secrets{Token: "123:secret"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, code, err := s.BeginBinding(context.Background(), 1, c.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	group := Incoming{ID: "1", ChannelID: c.ID, UserID: "42", ChatID: "group", Private: false, Text: "/bind " + code}
-	if err := s.HandleIncoming(context.Background(), group); err != nil {
-		t.Fatal(err)
-	}
-	if len(sender.sent) != 1 || !strings.Contains(sender.sent[0].Text, "/bind CODE") || !strings.Contains(sender.sent[0].Text, "Do not send it in a group") || strings.Contains(sender.sent[0].Text, code) {
-		t.Fatal("group binding rejection omitted private-chat instructions or echoed the code")
-	}
-	if err = s.ConfirmBinding(context.Background(), 1, b.ID); err == nil {
-		t.Fatal("group bound identity")
-	}
-	private := group
-	private.ID = "2"
-	private.Private = true
-	private.ChatID = "private"
-	if err = s.HandleIncoming(context.Background(), private); err != nil {
-		t.Fatal(err)
-	}
-	if len(sender.sent) != 2 || !strings.Contains(sender.sent[1].Text, "尚需站内确认") || !strings.Contains(sender.sent[1].Text, "确认并加入操作白名单") || strings.Contains(sender.sent[1].Text, code) {
-		t.Fatal("submitted binding code did not explain the remaining site confirmation")
-	}
-	if _, err := s.ValidateBinding(context.Background(), 1, b.ID); err == nil {
-		t.Fatal("submitting the code bypassed site confirmation")
-	}
-	if err = s.ConfirmBinding(context.Background(), 1, b.ID); err != nil {
-		t.Fatal(err)
-	}
-	bound, err := s.ValidateBinding(context.Background(), 1, b.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	token, err := s.ApprovalToken(context.Background(), bound, "operation", "private", time.Now().Add(time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-	in := private
-	in.OperationID = token
-	op, err := s.ConsumeApproval(context.Background(), in, bound)
-	if err != nil || op != "operation" {
-		t.Fatal(op, err)
-	}
-	if _, err = s.ConsumeApproval(context.Background(), in, bound); err == nil {
-		t.Fatal("token replay accepted")
-	}
-	s.RevokeBinding(context.Background(), 1, b.ID)
-	if _, err = s.ValidateBinding(context.Background(), 1, b.ID); err == nil {
-		t.Fatal("revoked identity accepted")
 	}
 }

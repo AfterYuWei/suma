@@ -16,7 +16,7 @@ import { nodePath } from '../lib/nodes'
 import { useUIStore } from '../stores/ui'
 import { ResourceFrame } from './images'
 
-interface Audit { id: number; scope: 'control_plane' | 'node'; node_id?: string; node_name?: string; user_id?: number; action: string; resource_type: string; resource_name: string; ip: string; result: string; created_at: string; source?: string; run_id?: string; operation_id?: string; task_id?: string; external_user_id?: string; chat_id?: string; details?: string }
+interface Audit { id: number; scope: 'control_plane' | 'node'; node_id?: string; node_name?: string; user_id?: number; action: string; resource_type: string; resource_name: string; ip: string; result: string; created_at: string; source?: string; task_id?: string; details?: string }
 
 export function AuditLogsPage() {
   const { formatDateTime } = useDateTime()
@@ -30,7 +30,7 @@ export function AuditLogsPage() {
   const pagination = useListPagination(rows, scope)
 
   return (
-    <ResourceFrame title={t('auditLogs')} detail={zh ? '全部节点、控制平面和 AI 操作的统一审计记录' : 'Unified audit of all nodes, control-plane and AI actions'} action={<Tabs value={scope} onValueChange={(value) => setScope(value as typeof scope)}><TabsList><TabsTrigger value="all">{zh ? '全部' : 'All'}</TabsTrigger><TabsTrigger value="current">{zh ? '当前节点' : 'Current node'}</TabsTrigger><TabsTrigger value="control_plane">{zh ? '控制平面' : 'Control plane'}</TabsTrigger></TabsList></Tabs>}>
+    <ResourceFrame title={t('auditLogs')} detail={zh ? '全部节点和控制平面的统一审计记录' : 'Unified audit of all nodes and the control plane'} action={<Tabs value={scope} onValueChange={(value) => setScope(value as typeof scope)}><TabsList><TabsTrigger value="all">{zh ? '全部' : 'All'}</TabsTrigger><TabsTrigger value="current">{zh ? '当前节点' : 'Current node'}</TabsTrigger><TabsTrigger value="control_plane">{zh ? '控制平面' : 'Control plane'}</TabsTrigger></TabsList></Tabs>}>
       {query.isPending
         ? <LoadingState compact label={zh ? '正在加载审计日志' : 'Loading audit logs'} />
         : rows.length === 0
@@ -54,7 +54,7 @@ export function AuditLogsPage() {
                         <TableCell className="text-muted-foreground tabular-nums">{formatDateTime(row.created_at)}</TableCell>
                         {scope !== 'current' && <TableCell><div>{row.scope === 'control_plane' ? (zh ? '控制平面' : 'Control plane') : (zh ? '节点' : 'Node')}</div>{row.node_id && <div className="text-xs text-muted-foreground">{row.node_name || row.node_id}</div>}</TableCell>}
                         <TableCell><div className="font-medium">{row.action}</div><div className="text-xs text-muted-foreground">{row.source || 'site'} · {row.user_id ? `${zh ? '用户' : 'user'} ${row.user_id}` : row.source === 'chat' ? (zh ? '访客' : 'guest') : '—'}</div></TableCell>
-                        <TableCell className="max-w-md break-words"><div>{`${row.resource_type} · ${row.resource_type === 'container' ? displayDockerId(row.resource_name) : row.resource_name}`}</div>{(row.run_id || row.operation_id) && <Link to="/ai-operations" hash={new URLSearchParams(row.operation_id ? { operation: row.operation_id } : { run: row.run_id! }).toString()} className="mr-3 text-xs underline">{zh ? '查看 AI 记录' : 'View AI record'}</Link>}{row.task_id && <Link to="/tasks" hash={row.task_id} className="text-xs underline">{zh ? '查看任务' : 'View task'}</Link>}{(row.details || row.external_user_id) && <details className="mt-1 text-xs"><summary className="cursor-pointer text-muted-foreground">{zh ? '审计详情' : 'Audit details'}</summary><p className="mt-1 whitespace-pre-wrap break-all">{row.details}</p>{row.external_user_id && <p className="break-all text-muted-foreground">{row.external_user_id} · {row.chat_id}</p>}</details>}</TableCell>
+                        <TableCell className="max-w-md break-words"><div>{`${row.resource_type} · ${row.resource_type === 'container' ? displayDockerId(row.resource_name) : row.resource_name}`}</div>{row.task_id && <Link to="/tasks" hash={row.task_id} className="text-xs underline">{zh ? '查看任务' : 'View task'}</Link>}{row.details && <details className="mt-1 text-xs"><summary className="cursor-pointer text-muted-foreground">{zh ? '审计详情' : 'Audit details'}</summary><p className="mt-1 whitespace-pre-wrap break-all">{row.details}</p></details>}</TableCell>
                         <TableCell>
                           <StatusBadge tone={row.result === 'success' ? 'success' : row.result === 'failed' || row.result === 'denied' ? 'critical' : 'neutral'}>{row.result}</StatusBadge>
                         </TableCell>

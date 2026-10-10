@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/suma/suma/server/internal/database"
 )
 
 func messagePayload(t *testing.T, appID, id, kind, chatType, content string, senderTenant bool) []byte {
@@ -27,15 +25,9 @@ func messagePayload(t *testing.T, appID, id, kind, chatType, content string, sen
 	return payload
 }
 
-func TestFeishuSDKNonTextMessagesOnlyDiscoverEvenWhenAIEnabled(t *testing.T) {
+func TestFeishuSDKNonTextMessagesOnlyDiscover(t *testing.T) {
 	s, _, sender, _ := fixture(t)
 	c := feishuChannel(t, s, "cli_rich")
-	c.Config.Interactive = true
-	if _, err := s.SaveChannel(context.Background(), c.ID, ChannelInput{Name: c.Name, Provider: c.Provider, Enabled: true, Version: c.Version, Config: c.Config}); err != nil {
-		t.Fatal(err)
-	}
-	called := false
-	s.SetChatHandler(func(Incoming, database.NotificationBinding) { called = true })
 	handler := feishuEventHandler(c, func() string { return "ou_bot" }, func(in Incoming) error { return s.HandleIncoming(context.Background(), in) }, func(string) {})
 	for _, kind := range []string{"post", "image", "file"} {
 		if _, err := handler.Do(context.Background(), messagePayload(t, c.Config.AppID, kind, kind, "p2p", `{"sensitive":"never execute this"}`, true)); err != nil {
@@ -43,8 +35,8 @@ func TestFeishuSDKNonTextMessagesOnlyDiscoverEvenWhenAIEnabled(t *testing.T) {
 		}
 	}
 	chats, err := s.Chats(context.Background(), c.ID)
-	if err != nil || len(chats) != 3 || called || len(sender.sent) > 0 {
-		t.Fatal("rich message did not remain discovery-only", chats, called, err)
+	if err != nil || len(chats) != 3 || len(sender.sent) > 0 {
+		t.Fatal("rich message did not remain discovery-only", chats, err)
 	}
 }
 
@@ -99,7 +91,7 @@ func TestFeishuEventObservationFiltersAndReconnects(t *testing.T) {
 	if strings.Contains(string(raw), "sensitive content") || strings.Contains(string(raw), "private-app-secret") || strings.Contains(string(raw), "ou_operator") {
 		t.Fatal("status exposed message or credential/identity material")
 	}
-	s.stopChatLocked(c.ID)
+	s.stopDiscoveryLocked(c.ID)
 	observed.record("received", "")
 	state, _ = s.Connection(context.Background(), c.ID)
 	if state.State != "stopped" || state.MessageCount != 0 {
@@ -110,8 +102,6 @@ func TestFeishuEventObservationFiltersAndReconnects(t *testing.T) {
 func TestFeishuSDKMessagePayloadDiscoversAllHumanConversationTypes(t *testing.T) {
 	s, _, sender, _ := fixture(t)
 	c := feishuChannel(t, s, "cli_payload")
-	called := false
-	s.SetChatHandler(func(Incoming, database.NotificationBinding) { called = true })
 	handler := feishuEventHandler(c, func() string { return "ou_bot" }, func(in Incoming) error { return s.HandleIncoming(context.Background(), in) }, func(string) {})
 	for _, sample := range []struct {
 		id, kind, chat, content string
@@ -131,7 +121,7 @@ func TestFeishuSDKMessagePayloadDiscoversAllHumanConversationTypes(t *testing.T)
 	if err != nil || len(chats) != 5 {
 		t.Fatalf("SDK messages were silently lost: discovered %d of 5 conversations (%v)", len(chats), err)
 	}
-	if called || len(sender.sent) > 0 {
+	if len(sender.sent) > 0 {
 		t.Fatal("notification discovery invoked chat or sent replies")
 	}
 }

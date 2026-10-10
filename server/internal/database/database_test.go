@@ -23,14 +23,25 @@ func TestPostgresBaselineAndReopen(t *testing.T) {
 			t.Errorf("missing table for %T", model)
 		}
 	}
-	if db.Migrator().HasTable("ai_audits") {
-		t.Fatal("duplicate AI audit table must not exist")
+	for _, name := range []string{"ai_runs", "ai_operations", "ai_audits", "ai_conversations", "ai_messages", "a_iplan_steps", "ai_plan_steps", "ai_interactions", "ai_checkpoints", "ai_tool_calls", "ai_workflow_events", "ai_compose_drafts", "notification_bindings", "notification_actions", "notification_chat_streams"} {
+		if db.Migrator().HasTable(name) {
+			t.Errorf("removed feature table still exists: %s", name)
+		}
+	}
+	for _, column := range []string{"run_id", "operation_id", "binding_id", "external_user_id", "chat_id"} {
+		if db.Migrator().HasColumn(&database.AuditLog{}, column) {
+			t.Errorf("removed audit column still exists: %s", column)
+		}
 	}
 	if !db.Migrator().HasColumn(&database.NotificationDelivery{}, "ChatID") {
 		t.Fatal("delivery recipient column is absent from fresh schema")
 	}
 	row := database.User{Username: "retained", Email: "User@Example.test", PasswordHash: "fixture"}
 	if err := db.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	channel := database.NotificationChannel{ID: "retained-channel", Name: "Notification", Provider: "telegram", ConfigJSON: `{"auto_discover":true}`, SecretCiphertext: []byte("encrypted-fixture"), Version: 1}
+	if err := db.Create(&channel).Error; err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := database.Open(dsn)
@@ -41,6 +52,10 @@ func TestPostgresBaselineAndReopen(t *testing.T) {
 	var found database.User
 	if err := reopened.First(&found, row.ID).Error; err != nil || found.Username != row.Username {
 		t.Fatal("reopen lost PostgreSQL state")
+	}
+	var retained database.NotificationChannel
+	if err := reopened.First(&retained, "id = ?", channel.ID).Error; err != nil || retained.ConfigJSON != channel.ConfigJSON || string(retained.SecretCiphertext) != string(channel.SecretCiphertext) {
+		t.Fatal("reopen lost notification configuration", err)
 	}
 	var groups int64
 	reopened.Model(&database.NodeGroup{}).Count(&groups)

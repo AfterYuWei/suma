@@ -79,9 +79,9 @@ func TestLiveFeishuApplication(t *testing.T) {
 			t.Fatal("invalid dedicated Feishu test conversation")
 		}
 		channel.Config.ChatID = id
-		if _, err = adapter.Send(ctx, channel, material, Message{Text: "SUMA notification acceptance test. No Docker operation is executed.", ApproveID: "acceptance-preview-only"}); err != nil {
+		if _, err = adapter.Send(ctx, channel, material, Message{Text: "SUMA notification acceptance test. No Docker operation is executed."}); err != nil {
 			t.Fatal("real Feishu test card delivery failed", err)
 		}
 	}
-	t.Logf("real Feishu interactive test card delivered to %d explicit conversations; callback/identity acceptance remains separate", len(ids))
+	t.Logf("real Feishu interactive test card delivered to %d explicit conversations; notification-only conversation discovery requires a published application", len(ids))
 }

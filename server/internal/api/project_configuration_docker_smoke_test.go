@@ -154,7 +154,7 @@ func projectConfigurationTransportSmoke(t *testing.T, transport, unixHost string
 	}
 	h := projectHTTPHarness{router: NewRouter(Dependencies{Engine: &fakeEngine{}, Nodes: nodes, Auth: authentication, Audit: audit.NewService(db), Tasks: tasks, Compose: projects, ComposeRunner: runner}), cookie: &http.Cookie{Name: sessionCookie, Value: token}, db: db, compose: projects}
 	operationsTransportSmoke(t, ctx, root, unixHost, nodeID, transport, db, nodes, adapter, tasks, authentication, current, h.cookie)
-	notificationAITransportSmoke(t, ctx, root, nodeID, transport, db, nodes, adapter, tasks, authentication, current)
+	notificationTransportSmoke(t, ctx, root, nodeID, transport, db, adapter, tasks, current)
 	name := fmt.Sprintf("visual-%s-%d", transport, time.Now().UnixNano())
 	path := "/api/v1/nodes/" + nodeID + "/projects"
 	content := "# visual source\nservices:\n  app:\n    image: alpine:3.24\n    command: [sleep, '300']\n    environment:\n      APP_VALUE: ${APP_VALUE}\n    volumes:\n      - data:/data\n    healthcheck:\n      test: [CMD, 'true']\n      interval: 1s\n    cpus: 0.25\n    mem_limit: 32M\n    x-preserved: value\nvolumes:\n  data: {}\n"

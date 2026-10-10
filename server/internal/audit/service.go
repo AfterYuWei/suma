@@ -89,7 +89,7 @@ func (s *Service) record(ctx context.Context, row database.AuditLog) error {
 }
 
 // RecordTx joins the caller's transaction. Notification sinks must run only
-// after commit; AI records use their own post-commit domain events.
+// after commit.
 func (s *Service) RecordTx(ctx context.Context, tx *gorm.DB, row *database.AuditLog) error {
 	if row.Source == "" {
 		row.Source = "site"

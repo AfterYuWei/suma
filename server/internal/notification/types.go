@@ -22,7 +22,7 @@ type Config struct {
 	Language     string   `json:"language"`
 	Timezone     string   `json:"timezone"`
 	AllowPrivate bool     `json:"allow_private"`
-	Interactive  bool     `json:"interactive"`
+	AutoDiscover bool     `json:"auto_discover"`
 	PublicURL    string   `json:"public_url,omitempty"`
 }
 type Target struct {
@@ -100,30 +100,17 @@ type CatalogEntry struct {
 	TitleEN  string `json:"title_en"`
 }
 type Incoming struct {
-	ID            string
-	ChannelID     string
-	UserID        string
-	Name          string
-	ChatID        string
-	Private       bool
-	Text          string
-	Action        string
-	OperationID   string
-	DiscoveryOnly bool
-}
-type ChatHandler func(Incoming, database.NotificationBinding)
-type InteractionChoice struct {
-	Label string
-	Token string
+	ID        string
+	ChannelID string
+	UserID    string
+	Name      string
+	ChatID    string
+	Private   bool
 }
 type Message struct {
-	Choices       []InteractionChoice
-	Text          string
-	ApproveID     string
-	OperationID   string
-	ApprovalToken string
-	URL           string
-	Events        []event.Event
+	Text   string
+	URL    string
+	Events []event.Event
 }
 
 var Catalog = []CatalogEntry{
@@ -133,13 +120,13 @@ var Catalog = []CatalogEntry{
 	{"image.available", "images", "发现镜像更新", "Image update available"}, {"image.check_failed", "images", "镜像检查失败", "Image check failed"}, {"image.recreate_required", "images", "镜像更新后需重建", "Container recreation required"}, {"image.pull_failed", "images", "镜像拉取失败", "Image pull failed"},
 	{"cd.awaiting_approval", "delivery", "Release 待审核", "Release awaiting approval"}, {"cd.completed", "delivery", "发布或回滚结果", "Deployment or rollback completed"}, {"cd.drift", "delivery", "发布状态漂移", "Deployment drift"},
 	{"cleanup.completed", "cleanup", "存储清理结果", "Storage cleanup result"}, {"cleanup.skipped", "cleanup", "清理被跳过", "Cleanup skipped"}, {"task.failed", "tasks", "任务失败", "Task failed"}, {"task.canceled", "tasks", "任务取消", "Task canceled"},
-	{"ai.diagnosed", "ai", "AI 诊断完成", "AI diagnosis completed"}, {"ai.awaiting_approval", "ai", "AI 操作待审核", "AI operation awaiting approval"}, {"ai.completed", "ai", "AI 操作结果", "AI operation completed"}, {"ai.expired", "ai", "AI 审批过期", "AI approval expired"}, {"ai.unavailable", "ai", "模型不可用", "Model unavailable"}, {"ai.budget", "ai", "AI 用量上限", "AI usage limit reached"}, {"notification.failed", "notifications", "渠道发送失败", "Channel delivery failed"},
+	{"notification.failed", "notifications", "渠道发送失败", "Channel delivery failed"},
 }
 var Presets = map[string][]string{
 	"security":  {"auth.login", "auth.new_ip", "auth.login_failed", "account.changed", "credential.changed", "tls.expiring"},
-	"important": {"node.offline", "node.recovered", "agent.error", "container.exited", "container.oom", "container.unhealthy", "container.recovered", "container.restart_loop", "task.failed", "ai.awaiting_approval", "ai.expired", "notification.failed"},
+	"important": {"node.offline", "node.recovered", "agent.error", "container.exited", "container.oom", "container.unhealthy", "container.recovered", "container.restart_loop", "task.failed", "notification.failed"},
 	"images":    {"image.available", "image.check_failed", "image.pull_failed", "image.recreate_required"},
-	"delivery":  {"cd.awaiting_approval", "cd.completed", "cd.drift", "ai.completed"},
+	"delivery":  {"cd.awaiting_approval", "cd.completed", "cd.drift"},
 	"cleanup":   {"cleanup.completed", "cleanup.skipped"},
 }
 

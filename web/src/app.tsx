@@ -13,7 +13,7 @@ import { TasksPage } from './pages/tasks'
 import { AuditLogsPage } from './pages/audit-logs'
 import { ComposePage } from './pages/compose'
 import { ContinuousDeliveryPage } from './pages/continuous-delivery'
-import { AIWorkbench, NotificationInbox } from './features/operations/workbench'
+import { NotificationInbox } from './features/notifications/inbox'
 import { SettingsPage } from './pages/settings'
 import { AuthenticationPage } from './pages/authentication'
 import { NodesPage } from './pages/nodes'
@@ -48,13 +48,12 @@ const composeDetailRoute = createRoute({ getParentRoute: () => rootRoute, path: 
 const continuousDeliveryRoute = createRoute({ getParentRoute: () => rootRoute, path: '/continuous-delivery', component: ContinuousDeliveryPage })
 const continuousDeliveryCreateRoute = createRoute({ getParentRoute: () => rootRoute, path: '/continuous-delivery/new/project', component: deferred(ContinuousDeliveryCreatePage) })
 const continuousDeliveryDetailRoute = createRoute({ getParentRoute: () => rootRoute, path: '/continuous-delivery/$projectName', component: deferred(ContinuousDeliveryDetailPage) })
-const aiRoute = createRoute({ getParentRoute: () => rootRoute, path: '/ai-operations', component: AIWorkbench })
 const notificationsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/notifications', component: NotificationInbox })
 const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/settings', component: SettingsPage })
 const authenticationRoute = createRoute({ getParentRoute: () => rootRoute, path: '/authentication', component: AuthenticationPage })
 const nodesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/nodes', component: NodesPage })
 const accountRoute = createRoute({ getParentRoute: () => rootRoute, path: '/account', component: AccountPage })
-const router = createRouter({ routeTree: rootRoute.addChildren([overviewRoute, containersRoute, containerDetailRoute, imagesRoute, networksRoute, volumesRoute, tasksRoute, auditRoute, projectsRoute, projectCreateRoute, projectDetailRoute, projectTakeoverRoute, composeRoute, composeDetailRoute, continuousDeliveryRoute, continuousDeliveryCreateRoute, continuousDeliveryDetailRoute, authenticationRoute, nodesRoute, settingsRoute, accountRoute, aiRoute, notificationsRoute]) })
+const router = createRouter({ routeTree: rootRoute.addChildren([overviewRoute, containersRoute, containerDetailRoute, imagesRoute, networksRoute, volumesRoute, tasksRoute, auditRoute, projectsRoute, projectCreateRoute, projectDetailRoute, projectTakeoverRoute, composeRoute, composeDetailRoute, continuousDeliveryRoute, continuousDeliveryCreateRoute, continuousDeliveryDetailRoute, authenticationRoute, nodesRoute, settingsRoute, accountRoute, notificationsRoute]) })
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 5_000, retry: 1 } } })
 
 declare module '@tanstack/react-router' { interface Register { router: typeof router } }

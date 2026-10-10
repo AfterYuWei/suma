@@ -46,7 +46,7 @@ func (o *feishuMessageObservation) status(state ConnectionStatus) ConnectionStat
 }
 
 func needsConnection(c Channel) bool {
-	return c.Enabled && (c.Provider == "feishu_app" || c.Provider == "telegram" && c.Config.Interactive)
+	return c.Enabled && (c.Provider == "feishu_app" || c.Provider == "telegram" && c.Config.AutoDiscover)
 }
 
 func (s *Service) Connection(ctx context.Context, id string) (ConnectionStatus, error) {
@@ -80,11 +80,10 @@ func (s *Service) connectionState(id, generation string, state ConnectionStatus)
 	s.connections[id] = entry
 }
 
-func (s *Service) stopChatLocked(id string) {
-	s.cancelStreamsLocked(id, "")
-	if cancel := s.chatCancel[id]; cancel != nil {
+func (s *Service) stopDiscoveryLocked(id string) {
+	if cancel := s.discoveryCancel[id]; cancel != nil {
 		cancel()
-		delete(s.chatCancel, id)
+		delete(s.discoveryCancel, id)
 	}
 	s.connections[id] = connectionEntry{ConnectionStatus: ConnectionStatus{State: "stopped"}}
 }

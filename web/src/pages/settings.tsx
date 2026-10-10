@@ -1,5 +1,4 @@
-import { NotificationSettings } from '../features/operations/notification-settings'
-import { AISettings } from '../features/operations/ai-settings'
+import { NotificationSettings } from '../features/notifications/notification-settings'
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from '@tanstack/react-router'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
@@ -34,14 +33,14 @@ export function SettingsPage() {
   const hash = useLocation({ select: location => location.hash })
   const navigate = useNavigate()
   const section = hash.split('?')[0]
-  const tab = ['cleanup', 'notifications', 'ai'].includes(section) ? section : 'general'
+  const tab = ['cleanup', 'notifications'].includes(section) ? section : 'general'
   useEffect(() => {
     if (hash === 'image-updates') void navigate({ to: '/images', hash: 'image-updates', replace: true })
   }, [hash, navigate])
   return <ResourceFrame title={t('settings')} detail={t('localConfiguration')}>
     <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-6">
-      <Tabs value={tab} onValueChange={value => { void navigate({ to: '/settings', hash: value === 'general' ? '' : value }) }}><TabsList><TabsTrigger value="general">{zh ? '常规设置' : 'General settings'}</TabsTrigger><TabsTrigger value="cleanup">{zh ? '存储清理' : 'Storage cleanup'}</TabsTrigger><TabsTrigger value="notifications">{zh ? '通知渠道' : 'Notification channels'}</TabsTrigger><TabsTrigger value="ai">{zh ? 'AI 运维' : 'AI operations'}</TabsTrigger></TabsList></Tabs>
-      {tab === 'notifications' ? <NotificationSettings /> : tab === 'ai' ? <AISettings /> : tab === 'cleanup' ? <StorageCleanup /> : <GeneralSettings />}
+      <Tabs value={tab} onValueChange={value => { void navigate({ to: '/settings', hash: value === 'general' ? '' : value }) }}><TabsList><TabsTrigger value="general">{zh ? '常规设置' : 'General settings'}</TabsTrigger><TabsTrigger value="cleanup">{zh ? '存储清理' : 'Storage cleanup'}</TabsTrigger><TabsTrigger value="notifications">{zh ? '通知渠道' : 'Notification channels'}</TabsTrigger></TabsList></Tabs>
+      {tab === 'notifications' ? <NotificationSettings /> : tab === 'cleanup' ? <StorageCleanup /> : <GeneralSettings />}
     </div>
   </ResourceFrame>
 }

@@ -233,7 +233,7 @@ volumes:
 
 - PostgreSQL 业务状态保存在 `suma-postgres` 数据卷；`/Data` 独立保存 Compose、Git 工作区和凭据加密密钥 `secret.key`
 - `/Data/compose/` 保存托管 Compose 项目的 YAML、环境文件和 SUMA 项目元信息；`/Data/gitops/` 保存 CD 仓库与修订工作区；`/Data/backups/` 是保留目录，当前没有自动备份任务
-- 用户、节点、应用设置、AI／通知配置、审计、Task 和 Agent 检查点均保存在 PostgreSQL；本地 `.env.local` 是项目根目录下的启动配置，不写入 `/Data`
+- 用户、节点、应用设置、通知配置、审计、Task 和 Agent 检查点均保存在 PostgreSQL；本地 `.env.local` 是项目根目录下的启动配置，不写入 `/Data`
 - 升级前将 PostgreSQL 与 `/Data` 作为同一恢复集合保存；`secret.key` 丢失将导致已存凭据无法解密
 
 ## 文档
@@ -241,5 +241,6 @@ volumes:
 - [PLANS.md](PLANS.md)：功能进度与上线验证记录
 - [ARCHITECTURE.md](ARCHITECTURE.md)：架构说明
 - [API.md](API.md)：REST / WebSocket API 参考
-- [Eino／PostgreSQL 运行说明](doc/eino-postgresql.md)：初始化、Agent 恢复、审核、渠道与验证命令
+- [PostgreSQL 运行说明](doc/postgresql.md)：初始化、存储、配置与验证命令
+- [通知中心](doc/notifications.md)：渠道、会话发现、通知规则和投递验证
 - [CD-DESIGN.md](CD-DESIGN.md)：持续交付设计模型

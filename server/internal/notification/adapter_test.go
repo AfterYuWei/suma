@@ -44,25 +44,25 @@ func TestWebhookUnifiedPayloadAndSignature(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-func TestTelegramRateLimitAndExplicitBoundApprovalCard(t *testing.T) {
+func TestTelegramRateLimitAndNotificationLink(t *testing.T) {
 	a := NewAdapter()
 	a.Client = func(bool) *http.Client {
 		return &http.Client{Transport: roundTrip(func(req *http.Request) (*http.Response, error) {
 			body, _ := io.ReadAll(req.Body)
-			if !strings.Contains(string(body), "approve:opaque-token") || strings.Contains(string(body), "approve:operation") {
-				t.Fatal("unbound approval callback")
+			if !strings.Contains(string(body), "https://suma.example/notifications") || strings.Contains(string(body), "callback_data") {
+				t.Fatal("notification link missing or callback included")
 			}
 			return response(429, `{"ok":false,"parameters":{"retry_after":12}}`), nil
 		})}
 	}
-	_, err := a.Send(context.Background(), Channel{NotificationChannel: database.NotificationChannel{Provider: "telegram"}, Config: Config{ChatID: "chat"}}, Secrets{Token: "123:PRIVATE"}, Message{Text: "preview", OperationID: "operation", ApprovalToken: "opaque-token"})
+	_, err := a.Send(context.Background(), Channel{NotificationChannel: database.NotificationChannel{Provider: "telegram"}, Config: Config{ChatID: "chat"}}, Secrets{Token: "123:PRIVATE"}, Message{Text: "notice", URL: "https://suma.example/notifications"})
 	limit, ok := err.(*RateLimitError)
 	if !ok || limit.After != 12*time.Second {
 		t.Fatal(err)
 	}
 }
 func TestFeishuCardsAndProviderErrorsHideSecrets(t *testing.T) {
-	card := feishuCard(Message{Text: "Review \n <at id=all> prompt", OperationID: "op", ApprovalToken: "opaque-token"})
+	card := feishuCard(Message{Text: "Notice \n <at id=all> prompt", URL: "https://suma.example/notifications"})
 	raw, _ := json.Marshal(card)
 	if !strings.Contains(string(raw), "card") && len(raw) == 0 {
 		t.Fatal("empty card")

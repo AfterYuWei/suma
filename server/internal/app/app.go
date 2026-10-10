@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/suma/suma/server/internal/agenthub"
-	"github.com/suma/suma/server/internal/ai"
 	"github.com/suma/suma/server/internal/api"
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/auth"
@@ -41,7 +40,6 @@ import (
 
 type App struct {
 	notifications  *notification.Service
-	ai             *ai.Service
 	imageUpdates   *imageupdate.Service
 	projectLogs    *projectlogs.Service
 	cleanup        *cleanup.Service
@@ -157,7 +155,7 @@ func New(logger *slog.Logger) (*App, error) {
 	if setupToken != "" {
 		logger.Info("SUMA initialization key", "setup_token", setupToken, "expires_at", setupExpires.UTC().Format(time.RFC3339))
 	}
-	notifications := notification.NewService(db, secretStore, notification.Dependencies{Audit: auditService, OnError: func(err error) { logger.Warn("notification service", "error", err) }})
+	notifications := notification.NewService(db, secretStore, notification.Dependencies{OnError: func(err error) { logger.Warn("notification service", "error", err) }})
 	auditService.SetSink(auditNotifications(db, notifications))
 	continuousDelivery.SetEventSink(notifications.Emit)
 	taskService.SetEventSink(func(e event.Event) {
@@ -186,23 +184,6 @@ func New(logger *slog.Logger) (*App, error) {
 		},
 		Resolver: registry.Adapter{}, Credentials: registryCredentials,
 	})
-	controlled := aiRuntime{secrets: secretStore, db: db, nodes: nodes, compose: compose, runner: runner, cd: continuousDelivery, cleanup: cleanupService, tasks: taskService, registries: registryCredentials, imageUpdates: imageUpdates}
-	assistant, err := ai.NewService(db, secretStore, taskService, ai.Dependencies{Audit: auditService, Read: controlled.Read, Check: controlled.Check, Resources: controlled.Resources, Verify: controlled.Verify, Draft: controlled.Draft, Query: controlled.Query, Freeze: controlled.Freeze, Execute: controlled.Execute, Emit: notifications.Emit, ActorValid: func(ctx context.Context, a ai.Actor) error {
-		if a.BindingID != "" {
-			binding, err := notifications.ValidateBinding(ctx, a.UserID, a.BindingID)
-			if err != nil || binding.ExternalUserID != a.ExternalUserID || binding.ChatID != a.ChatID {
-				return ai.ErrScope
-			}
-			return nil
-		}
-		return nil
-	}})
-	if err != nil {
-		return nil, err
-	}
-	notifications.SetEventHandler(assistant.OnEvent)
-	notifications.SetChatHandler(chatOperations(notifications, assistant))
-	assistant.SetChatDelivery(chatWorkflowDelivery(notifications, assistant))
 	notifications.Start()
 	imageUpdates.Start()
 	projectLogs := projectLogsService(nodes, compose, runner, db)
@@ -211,16 +192,11 @@ func New(logger *slog.Logger) (*App, error) {
 	cleanupService.Start()
 	recoveryContext, recoveryCancel := context.WithCancel(context.Background())
 	fileService := containerfiles.NewService(db, secretStore)
-	application := &App{notifications: notifications, ai: assistant, imageUpdates: imageUpdates, projectLogs: projectLogs, cleanup: cleanupService, logger: logger, engine: engine, nodes: nodes, agents: agents, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{Notifications: notifications, AI: assistant, ImageUpdates: imageUpdates, ProjectLogs: projectLogs, Cleanup: cleanupService, Engine: engine, Containers: engine, Files: fileService, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: applicationSettings, Monitor: monitorService.NewService(engine, cfg.DataRoot), System: systemService.NewService(engine, taskService), Nodes: nodes, Agents: agents, AgentPublicURL: cfg.AgentPublicURL, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
+	application := &App{notifications: notifications, imageUpdates: imageUpdates, projectLogs: projectLogs, cleanup: cleanupService, logger: logger, engine: engine, nodes: nodes, agents: agents, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{Notifications: notifications, ImageUpdates: imageUpdates, ProjectLogs: projectLogs, Cleanup: cleanupService, Engine: engine, Containers: engine, Files: fileService, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: applicationSettings, Monitor: monitorService.NewService(engine, cfg.DataRoot), System: systemService.NewService(engine, taskService), Nodes: nodes, Agents: agents, AgentPublicURL: cfg.AgentPublicURL, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
 	application.recoveryWG.Add(1)
 	go func() {
 		defer application.recoveryWG.Done()
-		assistant.ReconcileInterrupted(recoveryContext)
-	}()
-	application.recoveryWG.Add(1)
-	go func() {
-		defer application.recoveryWG.Done()
-		observeNotifications(recoveryContext, nodes, db, notifications, assistant.Expire)
+		observeNotifications(recoveryContext, nodes, db, notifications)
 	}()
 	application.recoveryWG.Add(1)
 	go func() {
@@ -283,9 +259,6 @@ func (a *App) Run() error {
 }
 
 func (a *App) Shutdown(ctx context.Context) error {
-	if a.ai != nil {
-		a.ai.Stop()
-	}
 	if a.projectLogs != nil {
 		a.projectLogs.Stop()
 	}

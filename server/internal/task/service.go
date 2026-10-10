@@ -263,29 +263,6 @@ func (s *Service) LogsForNode(ctx context.Context, nodeID, id string) ([]databas
 	return s.Logs(ctx, id)
 }
 
-// RecentLogsForNode bounds both the database read and the returned time range.
-// The caller applies its total byte budget and redaction before model access.
-func (s *Service) RecentLogsForNode(ctx context.Context, nodeID, id string, since time.Time, lines, bytes int) ([]database.TaskLog, error) {
-	if _, err := s.GetForNode(ctx, nodeID, id); err != nil {
-		return nil, err
-	}
-	if lines <= 0 || lines > 500 {
-		lines = 500
-	}
-	if bytes <= 0 || bytes > 64*1024 {
-		bytes = 64 * 1024
-	}
-	var rows []database.TaskLog
-	err := s.db.WithContext(ctx).Model(&database.TaskLog{}).
-		Select("id, task_id, level, substr(message, 1, ?) AS message, created_at", bytes).
-		Where("task_id = ? AND created_at >= ?", id, since.UTC()).
-		Order("created_at DESC, id DESC").Limit(lines).Find(&rows).Error
-	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
-		rows[i], rows[j] = rows[j], rows[i]
-	}
-	return rows, err
-}
-
 func (s *Service) StepsForNode(ctx context.Context, nodeID, id string) ([]database.TaskStep, error) {
 	if _, err := s.GetForNode(ctx, nodeID, id); err != nil {
 		return nil, err
@@ -353,3 +330,5 @@ func (s *Service) Wait(ctx context.Context, id string) error {
 		return ctx.Err()
 	}
 }
+
+func (s *Service) SetEventSink(sink domainEvent.Sink) { s.mu.Lock(); s.sink = sink; s.mu.Unlock() }
