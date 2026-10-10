@@ -20,13 +20,16 @@ import (
 	"github.com/suma/suma/server/internal/testutil"
 )
 
-type clarifiedContainerSmokeModel struct{}
+type clarifiedContainerSmokeModel struct{ semantic bool }
 
-func (clarifiedContainerSmokeModel) Complete(_ context.Context, _ ai.Settings, _ string, messages []ai.ModelMessage, tools []ai.Tool) (ai.ModelReply, error) {
+func (m clarifiedContainerSmokeModel) Complete(_ context.Context, _ ai.Settings, _ string, messages []ai.ModelMessage, tools []ai.Tool) (ai.ModelReply, error) {
 	if len(tools) == 1 && tools[0].Name == "connection_probe" {
 		return ai.ModelReply{Calls: []ai.ToolCall{{ID: "probe", Name: "connection_probe", Arguments: json.RawMessage(`{"message":"suma_connection_test"}`)}}}, nil
 	}
 	if len(tools) == 0 {
+		if m.semantic {
+			return ai.ModelReply{Text: `{"general":false,"candidate_node_ids":["local"]}`}, nil
+		}
 		return ai.ModelReply{Text: `{"general":true}`}, nil
 	}
 	for i := len(messages) - 1; i >= 0; i-- {
@@ -44,6 +47,15 @@ func (clarifiedContainerSmokeModel) Complete(_ context.Context, _ ai.Settings, _
 }
 
 func TestRealDockerAIContainerQueryClarifiesTarget(t *testing.T) {
+	realDockerContainerConfirmation(t, false)
+}
+
+func TestRealDockerAIContainerAliasRequiresConfirmation(t *testing.T) {
+	realDockerContainerConfirmation(t, true)
+}
+
+func realDockerContainerConfirmation(t *testing.T, semantic bool) {
+	t.Helper()
 	endpoint := os.Getenv("SUMA_PROJECT_SMOKE_UNIX")
 	if os.Getenv("SUMA_RUN_OPERATIONS_SMOKE") != "1" || endpoint == "" {
 		t.Skip("run doc/operations-smoke.sh with its isolated Docker engine")
@@ -63,7 +75,7 @@ func TestRealDockerAIContainerQueryClarifiesTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer nodes.Close()
-	if err := db.Model(&database.Node{}).Where("id = ?", "local").Update("name", "Alibaba Cloud").Error; err != nil {
+	if err := db.Model(&database.Node{}).Where("id = ?", "local").Update("name", "aliyun").Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&database.User{Username: "target-smoke-admin", PasswordHash: "fixture"}).Error; err != nil {
@@ -72,7 +84,7 @@ func TestRealDockerAIContainerQueryClarifiesTarget(t *testing.T) {
 	tasks := task.NewService(db)
 	runtime := aiRuntime{db: db, nodes: nodes, tasks: tasks}
 	var reads atomic.Int32
-	assistant, err := ai.NewService(db, store, tasks, ai.Dependencies{Model: clarifiedContainerSmokeModel{}, Resources: func(ctx context.Context, node string, args ai.ToolArgs) ([]ai.ResourceOption, error) {
+	assistant, err := ai.NewService(db, store, tasks, ai.Dependencies{Model: clarifiedContainerSmokeModel{semantic: semantic}, Resources: func(ctx context.Context, node string, args ai.ToolArgs) ([]ai.ResourceOption, error) {
 		reads.Add(1)
 		if node != "local" || args.Kind != "container" {
 			return nil, ai.ErrScope
@@ -119,6 +131,9 @@ func TestRealDockerAIContainerQueryClarifiesTarget(t *testing.T) {
 	waiting := wait("waiting_input")
 	if reads.Load() != 0 || waiting.Interaction == nil || len(waiting.TargetNodeIDs) != 0 {
 		t.Fatal("Docker accessed before confirming a target", waiting, reads.Load())
+	}
+	if waiting.Interaction.Options[0].Suggested != semantic || semantic && !strings.Contains(waiting.Interaction.Prompt, "你指的是 aliyun 节点吗") {
+		t.Fatal("alias suggestion did not require confirmation before Docker access")
 	}
 	if _, err := assistant.AnswerInput(ctx, run.ID, ai.InputAnswer{InteractionID: waiting.Interaction.ID, ExpectedRevision: waiting.Revision, RequestID: "select-local", Values: []string{"local"}}, actor); err != nil {
 		t.Fatal(err)

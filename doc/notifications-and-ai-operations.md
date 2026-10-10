@@ -84,6 +84,10 @@ AI 工作台位于运维菜单。新任务初始目标为空；明确或经过�
 
 例如“阿里云节点有哪些容器？”只有在名称或完整 ID 能唯一对应到一个已启用、已授权节点时才直接查询。名称不明确时先选择节点；模型将实际查询误判成普通问答后又调用容器工具，也会在读取前请求节点确认。选择后重新生成查询，不执行先前带有未验证节点、资源或操作参数的调用。模型把名称或推测值填入 `node_id` 时会收到固定任务内的有效 ID 并可纠正，不会扩大到其他节点。没有目标节点可选时，先在设置 → AI 运维中授权并启用节点。只读列举容器不需要操作审批。
 
+名称未精确匹配时，模型先结合已启用且已授权节点的名称与 ID，提出可能的翻译、拼音、简称或拼写候选。例如实际只有 `aliyun`，问题提到“阿里云”，会询问“你指的是 aliyun 节点吗？”，提供“是，继续”和“选择其他节点”。猜测本身不会建立目标或读取 Docker；确认后才使用真实节点 ID 继续原问题。多个候选需要选择一个；模型提出的未知、未授权或停用 ID 被过滤，无可靠候选时回到完整授权列表。新别名不会自动沿用上一轮的其他节点。
+
+绑定聊天中，单个语义候选可直接回复“是／是的／对／yes”确认，回复“不是／no”保留原问题并选择其他节点，也可以回复列表中节点的完整名称。多个候选不会因一句“是”被自动选中；过期选择仍拒绝，重复或迟到的确认不会启动新查询。自然确认只确认节点，任何变更仍需要独立的不可变审批预览。
+
 旧版本留下的 `resource is outside the authorized AI scope` 失败记录会显示节点确认／授权指引；重新发送问题即可进入新流程。真正的节点、资源或身份授权拒绝仍终止任务，并提示核对节点授权和账号绑定。
 
 回复支持 Markdown 标题、粗体、列表、引用、行内代码、代码块、表格和任务列表。宽代码和表格在消息内部滚动，适配深浅主题及移动端。使用 [react-markdown](https://github.com/remarkjs/react-markdown) 和 [remark-gfm](https://github.com/remarkjs/remark-gfm)；原始 HTML 不执行，不自动加载模型提供的图片，危险链接协议不会变成可点击链接。
@@ -201,6 +205,8 @@ SUMA_PROJECT_SMOKE_GO_CACHE=/tmp/suma-notification-go-cache bash doc/operations-
 新增的全局 AI 只读冒烟经真实本地 Unix 运行时读取节点和已有容器证据，并确认不创建提案或 Task，不修改或删除 Docker 资源。
 
 隔离 Docker 中的 `TestRealDockerAIContainerQueryClarifiesTarget` 复现“阿里云节点有哪些容器？”被受控模型误判为普通问答后调用容器工具，确认选择前无 Docker 读取，选择后通过真实 Unix 运行时列举容器，并且不创建提案或 Task。该场景已加入 `doc/operations-smoke.sh`。
+
+`TestRealDockerAIContainerAliasRequiresConfirmation` 使用受控模型为实际名为 `aliyun` 的节点提出语义候选，验证“你指的是 aliyun 节点吗？”确认前零读取，确认后返回隔离容器列表。它与服务／HTTP／聊天测试验证确认与路由机制；实际部署使用的模型对别名的理解，以及真实飞书消息体验，需要在对应环境验收。
 
 Docker 脚本使用可清理的隔离 Docker 27 daemon，覆盖 Unix、mTLS TCP、HTTPS/WSS Agent；需要本地已有 `docker:27-dind`、`alpine:3.24` 和测试 Agent 镜像，不删除用户资源。包含真实固定镜像 Compose 应用、通知事件、AI 提案、审批、容器重启及重复审批拒绝。额外的 `TestRealDockerGuestChatQueryNamedNode` 通过飞书消息处理路径，在两个授权节点中按“发送ganzhou节点的信息给我”选择真实 Unix 运行时，读取容器和镜像摘要，确认未调用模型、创建提案或 Task。`TestRealDockerBoundChatStreamsNodeStatus` 验证已绑定消息 → Eino → 真实 Unix 节点读取 → 模型完成前和完成后的同一卡片更新；这些测试使用发送器／模型替身，不会向真实飞书发送消息。
 

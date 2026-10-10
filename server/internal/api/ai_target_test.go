@@ -19,13 +19,16 @@ import (
 	"github.com/suma/suma/server/internal/testutil"
 )
 
-type targetScopeModel struct{}
+type targetScopeModel struct{ semantic bool }
 
-func (targetScopeModel) Complete(_ context.Context, _ ai.Settings, _ string, messages []ai.ModelMessage, tools []ai.Tool) (ai.ModelReply, error) {
+func (m targetScopeModel) Complete(_ context.Context, _ ai.Settings, _ string, messages []ai.ModelMessage, tools []ai.Tool) (ai.ModelReply, error) {
 	if len(tools) == 1 && tools[0].Name == "connection_probe" {
 		return ai.ModelReply{Calls: []ai.ToolCall{{ID: "probe", Name: "connection_probe", Arguments: json.RawMessage(`{"message":"suma_connection_test"}`)}}}, nil
 	}
 	if len(tools) == 0 {
+		if m.semantic {
+			return ai.ModelReply{Text: `{"general":false,"candidate_node_ids":["local"]}`}, nil
+		}
 		return ai.ModelReply{Text: `{"general":true}`}, nil
 	}
 	for i := len(messages) - 1; i >= 0; i-- {
@@ -43,6 +46,12 @@ func (targetScopeModel) Complete(_ context.Context, _ ai.Settings, _ string, mes
 }
 
 func TestAIResourceQueryHTTPClarifiesAndResumesWithoutScopeExpansion(t *testing.T) {
+	t.Run("misclassification", func(t *testing.T) { testAIResourceQueryHTTP(t, false) })
+	t.Run("semantic_alias", func(t *testing.T) { testAIResourceQueryHTTP(t, true) })
+}
+
+func testAIResourceQueryHTTP(t *testing.T, semantic bool) {
+	t.Helper()
 	ctx := context.Background()
 	db, err := testutil.Open(t)
 	if err != nil {
@@ -56,7 +65,7 @@ func TestAIResourceQueryHTTPClarifiesAndResumesWithoutScopeExpansion(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, row := range []database.Node{{ID: "local", Name: "Alibaba Cloud", Enabled: true}, {ID: "foreign", Name: "Private", Enabled: true}} {
+	for _, row := range []database.Node{{ID: "local", Name: "aliyun", Enabled: true}, {ID: "foreign", Name: "Private", Enabled: true}} {
 		if err := db.Create(&row).Error; err != nil {
 			t.Fatal(err)
 		}
@@ -66,7 +75,7 @@ func TestAIResourceQueryHTTPClarifiesAndResumesWithoutScopeExpansion(t *testing.
 		t.Fatal(err)
 	}
 	var reads atomic.Int32
-	assistant, err := ai.NewService(db, store, task.NewService(db), ai.Dependencies{Model: targetScopeModel{}, Resources: func(_ context.Context, node string, args ai.ToolArgs) ([]ai.ResourceOption, error) {
+	assistant, err := ai.NewService(db, store, task.NewService(db), ai.Dependencies{Model: targetScopeModel{semantic: semantic}, Resources: func(_ context.Context, node string, args ai.ToolArgs) ([]ai.ResourceOption, error) {
 		reads.Add(1)
 		if node != "local" || args.Kind != "container" {
 			t.Error("unverified runtime was accessed", node, args.Kind)
@@ -132,6 +141,9 @@ func TestAIResourceQueryHTTPClarifiesAndResumesWithoutScopeExpansion(t *testing.
 	waiting := wait("waiting_input")
 	if reads.Load() != 0 || waiting.Interaction == nil || waiting.Interaction.Kind != "node" || len(waiting.Interaction.Options) != 1 || waiting.Interaction.Options[0].ID != "local" {
 		t.Fatal("HTTP query did not request an authorized node before reading", waiting)
+	}
+	if waiting.Interaction.Options[0].Suggested != semantic || semantic && !strings.Contains(waiting.Interaction.Prompt, "你指的是 aliyun 节点吗") {
+		t.Fatal("semantic candidate did not reach the HTTP confirmation", waiting.Interaction)
 	}
 	answer := ai.InputAnswer{InteractionID: waiting.Interaction.ID, ExpectedRevision: waiting.Revision, RequestID: "select-node", Values: []string{"foreign"}}
 	if res := request("POST", "/ai/runs/"+started.Data.ID+"/inputs", answer); res.Code != 422 {

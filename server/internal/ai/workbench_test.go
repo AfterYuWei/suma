@@ -79,6 +79,9 @@ func TestPerTurnModelDoesNotChangeDefaultAndResumeKeepsModel(t *testing.T) {
 		if len(defs) == 1 && defs[0].Name == "connection_probe" {
 			return ModelReply{Calls: []ToolCall{{ID: "probe", Name: "connection_probe", Arguments: json.RawMessage(`{"message":"suma_connection_test"}`)}}}, nil
 		}
+		if len(defs) == 0 {
+			return ModelReply{Text: `{"general":false,"candidate_node_ids":[],"reuse_context":true}`}, nil
+		}
 		return ModelReply{Text: "Model " + cfg.Model}, nil
 	})
 	actor := Actor{UserID: 1, Source: "site"}

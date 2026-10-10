@@ -33,11 +33,12 @@ type Conversation struct {
 	CurrentRun *Run                 `json:"current_run,omitempty"`
 }
 type ResourceOption struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	NodeID string `json:"node_id"`
-	Kind   string `json:"kind"`
-	Detail string `json:"detail,omitempty"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	NodeID    string `json:"node_id"`
+	Kind      string `json:"kind"`
+	Detail    string `json:"detail,omitempty"`
+	Suggested bool   `json:"suggested,omitempty"`
 }
 type Interaction struct {
 	database.AIInteraction

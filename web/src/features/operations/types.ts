@@ -17,7 +17,7 @@ export interface AIOperation { id: string; run_id: string; node_id: string; acti
 
 export interface AIConversationRecord { id: string; title: string; source: string; current_run_id: string; revision: number; event_seq: number; created_at: string; updated_at: string }
 export interface AIConversationDetail extends AIConversationRecord { context: { node_ids?: string[]; resource_node_id?: string; resource_kind?: string; resource_id?: string }; messages: { id: string; run_id: string; role: string; content: string; created_at: string }[]; runs: AIRun[]; current_run?: AIRun }
-export interface AIResourceOption { id: string; name: string; node_id: string; kind: string; detail?: string }
+export interface AIResourceOption { id: string; name: string; node_id: string; kind: string; detail?: string; suggested?: boolean }
 export interface AIInteraction { id: string; run_id: string; revision: number; kind: string; prompt: string; multiple: boolean; status: string; expires_at: string; options: AIResourceOption[] }
 export interface AIPlanStep { id: string; position: number; title: string; node_id: string; action: string; resource_id: string; status: string; operation_id: string; expected: string }
 export interface AIConfirmation { key: string; label: string; expected: string; warning?: string; checkbox?: boolean }

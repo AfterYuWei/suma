@@ -150,6 +150,14 @@ func chatOperations(notify *notification.Service, assistant *ai.Service) notific
 		if text == "" {
 			return
 		}
+		conversation, err := assistant.CreateConversation(ctx, ai.ConversationInput{}, actor)
+		if err != nil {
+			reply(chatAIError(err))
+			return
+		}
+		if chatNodeConfirmation(ctx, assistant, conversation.CurrentRun, actor, text, in.ID, reply) {
+			return
+		}
 		nodeID := ""
 		if strings.HasPrefix(text, "/node ") {
 			parts := strings.SplitN(strings.TrimPrefix(text, "/node "), " ", 2)
@@ -159,7 +167,7 @@ func chatOperations(notify *notification.Service, assistant *ai.Service) notific
 			}
 			nodeID, text = parts[0], strings.TrimSpace(parts[1])
 		}
-		run, err := assistant.Start(ctx, ai.RunInput{NodeID: nodeID, Question: text}, actor)
+		run, err := assistant.Start(ctx, ai.RunInput{ConversationID: conversation.ID, NodeID: nodeID, Question: text}, actor)
 		if err != nil {
 			reply(chatAIError(err))
 			return
@@ -168,6 +176,57 @@ func chatOperations(notify *notification.Service, assistant *ai.Service) notific
 			reply("任务已开始 / Task started: " + run.ID)
 		}
 	}
+}
+
+// Natural yes/no replies can confirm only a current node selection. They never
+// grant operation approval or apply to an expired/different interaction.
+func chatNodeConfirmation(ctx context.Context, assistant *ai.Service, run *ai.Run, actor ai.Actor, text, messageID string, reply func(string)) bool {
+	value := strings.ToLower(strings.Trim(strings.TrimSpace(text), "。.!！?？"))
+	yes := value == "是" || value == "是的" || value == "对" || value == "对的" || value == "确认" || value == "yes" || value == "y"
+	no := value == "不是" || value == "否" || value == "不对" || value == "no" || value == "n"
+	if run != nil && run.Status == "waiting_input" && run.Interaction != nil && run.Interaction.Kind != "node" {
+		return false
+	}
+	if run != nil && run.Status == "waiting_input" && run.Interaction != nil && run.Interaction.Multiple && (yes || no) {
+		reply("请从列表中明确选择目标节点。 / Select the target nodes from the list.")
+		return true
+	}
+	if run == nil || run.Status != "waiting_input" || run.Interaction == nil || run.Interaction.Kind != "node" || run.Interaction.Multiple {
+		if yes || no {
+			reply("当前没有待确认的节点，请发送具体查询；变更操作仍须通过完整审批预览确认。 / No node is awaiting confirmation. Send a specific query; changes still require approval of the full preview.")
+			return true
+		}
+		return false
+	}
+	input := run.Interaction
+	if no {
+		reply("好的，请在上方选择其他节点，或回复它的完整名称。 / Choose another node above, or reply with its exact name.")
+		return true
+	}
+	selected := []string{}
+	for _, option := range input.Options {
+		if yes && option.Suggested || !yes && (strings.EqualFold(text, option.Name) || text == option.ID) {
+			selected = append(selected, option.ID)
+		}
+	}
+	if len(selected) != 1 {
+		if yes {
+			reply("请先从候选列表中明确选择一个节点。 / Select one node from the candidates first.")
+			return true
+		}
+		return false
+	}
+	requestID := notification.ID()
+	if messageID != "" {
+		hash := sha256.Sum256([]byte(run.ID + ":" + input.ID + ":" + messageID))
+		requestID = hex.EncodeToString(hash[:])
+	}
+	if _, err := assistant.AnswerInput(ctx, run.ID, ai.InputAnswer{InteractionID: input.ID, ExpectedRevision: input.Revision, RequestID: requestID, Values: selected}, actor); err != nil {
+		reply(chatAIError(err))
+	} else {
+		reply("已确认节点，继续任务。 / Node confirmed; resuming the task.")
+	}
+	return true
 }
 func chatWorkflowDelivery(notify *notification.Service, assistant *ai.Service) func(context.Context, ai.Actor, ai.WorkflowEvent, ai.Run) error {
 	return func(ctx context.Context, actor ai.Actor, entry ai.WorkflowEvent, run ai.Run) error {
@@ -212,6 +271,15 @@ func chatWorkflowDelivery(notify *notification.Service, assistant *ai.Service) f
 				}
 			}
 			message.Text = input.Prompt
+			suggestions := 0
+			for _, option := range input.Options {
+				if option.Suggested {
+					suggestions++
+				}
+			}
+			if input.Kind == "node" && !input.Multiple && suggestions == 1 {
+				message.Text += "\n可回复“是”确认这个节点，回复“不是”选择其他节点。 / Reply yes to confirm this node, or no to choose another."
+			}
 			channel, err := notify.Channel(ctx, b.ChannelID)
 			if err != nil {
 				return err

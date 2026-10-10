@@ -2,7 +2,6 @@ package ai
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"regexp"
 	"strings"
@@ -57,6 +56,7 @@ func (a *targetAgent) resolve(ctx context.Context, resume *adk.ResumeInfo) *adk.
 			return
 		}
 		text := strings.ToLower(f.row.Question)
+		var classification *targetClassification
 		matches := []ResourceOption{}
 		for _, option := range options {
 			if mentionsTarget(text, option.ID) || option.Name != "" && mentionsTarget(text, option.Name) {
@@ -84,19 +84,20 @@ func (a *targetAgent) resolve(ctx context.Context, resume *adk.ResumeInfo) *adk.
 			f.context = TargetContext{}
 		} else if len(f.targets) > 0 {
 			// A new topic must establish a new scope; pronouns/continue preserve it.
-			reuse := f.source != "conversation" || refersToTask(text)
-			if !reuse {
-				messages := append([]*schema.Message{schema.SystemMessage(`Classify whether the current request continues the same task and verified node context as the previous turn. Return only JSON {"reuse_context":true} for a related follow-up, otherwise {"reuse_context":false}. Do not infer permission or new nodes.`)}, f.history(ctx)...)
-				reply, e := (&ResponsesChatModel{frame: f}).Generate(ctx, messages)
+			reuse := f.source != "conversation"
+			if f.source == "conversation" {
+				choice, e := f.classifyTarget(ctx, options, true)
 				if e != nil {
 					writer.Send(&adk.AgentEvent{Err: e})
 					return
 				}
-				var choice struct {
-					Reuse bool `json:"reuse_context"`
+				classification = &choice
+				reuse = refersToTask(text)
+				if choice.ReuseContext != nil {
+					reuse = *choice.ReuseContext
 				}
-				if json.Unmarshal([]byte(reply.Content), &choice) == nil {
-					reuse = choice.Reuse
+				if len(choice.CandidateNodeIDs) > 0 {
+					reuse = false
 				}
 			}
 			if reuse {
@@ -136,17 +137,20 @@ func (a *targetAgent) resolve(ctx context.Context, resume *adk.ResumeInfo) *adk.
 		// node; even a fabricated ID from a model still results in a human selection.
 		general := false
 		if len(matches) == 0 {
-			reply, e := (&ResponsesChatModel{frame: f}).Generate(ctx, []*schema.Message{schema.SystemMessage(`Classify the request. Return only JSON {"general":true} for an explanation with no inspection or execution of real resources; otherwise {"general":false}. No tools or target inference.`), schema.UserMessage(f.row.Question)})
-			if e != nil {
-				writer.Send(&adk.AgentEvent{Err: e})
+			if classification == nil {
+				choice, e := f.classifyTarget(ctx, options, false)
+				if e != nil {
+					writer.Send(&adk.AgentEvent{Err: e})
+					return
+				}
+				classification = &choice
+			}
+			if len(classification.CandidateNodeIDs) > 0 {
+				state := f.candidateInput(options, classification.CandidateNodeIDs)
+				writer.Send(adk.StatefulInterrupt(ctx, f.prompt(state), state))
 				return
 			}
-			var classification struct {
-				General bool `json:"general"`
-			}
-			if json.Unmarshal([]byte(reply.Content), &classification) == nil {
-				general = classification.General
-			}
+			general = classification.General
 		}
 		if general {
 			writer.Send(adk.EventFromMessage(schema.AssistantMessage("General explanation: no Docker target is authorized for this task.", nil), nil, schema.Assistant, ""))

@@ -83,6 +83,37 @@ test('default setting explains channel usage and persists the chosen model', asy
 })
 
 for (const language of ['en-US', 'zh-CN']) for (const theme of ['dark', 'light']) for (const width of [390, 1440]) {
+  test(`confirm or reject a semantic node suggestion ${language} ${theme} ${width}`, async ({ page }) => {
+    const zh = language === 'zh-CN', now = new Date().toISOString()
+    const waiting = { id: 'semantic-node', conversation_id: 'test-conversation', revision: 2, phase: 'target', node_id: '', target_node_ids: [], target_source: '', steps: [], model: 'default-model', question: '阿里云节点有哪些容器？', status: 'waiting_input', error: '', tokens: 50, created_at: now, result: { summary: '', evidence: [], operation_ids: [], missing: [] }, interaction: { id: 'confirm-alias', run_id: 'semantic-node', revision: 2, kind: 'node', prompt: zh ? '你指的是 aliyun 节点吗？' : 'Do you mean the aliyun node?', multiple: false, status: 'pending', expires_at: new Date(Date.now() + 86400000).toISOString(), options: [{ id: 'local', name: 'aliyun', node_id: 'local', kind: 'node', suggested: true }, { id: 'edge-hk', name: 'edge-hk', node_id: 'edge-hk', kind: 'node' }] } }
+    await setup(page, language, theme, [waiting])
+    await page.setViewportSize({ width, height: 900 })
+    await page.goto('/ai-operations#run=semantic-node')
+    const interaction = page.getByRole('form', { name: zh ? '补充任务信息' : 'Provide task input', exact: true })
+    await expect(interaction).toContainText(zh ? '你指的是 aliyun 节点吗' : 'Do you mean the aliyun node')
+    await expect(interaction.getByRole('button', { name: zh ? '是，继续' : 'Yes, continue', exact: true })).toBeVisible()
+    expect((await state(page)).operations).toEqual([])
+    expect((await state(page)).runs[0].target_node_ids).toEqual([])
+    if (theme === 'dark') {
+      if (zh && width === 390) await page.screenshot({ path: '/tmp/suma-ai-semantic-confirmation-mobile.png', fullPage: true })
+      await interaction.getByRole('button', { name: zh ? '是，继续' : 'Yes, continue', exact: true }).click()
+      await expect(interaction).toHaveCount(0)
+      expect((await state(page)).runs[0]).toMatchObject({ node_id: 'local', target_source: 'selection', status: 'completed' })
+    } else {
+      await interaction.getByRole('button', { name: zh ? '选择其他节点' : 'Choose another node', exact: true }).click()
+      const confirm = interaction.getByRole('button', { name: zh ? '确认并继续' : 'Confirm and continue', exact: true })
+      await expect(confirm).toBeDisabled()
+      await expect(interaction.getByRole('checkbox', { name: 'aliyun', exact: false })).not.toBeChecked()
+      await interaction.getByRole('checkbox', { name: 'edge-hk', exact: false }).check()
+      await confirm.click()
+      await expect(interaction).toHaveCount(0)
+      expect((await state(page)).runs[0]).toMatchObject({ node_id: 'edge-hk', target_source: 'selection', status: 'completed' })
+    }
+    await expect(page.getByRole('cell', { name: 'demo-nginx', exact: true })).toBeVisible()
+    expect((await state(page)).operations).toEqual([])
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  })
+
   test(`recover an unverified node query ${language} ${theme} ${width}`, async ({ page }) => {
     const zh = language === 'zh-CN', question = zh ? '阿里云节点有哪些容器？' : 'Which containers are on the Alibaba Cloud node?'
     const failed = { id: 'legacy-scope-error', conversation_id: 'test-conversation', revision: 1, phase: 'paused', node_id: '', target_node_ids: [], target_source: '', steps: [], model: 'default-model', question, status: 'failed', error: '[NodeRunError] failed to stream tool call call_old: resource is outside the authorized AI scope -------- node path: [node_1, ToolNode]', tokens: 11755, created_at: '2026-10-10T09:00:00Z', result: { summary: '', evidence: [], operation_ids: [], missing: [] } }
