@@ -18,6 +18,10 @@ import (
 
 var operationActions = []string{"container.start", "container.stop", "container.restart", "container.pause", "container.unpause", "container.kill", "container.rename", "container.remove", "image.pull", "image.tag", "image.remove", "network.create", "network.remove", "volume.create", "volume.remove", "project.create", "project.save", "project.up", "project.start", "project.stop", "project.restart", "project.down", "project.pull", "project.build", "project.update", "project.remove", "project.takeover", "project.cleanup", "cd.deploy", "cd.retry", "cd.rollback", "cleanup.protected", "cleanup.cache"}
 
+// Bad model parameters can be corrected without weakening the actual actor,
+// configuration, runtime or resource authorization checks (which use ErrScope).
+var errToolNode = errors.New("invalid tool node ID")
+
 func object(properties map[string]any, required ...string) map[string]any {
 	return map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}
 }
@@ -88,10 +92,24 @@ func (t *workflowTool) InvokableRun(ctx context.Context, args string, _ ...tool.
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return "", err
 	}
+	// A model's general-question classification is advisory. If it later asks
+	// for a real resource, require a human target before any adapter is called.
+	if len(f.targets) == 0 && t.definition.Name != "list_nodes" {
+		options, err := f.nodeOptions(ctx)
+		if err != nil {
+			return "", err
+		}
+		if len(options) == 0 {
+			return "", errNoAvailableTarget
+		}
+		state := f.makeInput("node", "查询实际资源前，请确认目标节点；若列表中没有所需节点，请先在设置 → AI 运维中授权。 / Select the target node before querying real resources. If it is missing, authorize it in Settings → AI operations.", options, false, waitState{CallKey: callKey, ArgumentsHash: digest(json.RawMessage(args)), ArgumentsJSON: f.clean(args, 128<<10)})
+		return "", tool.StatefulInterrupt(ctx, f.prompt(state), state)
+	}
 	if err := f.progress(ctx, "evidence", "tool.started", map[string]string{"tool": t.definition.Name}); err != nil {
 		return "", err
 	}
 	output, err := t.invoke(ctx, args, callKey)
+	status := "completed"
 	if err != nil {
 		if _, isInterrupt := compose.IsInterruptRerunError(err); isInterrupt {
 			return "", err
@@ -99,7 +117,12 @@ func (t *workflowTool) InvokableRun(ctx context.Context, args string, _ ...tool.
 		if errors.Is(err, ErrScope) || errors.Is(err, ErrConflict) || ctx.Err() != nil {
 			return "", err
 		}
-		output = marshal(map[string]string{"error": f.clean(err.Error(), 1024)})
+		status = "rejected"
+		if errors.Is(err, errToolNode) {
+			output = marshal(map[string]any{"error": "invalid_node_id", "message": "No resource was accessed. Use an exact ID from target_node_ids, not a display name or an inferred ID. Do not broaden this task's target set.", "target_node_ids": f.targets})
+		} else {
+			output = marshal(map[string]string{"error": f.clean(err.Error(), 1024)})
+		}
 	}
 	if err = f.guard(ctx); err != nil {
 		return "", err
@@ -107,7 +130,7 @@ func (t *workflowTool) InvokableRun(ctx context.Context, args string, _ ...tool.
 	if err = f.progress(ctx, "evidence", "tool.completed", map[string]string{"tool": t.definition.Name}); err != nil {
 		return "", err
 	}
-	f.calls[callKey] = database.AIToolCall{ID: id(), RunID: f.row.ID, CallKey: callKey, Name: t.definition.Name, ArgumentsHash: digest(json.RawMessage(args)), ArgumentsJSON: f.clean(args, 128<<10), Result: f.clean(output, 128<<10), Status: "completed"}
+	f.calls[callKey] = database.AIToolCall{ID: id(), RunID: f.row.ID, CallKey: callKey, Name: t.definition.Name, ArgumentsHash: digest(json.RawMessage(args)), ArgumentsJSON: f.clean(args, 128<<10), Result: f.clean(output, 128<<10), Status: status}
 	return output, nil
 }
 func (t *workflowTool) node(node string) (string, error) {
@@ -116,7 +139,7 @@ func (t *workflowTool) node(node string) (string, error) {
 		node = f.targets[0]
 	}
 	if node == "" || !has(f.targets, node) {
-		return "", ErrScope
+		return "", errToolNode
 	}
 	return node, nil
 }
@@ -319,6 +342,22 @@ func (t *workflowTool) resume(ctx context.Context, state waitState) (string, err
 	target, data, answer := tool.GetResumeContext[InputAnswer](ctx)
 	if !target || !data || answer.InteractionID != state.InteractionID {
 		return "", ErrConflict
+	}
+	if state.Kind == "node" {
+		if len(answer.Values) != 1 {
+			return "", ErrInvalid
+		}
+		if err := f.setTargets(answer.Values, "selection"); err != nil {
+			return "", err
+		}
+		// Never replay the original call with unverified IDs, resources or write
+		// parameters. Let the model build a fresh call using the confirmed scope.
+		output := marshal(map[string]any{"target_node_ids": f.targets, "message": "The user confirmed the task target. The original tool call was not executed. Discard its unverified parameters and issue a fresh call using the confirmed node ID."})
+		t.recordResume(state, output)
+		call := f.calls[state.CallKey]
+		call.Status = "clarified"
+		f.calls[state.CallKey] = call
+		return output, nil
 	}
 	output := marshal(map[string]any{"values": answer.Values, "text": answer.Text})
 	t.recordResume(state, output)

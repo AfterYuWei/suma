@@ -77,10 +77,10 @@ export function mockOperations(path: string, method: string, body: Record<string
   const context = body.context as AIConversationDetail['context'] | undefined, target = context?.resource_node_id || conv.context.node_ids?.[0] || ''
   if (target && !settings.node_ids.includes(target)) throw new ApiError('Node unauthorized', 20801, 403)
   const now = new Date().toISOString(), run: AIRun = { id: identifier(), conversation_id: conv.id, revision: 2, phase: 'target', target_node_ids: target ? [target] : [], target_source: context?.resource_id ? 'resource' : target ? 'conversation' : '', node_id: target, model, question: String(body.question), status: target ? 'waiting_approval' : 'waiting_input', error: '', tokens: 240, created_at: now, steps: [], result: { summary: '', evidence: [], operation_ids: [], missing: [] } }
-  if (target) demoPropose(run, context?.resource_id || 'redis-main'); else run.interaction = { id: identifier(), run_id: run.id, revision: run.revision, kind: 'node', prompt: '需要在哪个节点执行这项任务？ / Which node should this task use?', multiple: false, status: 'pending', expires_at: new Date(Date.now() + 86400000).toISOString(), options: settings.node_ids.map(id => ({ id, name: id, node_id: id, kind: 'node' })) }
+  if (target) demoContinue(run, context?.resource_id || 'redis-main'); else run.interaction = { id: identifier(), run_id: run.id, revision: run.revision, kind: 'node', prompt: '需要在哪个节点执行这项任务？ / Which node should this task use?', multiple: false, status: 'pending', expires_at: new Date(Date.now() + 86400000).toISOString(), options: settings.node_ids.map(id => ({ id, name: id, node_id: id, kind: 'node' })) }
   conv.revision++; conv.event_seq++; conv.current_run_id = run.id; conv.title ||= run.question; conv.updated_at = now; conv.context = context || conv.context; conv.messages.push({ id: identifier(), run_id: run.id, role: 'user', content: run.question, created_at: now }); runs.unshift(run); return run
  }
- if (/^\/ai\/runs\/[^/]+\/inputs$/.test(path) && method === 'POST') { const run = runs.find(r => r.id === path.split('/')[3]), values = body.values as string[]; if (!run || run.status !== 'waiting_input' || run.interaction?.id !== body.interaction_id || run.revision !== body.expected_revision || values.length !== 1 || !settings.node_ids.includes(values[0])) conflict(); const row = run!; row.node_id = values[0]; row.target_node_ids = values; row.target_source = 'selection'; row.status = 'waiting_approval'; row.interaction = undefined; row.revision++; demoPropose(row, 'redis-main'); const conv = conversations.find(c => c.id === row.conversation_id)!; conv.context.node_ids = values; return row }
+ if (/^\/ai\/runs\/[^/]+\/inputs$/.test(path) && method === 'POST') { const run = runs.find(r => r.id === path.split('/')[3]), values = body.values as string[]; if (!run || run.status !== 'waiting_input' || run.interaction?.id !== body.interaction_id || run.revision !== body.expected_revision || values.length !== 1 || !settings.node_ids.includes(values[0])) conflict(); const row = run!; row.node_id = values[0]; row.target_node_ids = values; row.target_source = 'selection'; row.status = 'waiting_approval'; row.interaction = undefined; row.revision++; demoContinue(row, 'redis-main'); const conv = conversations.find(c => c.id === row.conversation_id)!; conv.context.node_ids = values; return row }
  if (/^\/ai\/runs\/[^/]+\/cancel$/.test(path) && method === 'POST') { const run = runs.find(r => r.id === path.split('/')[3]); if (run) { run.status = 'canceled'; run.interaction = undefined; operations.filter(o => o.run_id === run.id && o.status === 'awaiting_approval').forEach(o => { o.status = 'invalidated' }) }; return run }
  if (/^\/ai\/runs\/[^/]+$/.test(path)) return runs.find(r => r.id === path.split('/')[3])
  if (path === '/ai/operations') return operations
@@ -100,6 +100,15 @@ if (typeof sessionStorage !== 'undefined') {
 }
 
 export function mockAIAuditLogs() { return audits.map(a => { const op = operations.find(o => o.id === a.operation_id); return { id: 100000 + Number(a.id), scope: op ? 'node' : 'control_plane', node_id: op?.node_id || '', node_name: op ? 'homelab-01' : '', user_id: a.user_id, source: a.source, action: `ai.${String(a.action)}`, resource_type: 'ai', resource_name: a.resource, result: a.result === 'completed' ? 'success' : 'denied', details: a.result, run_id: op?.run_id, operation_id: a.operation_id, task_id: op?.task_id, ip: '', created_at: a.created_at } }) }
+
+function demoContinue(run: AIRun, resource: string) {
+ if (/(有哪些容器|list containers|which containers|what containers)/i.test(run.question)) {
+  run.status = 'completed'; run.phase = 'report'; run.steps = []
+  run.result = { summary: `## ${run.node_id} · Containers / 容器\n\n| Name / 名称 | State / 状态 |\n| --- | --- |\n| demo-nginx | running |`, evidence: [{ node_id: run.node_id, source: 'list_resources', resource: 'container', time: new Date().toISOString(), content: 'demo-nginx: running (demo data)', unavailable: false }], operation_ids: [], missing: [] }
+  return
+ }
+ demoPropose(run, resource)
+}
 
 function demoPropose(run: AIRun, resource: string) {
  const now = new Date().toISOString(), op: AIOperation = { id: identifier(), run_id: run.id, node_id: run.node_id, action: 'container.restart', resource_id: resource, title: `Restart ${resource}`, impact: 'Interrupts service. Volumes are preserved. Recovery requires a new approval.', parameters: {}, snapshot: { details: { state: 'running', image_id: 'sha256:demo-image', restart_count: 5 }, fingerprint: 'frozen-demo-state' }, review_token: identifier(), status: 'awaiting_approval', task_id: '', result: '', expires_at: new Date(Date.now() + 900000).toISOString(), approval_source: '', confirmations: [] }

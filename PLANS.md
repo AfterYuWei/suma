@@ -4,6 +4,8 @@ This file records the completed MVP implementation. Every checked phase was veri
 
 ## Current work
 
+- [x] 修复 AI 工作台查询节点时直接报授权范围错误（2026-10-10）：未修复代码复现模型将“阿里云节点有哪些容器？”误判为普通解释后调用容器工具，产生与截图相同的 NodeRunError；目标未确定时在工具边界发起结构化节点选择，选择后重新生成调用，不重放未验证读取／操作参数；错误节点 ID 返回固定任务内的纠正提示，实际权限拒绝仍停止并显示指引。隔离 PostgreSQL 服务／认证 HTTP 回归验证授权选择、显示名称／其他已授权节点／虚构 ID 参数纠正、停用节点／无可用节点、重启恢复、重复回答、批量调用不重放及仅实际成功读取进入审计；新增受控模型 fixture 校正为读取最新工具结果及现有 HTTP 200 合约后通过。完整 Go test／build、针对 AI／API 的 race、Web lint／typecheck／build 和 31 项工作台／聊天浏览器场景通过，包含八组中英文、深浅主题、390px／1440px 失败记录指引与重新选择后的只读查询，代表性手机截图已核对。独立 Docker 冒烟确认选择前零读取、确认后真实 Unix 运行时返回隔离容器且无提案／Task（1.17s），既有绑定流式与访客查询、Unix／mTLS TCP／HTTPS-WSS Agent 逐项审批重启回归通过（55.95s）。同步 API、使用说明、演示只读查询及隔离冒烟脚本。
+
 - [x] 飞书 AI 真实流式回复（2026-10-08）：参考 OpenClaw 的同卡片更新与收尾，打通 Responses SSE → Eino ADK → 脱敏进度事件 → 飞书 CardKit；正文保留 Markdown，澄清与不可变审批卡片独立。验证：延迟真实 HTTP SSE 证明模型完成前产生正文，隐藏推理／工具参数、要求完整终态、取消关闭上游、JSON 不伪造分片；Eino／完整飞书处理路径验证完成前更新且只有一个回执，跨分片模型密钥／引号凭证／私钥不外泄，空闲生成撤权后取消。平台 API／隔离 PostgreSQL 回归覆盖累计内容与替换、单调序号／稳定 UUID、未知发送结果／收尾失败重试不重复、持久回执／过期事件、部分内容保留、权限兼容／完整回退、审批与不同任务边界、暂停／关闭聊天／删除／换密钥／撤权／关服务取消请求；重启产生暂停收尾事件且不重放变更。完整 Go test／build、AI／App／Notification／Database／Redact race、Web lint／typecheck／build 和 31 项飞书／绑定／通知审批浏览器场景通过；修正受控模型 fixture 的必需工具探针后完整链路和 gates 通过。独立 Docker 实测绑定聊天 → Eino 流式 → 真实 Unix 节点读取 → 同卡片分片及最终更新（模型／发送器替身、无变更），既有 Unix／mTLS TCP／HTTPS-WSS Agent 逐项审批重启回归通过（48.023s）。同步新增回执表、API、权限 JSON、使用文档与冒烟；真实飞书 CardKit 效果及权限发布验收仍待专用应用／会话条件。
 
   - [ ] 专用飞书应用真实流式验收：发布 cardkit:card:write／im:message:update 权限后，在明确指定的私聊与群聊验证打字效果、同卡片最终文本、取消和独立审批；当前缺少专用应用凭证及测试会话，自动化平台 API 与 Docker 测试不替代该验收。

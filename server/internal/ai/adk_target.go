@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"regexp"
 	"strings"
 	"unicode"
@@ -10,6 +11,8 @@ import (
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
 )
+
+var errNoAvailableTarget = errors.New("没有可用的 AI 授权节点，请在设置 → AI 运维中授权并启用节点后重新提问。 / No enabled AI-authorized node is available. Authorize an enabled node in Settings → AI operations, then ask again.")
 
 // Target resolution runs before the model receives any Docker tools. Only real
 // directory entries and a server-validated context can establish a target.
@@ -149,7 +152,11 @@ func (a *targetAgent) resolve(ctx context.Context, resume *adk.ResumeInfo) *adk.
 			writer.Send(adk.EventFromMessage(schema.AssistantMessage("General explanation: no Docker target is authorized for this task.", nil), nil, schema.Assistant, ""))
 			return
 		}
-		state := f.makeInput("node", "需要在哪个节点执行这项任务？ / Which node should this task use?", options, all || len(matches) > 1, waitState{})
+		if len(options) == 0 {
+			writer.Send(&adk.AgentEvent{Err: errNoAvailableTarget})
+			return
+		}
+		state := f.makeInput("node", "请确认本次任务的目标节点；若列表中没有所需节点，请先在设置 → AI 运维中授权。 / Confirm the target node. If it is missing, authorize it in Settings → AI operations.", options, all || len(matches) > 1, waitState{})
 		writer.Send(adk.StatefulInterrupt(ctx, f.prompt(state), state))
 	}()
 	return iterator

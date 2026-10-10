@@ -82,6 +82,10 @@ PostgreSQL 保存事件历史、每用户已读状态和投递队列。队列最
 
 AI 工作台位于运维菜单。新任务初始目标为空；明确或经过核对的资源上下文可自动确定节点，否则在消息中询问选择。顶部节点／Group 不影响任务。模型选择保留在发送按钮左侧。会话、计划、交互、审核与执行使用统一 Eino ADK 运行时，详细说明见 [Eino 与 PostgreSQL](eino-postgresql.md)。
 
+例如“阿里云节点有哪些容器？”只有在名称或完整 ID 能唯一对应到一个已启用、已授权节点时才直接查询。名称不明确时先选择节点；模型将实际查询误判成普通问答后又调用容器工具，也会在读取前请求节点确认。选择后重新生成查询，不执行先前带有未验证节点、资源或操作参数的调用。模型把名称或推测值填入 `node_id` 时会收到固定任务内的有效 ID 并可纠正，不会扩大到其他节点。没有目标节点可选时，先在设置 → AI 运维中授权并启用节点。只读列举容器不需要操作审批。
+
+旧版本留下的 `resource is outside the authorized AI scope` 失败记录会显示节点确认／授权指引；重新发送问题即可进入新流程。真正的节点、资源或身份授权拒绝仍终止任务，并提示核对节点授权和账号绑定。
+
 回复支持 Markdown 标题、粗体、列表、引用、行内代码、代码块、表格和任务列表。宽代码和表格在消息内部滚动，适配深浅主题及移动端。使用 [react-markdown](https://github.com/remarkjs/react-markdown) 和 [remark-gfm](https://github.com/remarkjs/remark-gfm)；原始 HTML 不执行，不自动加载模型提供的图片，危险链接协议不会变成可点击链接。
 
 工作台的会话采用官方 shadcn [Message](https://ui.shadcn.com/docs/components/base/message)、[Bubble](https://ui.shadcn.com/docs/components/base/bubble) 和 [MessageScroller](https://ui.shadcn.com/docs/components/base/message-scroller)，输入框复用 InputGroup。问题与回答按轮次排列，连续追问保留会话历史；桌面通过侧栏选择会话，移动端通过历史抽屉选择。布局沿用设置页的间距分组、项目详情的 muted 背景和共享圆角，不使用侧栏、标题、证据或输入区的线条分隔。输入框位于对话底部，Enter 发送、Shift + Enter 换行，中文输入法确认候选不会发送。阅读旧消息时保持位置，可点击“回到最新回复”；诊断证据与事件时间线按需展开，建议操作仍进入完整预览逐项审核。
@@ -195,6 +199,8 @@ SUMA_PROJECT_SMOKE_GO_CACHE=/tmp/suma-notification-go-cache bash doc/operations-
 ```
 
 新增的全局 AI 只读冒烟经真实本地 Unix 运行时读取节点和已有容器证据，并确认不创建提案或 Task，不修改或删除 Docker 资源。
+
+隔离 Docker 中的 `TestRealDockerAIContainerQueryClarifiesTarget` 复现“阿里云节点有哪些容器？”被受控模型误判为普通问答后调用容器工具，确认选择前无 Docker 读取，选择后通过真实 Unix 运行时列举容器，并且不创建提案或 Task。该场景已加入 `doc/operations-smoke.sh`。
 
 Docker 脚本使用可清理的隔离 Docker 27 daemon，覆盖 Unix、mTLS TCP、HTTPS/WSS Agent；需要本地已有 `docker:27-dind`、`alpine:3.24` 和测试 Agent 镜像，不删除用户资源。包含真实固定镜像 Compose 应用、通知事件、AI 提案、审批、容器重启及重复审批拒绝。额外的 `TestRealDockerGuestChatQueryNamedNode` 通过飞书消息处理路径，在两个授权节点中按“发送ganzhou节点的信息给我”选择真实 Unix 运行时，读取容器和镜像摘要，确认未调用模型、创建提案或 Task。`TestRealDockerBoundChatStreamsNodeStatus` 验证已绑定消息 → Eino → 真实 Unix 节点读取 → 模型完成前和完成后的同一卡片更新；这些测试使用发送器／模型替身，不会向真实飞书发送消息。
 

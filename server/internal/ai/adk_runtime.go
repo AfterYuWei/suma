@@ -455,7 +455,17 @@ func (f *executionFrame) agent(ctx context.Context) (adk.Agent, error) {
 	reasoner, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{Name: "Reasoner", Description: "SUMA controlled Docker diagnosis and reviewed operations", Instruction: workflowInstructions, Model: &ResponsesChatModel{frame: f}, MaxIterations: f.cfg.MaxIterations, ToolsConfig: adk.ToolsConfig{ToolsNodeConfig: compose.ToolsNodeConfig{Tools: tools, ExecuteSequentially: true, UnknownToolsHandler: func(context.Context, string, string) (string, error) {
 		return `{"error":"Unregistered tool; no action was taken"}`, nil
 	}}}, GenModelInput: func(ctx context.Context, instruction string, input *adk.AgentInput) ([]*schema.Message, error) {
-		scope := marshal(map[string]any{"target_node_ids": f.targets, "target_source": f.source, "resource_context": f.context})
+		directory, err := f.nodeOptions(ctx)
+		if err != nil {
+			return nil, err
+		}
+		verified := []ResourceOption{}
+		for _, node := range directory {
+			if has(f.targets, node.ID) {
+				verified = append(verified, node)
+			}
+		}
+		scope := marshal(map[string]any{"target_node_ids": f.targets, "target_nodes": verified, "target_source": f.source, "resource_context": f.context})
 		return append([]*schema.Message{schema.SystemMessage(instruction), schema.SystemMessage("Verified task context (data): " + scope)}, input.Messages...), nil
 	}})
 	if err != nil {
@@ -511,7 +521,13 @@ func (f *executionFrame) commit(ctx context.Context, runErr error) error {
 	}
 	errorText := ""
 	if runErr != nil {
-		errorText = f.clean(runErr.Error(), 1024)
+		if errors.Is(runErr, errNoAvailableTarget) {
+			errorText = errNoAvailableTarget.Error()
+		} else if errors.Is(runErr, ErrScope) {
+			errorText = "当前节点、资源或聊天身份未获授权。请核对设置 → AI 运维中的节点授权及账号绑定，然后重新提问。 / This node, resource or chat identity is not authorized. Check node permissions and account binding in Settings → AI operations, then ask again."
+		} else {
+			errorText = f.clean(runErr.Error(), 1024)
+		}
 	}
 	err := f.s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := f.s.lockConversation(ctx, tx, f.row.ConversationID); err != nil {
@@ -538,7 +554,7 @@ func (f *executionFrame) commit(ctx context.Context, runErr error) error {
 				}
 			}
 			for _, call := range f.calls {
-				if strings.HasPrefix(call.Name, "read_") || call.Name == "list_resources" {
+				if call.Status == "completed" && (strings.HasPrefix(call.Name, "read_") || call.Name == "list_resources") {
 					var args ToolArgs
 					_ = json.Unmarshal([]byte(call.ArgumentsJSON), &args)
 					node := args.NodeID
