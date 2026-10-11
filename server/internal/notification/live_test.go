@@ -41,7 +41,7 @@ func TestLiveFeishuApplication(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	adapter := NewAdapter()
-	channel := Channel{NotificationChannel: database.NotificationChannel{Provider: "feishu_app"}, Config: Config{AppID: creds.AppID, Language: "en-US", Timezone: "UTC", ChatID: os.Getenv("SUMA_LIVE_FEISHU_CHAT_ID")}}
+	channel := Channel{NotificationChannel: database.NotificationChannel{Provider: "feishu_app"}, Config: Config{AppID: creds.AppID, Language: "en-US", Subscription: DefaultSubscription("UTC"), ChatID: os.Getenv("SUMA_LIVE_FEISHU_CHAT_ID")}}
 	material := Secrets{Token: creds.AppSecret}
 	if _, err = adapter.Check(ctx, channel, material); err != nil {
 		t.Fatal("Feishu credentials/bot check failed", err)

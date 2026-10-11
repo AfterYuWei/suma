@@ -73,7 +73,7 @@ func decodeRule(row database.NotificationRule) Rule {
 }
 func (s *Service) Channels(ctx context.Context) ([]Channel, error) {
 	var rows []database.NotificationChannel
-	err := s.db.WithContext(ctx).Order("created_at ASC").Find(&rows).Error
+	err := s.db.WithContext(ctx).Select("*, destination_version").Order("created_at ASC").Find(&rows).Error
 	out := make([]Channel, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, decodeChannel(r))
@@ -82,7 +82,7 @@ func (s *Service) Channels(ctx context.Context) ([]Channel, error) {
 }
 func (s *Service) Channel(ctx context.Context, id string) (Channel, error) {
 	var r database.NotificationChannel
-	err := s.db.WithContext(ctx).First(&r, "id = ?", id).Error
+	err := s.db.WithContext(ctx).Select("*, destination_version").First(&r, "id = ?", id).Error
 	return decodeChannel(r), err
 }
 func (s *Service) material(row Channel) (Secrets, error) {
@@ -104,9 +104,6 @@ func (s *Service) SaveChannel(ctx context.Context, id string, in ChannelInput) (
 	}
 	if in.Config.Language != "zh-CN" && in.Config.Language != "en-US" {
 		return Channel{}, ErrInvalid
-	}
-	if _, err := time.LoadLocation(in.Config.Timezone); err != nil || in.Config.Timezone == "Local" {
-		return Channel{}, fmt.Errorf("%w: select an IANA timezone", ErrInvalid)
 	}
 	if in.Config.PublicURL != "" {
 		u, err := url.Parse(in.Config.PublicURL)
@@ -141,7 +138,9 @@ func (s *Service) SaveChannel(ctx context.Context, id string, in ChannelInput) (
 		}
 	}
 	originalToken := previous.Token
-	originalAppID := decodeChannel(row).Config.AppID
+	oldConfig := decodeChannel(row).Config
+	originalAppID := oldConfig.AppID
+	originalEndpoint := previous.Endpoint
 	in.Config.AppID = strings.TrimSpace(in.Config.AppID)
 	if in.Secrets != nil {
 		if in.Secrets.Token != "" {
@@ -175,6 +174,7 @@ func (s *Service) SaveChannel(ctx context.Context, id string, in ChannelInput) (
 			return Channel{}, err
 		}
 	case "webhook":
+		in.Config.ChatID = ""
 		if err := outbound.Validate(previous.Endpoint, in.Config.AllowPrivate); err != nil {
 			return Channel{}, err
 		}
@@ -199,6 +199,23 @@ func (s *Service) SaveChannel(ctx context.Context, id string, in ChannelInput) (
 			}
 		}
 	}
+	if in.Provider != "feishu_app" {
+		in.Config.Targets = nil
+	}
+	if err := s.validateSubscription(ctx, row.ID, &in.Config.Subscription); err != nil {
+		return Channel{}, err
+	}
+	for i := range in.Config.Targets {
+		if sub := in.Config.Targets[i].SubscriptionOverride; sub != nil {
+			if err := s.validateSubscription(ctx, row.ID, sub); err != nil {
+				return Channel{}, err
+			}
+		}
+	}
+	identityChanged := id != "" && (originalAppID != in.Config.AppID || in.Provider == "telegram" && (originalToken != previous.Token || oldConfig.ChatID != in.Config.ChatID) || in.Provider == "webhook" && originalEndpoint != previous.Endpoint)
+	if row.DestinationVersion == 0 || identityChanged {
+		row.DestinationVersion++
+	}
 	// Endpoint paths can contain bearer credentials, so all destination URLs are encrypted.
 	in.Config.Endpoint = ""
 	cipher, err := s.secrets.Encrypt(encode(previous))
@@ -215,6 +232,11 @@ func (s *Service) SaveChannel(ctx context.Context, id string, in ChannelInput) (
 		if err := tx.Save(&row).Error; err != nil {
 			return err
 		}
+		if id != "" && (!in.Enabled || identityChanged) {
+			if err := tx.Model(&database.NotificationDelivery{}).Where("channel_id = ? AND status IN ?", id, []string{"pending", "retry"}).Updates(map[string]any{"status": "suppressed", "reason": "channel paused or destination changed"}).Error; err != nil {
+				return err
+			}
+		}
 		if in.Provider == "feishu_app" && id != "" {
 			ids := targetIDs(in.Config.Targets)
 			pending := tx.Model(&database.NotificationDelivery{}).Where("channel_id = ? AND status IN ?", id, []string{"pending", "retry"})
@@ -222,6 +244,9 @@ func (s *Service) SaveChannel(ctx context.Context, id string, in ChannelInput) (
 				pending = pending.Where("chat_id NOT IN ?", ids)
 			}
 			if err := pending.Updates(map[string]any{"status": "suppressed", "reason": "recipient removed or application changed"}).Error; err != nil {
+				return err
+			}
+			if err := detachFallbacks(tx, id, in.Config.Targets); err != nil {
 				return err
 			}
 			if originalAppID != in.Config.AppID {
@@ -250,6 +275,9 @@ func (s *Service) DeleteChannel(ctx context.Context, id string) error {
 			return err
 		}
 		if err := tx.Model(&database.NotificationDelivery{}).Where("channel_id = ? AND status IN ?", id, []string{"pending", "retry"}).Updates(map[string]any{"status": "suppressed", "reason": "channel deleted"}).Error; err != nil {
+			return err
+		}
+		if err := detachFallbacks(tx, id, nil); err != nil {
 			return err
 		}
 		return tx.Where("channel_id = ?", id).Delete(&database.NotificationChat{}).Error
@@ -303,7 +331,7 @@ func (s *Service) Rules(ctx context.Context) ([]Rule, error) {
 }
 func (s *Service) SaveRule(ctx context.Context, id string, in RuleInput) (Rule, error) {
 	c := in.Config
-	if strings.TrimSpace(in.Name) == "" || len(in.Name) > 128 || len(c.Events) == 0 || len(c.ChannelIDs) == 0 || len(c.ChannelIDs) > 20 {
+	if strings.TrimSpace(in.Name) == "" || len(in.Name) > 128 || len(c.Events) == 0 {
 		return Rule{}, ErrInvalid
 	}
 	for _, typ := range c.Events {
@@ -319,68 +347,6 @@ func (s *Service) SaveRule(ctx context.Context, id string, in RuleInput) (Rule, 
 	}
 	for _, severity := range c.Severities {
 		if !contains([]string{"info", "warning", "error", "critical"}, severity) {
-			return Rule{}, ErrInvalid
-		}
-	}
-	if c.Mode != "immediate" && c.Mode != "merge" && c.Mode != "daily" {
-		return Rule{}, ErrInvalid
-	}
-	if _, err := time.LoadLocation(c.Timezone); err != nil || c.Timezone == "Local" || c.DigestHour < 0 || c.DigestHour > 23 {
-		return Rule{}, ErrInvalid
-	}
-	if (c.QuietStart == "") != (c.QuietEnd == "") || c.QuietStart != "" && c.QuietStart == c.QuietEnd {
-		return Rule{}, ErrInvalid
-	}
-	for _, v := range []string{c.QuietStart, c.QuietEnd} {
-		if v != "" {
-			if _, err := time.Parse("15:04", v); err != nil {
-				return Rule{}, ErrInvalid
-			}
-		}
-	}
-	if len(c.Template) > 4000 {
-		return Rule{}, ErrInvalid
-	}
-	clean := c.Template
-	for _, field := range []string{"title", "message", "node", "resource", "time", "url"} {
-		clean = strings.ReplaceAll(clean, "{{"+field+"}}", "")
-	}
-	if strings.Contains(clean, "{{") || strings.Contains(clean, "}}") {
-		return Rule{}, fmt.Errorf("%w: unsupported template field", ErrInvalid)
-	}
-	for _, channel := range append(append([]string{}, c.ChannelIDs...), c.FallbackID) {
-		if channel != "" {
-			row, err := s.Channel(ctx, channel)
-			if err != nil {
-				return Rule{}, ErrInvalid
-			}
-			if row.Provider == "feishu_app" {
-				ids := c.ChannelTargets[channel]
-				if channel == c.FallbackID && !contains(c.ChannelIDs, channel) {
-					ids = []string{c.FallbackChatID}
-				}
-				if in.Enabled && len(ids) == 0 {
-					return Rule{}, fmt.Errorf("%w: select Feishu recipients", ErrInvalid)
-				}
-				seen := map[string]bool{}
-				for _, id := range ids {
-					if in.Enabled && !hasTarget(row.Config.Targets, id) || id != "" && !validChatID(id) || seen[id] {
-						return Rule{}, fmt.Errorf("%w: recipient is missing or duplicated", ErrInvalid)
-					}
-					seen[id] = true
-				}
-			}
-		}
-	}
-	if c.FallbackID != "" && contains(c.ChannelIDs, c.FallbackID) {
-		return Rule{}, fmt.Errorf("%w: fallback must be a different channel", ErrInvalid)
-	}
-	for channel := range c.ChannelTargets {
-		if !contains(c.ChannelIDs, channel) {
-			return Rule{}, ErrInvalid
-		}
-		row, err := s.Channel(ctx, channel)
-		if err != nil || row.Provider != "feishu_app" {
 			return Rule{}, ErrInvalid
 		}
 	}
@@ -416,7 +382,6 @@ func (s *Service) SaveRule(ctx context.Context, id string, in RuleInput) (Rule, 
 		}
 	}
 	row.Name = in.Name
-	row.Enabled = in.Enabled
 	row.Version++
 	row.ConfigJSON = encode(c)
 	err := s.db.WithContext(ctx).Save(&row).Error
@@ -429,7 +394,25 @@ func (s *Service) DeleteRule(ctx context.Context, id string) error {
 		if err := tx.Delete(&database.NotificationRule{}, "id = ?", id).Error; err != nil {
 			return err
 		}
-		return tx.Model(&database.NotificationDelivery{}).Where("rule_id = ? AND status IN ?", id, []string{"pending", "retry"}).Updates(map[string]any{"status": "suppressed", "reason": "rule deleted"}).Error
+		var channels []database.NotificationChannel
+		if err := tx.Find(&channels).Error; err != nil {
+			return err
+		}
+		for _, raw := range channels {
+			c := decodeChannel(raw)
+			changed := removeRule(&c.Config.Subscription, id)
+			for i := range c.Config.Targets {
+				if sub := c.Config.Targets[i].SubscriptionOverride; sub != nil {
+					changed = removeRule(sub, id) || changed
+				}
+			}
+			if changed {
+				if err := tx.Model(&raw).Updates(map[string]any{"config_json": encode(c.Config), "version": gorm.Expr("version + 1")}).Error; err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	})
 }
 func (s *Service) Emit(e event.Event) {
@@ -465,6 +448,9 @@ func (s *Service) Ingest(ctx context.Context, e event.Event) error {
 		}
 	}
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", "event|"+e.DedupeKey).Error; err != nil {
+			return err
+		}
 		var count int64
 		q := tx.Model(&database.NotificationEvent{}).Where("dedupe_key = ?", e.DedupeKey)
 		if e.Type != "image.available" && e.Type != "image.recreate_required" && e.Type != "auth.new_ip" {
@@ -485,30 +471,41 @@ func (s *Service) Ingest(ctx context.Context, e event.Event) error {
 			return err
 		}
 		var rules []database.NotificationRule
-		if err := tx.Where("enabled = ?", true).Find(&rules).Error; err != nil {
+		if err := tx.Find(&rules).Error; err != nil {
 			return err
 		}
+		matched := map[string]MatchedRule{}
 		for _, r := range rules {
-			rule := decodeRule(r)
-			if matches(tx, rule.Config, e) {
-				for _, ch := range rule.Config.ChannelIDs {
-					var raw database.NotificationChannel
-					err := tx.First(&raw, "id = ?", ch).Error
-					if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-						return err
+			if matches(tx, decodeRule(r).Config, e) {
+				matched[r.ID] = MatchedRule{ID: r.ID, Name: r.Name, Version: r.Version}
+			}
+		}
+		var channels []database.NotificationChannel
+		if err := tx.Where("enabled = ?", true).Order("id ASC").Find(&channels).Error; err != nil {
+			return err
+		}
+		for _, raw := range channels {
+			channel := decodeChannel(raw)
+			if e.Type == "notification.failed" && e.ResourceID == channel.ID {
+				continue
+			}
+			for _, target := range channelTargets(channel) {
+				sub := channel.Config.Subscription
+				if target.SubscriptionOverride != nil {
+					sub = *target.SubscriptionOverride
+				}
+				evidence := []MatchedRule{}
+				for _, id := range sub.RuleIDs {
+					if r, ok := matched[id]; ok {
+						evidence = append(evidence, r)
 					}
-					if errors.Is(err, gorm.ErrRecordNotFound) {
-						raw.ID = ch
-					}
-					ids := []string{""}
-					if raw.Provider == "feishu_app" || errors.Is(err, gorm.ErrRecordNotFound) && len(rule.Config.ChannelTargets[ch]) > 0 {
-						ids = rule.Config.ChannelTargets[ch]
-					}
-					for _, chatID := range ids {
-						if err := s.queue(tx, rule, decodeChannel(raw), chatID, e); err != nil {
-							return err
-						}
-					}
+				}
+				if len(evidence) == 0 {
+					continue
+				}
+				snapshot := DeliverySnapshot{Policy: sub.Policy, Language: channel.Config.Language, PublicURL: channel.Config.PublicURL}
+				if err := s.queue(tx, channel, target.ChatID, e, snapshot, evidence); err != nil {
+					return err
 				}
 			}
 		}
@@ -519,9 +516,6 @@ func (s *Service) Ingest(ctx context.Context, e event.Event) error {
 }
 func matches(tx *gorm.DB, c RuleConfig, e event.Event) bool {
 	if !contains(c.Events, e.Type) || len(c.Severities) > 0 && !contains(c.Severities, e.Severity) {
-		return false
-	}
-	if !c.Recovery && strings.HasSuffix(e.Type, ".recovered") {
 		return false
 	}
 	if len(c.NodeIDs) > 0 || len(c.GroupIDs) > 0 {
@@ -539,70 +533,6 @@ func matches(tx *gorm.DB, c RuleConfig, e event.Event) bool {
 }
 func urgent(e event.Event) bool {
 	return e.Severity == "critical" || e.Type == "cd.awaiting_approval"
-}
-func (s *Service) queue(tx *gorm.DB, rule Rule, channel Channel, chatID string, e event.Event) error {
-	channelID := channel.ID
-	now := s.deps.Now().UTC()
-	due := now
-	status, reason := "pending", ""
-	c := rule.Config
-	if !urgent(e) && c.MutedUntil != nil && now.Before(*c.MutedUntil) {
-		status, reason = "suppressed", "temporarily muted"
-	}
-	zone, _ := time.LoadLocation(c.Timezone)
-	if zone == nil {
-		zone = time.UTC
-	}
-	local := now.In(zone)
-	if !urgent(e) && c.QuietStart != "" {
-		clock := local.Format("15:04")
-		quiet := c.QuietStart < c.QuietEnd && clock >= c.QuietStart && clock < c.QuietEnd || c.QuietStart > c.QuietEnd && (clock >= c.QuietStart || clock < c.QuietEnd)
-		if quiet {
-			end, _ := time.Parse("15:04", c.QuietEnd)
-			due = time.Date(local.Year(), local.Month(), local.Day(), end.Hour(), end.Minute(), 0, 0, zone)
-			if !due.After(now) {
-				due = due.AddDate(0, 0, 1)
-			}
-			reason = "quiet hours"
-		}
-	}
-	if !urgent(e) && c.Mode == "merge" {
-		due = due.Truncate(5 * time.Minute).Add(5 * time.Minute)
-	}
-	if !urgent(e) && c.Mode == "daily" {
-		candidate := time.Date(local.Year(), local.Month(), local.Day(), c.DigestHour, 0, 0, 0, zone)
-		if !candidate.After(due) {
-			candidate = candidate.AddDate(0, 0, 1)
-		}
-		due = candidate
-	}
-	due = due.UTC()
-	if channel.Provider == "" {
-		status, reason = "suppressed", "channel deleted"
-	} else if channel.Provider == "feishu_app" && !hasTarget(channel.Config.Targets, chatID) {
-		status, reason = "suppressed", "recipient removed or application changed"
-	}
-	key := rule.ID + "|" + channelID + "|" + chatID + "|" + e.ID
-	if !urgent(e) && c.Mode != "immediate" && status == "pending" {
-		key = rule.ID + "|" + channelID + "|" + chatID + "|" + due.UTC().Format(time.RFC3339)
-	}
-	var row database.NotificationDelivery
-	if err := tx.Where("batch_key = ? AND status = ?", key, "pending").First(&row).Error; err == nil {
-		var ids []string
-		_ = json.Unmarshal([]byte(row.EventIDsJSON), &ids)
-		if !contains(ids, e.ID) {
-			ids = append(ids, e.ID)
-		}
-		if len(ids) <= 200 {
-			return tx.Model(&row).Update("event_ids_json", encode(ids)).Error
-		}
-		// Keep digest envelopes bounded; overflow remains in the inbox and gets
-		// its own delivery rather than growing one unbounded payload.
-		key += "|" + e.ID
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return err
-	}
-	return tx.Create(&database.NotificationDelivery{ID: ID(), ChannelID: channelID, ChatID: chatID, RuleID: rule.ID, BatchKey: key, EventIDsJSON: encode([]string{e.ID}), Status: status, Reason: reason, DueAt: due}).Error
 }
 func (s *Service) Inbox(ctx context.Context, userID uint) (Inbox, error) {
 	var rows []database.NotificationEvent
@@ -633,26 +563,6 @@ func (s *Service) Read(ctx context.Context, userID uint, id string) error {
 		return err
 	}
 	return s.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&database.NotificationRead{UserID: userID, EventID: id, ReadAt: s.deps.Now()}).Error
-}
-func (s *Service) Deliveries(ctx context.Context) ([]database.NotificationDelivery, error) {
-	rows := []database.NotificationDelivery{}
-	err := s.db.WithContext(ctx).Order("created_at DESC").Limit(200).Find(&rows).Error
-	return rows, err
-}
-func (s *Service) Resend(ctx context.Context, id string) error {
-	var r database.NotificationDelivery
-	if err := s.db.WithContext(ctx).First(&r, "id = ?", id).Error; err != nil {
-		return err
-	}
-	r.ID = ID()
-	r.Status = "pending"
-	r.Attempts = 0
-	r.Reason = "manual resend"
-	r.DueAt = s.deps.Now()
-	r.LeaseUntil = nil
-	r.CreatedAt = time.Time{}
-	r.UpdatedAt = time.Time{}
-	return s.db.WithContext(ctx).Create(&r).Error
 }
 func (s *Service) Start() {
 	s.mu.Lock()
@@ -753,37 +663,27 @@ func (s *Service) deliver(ctx context.Context, row database.NotificationDelivery
 		s.finishDelivery(row.ID, "suppressed", "channel disabled or deleted", now, "")
 		return
 	}
-	if channel.Provider == "feishu_app" {
-		if !hasTarget(channel.Config.Targets, row.ChatID) {
-			s.finishDelivery(row.ID, "suppressed", "recipient removed or application changed", now, "")
-			return
-		}
+	if !destinationValid(channel, row) {
+		s.finishDelivery(row.ID, "suppressed", "recipient removed or destination changed", now, "")
+		return
+	}
+	if channel.Provider != "webhook" {
 		channel.Config.ChatID = row.ChatID
 	}
-	var config RuleConfig
-	if row.RuleID != "" {
-		var raw database.NotificationRule
-		if s.db.WithContext(ctx).First(&raw, "id = ?", row.RuleID).Error != nil || !raw.Enabled {
-			s.finishDelivery(row.ID, "suppressed", "rule disabled or deleted", now, "")
-			return
-		}
-		config = decodeRule(raw).Config
-		if channel.Provider == "feishu_app" && (!contains(config.ChannelIDs, channel.ID) || !contains(config.ChannelTargets[channel.ID], row.ChatID)) {
-			s.finishDelivery(row.ID, "suppressed", "rule recipient removed", now, "")
-			return
-		}
+	var snapshot DeliverySnapshot
+	if err = json.Unmarshal([]byte(row.SnapshotJSON), &snapshot); err != nil {
+		s.error(err)
+		return
 	}
-	var ids []string
-	_ = json.Unmarshal([]byte(row.EventIDsJSON), &ids)
-	var events []database.NotificationEvent
-	if err = s.db.WithContext(ctx).Where("id IN ?", ids).Order("created_at ASC").Find(&events).Error; err != nil {
+	events, links, err := s.deliveryEvents(ctx, row.ID)
+	if err != nil {
 		s.error(err)
 		return
 	}
 	m, err := s.material(channel)
 	var remoteID string
 	if err == nil {
-		remoteID, err = s.deps.Sender.Send(ctx, channel, m, s.render(channel, config, events))
+		remoteID, err = s.deps.Sender.Send(ctx, channel, m, s.render(snapshot, events))
 	}
 	status, reason := "sent", ""
 	due := now
@@ -799,27 +699,26 @@ func (s *Service) deliver(ctx context.Context, row database.NotificationDelivery
 			status = "failed"
 		}
 	}
-	s.finishDelivery(row.ID, status, reason, due, remoteID)
+	if status == "failed" {
+		s.error(s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			result := tx.Model(&database.NotificationDelivery{}).Where("id = ? AND status = ?", row.ID, "sending").Updates(map[string]any{"status": status, "reason": reason, "due_at": due, "lease_until": nil, "provider_message_id": remoteID})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 1 && snapshot.Policy.FallbackID != "" && row.Source != "fallback" {
+				return s.queueFallback(tx, row, snapshot, links)
+			}
+			return nil
+		}))
+	} else {
+		s.finishDelivery(row.ID, status, reason, due, remoteID)
+	}
 	if err == nil {
 		s.db.Model(&database.NotificationChannel{}).Where("id = ?", channel.ID).Updates(map[string]any{"last_error": "", "last_sent_at": now})
 	} else {
 		s.db.Model(&database.NotificationChannel{}).Where("id = ?", channel.ID).Update("last_error", reason)
 	}
 	if status == "failed" {
-		if config.FallbackID != "" && config.FallbackID != row.ChannelID {
-			fallback := row
-			fallback.ID = ID()
-			fallback.ChannelID = config.FallbackID
-			fallback.ChatID = config.FallbackChatID
-			fallback.RuleID = ""
-			fallback.Status = "pending"
-			fallback.Attempts = 0
-			fallback.DueAt = now
-			fallback.LeaseUntil = nil
-			fallback.CreatedAt = time.Time{}
-			fallback.UpdatedAt = time.Time{}
-			s.error(s.db.Create(&fallback).Error)
-		}
 		if len(events) > 0 && events[0].Type != "notification.failed" {
 			s.Emit(event.Event{Type: "notification.failed", Severity: "error", ResourceType: "notification_channel", ResourceID: channel.ID, Title: "通知渠道发送失败 / Channel delivery failed", Message: channel.Name + ": " + reason, DedupeKey: "delivery-failed|" + channel.ID})
 		}
@@ -828,9 +727,10 @@ func (s *Service) deliver(ctx context.Context, row database.NotificationDelivery
 func (s *Service) finishDelivery(id, status, reason string, due time.Time, remote string) {
 	s.error(s.db.Model(&database.NotificationDelivery{}).Where("id = ? AND status = ?", id, "sending").Updates(map[string]any{"status": status, "reason": reason, "due_at": due, "lease_until": nil, "provider_message_id": remote}).Error)
 }
-func (s *Service) render(channel Channel, c RuleConfig, rows []database.NotificationEvent) Message {
+func (s *Service) render(snapshot DeliverySnapshot, rows []database.NotificationEvent) Message {
+	c := snapshot.Policy
 	var text strings.Builder
-	zone, _ := time.LoadLocation(channel.Config.Timezone)
+	zone, _ := time.LoadLocation(c.Timezone)
 	if zone == nil {
 		zone = time.UTC
 	}
@@ -840,12 +740,12 @@ func (s *Service) render(channel Channel, c RuleConfig, rows []database.Notifica
 		_ = json.Unmarshal([]byte(row.DataJSON), &e)
 		message.Events = append(message.Events, e)
 		path := "/notifications#" + e.ID
-		link := strings.TrimRight(channel.Config.PublicURL, "/") + path
+		link := strings.TrimRight(snapshot.PublicURL, "/") + path
 		title := e.Title
 		if c.Template == "" {
 			for _, entry := range Catalog {
 				if entry.Type == e.Type {
-					if channel.Config.Language == "en-US" {
+					if snapshot.Language == "en-US" {
 						title = entry.TitleEN
 					} else {
 						title = entry.Title
@@ -861,7 +761,7 @@ func (s *Service) render(channel Channel, c RuleConfig, rows []database.Notifica
 			body = strings.ReplaceAll(body, "{{"+key+"}}", value)
 		}
 		text.WriteString(body + "\n\n")
-		if channel.Config.PublicURL != "" {
+		if snapshot.PublicURL != "" {
 			message.URL = link
 		}
 	}

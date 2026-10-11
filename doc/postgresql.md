@@ -4,14 +4,14 @@ SUMA 使用 PostgreSQL 18.6 保存应用配置、Task、审计和历史通知证
 
 ## 初始化与开发
 
-本地原生启动与测试使用项目根目录 `.env.local`，无需在终端 `export`。运行 `make local-config` 创建权限为 `0600` 的私密模板，已有文件保持不变。当前本地数据库使用 `127.0.0.1:5432/suma`，填写对应用户名与密码：
+本地原生启动与测试使用项目根目录 `.env.local`，无需在终端 `export`。运行 `make local-config` 创建权限为 `0600` 的私密模板，已有文件保持不变。项目内置开发数据库使用 `127.0.0.1:55432/suma`，填写对应用户名与密码：
 
 ```dotenv
-SUMA_DATABASE_DSN='postgres://YOUR_USER:YOUR_PASSWORD@127.0.0.1:5432/suma?sslmode=disable'
+SUMA_DATABASE_DSN='postgres://YOUR_USER:YOUR_PASSWORD@127.0.0.1:55432/suma?sslmode=disable'
 SUMA_TEST_DATABASE_DSN=${SUMA_DATABASE_DSN}
 ```
 
-用户名与密码中的特殊字符需要 URL 编码；单引号保持 `$` 字面值。`make dev`、`make server-check`、原生 `go run` 和 `go test` 自动读取同一文件。每个调用独立读取，不修改进程环境或执行 shell 文本；已有环境变量优先。`SUMA_ENV_FILE` 可以指定文件，设置为 `-` 时只使用进程环境。指定文件不存在、不可读或格式错误时明确失败，错误不含原始配置内容。`.env.local` 不提交 Git，生产镜像也不复制该文件。
+模板中的 `5432` 用于连接既有本机数据库；使用项目内置实例时改为上例的 `55432`。用户名与密码中的特殊字符需要 URL 编码；单引号保持 `$` 字面值。`make dev`、`make server-check`、原生 `go run` 和 `go test` 自动读取同一文件。每个调用独立读取，不修改进程环境或执行 shell 文本；已有环境变量优先。`SUMA_ENV_FILE` 可以指定文件，设置为 `-` 时只使用进程环境。指定文件不存在、不可读或格式错误时明确失败，错误不含原始配置内容。`.env.local` 不提交 Git，生产镜像也不复制该文件。
 
 生产 Compose 使用 `.env`：复制 `.env.example`，填写至少 32 位随机十六进制 `SUMA_POSTGRES_PASSWORD`。内置 PostgreSQL 不发布端口，SUMA 通过 `postgres:5432/suma` 连接，数据卷挂载 `/var/lib/postgresql`。如果本机没有现有数据库，可使用 `make db-up`；开发覆盖文件仅绑定 `127.0.0.1:55432`，相应修改 `.env.local` 端口。
 
@@ -20,6 +20,16 @@ SUMA_TEST_DATABASE_DSN=${SUMA_DATABASE_DSN}
 使用空库初始化，不迁移旧开发数据。启动仅执行嵌入式 `internal/database/migrations/*.sql`，在事务与 advisory lock 下登记版本；不运行 AutoMigrate 或数据回填。`cmd/schema` 是开发阶段的基线生成工具。当前版本按全新数据库验收，不提供旧开发数据库升级或历史数据迁移，不自动清空现有数据库。
 
 测试必须在配置文件或进程环境中提供 `SUMA_TEST_DATABASE_DSN`，账户需要创建与删除 schema 的权限。开发环境可以使用本地 `suma` 库中的独立测试 schema；生产应使用独立测试库。`testutil.Open` 为每个测试创建随机 schema，测试结束清理；没有数据库时明确失败，不跳过或回退。
+
+## 本机一次性恢复（2026-10-11）
+
+此前用户授权保留现有数据，例外完成过定向迁移：暂停原生后端写入，将原 PostgreSQL 17 的 `suma` 库完整导出并恢复到独立 PostgreSQL 18.6，转换已核对的单渠道／单规则通知配置。原规则的筛选条件保留，发送策略和目标绑定转换为“全部对话”订阅；已发送记录保留原状态并补齐命中规则证据和快照，不补发历史事件。
+
+随后用户删除并重建原 `suma` 库，明确要求复用原数据库容器。当前原生服务和隔离测试通过 `.env.local` 连接原容器 `postgres` 的 `127.0.0.1:5432/suma`，使用当前全新基线初始化；未导入此前的数据。原容器镜像未变更，当前实际版本为 PostgreSQL 17.11，标准部署要求仍为 18.6。应用加密密钥和文件目录沿用原配置。重新创建的空库需要重新初始化管理员和配置通知。
+
+新增容器 `dockport-pg18-postgres-1` 及专属网络已移除，`55432` 不再使用。为保留此前数据找回的可能性，未删除其数据卷 `dockport-pg18_suma-postgres`、完整导出和私密配置；日常启动只使用现有 `postgres` 容器，无需启动额外数据库。
+
+原数据库容器 `postgres`、其 `5432` 端口及 `/Data/PostgreSQL/data` 均未由本次操作删除或替换。原连接配置位于 `.env.local.before-notification-v2`，切回前的连接配置位于 `.env.local.before-original-db`；完整导出和校验报告位于 `server/.codex/notification-recovery/`。凭据和导出文件权限为 `0600`，不提交 Git 或进入镜像构建上下文。本次切换不自动恢复备份，未添加启动升级、通用历史迁移或自动数据库清理。
 
 ## `/Data` 保存内容
 
@@ -43,4 +53,4 @@ npm run build:demo
 npx playwright test e2e/notifications.spec.ts e2e/feishu-channel.spec.ts e2e/operations.spec.ts
 ```
 
-在项目根目录运行 `bash doc/operations-smoke.sh`，通过一次性 Docker Engine 验证 Unix、mTLS TCP 和 HTTPS/WSS Agent 的 Project 配置、镜像更新、聚合日志和真实异常退出通知。通知发送使用受控替身，不投递到真实用户。脚本需要已缓存的 `docker:27-dind`、`alpine:3.24` 和 `suma-agent:env-only-smoke` 镜像及上述测试数据库配置。
+在项目根目录运行 `bash doc/operations-smoke.sh`，通过一次性 Docker Engine 验证 Unix、mTLS TCP 和 HTTPS/WSS Agent 的 Project 配置、镜像更新、聚合日志和真实异常退出通知。测试服务的通知发送使用受控替身。若同一宿主机上另有运行中的 SUMA 实例，其原有监控与订阅仍可能通知烟测临时容器的退出；本次恢复后的实例产生了两条此类新事件，历史事件没有重发。脚本需要已缓存的 `docker:27-dind`、`alpine:3.24` 和 `suma-agent:env-only-smoke` 镜像及上述测试数据库配置。

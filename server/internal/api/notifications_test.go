@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/auth"
+	"github.com/suma/suma/server/internal/event"
 	"github.com/suma/suma/server/internal/notification"
 	"github.com/suma/suma/server/internal/secret"
 	"github.com/suma/suma/server/internal/task"
@@ -60,7 +61,7 @@ func TestNotificationAuthenticatedHTTP(t *testing.T) {
 			t.Fatalf("unprotected %s: %d", path, r.Code)
 		}
 	}
-	create := `{"name":"Webhook","provider":"webhook","enabled":false,"version":0,"config":{"endpoint":"https://example.com/SECRETURL","timezone":"UTC","language":"en-US"},"secrets":{"authorization":"Bearer SECRETAUTH"}}`
+	create := `{"name":"Webhook","provider":"webhook","enabled":false,"version":0,"config":{"endpoint":"https://example.com/SECRETURL","subscription":{"rule_ids":[],"policy":{"timezone":"UTC","mode":"immediate"}},"language":"en-US"},"secrets":{"authorization":"Bearer SECRETAUTH"}}`
 	r := request("POST", "/notifications/channels", create, true)
 	if r.Code != 200 || strings.Contains(r.Body.String(), "SECRET") {
 		t.Fatal(r.Code, r.Body.String())
@@ -75,7 +76,7 @@ func TestNotificationAuthenticatedHTTP(t *testing.T) {
 	if strings.Contains(r.Body.String(), "SECRET") {
 		t.Fatal("secret returned in list")
 	}
-	feishu := `{"name":"Feishu","provider":"feishu_app","enabled":false,"config":{"app_id":"cli_http","targets":[{"chat_id":"oc_private","name":"Admin"},{"chat_id":"oc_group","name":"Operations"}],"timezone":"UTC","language":"en-US"},"secrets":{"token":"PRIVATE-APP-SECRET"}}`
+	feishu := `{"name":"Feishu","provider":"feishu_app","enabled":false,"config":{"app_id":"cli_http","targets":[{"chat_id":"oc_private","name":"Admin"},{"chat_id":"oc_group","name":"Operations"}],"subscription":{"rule_ids":[],"policy":{"timezone":"UTC","mode":"immediate"}},"language":"en-US"},"secrets":{"token":"PRIVATE-APP-SECRET"}}`
 	r = request("POST", "/notifications/channels", feishu, true)
 	if r.Code != 200 || strings.Contains(r.Body.String(), "PRIVATE-APP-SECRET") {
 		t.Fatal("Feishu setup failed or leaked secret", r.Code)
@@ -108,13 +109,72 @@ func TestNotificationAuthenticatedHTTP(t *testing.T) {
 	if r := request("POST", "/notifications/channels", strings.Replace(feishu, `"feishu_app"`, `"feishu_webhook"`, 1), true); r.Code != 422 {
 		t.Fatal("removed provider accepted", r.Code)
 	}
-	ruleBody := `{"name":"Routed","enabled":true,"config":{"events":["container.oom"],"channel_ids":["` + application.Data.ID + `"],"channel_targets":{"` + application.Data.ID + `":["oc_group"]},"timezone":"UTC","mode":"immediate","recovery":true}}`
-	if r := request("POST", "/notifications/rules", ruleBody, true); r.Code != 200 {
-		t.Fatal("explicit rule routing failed", r.Code, r.Body.String())
+	ruleBody := `{"name":"Routed","config":{"events":["container.oom"]}}`
+	res := request("POST", "/notifications/rules", ruleBody, true)
+	if res.Code != 200 {
+		t.Fatal("standalone rule failed", res.Code, res.Body.String())
 	}
-	if r := request("POST", "/notifications/rules", strings.Replace(ruleBody, "oc_group", "oc_unrelated", 1), true); r.Code != 422 {
-		t.Fatal("invalid rule recipient accepted", r.Code)
+	if strings.Contains(res.Body.String(), `"enabled"`) {
+		t.Fatal("rule response still exposes an enabled state")
 	}
+	legacyEnable := strings.Replace(ruleBody, `"name":"Routed"`, `"name":"Routed","enabled":false`, 1)
+	if response := request("POST", "/notifications/rules", legacyEnable, true); response.Code != http.StatusBadRequest {
+		t.Fatal("removed rule enable field accepted", response.Code)
+	}
+	var savedRule struct{ Data notification.Rule }
+	json.Unmarshal(res.Body.Bytes(), &savedRule)
+	application.Data.Config.Subscription.RuleIDs = []string{savedRule.Data.ID}
+	valid := notification.ChannelInput{Name: application.Data.Name, Provider: application.Data.Provider, Enabled: true, Version: application.Data.Version, Config: application.Data.Config}
+	payload, _ := json.Marshal(valid)
+	res = request("PUT", path, string(payload), true)
+	if res.Code != 200 {
+		t.Fatal("subscription save failed", res.Code, res.Body.String())
+	}
+	json.Unmarshal(res.Body.Bytes(), &application)
+	valid.Version = application.Data.Version
+	valid.Config.Subscription.RuleIDs = []string{"missing-rule"}
+	payload, _ = json.Marshal(valid)
+	if res := request("PUT", path, string(payload), true); res.Code != 422 {
+		t.Fatal("missing subscription rule accepted", res.Code)
+	}
+	// Rule writes cannot accidentally carry the old routing/delivery fields.
+	for _, field := range []string{`"channel_ids":[]`, `"mode":"merge"`, `"recovery":true`} {
+		legacy := strings.Replace(ruleBody, `"events":["container.oom"]`, `"events":["container.oom"],`+field, 1)
+		if res := request("POST", "/notifications/rules", legacy, true); res.Code != http.StatusBadRequest {
+			t.Fatal("legacy rule config accepted", field, res.Code)
+		}
+	}
+	if err := notify.Ingest(context.Background(), event.Event{ID: "http-overlap", Type: "container.oom", ResourceID: "http-overlap"}); err != nil {
+		t.Fatal(err)
+	}
+	res = request("GET", "/notifications/deliveries", "", true)
+	if res.Code != 200 || !strings.Contains(res.Body.String(), `"matched_rules"`) || strings.Contains(res.Body.String(), `"rule_id"`) || strings.Contains(res.Body.String(), `"snapshot_json"`) {
+		t.Fatal("invalid delivery contract", res.Code, res.Body.String())
+	}
+	var deliveries struct{ Data []notification.Delivery }
+	if err := json.Unmarshal(res.Body.Bytes(), &deliveries); err != nil || len(deliveries.Data) != 2 {
+		t.Fatal("selected rule did not take effect without an enabled field", err)
+	}
+	for _, delivery := range deliveries.Data {
+		if len(delivery.MatchedRules) != 1 || delivery.MatchedRules[0].ID != savedRule.Data.ID {
+			t.Fatal("subscription did not apply the selected rule to both conversations")
+		}
+	}
+	// Deleting a rule detaches defaults and makes stale channel writes conflict.
+	beforeDelete := application.Data.Version
+	if res := request("DELETE", "/notifications/rules/"+savedRule.Data.ID, "", true); res.Code != 200 {
+		t.Fatal(res.Code, res.Body.String())
+	}
+	current, err := notify.Channel(context.Background(), application.Data.ID)
+	if err != nil || current.Version != beforeDelete+1 || len(current.Config.Subscription.RuleIDs) != 0 {
+		t.Fatal("delete did not update binding version", current, err)
+	}
+	stale := notification.ChannelInput{Name: application.Data.Name, Provider: application.Data.Provider, Enabled: true, Version: beforeDelete, Config: current.Config}
+	payload, _ = json.Marshal(stale)
+	if res := request("PUT", path, string(payload), true); res.Code != 409 {
+		t.Fatal("stale channel write accepted", res.Code)
+	}
+	application.Data = current
 	// An incompatible schema returns a safe fresh-database instruction.
 	if err := db.Exec("ALTER TABLE notification_deliveries DROP COLUMN chat_id").Error; err != nil {
 		t.Fatal(err)
@@ -158,15 +218,15 @@ func TestNotificationAuthenticatedHTTP(t *testing.T) {
 		t.Fatal("invalid notification catalog", catalog.Code, catalog.Body.String())
 	}
 	// Removed configuration fields are rejected instead of silently enabling behavior.
-	removedConfig := strings.Replace(create, `"timezone":"UTC"`, `"interactive":true,"timezone":"UTC"`, 1)
+	removedConfig := strings.Replace(create, `"language":"en-US"`, `"interactive":true,"language":"en-US"`, 1)
 	if res := request("POST", "/notifications/channels", removedConfig, true); res.Code != http.StatusBadRequest {
 		t.Fatal("removed channel config accepted", res.Code)
 	}
-	telegram := `{"name":"Telegram","provider":"telegram","enabled":false,"config":{"timezone":"UTC","language":"en-US"},"secrets":{"token":"123:PRIVATE-TOKEN"}}`
+	telegram := `{"name":"Telegram","provider":"telegram","enabled":false,"config":{"subscription":{"rule_ids":[],"policy":{"timezone":"UTC","mode":"immediate"}},"language":"en-US"},"secrets":{"token":"123:PRIVATE-TOKEN"}}`
 	for _, enabled := range []bool{false, true} {
 		body := telegram
 		if enabled {
-			body = strings.Replace(body, `"timezone":"UTC"`, `"auto_discover":true,"timezone":"UTC"`, 1)
+			body = strings.Replace(body, `"language":"en-US"`, `"auto_discover":true,"language":"en-US"`, 1)
 		}
 		res := request("POST", "/notifications/channels", body, true)
 		if res.Code != 200 || !strings.Contains(res.Body.String(), `"auto_discover":`+fmt.Sprint(enabled)) || strings.Contains(res.Body.String(), "PRIVATE-TOKEN") {

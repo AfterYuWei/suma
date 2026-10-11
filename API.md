@@ -317,9 +317,15 @@ Supported providers are `feishu_app`, `telegram` and `webhook`. Each Feishu App 
 
 Telegram uses `config.chat_id` as the destination. Its `config.auto_discover` boolean defaults to false; opt-in enables long polling for recipient discovery. Existing platform webhooks are preserved. Feishu always discovers while enabled; the option is false for Feishu and Webhook channels. Pausing/deleting a channel, replacing credentials, disabling discovery or stopping the service cancels the connection and rejects events from obsolete connection generations.
 
-Rules use `config.channel_ids` and explicit Feishu routing in `config.channel_targets: {"channel-id":["oc_group","oc_private"]}`. Enabled rules require valid configured recipients. A Feishu fallback uses a different `fallback_id` and one `fallback_chat_id`. Removed targets suppress pending/retry deliveries and invalidate routing. Changing an App ID clears discovered conversations and configured targets.
+Rules are reusable filters with no enabled/paused state. Rule writes accept `name`, `version` and filtering `config`; responses add the rule ID and timestamps. Selecting and saving a rule in an enabled channel or conversation subscription activates it there. Their `config` contains only `events`, `severities`, `node_ids`, `group_ids` and `projects`. A rule can be saved without a channel. Recovery events are selected directly, without a separate recovery flag. Legacy rule enabling, routing and policy fields are rejected.
 
-Merge/digest batches, retries, manual resend and fallback remain independent per rule/channel/conversation. Connection state is held in memory. Feishu additionally returns `message_count`, `last_message_at`, `last_message_result` and a safe `discovery_error`; socket readiness does not prove published event subscriptions. Critical events and CD awaiting-approval notifications bypass quiet periods. Cards provide notification text and an optional SUMA URL without action callbacks.
+Channels hold `config.subscription: { "rule_ids": ["rule-id"], "policy": { ... } }`. The Feishu UI labels the channel-level default as **All conversations** (全部对话), applying to selected conversations unless overridden. A Feishu target may include `subscription_override` with the same shape; absent/null inherits the whole channel default. Switching to an override copies defaults, while subsequent changes remain independent. Empty rule selection generates no automatic deliveries. Defaults and overrides save atomically with the channel version. The policy contains `mode` (`immediate`, `merge`, `daily`), `timezone`, `digest_hour`, `quiet_start`, `quiet_end`, optional `muted_until`, `template`, `fallback_id` and `fallback_chat_id`. A fallback must use another channel and a configured recipient. Policy timezone governs scheduling and rendered timestamps; channel language/public URL are snapshotted for rendering.
+
+Any subscribed rule can match. The same event/channel/recipient has one automatic delivery claim, protected by PostgreSQL transaction locks and a unique index. Primary and fallback routes share claims. Batches group by recipient, due time and immutable configuration snapshot. Rule/subscription/policy edits and deletions affect new events only; queued messages retain their original snapshot and no historical events are backfilled. Pausing/deleting a channel or removing/replacing recipients cancels pending/retry deliveries. Rule deletion detaches all current bindings and increments affected channel versions; removed fallback destinations similarly detach invalid references.
+
+Deliveries return `matched_rules: [{"id":"rule-id","name":"Historical name","version":1}]`, `event_count`, `source` (`event`, `fallback`, `manual`) and optional `origin_delivery_id`, replacing the old `rule_id`. Per-event rule evidence and private snapshots survive rule deletion. Manual resend creates a separate delivery with the original snapshot and does not consume an automatic claim. Fallback receives the original message immediately after attempts are exhausted, without rule rematching or recursive fallback; failure and fallback enqueue commit atomically.
+
+Connection state is held in memory. Feishu returns `message_count`, `last_message_at`, `last_message_result` and a safe `discovery_error`; socket readiness does not prove published event subscriptions. Matching critical events and CD awaiting-approval notifications bypass quiet periods and digest delays. Cards provide notification text and an optional SUMA URL without action callbacks. Provider delivery remains at-least-once after ambiguous timeouts.
 
 | Method | `/api/v1` path | Behavior |
 | --- | --- | --- |
@@ -330,11 +336,11 @@ Merge/digest batches, retries, manual resend and fallback remain independent per
 | POST | `/notifications/channels/:id/test` | Send an explicit test, including while paused; Feishu requires a configured `chat_id` |
 | GET | `/notifications/channels/:id/chats` | Discovered recipient conversations |
 | GET | `/notifications/channels/:id/connection` | Feishu connection state and discovery observations |
-| GET / POST | `/notifications/rules` | List or create a routing rule |
+| GET / POST | `/notifications/rules` | List or create a reusable event filter |
 | PUT / DELETE | `/notifications/rules/:id` | Edit or remove a rule |
 | GET | `/notifications/inbox` | Latest 200 historical messages and per-user unread count |
 | POST | `/notifications/inbox/:id/read` | Persist per-user read state |
 | GET | `/notifications/deliveries` | Latest 200 deliveries and suppression reasons |
-| POST | `/notifications/deliveries/:id/resend` | Queue a new durable delivery |
+| POST | `/notifications/deliveries/:id/resend` | Queue a separate manual delivery using the original snapshot |
 
 Delivery evidence includes `chat_id`. Schema incompatibility returns HTTP 503 / `20802` with a fresh PostgreSQL initialization instruction. This version does not migrate old installations or automatically delete existing data.

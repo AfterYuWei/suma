@@ -15,19 +15,20 @@ var ErrConflict = errors.New("configuration changed; reload before saving")
 var ErrInvalid = errors.New("invalid notification configuration")
 
 type Config struct {
-	Endpoint     string   `json:"endpoint,omitempty"`
-	ChatID       string   `json:"chat_id,omitempty"`
-	Targets      []Target `json:"targets,omitempty"`
-	AppID        string   `json:"app_id,omitempty"`
-	Language     string   `json:"language"`
-	Timezone     string   `json:"timezone"`
-	AllowPrivate bool     `json:"allow_private"`
-	AutoDiscover bool     `json:"auto_discover"`
-	PublicURL    string   `json:"public_url,omitempty"`
+	Endpoint     string       `json:"endpoint,omitempty"`
+	ChatID       string       `json:"chat_id,omitempty"`
+	Targets      []Target     `json:"targets,omitempty"`
+	AppID        string       `json:"app_id,omitempty"`
+	Language     string       `json:"language"`
+	Subscription Subscription `json:"subscription"`
+	AllowPrivate bool         `json:"allow_private"`
+	AutoDiscover bool         `json:"auto_discover"`
+	PublicURL    string       `json:"public_url,omitempty"`
 }
 type Target struct {
-	ChatID string `json:"chat_id"`
-	Name   string `json:"name"`
+	ChatID               string        `json:"chat_id"`
+	Name                 string        `json:"name"`
+	SubscriptionOverride *Subscription `json:"subscription_override,omitempty"`
 }
 type ConnectionStatus struct {
 	State             string     `json:"state"`
@@ -57,27 +58,46 @@ type Channel struct {
 	HasSecrets bool   `json:"has_secrets"`
 }
 type RuleConfig struct {
-	Events         []string            `json:"events"`
-	Severities     []string            `json:"severities"`
-	NodeIDs        []string            `json:"node_ids"`
-	GroupIDs       []uint              `json:"group_ids"`
-	Projects       []string            `json:"projects"`
-	ChannelIDs     []string            `json:"channel_ids"`
-	ChannelTargets map[string][]string `json:"channel_targets,omitempty"`
-	FallbackID     string              `json:"fallback_id,omitempty"`
-	FallbackChatID string              `json:"fallback_chat_id,omitempty"`
-	Mode           string              `json:"mode"`
-	Timezone       string              `json:"timezone"`
-	DigestHour     int                 `json:"digest_hour"`
-	QuietStart     string              `json:"quiet_start,omitempty"`
-	QuietEnd       string              `json:"quiet_end,omitempty"`
-	MutedUntil     *time.Time          `json:"muted_until,omitempty"`
-	Recovery       bool                `json:"recovery"`
-	Template       string              `json:"template,omitempty"`
+	Events     []string `json:"events"`
+	Severities []string `json:"severities"`
+	NodeIDs    []string `json:"node_ids"`
+	GroupIDs   []uint   `json:"group_ids"`
+	Projects   []string `json:"projects"`
+}
+type Subscription struct {
+	RuleIDs []string       `json:"rule_ids"`
+	Policy  DeliveryPolicy `json:"policy"`
+}
+type DeliveryPolicy struct {
+	FallbackID     string     `json:"fallback_id,omitempty"`
+	FallbackChatID string     `json:"fallback_chat_id,omitempty"`
+	Mode           string     `json:"mode"`
+	Timezone       string     `json:"timezone"`
+	DigestHour     int        `json:"digest_hour"`
+	QuietStart     string     `json:"quiet_start,omitempty"`
+	QuietEnd       string     `json:"quiet_end,omitempty"`
+	MutedUntil     *time.Time `json:"muted_until,omitempty"`
+	Template       string     `json:"template,omitempty"`
+}
+
+// A queue entry never reads mutable rules or subscriptions when sending.
+type DeliverySnapshot struct {
+	Policy    DeliveryPolicy `json:"policy"`
+	Language  string         `json:"language"`
+	PublicURL string         `json:"public_url"`
+}
+type MatchedRule struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Version uint64 `json:"version"`
+}
+type Delivery struct {
+	database.NotificationDelivery
+	MatchedRules []MatchedRule `json:"matched_rules"`
+	EventCount   int           `json:"event_count"`
 }
 type RuleInput struct {
 	Name    string     `json:"name"`
-	Enabled bool       `json:"enabled"`
 	Version uint64     `json:"version"`
 	Config  RuleConfig `json:"config"`
 }

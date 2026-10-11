@@ -15,7 +15,7 @@ import (
 
 func feishuChannel(t *testing.T, s *Service, app string, targets ...string) Channel {
 	t.Helper()
-	config := Config{AppID: app, Timezone: "UTC", Language: "en-US"}
+	config := Config{AppID: app, Subscription: DefaultSubscription("UTC"), Language: "en-US"}
 	for _, id := range targets {
 		config.Targets = append(config.Targets, Target{ChatID: id, Name: id})
 	}
@@ -28,8 +28,20 @@ func feishuChannel(t *testing.T, s *Service, app string, targets ...string) Chan
 
 func feishuRule(t *testing.T, s *Service, c Channel, mode string, recipients ...string) Rule {
 	t.Helper()
-	r, err := s.SaveRule(context.Background(), "", RuleInput{Name: "incident", Enabled: true, Config: RuleConfig{Events: []string{"container.oom"}, ChannelIDs: []string{c.ID}, ChannelTargets: map[string][]string{c.ID: recipients}, Mode: mode, Timezone: "UTC", Recovery: true}})
+	r, err := s.SaveRule(context.Background(), "", RuleInput{Name: "incident", Config: RuleConfig{Events: []string{"container.oom"}}})
 	if err != nil {
+		t.Fatal(err)
+	}
+	c, err = s.Channel(context.Background(), c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range c.Config.Targets {
+		if contains(recipients, c.Config.Targets[i].ChatID) {
+			c.Config.Targets[i].SubscriptionOverride = &Subscription{RuleIDs: []string{r.ID}, Policy: DeliveryPolicy{Mode: mode, Timezone: "UTC", DigestHour: 9}}
+		}
+	}
+	if _, err := s.SaveChannel(context.Background(), c.ID, ChannelInput{Name: c.Name, Provider: c.Provider, Enabled: true, Version: c.Version, Config: c.Config}); err != nil {
 		t.Fatal(err)
 	}
 	return r
@@ -105,6 +117,7 @@ func TestFeishuApplicationUniquenessSecretsAndIdentityChange(t *testing.T) {
 		}
 	}
 	feishuRule(t, s, updated, "immediate", "oc_a", "oc_b")
+	updated, _ = s.Channel(context.Background(), updated.ID)
 	if err := s.Ingest(context.Background(), event.Event{Type: "container.oom", ID: "pending"}); err != nil {
 		t.Fatal(err)
 	}
@@ -148,10 +161,13 @@ func TestFeishuMultiRecipientRetryResendAndFallback(t *testing.T) {
 	s.deps.Sender = sender
 	c := feishuChannel(t, s, "cli_multi", "oc_a", "oc_b")
 	fallback := feishuChannel(t, s, "cli_fallback", "oc_fallback", "oc_unused")
-	r := feishuRule(t, s, c, "immediate", "oc_a", "oc_b")
-	r.Config.FallbackID = fallback.ID
-	r.Config.FallbackChatID = "oc_fallback"
-	if _, err := s.SaveRule(context.Background(), r.ID, RuleInput{Name: r.Name, Enabled: true, Version: r.Version, Config: r.Config}); err != nil {
+	feishuRule(t, s, c, "immediate", "oc_a", "oc_b")
+	c, _ = s.Channel(context.Background(), c.ID)
+	for i := range c.Config.Targets {
+		c.Config.Targets[i].SubscriptionOverride.Policy.FallbackID = fallback.ID
+		c.Config.Targets[i].SubscriptionOverride.Policy.FallbackChatID = "oc_fallback"
+	}
+	if _, err := s.SaveChannel(context.Background(), c.ID, ChannelInput{Name: c.Name, Provider: c.Provider, Enabled: true, Version: c.Version, Config: c.Config}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Ingest(context.Background(), event.Event{Type: "container.oom", ID: "event-one"}); err != nil {
@@ -200,7 +216,8 @@ func TestFeishuMultiRecipientRetryResendAndFallback(t *testing.T) {
 func TestFeishuRecipientDigestRemovalAndRuleRouting(t *testing.T) {
 	s, _, sender, now := fixture(t)
 	c := feishuChannel(t, s, "cli_digest", "oc_a", "oc_b")
-	r := feishuRule(t, s, c, "merge", "oc_a", "oc_b")
+	feishuRule(t, s, c, "merge", "oc_a", "oc_b")
+	c, _ = s.Channel(context.Background(), c.ID)
 	for _, id := range []string{"one", "two"} {
 		if err := s.Ingest(context.Background(), event.Event{Type: "container.oom", ID: id, ResourceID: id}); err != nil {
 			t.Fatal(err)
@@ -211,9 +228,7 @@ func TestFeishuRecipientDigestRemovalAndRuleRouting(t *testing.T) {
 		t.Fatal("digest recipients merged together", rows)
 	}
 	for _, row := range rows {
-		var ids []string
-		json.Unmarshal([]byte(row.EventIDsJSON), &ids)
-		if len(ids) != 2 {
+		if row.EventCount != 2 {
 			t.Fatal("digest lost event", row)
 		}
 	}
@@ -227,12 +242,6 @@ func TestFeishuRecipientDigestRemovalAndRuleRouting(t *testing.T) {
 	if len(sender.sent) != 1 {
 		t.Fatal("removed recipient was sent", len(sender.sent))
 	}
-	if _, err := s.SaveRule(context.Background(), r.ID, RuleInput{Name: r.Name, Enabled: true, Version: r.Version, Config: r.Config}); !errors.Is(err, ErrInvalid) {
-		t.Fatal("stale recipient accepted", err)
-	}
-	if _, err := s.SaveRule(context.Background(), r.ID, RuleInput{Name: r.Name, Enabled: false, Version: r.Version, Config: r.Config}); err != nil {
-		t.Fatal("stale rule could not be paused", err)
-	}
 	rows, _ = s.Deliveries(context.Background())
 	for _, row := range rows {
 		if row.ChatID == "oc_b" && row.Status != "suppressed" {
@@ -242,7 +251,7 @@ func TestFeishuRecipientDigestRemovalAndRuleRouting(t *testing.T) {
 	c = feishuChannel(t, s, "cli_route", "oc_security", "oc_operations")
 	security := feishuRule(t, s, c, "immediate", "oc_security")
 	security.Config.Events = []string{"auth.login"}
-	if _, err := s.SaveRule(context.Background(), security.ID, RuleInput{Name: "security", Enabled: true, Version: security.Version, Config: security.Config}); err != nil {
+	if _, err := s.SaveRule(context.Background(), security.ID, RuleInput{Name: "security", Version: security.Version, Config: security.Config}); err != nil {
 		t.Fatal(err)
 	}
 	feishuRule(t, s, c, "immediate", "oc_operations")
@@ -251,7 +260,8 @@ func TestFeishuRecipientDigestRemovalAndRuleRouting(t *testing.T) {
 	rows, _ = s.Deliveries(context.Background())
 	for _, row := range rows {
 		if row.ChannelID == c.ID {
-			if row.ChatID == "oc_security" && row.EventIDsJSON != `["login"]` || row.ChatID == "oc_operations" && row.EventIDsJSON != `["oom"]` {
+			events, _, err := s.deliveryEvents(context.Background(), row.ID)
+			if err != nil || len(events) != 1 || row.ChatID == "oc_security" && events[0].ID != "login" || row.ChatID == "oc_operations" && events[0].ID != "oom" {
 				t.Fatal("rules routed to incorrect recipient", row)
 			}
 		}
@@ -278,7 +288,7 @@ func TestDeletedFeishuChannelCannotLoseInboxOrHealthyDeliveries(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows, _ := s.Deliveries(context.Background())
-	if len(rows) != 2 {
+	if len(rows) != 1 {
 		t.Fatal(rows)
 	}
 	for _, row := range rows {

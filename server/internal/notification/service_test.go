@@ -52,7 +52,7 @@ func fixture(t *testing.T) (*Service, *gorm.DB, *recorder, *time.Time) {
 }
 func channel(t *testing.T, s *Service) Channel {
 	t.Helper()
-	c, err := s.SaveChannel(context.Background(), "", ChannelInput{Name: "test", Provider: "webhook", Enabled: true, Config: Config{Endpoint: "https://example.com/hook/secret-address", Language: "en-US", Timezone: "Asia/Shanghai"}, Secrets: &Secrets{Authorization: "Bearer private-value", SigningKey: "private-signature"}})
+	c, err := s.SaveChannel(context.Background(), "", ChannelInput{Name: "test", Provider: "webhook", Enabled: true, Config: Config{Endpoint: "https://example.com/hook/secret-address", Language: "en-US", Subscription: DefaultSubscription("Asia/Shanghai")}, Secrets: &Secrets{Authorization: "Bearer private-value", SigningKey: "private-signature"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,8 +60,16 @@ func channel(t *testing.T, s *Service) Channel {
 }
 func rule(t *testing.T, s *Service, c Channel, mode string) Rule {
 	t.Helper()
-	r, err := s.SaveRule(context.Background(), "", RuleInput{Name: "test", Enabled: true, Config: RuleConfig{Events: []string{"container.oom", "image.available", "cd.awaiting_approval", "node.recovered"}, ChannelIDs: []string{c.ID}, Mode: mode, Timezone: "Asia/Shanghai", DigestHour: 9, Recovery: true}})
+	r, err := s.SaveRule(context.Background(), "", RuleInput{Name: "test", Config: RuleConfig{Events: []string{"container.oom", "image.available", "cd.awaiting_approval", "node.recovered"}}})
 	if err != nil {
+		t.Fatal(err)
+	}
+	c, err = s.Channel(context.Background(), c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Config.Subscription = Subscription{RuleIDs: []string{r.ID}, Policy: DeliveryPolicy{Mode: mode, Timezone: "Asia/Shanghai", DigestHour: 9}}
+	if _, err := s.SaveChannel(context.Background(), c.ID, ChannelInput{Name: c.Name, Provider: c.Provider, Enabled: c.Enabled, Version: c.Version, Config: c.Config}); err != nil {
 		t.Fatal(err)
 	}
 	return r
@@ -113,10 +121,11 @@ func TestSecretsDedupDurableDeliveryAndUnread(t *testing.T) {
 func TestQuietUrgencyMergeAndDailyTimezone(t *testing.T) {
 	s, _, sender, now := fixture(t)
 	c := channel(t, s)
-	r := rule(t, s, c, "merge")
-	r.Config.QuietStart = "21:00"
-	r.Config.QuietEnd = "08:00"
-	r, err := s.SaveRule(context.Background(), r.ID, RuleInput{Name: r.Name, Enabled: true, Version: r.Version, Config: r.Config})
+	rule(t, s, c, "merge")
+	c, _ = s.Channel(context.Background(), c.ID)
+	c.Config.Subscription.Policy.QuietStart = "21:00"
+	c.Config.Subscription.Policy.QuietEnd = "08:00"
+	c, err := s.SaveChannel(context.Background(), c.ID, ChannelInput{Name: c.Name, Provider: c.Provider, Enabled: true, Version: c.Version, Config: c.Config})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,10 +145,10 @@ func TestQuietUrgencyMergeAndDailyTimezone(t *testing.T) {
 	if len(sender.sent) != 2 {
 		t.Fatal("merged notification missing")
 	}
-	r.Config.Mode = "daily"
-	r.Config.QuietStart = ""
-	r.Config.QuietEnd = ""
-	s.SaveRule(context.Background(), r.ID, RuleInput{Name: r.Name, Enabled: true, Version: r.Version, Config: r.Config})
+	c.Config.Subscription.Policy.Mode = "daily"
+	c.Config.Subscription.Policy.QuietStart = ""
+	c.Config.Subscription.Policy.QuietEnd = ""
+	s.SaveChannel(context.Background(), c.ID, ChannelInput{Name: c.Name, Provider: c.Provider, Enabled: true, Version: c.Version, Config: c.Config})
 	s.Ingest(context.Background(), event.Event{Type: "container.oom", ResourceID: "daily"})
 	rows, _ = s.Deliveries(context.Background())
 	found := false
@@ -160,9 +169,12 @@ func TestRetryFallbackAndSuppression(t *testing.T) {
 	first := channel(t, s)
 	fallback := channel(t, s)
 	sender.fail[first.ID] = true
-	r := rule(t, s, first, "immediate")
-	r.Config.FallbackID = fallback.ID
-	s.SaveRule(context.Background(), r.ID, RuleInput{Name: r.Name, Enabled: true, Version: r.Version, Config: r.Config})
+	rule(t, s, first, "immediate")
+	first, _ = s.Channel(context.Background(), first.ID)
+	first.Config.Subscription.Policy.FallbackID = fallback.ID
+	if _, err := s.SaveChannel(context.Background(), first.ID, ChannelInput{Name: first.Name, Provider: first.Provider, Enabled: true, Version: first.Version, Config: first.Config}); err != nil {
+		t.Fatal(err)
+	}
 	s.Ingest(context.Background(), event.Event{Type: "container.oom", ResourceID: "a"})
 	for i := 0; i < 6; i++ {
 		s.Tick(context.Background())

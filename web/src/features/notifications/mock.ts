@@ -1,3 +1,4 @@
+import { defaultSubscription } from './helpers'
 import { ApiError } from '../../lib/api'
 import type { Channel, ChannelConfig, ConnectionStatus, Delivery, Inbox, Rule } from './types'
 const feishuReception = new Map<string, { connection: ConnectionStatus; chats: { chat_id: string; name: string; private: boolean }[] }>()
@@ -20,20 +21,39 @@ export function mockNotifications(path: string, method: string, body: Record<str
   if (previous && previous.version !== input.version) conflict()
   if (!['telegram', 'feishu_app', 'webhook'].includes(input.provider)) throw new ApiError('Unsupported notification provider', 20801, 422)
   if (input.provider === 'feishu_app' && channels.some(channel => channel.id !== id && channel.config.app_id === input.config.app_id)) throw new ApiError('One channel per Feishu application', 20801, 422)
-  const cfg = input.config as ChannelConfig, secrets = body.secrets as Record<string, unknown> | undefined
+  const cfg = structuredClone(input.config) as ChannelConfig, secrets = body.secrets as Record<string, unknown> | undefined
   if (previous && previous.config.app_id !== cfg.app_id) cfg.targets = []
+  cfg.subscription ||= defaultSubscription('UTC')
+  for (const sub of [cfg.subscription,...(cfg.targets || []).flatMap(target => target.subscription_override ? [target.subscription_override] : [])]) {
+   const policy = sub.policy
+   const clean = policy.template.replace(/{{(title|message|node|resource|time|url)}}/g,'')
+   if (clean.includes('{{') || clean.includes('}}')) throw new ApiError('Unsupported template field',20801,422)
+   if (sub.rule_ids.some(id => !rules.some(rule => rule.id === id))) throw new ApiError('Selected rule does not exist',20801,422)
+  }
   const row: Channel = { id: previous?.id || identifier(), name: input.name, provider: input.provider, enabled: input.enabled, version: (previous?.version || 0) + 1, config: { ...cfg, endpoint: '', auto_discover: input.provider === 'telegram' && !!cfg.auto_discover }, has_secrets: previous?.has_secrets || !!(secrets?.token || cfg.endpoint), last_error: '' }
   if (previous) Object.assign(previous, row); else channels.push(row)
   return row
  }
- if (/^\/notifications\/channels\/[^/]+$/.test(path) && method === 'DELETE') { const index = channels.findIndex(c => c.id === path.split('/')[3]); if (index >= 0) channels.splice(index, 1); return { deleted: true } }
+ if (/^\/notifications\/channels\/[^/]+$/.test(path) && method === 'DELETE') {
+  const id=path.split('/')[3],index=channels.findIndex(channel=>channel.id === id)
+  if (index >= 0) channels.splice(index,1)
+  for (const channel of channels) {
+   let changed=false
+   for (const sub of [channel.config.subscription,...(channel.config.targets || []).flatMap(target=>target.subscription_override ? [target.subscription_override] : [])]) {
+    if (sub.policy.fallback_id === id) {sub.policy.fallback_id='';sub.policy.fallback_chat_id='';changed=true}
+   }
+   if (changed) channel.version++
+  }
+  for (const delivery of deliveries) if (delivery.channel_id === id && ['pending','retry'].includes(delivery.status)) {delivery.status='suppressed';delivery.reason='channel deleted'}
+  return {deleted:true}
+ }
  if (/\/notifications\/channels\/[^/]+\/(test|check)$/.test(path)) {
   const channel = channels.find(item => item.id === path.split('/')[3])
   if (!channel) throw new ApiError('Channel not found', 20801, 404)
   if (path.endsWith('/check')) return { credentials_valid: true }
   const chatID = String(body.chat_id || '')
   if (channel.provider === 'feishu_app' && !channel.config.targets?.some(target => target.chat_id === chatID)) throw new ApiError('Select a configured test recipient', 20801, 422)
-  deliveries.unshift({ id: identifier(), channel_id: channel.id, chat_id: chatID, status: 'sent', reason: '', attempts: 1, due_at: new Date().toISOString(), created_at: new Date().toISOString() })
+  deliveries.unshift({ id: identifier(), channel_id: channel.id, chat_id: chatID, matched_rules: [], event_count: 0, source: 'test', status: 'sent', reason: '', attempts: 1, due_at: new Date().toISOString(), created_at: new Date().toISOString() })
   return { sent: true, chat_id: chatID }
  }
  if (/\/notifications\/channels\/[^/]+\/connection$/.test(path)) { const id = path.split('/')[3], channel = channels.find(item => item.id === id); return feishuReception.get(id)?.connection || (channel?.enabled ? { state: 'connected', message_count: 2, last_message_at: new Date().toISOString(), last_message_result: 'discovered' } : { state: 'stopped' }) }
@@ -43,19 +63,36 @@ export function mockNotifications(path: string, method: string, body: Record<str
   return channel?.provider === 'feishu_app' && channel.enabled ? [{ chat_id: 'oc_demo_private', name: 'Admin', private: true }, { chat_id: 'oc_demo_group', name: 'Operations', private: false }] : channel?.provider === 'telegram' && channel.enabled && channel.config.auto_discover ? [{ chat_id: '123456', name: 'Admin', private: true }] : []
  }
  if (path === '/notifications/rules' && method === 'GET') return rules
- if (/^\/notifications\/rules(?:\/[^/]+)?$/.test(path) && (method === 'PUT' || method === 'POST')) { const id = path.split('/')[3], input = body as unknown as Rule, previous = rules.find(r => r.id === id); if (previous && previous.version !== input.version) conflict(); const row: Rule = { id: previous?.id || identifier(), name: input.name, config: input.config, enabled: input.enabled, version: (previous?.version || 0) + 1 }; if (previous) Object.assign(previous, row); else rules.push(row); return row }
- if (path.startsWith('/notifications/rules/') && method === 'DELETE') { const index = rules.findIndex(r => r.id === path.split('/')[3]); if (index >= 0) rules.splice(index, 1); return {} }
+ if (/^\/notifications\/rules(?:\/[^/]+)?$/.test(path) && (method === 'PUT' || method === 'POST')) { if ('enabled' in body) throw new ApiError('Rules take effect through subscriptions', 20602, 400); const id = path.split('/')[3], input = body as unknown as Rule, previous = rules.find(r => r.id === id); if (previous && previous.version !== input.version) conflict(); const row: Rule = { id: previous?.id || identifier(), name: input.name, config: input.config, version: (previous?.version || 0) + 1 }; if (previous) Object.assign(previous, row); else rules.push(row); return row }
+ if (path.startsWith('/notifications/rules/') && method === 'DELETE') {
+  const id = path.split('/')[3], index = rules.findIndex(rule => rule.id === id)
+  if (index >= 0) rules.splice(index,1)
+  for (const channel of channels) {
+   let changed = false
+   for (const sub of [channel.config.subscription,...(channel.config.targets || []).flatMap(target => target.subscription_override ? [target.subscription_override] : [])]) {
+    if (sub.rule_ids.includes(id)) { sub.rule_ids = sub.rule_ids.filter(value => value !== id); changed = true }
+   }
+   if (changed) channel.version++
+  }
+  return { deleted:true }
+ }
  if (path === '/notifications/deliveries') return deliveries
- if (path.endsWith('/resend')) return { queued: true }
+ if (/\/notifications\/deliveries\/[^/]+\/resend$/.test(path) && method === 'POST') {
+  const source = deliveries.find(row => row.id === path.split('/')[3])
+  if (!source) throw new ApiError('Delivery not found', 20801, 404)
+  const now = new Date().toISOString()
+  deliveries.unshift({ ...source, id: identifier(), source: 'manual', origin_delivery_id: source.id, status: 'pending', reason: 'manual resend', attempts: 0, due_at: now, created_at: now })
+  return { queued: true }
+ }
  if (path === '/notifications/inbox') return inbox
  if (/\/notifications\/inbox\/[^/]+\/read$/.test(path)) { const item = inbox.items.find(e => e.id === path.split('/')[3]); if (item && !item.read) { item.read = true; inbox.unread-- } return { read: true } }
  return undefined
 }
-const storageKey = 'suma-demo-notifications-v1'
+const storageKey = 'suma-demo-notifications-v2'
 export function persistMockNotifications() { if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(storageKey, JSON.stringify({ serial, channels, rules, deliveries, inbox })) }
 if (typeof sessionStorage !== 'undefined') {
  try {
   const saved = JSON.parse(sessionStorage.getItem(storageKey) || 'null') as { serial: number; channels: Channel[]; rules: Rule[]; deliveries: Delivery[]; inbox: Inbox } | null
-  if (saved) { serial = saved.serial; channels.push(...saved.channels); rules.push(...saved.rules); deliveries.push(...saved.deliveries); Object.assign(inbox, saved.inbox) }
+  if (saved) { serial = saved.serial; channels.push(...saved.channels); rules.push(...saved.rules.map(({ id, name, version, config }) => ({ id, name, version, config }))); deliveries.push(...saved.deliveries); Object.assign(inbox, saved.inbox) }
  } catch { sessionStorage.removeItem(storageKey) }
 }

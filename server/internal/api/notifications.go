@@ -7,12 +7,14 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/suma/suma/server/internal/notification"
 	"gorm.io/gorm"
 )
 
 func operationsFailure(c *gin.Context, err error) {
-	if errors.Is(err, gorm.ErrInvalidField) {
+	var pgError *pgconn.PgError
+	if errors.Is(err, gorm.ErrInvalidField) || errors.As(err, &pgError) && (pgError.Code == "42703" || pgError.Code == "42P01") {
 		failure(c, http.StatusServiceUnavailable, 20802, "Database schema is incompatible with this server version; initialize a fresh PostgreSQL database for this version")
 		return
 	}

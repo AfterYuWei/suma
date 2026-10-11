@@ -15,7 +15,7 @@ import (
 func TestTelegramDiscoveryDefaultsAndExplicitOptIn(t *testing.T) {
 	s, _, sender, _ := fixture(t)
 	ctx := context.Background()
-	c, err := s.SaveChannel(ctx, "", ChannelInput{Name: "Telegram", Provider: "telegram", Enabled: true, Config: Config{Timezone: "UTC", Language: "en-US"}, Secrets: &Secrets{Token: "123:private-token"}})
+	c, err := s.SaveChannel(ctx, "", ChannelInput{Name: "Telegram", Provider: "telegram", Enabled: true, Config: Config{Subscription: DefaultSubscription("UTC"), Language: "en-US"}, Secrets: &Secrets{Token: "123:private-token"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestTelegramDiscoveryDefaultsAndExplicitOptIn(t *testing.T) {
 
 func TestTelegramPollingStoresMetadataAndCursorWithoutCommandsOrCallbacks(t *testing.T) {
 	s, db, sender, _ := fixture(t)
-	c, err := s.SaveChannel(context.Background(), "", ChannelInput{Name: "Telegram", Provider: "telegram", Enabled: true, Config: Config{AutoDiscover: true, Language: "en-US", Timezone: "UTC"}, Secrets: &Secrets{Token: "123:private-token"}})
+	c, err := s.SaveChannel(context.Background(), "", ChannelInput{Name: "Telegram", Provider: "telegram", Enabled: true, Config: Config{AutoDiscover: true, Language: "en-US", Subscription: DefaultSubscription("UTC")}, Secrets: &Secrets{Token: "123:private-token"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestTelegramPollingStoresMetadataAndCursorWithoutCommandsOrCallbacks(t *tes
 
 func TestTelegramExistingWebhookIsPreserved(t *testing.T) {
 	s, _, _, _ := fixture(t)
-	c, err := s.SaveChannel(context.Background(), "", ChannelInput{Name: "Telegram", Provider: "telegram", Enabled: true, Config: Config{AutoDiscover: true, Language: "en-US", Timezone: "UTC"}, Secrets: &Secrets{Token: "123:private-token"}})
+	c, err := s.SaveChannel(context.Background(), "", ChannelInput{Name: "Telegram", Provider: "telegram", Enabled: true, Config: Config{AutoDiscover: true, Language: "en-US", Subscription: DefaultSubscription("UTC")}, Secrets: &Secrets{Token: "123:private-token"}})
 	if err != nil {
 		t.Fatal(err)
 	}

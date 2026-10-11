@@ -51,11 +51,20 @@ func notificationTransportSmoke(t *testing.T, ctx context.Context, root, nodeID,
 	now := time.Now().UTC()
 	sender := &smokeNotificationSender{}
 	notify := notification.NewService(db, store, notification.Dependencies{Sender: sender, Now: func() time.Time { return now }})
-	channel, err := notify.SaveChannel(ctx, "", notification.ChannelInput{Name: "Isolated notification", Provider: "webhook", Enabled: true, Config: notification.Config{Endpoint: "https://example.com/isolated-smoke", Language: "en-US", Timezone: "UTC"}})
+	channel, err := notify.SaveChannel(ctx, "", notification.ChannelInput{Name: "Isolated notification", Provider: "webhook", Enabled: true, Config: notification.Config{Endpoint: "https://example.com/isolated-smoke", Language: "en-US", Subscription: notification.DefaultSubscription("UTC")}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = notify.SaveRule(ctx, "", notification.RuleInput{Name: "Container failure", Enabled: true, Config: notification.RuleConfig{Events: []string{"container.exited"}, NodeIDs: []string{nodeID}, Projects: []string{name}, ChannelIDs: []string{channel.ID}, Mode: "immediate", Timezone: "UTC"}}); err != nil {
+	rule, err := notify.SaveRule(ctx, "", notification.RuleInput{Name: "Container failure", Config: notification.RuleConfig{Events: []string{"container.exited"}, NodeIDs: []string{nodeID}, Projects: []string{name}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlap, err := notify.SaveRule(ctx, "", notification.RuleInput{Name: "Overlapping exit filter", Config: notification.RuleConfig{Events: []string{"container.exited"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	channel.Config.Subscription.RuleIDs = []string{rule.ID, overlap.ID}
+	if _, err = notify.SaveChannel(ctx, channel.ID, notification.ChannelInput{Name: channel.Name, Provider: channel.Provider, Enabled: true, Version: channel.Version, Config: channel.Config}); err != nil {
 		t.Fatal(err)
 	}
 	watchCtx, cancel := context.WithCancel(ctx)
@@ -102,7 +111,7 @@ func notificationTransportSmoke(t *testing.T, ctx context.Context, root, nodeID,
 		t.Fatal(err)
 	}
 	deliveries, err := notify.Deliveries(ctx)
-	if err != nil || len(deliveries) != 1 || deliveries[0].Status != "retry" {
+	if err != nil || len(deliveries) != 1 || deliveries[0].Status != "retry" || len(deliveries[0].MatchedRules) != 2 {
 		t.Fatal("transient failure was not queued for retry", deliveries, err)
 	}
 	now = now.Add(10 * time.Minute)
