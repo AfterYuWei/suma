@@ -425,6 +425,19 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     const nodeID = nodeMatch[1]
     const suffix = nodeMatch[2] || ''
     const containers = nodeContainers(nodeID)
+    if (['/overview/info', '/overview/metrics', '/overview/resources', '/overview/disk'].includes(suffix)) {
+      const fleet = await demoApi<{ nodes: import('../components/docker/node-overview-card').FleetNode[] }>('/fleet/overview')
+      const node = fleet.nodes.find((item) => item.id === nodeID)
+      if (!node || !node.enabled || node.status !== 'online') throw new Error('Docker node is unavailable')
+      if (suffix === '/overview/info') return clone({ name: node.hostname, server_version: node.engine_version, operating_system: node.os, os_version: node.os_version, architecture: node.architecture, kernel_version: node.kernel_version, containers_running: node.containers_running, containers_paused: node.containers_paused, containers_stopped: node.containers_stopped, images: node.images, cpus: node.cpus, memory_bytes: node.memory_total_bytes, storage_driver: node.storage_driver, logging_driver: node.logging_driver, cgroup_driver: node.cgroup_driver, cgroup_version: node.cgroup_version, default_runtime: node.default_runtime, live_restore: node.live_restore, security_options: node.security_options }) as T
+      if (suffix === '/overview/resources') return clone({ networks: node.networks, volumes: node.volumes }) as T
+      if (suffix === '/overview/disk') return clone({ docker_disk_usage_bytes: node.docker_disk_usage_bytes }) as T
+      const size = url.searchParams.get('size') || 'medium'
+      if (!['small', 'medium', 'large'].includes(size)) throw new Error('Invalid overview card size')
+      const metrics = { metrics_available: node.metrics_available, container_cpu_percent: node.container_cpu_percent, container_memory_bytes: node.container_memory_bytes }
+      if (size === 'small') return clone(metrics) as T
+      return clone({ ...metrics, container_network_rx_bytes: node.container_network_rx_bytes, container_network_tx_bytes: node.container_network_tx_bytes, container_block_read_bytes: node.container_block_read_bytes, container_block_write_bytes: node.container_block_write_bytes, longest_container_uptime_seconds: node.longest_container_uptime_seconds, containers: size === 'large' ? node.containers : node.containers.map(({ id, name, image, state, available, cpu_percent, memory_bytes }) => ({ id, name, image, state, available, cpu_percent, memory_bytes })) }) as T
+    }
     const operation = operationsDemo(nodeID, suffix, method, body, url, images, containers)
     if (operation.handled) return clone(operation.value) as T
     if (suffix === '/tasks') return clone(tasks.filter((item) => item.scope === 'node' && item.node_id === nodeID)) as T

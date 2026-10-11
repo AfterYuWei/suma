@@ -1,5 +1,5 @@
 import { useDateTime } from '../../lib/time-zone'
-import { useRef, type KeyboardEvent, type PointerEvent } from 'react'
+import { useRef, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
 import { motion, useReducedMotion } from 'motion/react'
 import { Boxes, Container, Cpu, Grip, GripVertical, MemoryStick, Server } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -8,6 +8,10 @@ import { nodeCardSizeOptions, type NodeCardSize } from '../../stores/ui'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card'
 import { StatusBadge } from '../ui/status-badge'
 import { TooltipHint } from '../ui/tooltip-hint'
+import { LoadingState } from '../ui/loading-state'
+import { Spinner } from '../ui/spinner'
+import { useNodeOverview } from '../../features/overview/use-node-overview'
+import type { DockerNode } from '../../lib/nodes'
 
 export interface FleetContainer {
   id: string
@@ -101,7 +105,7 @@ function loadTone(value: number) {
   return value >= 85 ? 'critical' as const : value >= 65 ? 'warning' as const : 'neutral' as const
 }
 
-function Metric({ icon: Icon, label, value, detail, bar }: { icon: typeof Cpu; label: string; value: string; detail?: string; bar?: number }) {
+function Metric({ icon: Icon, label, value, detail, bar }: { icon: typeof Cpu; label: string; value: ReactNode; detail?: string; bar?: number }) {
   return (
     <div className="min-w-0 rounded-lg bg-muted/35 p-3">
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground"><Icon className="size-3.5" />{label}</div>
@@ -112,14 +116,18 @@ function Metric({ icon: Icon, label, value, detail, bar }: { icon: typeof Cpu; l
   )
 }
 
-function ContainerMetricsList({ containers, detailed, zh }: { containers: FleetContainer[]; detailed?: boolean; zh: boolean }) {
+function ContainerMetricsList({ containers, detailed, zh, loading, unavailable }: { containers: FleetContainer[]; detailed?: boolean; zh: boolean; loading: boolean; unavailable: boolean }) {
   const rows = [...containers].sort((left, right) => right.memory_bytes - left.memory_bytes || left.name.localeCompare(right.name))
   return (
     <section className="mt-4 flex min-h-0 flex-1 flex-col border-t pt-3" aria-label={zh ? '运行中容器性能' : 'Running container performance'}>
       <div className="flex shrink-0 items-center justify-between gap-3">
         <div className="flex items-center gap-1.5 text-xs font-medium"><Container className="size-3.5 text-muted-foreground" />{zh ? '运行中容器' : 'Running containers'}</div>
       </div>
-      {rows.length === 0
+      {loading
+        ? <div className="mt-3"><LoadingState embedded compact rows={3} label={zh ? '正在加载容器数据' : 'Loading container data'} /></div>
+        : unavailable
+        ? <div className="flex min-h-20 flex-1 items-center justify-center text-xs text-muted-foreground">{zh ? '容器数据暂不可用' : 'Container data unavailable'}</div>
+        : rows.length === 0
         ? <div className="flex min-h-20 flex-1 items-center justify-center text-xs text-muted-foreground">{zh ? '暂无运行中容器' : 'No running containers'}</div>
         : <div className="mt-2 min-h-0 flex-1 divide-y divide-border overflow-y-auto overscroll-contain pr-1">
             {rows.map((container) => (
@@ -144,8 +152,8 @@ function ContainerMetricsList({ containers, detailed, zh }: { containers: FleetC
   )
 }
 
-export function NodeOverviewCard({ node, size, isDragging, onSizeChange, onOrderDragStart, onOrderDragMove, onOrderDragEnd, onOrderMove }: {
-  node: FleetNode
+export function NodeOverviewCard({ node: metadata, size, isDragging, onSizeChange, onOrderDragStart, onOrderDragMove, onOrderDragEnd, onOrderMove }: {
+  node: DockerNode
   size: NodeCardSize
   isDragging: boolean
   onSizeChange: (size: NodeCardSize) => void
@@ -154,6 +162,7 @@ export function NodeOverviewCard({ node, size, isDragging, onSizeChange, onOrder
   onOrderDragEnd: () => void
   onOrderMove: (offset: -1 | 1) => void
 }) {
+  const { node, loading, errors, retry } = useNodeOverview(metadata, size)
   const { formatDateTime } = useDateTime()
 
   const { language } = useI18n()
@@ -167,8 +176,8 @@ export function NodeOverviewCard({ node, size, isDragging, onSizeChange, onOrder
   const containerTotal = node.containers_running + node.containers_paused + node.containers_stopped
   const cpuLoad = metricsAvailable && node.cpus > 0 ? node.container_cpu_percent / node.cpus : null
   const memoryLoad = metricsAvailable && node.memory_total_bytes > 0 ? node.container_memory_bytes / node.memory_total_bytes * 100 : null
-  const statusLabel = !node.enabled ? (zh ? '已禁用' : 'Disabled') : node.status === 'online' ? (zh ? '在线' : 'Online') : (zh ? '离线' : 'Offline')
-  const statusTone = !node.enabled ? 'neutral' as const : node.status === 'online' ? 'success' as const : 'critical' as const
+  const statusLabel = !node.enabled ? (zh ? '已禁用' : 'Disabled') : loading.info ? (zh ? '连接中' : 'Connecting') : node.status === 'online' ? (zh ? '在线' : 'Online') : (zh ? '离线' : 'Offline')
+  const statusTone = !node.enabled ? 'neutral' as const : loading.info ? 'warning' as const : node.status === 'online' ? 'success' as const : 'critical' as const
   const sizeLabel = previewSize === 'small' ? (zh ? '小型' : 'Small') : previewSize === 'medium' ? (zh ? '中型' : 'Medium') : (zh ? '大型' : 'Large')
   const nextSize = nodeCardSizeOptions[(nodeCardSizeOptions.indexOf(previewSize) + 1) % nodeCardSizeOptions.length]
   const nextSizeLabel = nextSize === 'small' ? (zh ? '小型' : 'Small') : nextSize === 'medium' ? (zh ? '中型' : 'Medium') : (zh ? '大型' : 'Large')
@@ -217,6 +226,14 @@ export function NodeOverviewCard({ node, size, isDragging, onSizeChange, onOrder
   const unavailable = '—'
   const latency = available && node.last_latency_ms != null ? `${node.last_latency_ms} ms` : unavailable
   const checkedAt = node.last_checked_at ? formatDateTime(node.last_checked_at) : unavailable
+  const pendingValue = (value: ReactNode, pending: boolean, label: string) => pending
+    ? <span role="status" aria-label={label} className="inline-flex"><Spinner className="size-4" /></span>
+    : value
+  const infoValue = (value: ReactNode) => pendingValue(value, loading.info, zh ? '正在加载节点信息' : 'Loading node information')
+  const metricsValue = (value: ReactNode) => pendingValue(value, loading.metrics, zh ? '正在加载容器数据' : 'Loading container data')
+  const resourceValue = (value: ReactNode) => pendingValue(value, loading.resources, zh ? '正在加载资源数量' : 'Loading resource counts')
+  const diskValue = pendingValue(node.docker_disk_usage_bytes == null ? unavailable : bytes(node.docker_disk_usage_bytes), loading.disk, zh ? '正在加载磁盘占用' : 'Loading disk usage')
+  const errorLabels = { info: zh ? '节点信息加载失败' : 'Node information failed to load', metrics: zh ? '容器数据加载失败' : 'Container data failed to load', resources: zh ? '资源数量加载失败' : 'Resource counts failed to load', disk: zh ? '磁盘占用加载失败' : 'Disk usage failed to load' }
 
   return (
     <motion.div
@@ -243,7 +260,7 @@ export function NodeOverviewCard({ node, size, isDragging, onSizeChange, onOrder
                 <GripVertical className="size-3.5" />
               </button>
             </TooltipHint>
-            <span className={cn('size-2 shrink-0 rounded-full', !node.enabled ? 'bg-zinc-400' : available ? 'bg-emerald-500' : 'bg-red-500')} />
+            <span className={cn('size-2 shrink-0 rounded-full', !node.enabled ? 'bg-zinc-400' : loading.info ? 'bg-amber-500' : available ? 'bg-emerald-500' : 'bg-red-500')} />
             <CardTitle className="min-w-0 flex-1 truncate">{node.name}</CardTitle>
             <StatusBadge tone={statusTone}>{statusLabel}</StatusBadge>
           </div>
@@ -255,20 +272,21 @@ export function NodeOverviewCard({ node, size, isDragging, onSizeChange, onOrder
         </CardHeader>
 
         <CardContent className="flex min-h-0 flex-1 flex-col pb-5">
+          {(Object.keys(errors) as (keyof typeof errors)[]).filter((key) => errors[key]).map((key) => <div key={key} role="alert" className="mb-2 flex items-center justify-between gap-2 text-xs text-destructive"><span>{errorLabels[key]}</span><button type="button" className="shrink-0 underline underline-offset-4" aria-label={zh ? `重试：${errorLabels[key]}` : `Retry: ${errorLabels[key]}`} onClick={retry[key]}>{zh ? '重试' : 'Retry'}</button></div>)}
           {previewSize === 'small' && (
             <>
               <div className="grid grid-cols-3 gap-2">
-                <div><div className="text-xs text-muted-foreground">{zh ? '运行容器' : 'Running'}</div><div className="mt-1 text-xl font-semibold tabular-nums">{available ? node.containers_running : unavailable}</div></div>
-                <div><div className="text-xs text-muted-foreground">CPU</div><div className="mt-1 text-xl font-semibold tabular-nums">{cpuLoad == null ? unavailable : `${cpuLoad.toFixed(1)}%`}</div></div>
-                <div><div className="text-xs text-muted-foreground">{zh ? '内存' : 'Memory'}</div><div className="mt-1 text-xl font-semibold tabular-nums">{memoryLoad == null ? unavailable : `${memoryLoad.toFixed(1)}%`}</div></div>
+                <div><div className="text-xs text-muted-foreground">{zh ? '运行容器' : 'Running'}</div><div className="mt-1 text-xl font-semibold tabular-nums">{infoValue(available ? node.containers_running : unavailable)}</div></div>
+                <div><div className="text-xs text-muted-foreground">CPU</div><div className="mt-1 text-xl font-semibold tabular-nums">{metricsValue(cpuLoad == null ? unavailable : `${cpuLoad.toFixed(1)}%`)}</div></div>
+                <div><div className="text-xs text-muted-foreground">{zh ? '内存' : 'Memory'}</div><div className="mt-1 text-xl font-semibold tabular-nums">{metricsValue(memoryLoad == null ? unavailable : `${memoryLoad.toFixed(1)}%`)}</div></div>
               </div>
               <dl className="mt-4 grid grid-cols-2 gap-x-5 gap-y-2 border-t pt-3 text-xs">
-                <div className="flex justify-between gap-2"><dt className="text-muted-foreground">{zh ? '容器总数' : 'Containers'}</dt><dd className="font-medium tabular-nums">{available ? containerTotal : unavailable}</dd></div>
-                <div className="flex justify-between gap-2"><dt className="text-muted-foreground">{zh ? '镜像' : 'Images'}</dt><dd className="font-medium tabular-nums">{available ? node.images : unavailable}</dd></div>
-                <div className="flex justify-between gap-2"><dt className="text-muted-foreground">{zh ? '网络' : 'Networks'}</dt><dd className="font-medium tabular-nums">{node.networks ?? unavailable}</dd></div>
-                <div className="flex justify-between gap-2"><dt className="text-muted-foreground">{zh ? '存储卷' : 'Volumes'}</dt><dd className="font-medium tabular-nums">{node.volumes ?? unavailable}</dd></div>
-                <div className="flex justify-between gap-2"><dt className="text-muted-foreground">Docker {zh ? '磁盘' : 'disk'}</dt><dd className="font-medium tabular-nums">{node.docker_disk_usage_bytes == null ? unavailable : bytes(node.docker_disk_usage_bytes)}</dd></div>
-                <div className="flex justify-between gap-2"><dt className="text-muted-foreground">Engine</dt><dd className="max-w-24 truncate font-mono">{available ? node.engine_version || unavailable : unavailable}</dd></div>
+                <div className="flex justify-between gap-2"><dt className="text-muted-foreground">{zh ? '容器总数' : 'Containers'}</dt><dd className="font-medium tabular-nums">{infoValue(available ? containerTotal : unavailable)}</dd></div>
+                <div className="flex justify-between gap-2"><dt className="text-muted-foreground">{zh ? '镜像' : 'Images'}</dt><dd className="font-medium tabular-nums">{infoValue(available ? node.images : unavailable)}</dd></div>
+                <div className="flex justify-between gap-2"><dt className="text-muted-foreground">{zh ? '网络' : 'Networks'}</dt><dd className="font-medium tabular-nums">{resourceValue(node.networks ?? unavailable)}</dd></div>
+                <div className="flex justify-between gap-2"><dt className="text-muted-foreground">{zh ? '存储卷' : 'Volumes'}</dt><dd className="font-medium tabular-nums">{resourceValue(node.volumes ?? unavailable)}</dd></div>
+                <div className="flex justify-between gap-2"><dt className="text-muted-foreground">Docker {zh ? '磁盘' : 'disk'}</dt><dd className="font-medium tabular-nums">{diskValue}</dd></div>
+                <div className="flex justify-between gap-2"><dt className="text-muted-foreground">Engine</dt><dd className="max-w-24 truncate font-mono">{infoValue(available ? node.engine_version || unavailable : unavailable)}</dd></div>
               </dl>
             </>
           )}
@@ -276,38 +294,38 @@ export function NodeOverviewCard({ node, size, isDragging, onSizeChange, onOrder
           {previewSize === 'medium' && (
             <>
               <div className="grid grid-cols-2 gap-2">
-                <Metric icon={Container} label={zh ? '容器' : 'Containers'} value={available ? `${node.containers_running} / ${containerTotal}` : unavailable} detail={available ? `${node.containers_stopped} ${zh ? '停止' : 'stopped'} · ${node.containers_paused} ${zh ? '暂停' : 'paused'}` : undefined} />
-                <Metric icon={Cpu} label={zh ? '容器 CPU' : 'Container CPU'} value={cpuLoad == null ? unavailable : `${cpuLoad.toFixed(1)}%`} detail={available ? `${node.cpus} vCPU` : undefined} bar={cpuLoad ?? undefined} />
-                <Metric icon={MemoryStick} label={zh ? '容器内存' : 'Container memory'} value={memoryLoad == null ? unavailable : `${memoryLoad.toFixed(1)}%`} detail={metricsAvailable ? `${bytes(node.container_memory_bytes)} / ${bytes(node.memory_total_bytes)}` : undefined} bar={memoryLoad ?? undefined} />
-                <Metric icon={Boxes} label="Docker disk" value={node.docker_disk_usage_bytes == null ? unavailable : bytes(node.docker_disk_usage_bytes)} detail={zh ? '镜像、容器、卷与构建缓存' : 'Images, containers, volumes, and build cache'} />
+                <Metric icon={Container} label={zh ? '容器' : 'Containers'} value={infoValue(available ? `${node.containers_running} / ${containerTotal}` : unavailable)} detail={available ? `${node.containers_stopped} ${zh ? '停止' : 'stopped'} · ${node.containers_paused} ${zh ? '暂停' : 'paused'}` : undefined} />
+                <Metric icon={Cpu} label={zh ? '容器 CPU' : 'Container CPU'} value={metricsValue(cpuLoad == null ? unavailable : `${cpuLoad.toFixed(1)}%`)} detail={available ? `${node.cpus} vCPU` : undefined} bar={cpuLoad ?? undefined} />
+                <Metric icon={MemoryStick} label={zh ? '容器内存' : 'Container memory'} value={metricsValue(memoryLoad == null ? unavailable : `${memoryLoad.toFixed(1)}%`)} detail={metricsAvailable ? `${bytes(node.container_memory_bytes)} / ${bytes(node.memory_total_bytes)}` : undefined} bar={memoryLoad ?? undefined} />
+                <Metric icon={Boxes} label="Docker disk" value={diskValue} detail={zh ? '镜像、容器、卷与构建缓存' : 'Images, containers, volumes, and build cache'} />
               </div>
               <dl className="mt-3 grid grid-cols-3 gap-3 border-t pt-3 text-xs sm:grid-cols-5">
-                <div><dt className="text-muted-foreground">{zh ? '镜像' : 'Images'}</dt><dd className="mt-1 font-medium tabular-nums">{available ? node.images : unavailable}</dd></div>
-                <div><dt className="text-muted-foreground">{zh ? '网络' : 'Networks'}</dt><dd className="mt-1 font-medium tabular-nums">{node.networks ?? unavailable}</dd></div>
-                <div><dt className="text-muted-foreground">{zh ? '存储卷' : 'Volumes'}</dt><dd className="mt-1 font-medium tabular-nums">{node.volumes ?? unavailable}</dd></div>
-                <div><dt className="text-muted-foreground">Engine</dt><dd className="mt-1 truncate font-mono">{available ? node.engine_version || unavailable : unavailable}</dd></div>
-                <div><dt className="text-muted-foreground">{zh ? '最长运行' : 'Longest uptime'}</dt><dd className="mt-1 truncate font-medium tabular-nums">{metricsAvailable ? duration(node.longest_container_uptime_seconds, zh) : unavailable}</dd></div>
+                <div><dt className="text-muted-foreground">{zh ? '镜像' : 'Images'}</dt><dd className="mt-1 font-medium tabular-nums">{infoValue(available ? node.images : unavailable)}</dd></div>
+                <div><dt className="text-muted-foreground">{zh ? '网络' : 'Networks'}</dt><dd className="mt-1 font-medium tabular-nums">{resourceValue(node.networks ?? unavailable)}</dd></div>
+                <div><dt className="text-muted-foreground">{zh ? '存储卷' : 'Volumes'}</dt><dd className="mt-1 font-medium tabular-nums">{resourceValue(node.volumes ?? unavailable)}</dd></div>
+                <div><dt className="text-muted-foreground">Engine</dt><dd className="mt-1 truncate font-mono">{infoValue(available ? node.engine_version || unavailable : unavailable)}</dd></div>
+                <div><dt className="text-muted-foreground">{zh ? '最长运行' : 'Longest uptime'}</dt><dd className="mt-1 truncate font-medium tabular-nums">{metricsValue(metricsAvailable ? duration(node.longest_container_uptime_seconds, zh) : unavailable)}</dd></div>
               </dl>
               <div className="mt-3 grid grid-cols-2 gap-x-5 gap-y-2 rounded-lg bg-muted/35 p-3 text-xs">
-                <div className="flex justify-between gap-2"><span className="text-muted-foreground">Network I/O</span><span className="tabular-nums">{metricsAvailable ? `↓ ${bytes(node.container_network_rx_bytes)} · ↑ ${bytes(node.container_network_tx_bytes)}` : unavailable}</span></div>
-                <div className="flex justify-between gap-2"><span className="text-muted-foreground">Block I/O</span><span className="tabular-nums">{metricsAvailable ? `R ${bytes(node.container_block_read_bytes)} · W ${bytes(node.container_block_write_bytes)}` : unavailable}</span></div>
+                <div className="flex justify-between gap-2"><span className="text-muted-foreground">Network I/O</span><span className="tabular-nums">{metricsValue(metricsAvailable ? `↓ ${bytes(node.container_network_rx_bytes)} · ↑ ${bytes(node.container_network_tx_bytes)}` : unavailable)}</span></div>
+                <div className="flex justify-between gap-2"><span className="text-muted-foreground">Block I/O</span><span className="tabular-nums">{metricsValue(metricsAvailable ? `R ${bytes(node.container_block_read_bytes)} · W ${bytes(node.container_block_write_bytes)}` : unavailable)}</span></div>
               </div>
-              <ContainerMetricsList containers={node.containers ?? []} zh={zh} />
+              <ContainerMetricsList containers={node.containers ?? []} zh={zh} loading={loading.metrics} unavailable={!available || errors.metrics} />
             </>
           )}
 
           {previewSize === 'large' && (
             <>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <Metric icon={Container} label={zh ? '容器' : 'Containers'} value={available ? `${node.containers_running} ${zh ? '运行中' : 'running'}` : unavailable} detail={available ? `${node.containers_stopped} ${zh ? '停止' : 'stopped'} · ${node.containers_paused} ${zh ? '暂停' : 'paused'} · ${containerTotal} ${zh ? '总计' : 'total'}` : undefined} />
-                <Metric icon={Cpu} label={zh ? '容器 CPU' : 'Container CPU'} value={cpuLoad == null ? unavailable : `${cpuLoad.toFixed(1)}%`} detail={metricsAvailable ? `${node.container_cpu_percent.toFixed(1)}% ${zh ? '容器合计' : 'container total'} · ${node.cpus} vCPU` : undefined} bar={cpuLoad ?? undefined} />
-                <Metric icon={MemoryStick} label={zh ? '容器内存' : 'Container memory'} value={metricsAvailable ? bytes(node.container_memory_bytes) : unavailable} detail={metricsAvailable ? `${memoryLoad?.toFixed(1)}% · ${bytes(node.memory_total_bytes)} ${zh ? '总容量' : 'total'}` : undefined} bar={memoryLoad ?? undefined} />
-                <Metric icon={Boxes} label="Docker disk" value={node.docker_disk_usage_bytes == null ? unavailable : bytes(node.docker_disk_usage_bytes)} detail={zh ? `${node.images} 镜像 · ${node.volumes ?? '—'} 存储卷` : `${node.images} images · ${node.volumes ?? '—'} volumes`} />
+                <Metric icon={Container} label={zh ? '容器' : 'Containers'} value={infoValue(available ? `${node.containers_running} ${zh ? '运行中' : 'running'}` : unavailable)} detail={available ? `${node.containers_stopped} ${zh ? '停止' : 'stopped'} · ${node.containers_paused} ${zh ? '暂停' : 'paused'} · ${containerTotal} ${zh ? '总计' : 'total'}` : undefined} />
+                <Metric icon={Cpu} label={zh ? '容器 CPU' : 'Container CPU'} value={metricsValue(cpuLoad == null ? unavailable : `${cpuLoad.toFixed(1)}%`)} detail={metricsAvailable ? `${node.container_cpu_percent.toFixed(1)}% ${zh ? '容器合计' : 'container total'} · ${node.cpus} vCPU` : undefined} bar={cpuLoad ?? undefined} />
+                <Metric icon={MemoryStick} label={zh ? '容器内存' : 'Container memory'} value={metricsValue(metricsAvailable ? bytes(node.container_memory_bytes) : unavailable)} detail={metricsAvailable ? `${memoryLoad?.toFixed(1)}% · ${bytes(node.memory_total_bytes)} ${zh ? '总容量' : 'total'}` : undefined} bar={memoryLoad ?? undefined} />
+                <Metric icon={Boxes} label="Docker disk" value={diskValue} detail={zh ? `${node.images} 镜像 · ${node.volumes ?? '—'} 存储卷` : `${node.images} images · ${node.volumes ?? '—'} volumes`} />
               </div>
               <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                <Metric icon={Server} label="Network RX / TX" value={metricsAvailable ? bytes(node.container_network_rx_bytes) : unavailable} detail={metricsAvailable ? `${bytes(node.container_network_tx_bytes)} TX` : undefined} />
-                <Metric icon={Server} label="Block read / write" value={metricsAvailable ? bytes(node.container_block_read_bytes) : unavailable} detail={metricsAvailable ? `${bytes(node.container_block_write_bytes)} write` : undefined} />
-                <Metric icon={Container} label={zh ? '最长容器运行时间' : 'Longest container uptime'} value={metricsAvailable ? duration(node.longest_container_uptime_seconds, zh) : unavailable} />
+                <Metric icon={Server} label="Network RX / TX" value={metricsValue(metricsAvailable ? bytes(node.container_network_rx_bytes) : unavailable)} detail={metricsAvailable ? `${bytes(node.container_network_tx_bytes)} TX` : undefined} />
+                <Metric icon={Server} label="Block read / write" value={metricsValue(metricsAvailable ? bytes(node.container_block_read_bytes) : unavailable)} detail={metricsAvailable ? `${bytes(node.container_block_write_bytes)} write` : undefined} />
+                <Metric icon={Container} label={zh ? '最长容器运行时间' : 'Longest container uptime'} value={metricsValue(metricsAvailable ? duration(node.longest_container_uptime_seconds, zh) : unavailable)} />
               </div>
               <div className="mt-4 grid gap-4 border-t pt-4 md:grid-cols-3">
                 <div>
@@ -337,14 +355,13 @@ export function NodeOverviewCard({ node, size, isDragging, onSizeChange, onOrder
                     <dt className="text-muted-foreground">{zh ? '类型' : 'Type'}</dt><dd className="text-right font-mono">{node.connection_type.toUpperCase()}</dd>
                     <dt className="text-muted-foreground">TLS</dt><dd className="text-right font-mono">{node.tls_mode === 'required' ? 'mTLS' : 'Plain'}</dd>
                     <dt className="text-muted-foreground">{zh ? '延迟' : 'Latency'}</dt><dd className="text-right tabular-nums">{latency}</dd>
-                    <dt className="text-muted-foreground">{zh ? '网络 / 存储卷' : 'Networks / volumes'}</dt><dd className="text-right tabular-nums">{node.networks ?? unavailable} / {node.volumes ?? unavailable}</dd>
+                    <dt className="text-muted-foreground">{zh ? '网络 / 存储卷' : 'Networks / volumes'}</dt><dd className="text-right tabular-nums">{resourceValue(node.networks ?? unavailable)} / {resourceValue(node.volumes ?? unavailable)}</dd>
                     <dt className="text-muted-foreground">{zh ? '最后检查' : 'Last checked'}</dt><dd className="truncate text-right tabular-nums">{checkedAt}</dd>
                   </dl>
                 </div>
               </div>
               {(node.security_options?.length ?? 0) > 0 && <div className="mt-4 flex flex-wrap items-center gap-1.5 border-t pt-3"><span className="mr-1 text-xs text-muted-foreground">Security</span>{node.security_options?.map((option) => <span key={option} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">{option}</span>)}</div>}
-              {!available && node.last_error && <div className="mt-4 rounded-lg bg-red-500/10 px-3 py-2 text-xs break-all text-red-700 dark:text-red-300">{node.last_error}</div>}
-              <ContainerMetricsList containers={node.containers ?? []} detailed zh={zh} />
+              <ContainerMetricsList containers={node.containers ?? []} detailed zh={zh} loading={loading.metrics} unavailable={!available || errors.metrics} />
             </>
           )}
         </CardContent>

@@ -97,16 +97,19 @@ type cachedClient struct {
 }
 
 type Service struct {
-	db          *gorm.DB
-	secrets     *secret.Store
-	mu          sync.Mutex
-	engineMu    sync.Mutex
-	claimMu     sync.Mutex
-	clients     map[string]cachedClient
-	retired     []*docker.Adapter
-	probeCancel context.CancelFunc
-	probeWG     sync.WaitGroup
-	agents      *agenthub.Hub
+	db              *gorm.DB
+	secrets         *secret.Store
+	mu              sync.Mutex
+	engineMu        sync.Mutex
+	claimMu         sync.Mutex
+	clients         map[string]cachedClient
+	runtimeGates    map[string]chan struct{}
+	clientRevisions map[string]uint64
+	closed          bool
+	retired         []*docker.Adapter
+	probeCancel     context.CancelFunc
+	probeWG         sync.WaitGroup
+	agents          *agenthub.Hub
 }
 
 func (s *Service) Start() {
@@ -147,7 +150,7 @@ func (s *Service) Stop() {
 }
 
 func NewService(db *gorm.DB, secrets *secret.Store, bootstrapHost string) (*Service, error) {
-	s := &Service{db: db, secrets: secrets, clients: map[string]cachedClient{}}
+	s := &Service{db: db, secrets: secrets, clients: map[string]cachedClient{}, runtimeGates: map[string]chan struct{}{}, clientRevisions: map[string]uint64{}}
 	var count int64
 	if err := db.Model(&database.Node{}).Count(&count).Error; err != nil {
 		return nil, err
@@ -445,6 +448,22 @@ func (s *Service) Test(ctx context.Context, id string) (docker.Info, error) {
 }
 
 func (s *Service) Runtime(ctx context.Context, id string) (*docker.Adapter, error) {
+	if !validID.MatchString(id) {
+		return nil, errors.New("invalid node ID")
+	}
+	s.mu.Lock()
+	gate := s.runtimeGates[id]
+	if gate == nil {
+		gate = make(chan struct{}, 1)
+		s.runtimeGates[id] = gate
+	}
+	s.mu.Unlock()
+	select {
+	case gate <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-gate }()
 	row, err := s.row(ctx, id)
 	if err != nil {
 		return nil, err
@@ -453,13 +472,27 @@ func (s *Service) Runtime(ctx context.Context, id string) (*docker.Adapter, erro
 		return nil, errors.New("Docker node is disabled")
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, errors.New("Docker node service is closed")
+	}
 	if cached, ok := s.clients[id]; ok && cached.updatedAt.Equal(row.UpdatedAt) {
+		s.mu.Unlock()
 		return cached.client, nil
 	}
+	revision := s.clientRevisions[id]
+	s.mu.Unlock()
+	// Network I/O must not hold the shared cache lock: a slow connection on
+	// one node should not block other cards, including already-cached nodes.
 	client, _, _, err := s.connect(ctx, row)
 	if err != nil {
 		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.clientRevisions[id] != revision {
+		_ = client.Close()
+		return nil, errors.New("Docker node connection changed; retry request")
 	}
 	if old, ok := s.clients[id]; ok {
 		// Existing operations may have captured this client. Retire it until
@@ -536,6 +569,7 @@ func (s *Service) Close() error {
 	s.Stop()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.closed = true
 	var first error
 	for id, cached := range s.clients {
 		if err := cached.client.Close(); err != nil && first == nil {
@@ -752,6 +786,7 @@ func (s *Service) recordProbe(id string, started time.Time, info docker.Info, pr
 func (s *Service) invalidate(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.clientRevisions[id]++
 	if cached, ok := s.clients[id]; ok {
 		s.retired = append(s.retired, cached.client)
 		delete(s.clients, id)

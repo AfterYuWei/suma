@@ -466,7 +466,17 @@ func shortDockerID(value string) string {
 	return value
 }
 
+type MetricsOptions struct {
+	IncludeUptime bool
+}
+
 func (a *Adapter) Metrics(ctx context.Context) ([]domain.Metrics, error) {
+	return a.MetricsWithOptions(ctx, MetricsOptions{IncludeUptime: true})
+}
+
+// MetricsWithOptions omits container inspection when the caller only needs
+// performance counters. CPU/memory still require a Stats sample per container.
+func (a *Adapter) MetricsWithOptions(ctx context.Context, options MetricsOptions) ([]domain.Metrics, error) {
 	rows, err := a.client.ContainerList(ctx, dockercontainer.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("list running containers for metrics: %w", err)
@@ -484,9 +494,13 @@ func (a *Adapter) Metrics(ctx context.Context) ([]domain.Metrics, error) {
 		wait.Add(1)
 		go func(index int) {
 			defer wait.Done()
-			limit <- struct{}{}
+			select {
+			case limit <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
 			defer func() { <-limit }()
-			available[index] = a.loadSummaryStats(ctx, &summaries[index])
+			available[index] = a.loadSummaryStats(ctx, &summaries[index], options.IncludeUptime)
 		}(index)
 	}
 	wait.Wait()
@@ -502,7 +516,7 @@ func (a *Adapter) Metrics(ctx context.Context) ([]domain.Metrics, error) {
 	return result, nil
 }
 
-func (a *Adapter) loadSummaryStats(ctx context.Context, summary *domain.Summary) bool {
+func (a *Adapter) loadSummaryStats(ctx context.Context, summary *domain.Summary, includeUptime bool) bool {
 	available := false
 	response, err := a.client.ContainerStats(ctx, summary.ID, false)
 	if err == nil {
@@ -543,9 +557,11 @@ func (a *Adapter) loadSummaryStats(ctx context.Context, summary *domain.Summary)
 			summary.PIDs = stats.PidsStats.Current
 		}
 	}
-	if inspect, err := a.client.ContainerInspect(ctx, summary.ID); err == nil && inspect.State != nil {
-		if started, err := time.Parse(time.RFC3339Nano, inspect.State.StartedAt); err == nil {
-			summary.UptimeSeconds = int64(time.Since(started).Seconds())
+	if includeUptime && ctx.Err() == nil {
+		if inspect, err := a.client.ContainerInspect(ctx, summary.ID); err == nil && inspect.State != nil {
+			if started, err := time.Parse(time.RFC3339Nano, inspect.State.StartedAt); err == nil {
+				summary.UptimeSeconds = int64(time.Since(started).Seconds())
+			}
 		}
 	}
 	return available

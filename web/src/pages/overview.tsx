@@ -1,4 +1,3 @@
-import { useDateTime } from '../lib/time-zone'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { LayoutGroup, motion, useReducedMotion } from 'motion/react'
@@ -7,18 +6,18 @@ import {
   ArrowUpRight,
   GitPullRequest,
 } from 'lucide-react'
-import { NodeOverviewCard, type FleetNode } from '../components/docker/node-overview-card'
+import { NodeOverviewCard } from '../components/docker/node-overview-card'
 import { LoadingState } from '../components/ui/loading-state'
+import { ErrorState } from '../components/ui/error-state'
 import { Button } from '../components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { StatusBadge } from '../components/ui/status-badge'
 import { TooltipHint } from '../components/ui/tooltip-hint'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
-import { fleetGroupQuery, type DockerNode } from '../lib/nodes'
+import { filterNodesByGroup, type DockerNode } from '../lib/nodes'
 import { useUIStore } from '../stores/ui'
 
-interface FleetOverview { nodes: FleetNode[] }
 interface ReleaseSummary { id: number; status: string; commit_sha: string; trigger_type: string; created_at: string }
 interface CDProject { name: string; configured: boolean; repository_url?: string; git_ref?: string; reconcile_mode: string; node_ids: string[]; drifted: boolean; runtime_healthy: boolean; drift_reason?: string; active_release?: ReleaseSummary; latest_release?: ReleaseSummary; awaiting_approval: boolean; releasing: boolean }
 interface CDOverview { projects: CDProject[]; totals: { projects: number; configured: number; releasing: number; awaiting_approval: number; drifted: number; healthy: number } }
@@ -33,8 +32,6 @@ function releaseTone(status: string) {
 }
 
 export function OverviewPage() {
-  const { formatTime } = useDateTime()
-
   const navigate = useNavigate()
   const { language } = useI18n()
   const zh = language === 'zh-CN'
@@ -48,29 +45,25 @@ export function OverviewPage() {
   const [dragOrder, setDragOrder] = useState<string[] | null>(null)
   const dragOrderRef = useRef<string[] | null>(null)
 
-  const fleet = useQuery({
-    queryKey: ['fleet-overview', currentGroupFilter],
-    queryFn: () => api<FleetOverview>(`/fleet/overview${fleetGroupQuery(currentGroupFilter)}`),
+  const allNodes = useQuery({
+    queryKey: ['nodes'],
+    queryFn: ({ signal }) => api<DockerNode[]>('/nodes', { signal }),
     refetchInterval: fleetRefreshInterval,
     refetchOnWindowFocus: 'always',
     refetchOnReconnect: 'always',
   })
-  const allNodes = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes') })
   const cd = useQuery({ queryKey: ['cd-overview'], queryFn: () => api<CDOverview>('/cd/overview'), refetchInterval: 10_000 })
 
-  const nodes = fleet.data?.nodes ?? []
+  const nodes = filterNodesByGroup(allNodes.data ?? [], currentGroupFilter)
   const nodeIDs = new Set(nodes.map((node) => node.id))
   const savedNodeIDs = nodeCardOrder.filter((nodeID) => nodeIDs.has(nodeID))
   const orderedNodeIDs = [...savedNodeIDs, ...nodes.map((node) => node.id).filter((nodeID) => !savedNodeIDs.includes(nodeID))]
   const renderedNodeIDs = dragOrder ?? orderedNodeIDs
   const nodeByID = new Map(nodes.map((node) => [node.id, node]))
-  const orderedNodes = renderedNodeIDs.map((nodeID) => nodeByID.get(nodeID)).filter((node): node is FleetNode => node != null)
+  const orderedNodes = renderedNodeIDs.map((nodeID) => nodeByID.get(nodeID)).filter((node): node is DockerNode => node != null)
   const cdTotals = cd.data?.totals
   const nodeNames = new Map((allNodes.data ?? []).map((node) => [node.id, node.name]))
   const layoutTransition = reduceMotion ? { duration: 0 } : { layout: { duration: 0.3, ease: 'linear' as const } }
-  const fleetUpdatedAt = fleet.dataUpdatedAt > 0
-    ? formatTime(fleet.dataUpdatedAt, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-    : '—'
 
   const startNodeOrderDrag = (nodeID: string) => {
     const order = [...orderedNodeIDs]
@@ -117,8 +110,6 @@ export function OverviewPage() {
     return <StatusBadge tone={releaseTone(release.status)}>{release.status.replaceAll('_', ' ')}</StatusBadge>
   }
 
-  if (fleet.isPending && cd.isPending) return <LoadingState label={zh ? '正在加载全局概览' : 'Loading fleet overview'} rows={8} />
-
   return (
       <LayoutGroup>
         <div className="flex w-full flex-col gap-5">
@@ -126,11 +117,13 @@ export function OverviewPage() {
           <div className="flex flex-wrap items-end gap-3">
             <div>
               <h3 id="overview-nodes-heading" className="cn-font-heading text-base font-medium">{zh ? '节点资源' : 'Node resources'}</h3>
-              <p className="mt-0.5 text-sm text-muted-foreground">{zh ? `每 10 秒自动刷新 · 最近更新 ${fleetUpdatedAt}；拖动标题手柄调整顺序` : `Refreshes every 10 seconds · Updated ${fleetUpdatedAt}; drag title handles to reorder`}</p>
+              <p className="mt-0.5 text-sm text-muted-foreground">{zh ? '节点与容器每 10 秒刷新 · 磁盘每 60 秒刷新；拖动标题手柄调整顺序' : 'Nodes and containers refresh every 10 seconds · Disk every 60 seconds; drag title handles to reorder'}</p>
             </div>
             <Button variant="ghost" size="sm" className="ml-auto text-muted-foreground" onClick={() => void navigate({ to: '/nodes' })}><ArrowUpRight className="size-4" />{zh ? '管理节点' : 'Manage nodes'}</Button>
           </div>
-          {fleet.isPending
+          {allNodes.isError
+            ? <div className="space-y-2"><ErrorState description={allNodes.error.message} /><Button variant="ghost" size="sm" onClick={() => void allNodes.refetch()}>{zh ? '重试' : 'Retry'}</Button></div>
+            : allNodes.isPending
             ? <LoadingState rows={5} label={zh ? '正在加载节点' : 'Loading nodes'} />
             : nodes.length === 0
               ? <div className="rounded-xl border border-dashed py-12 text-center text-sm text-muted-foreground">{zh ? '暂无节点' : 'No nodes'}</div>
