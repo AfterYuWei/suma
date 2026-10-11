@@ -7,7 +7,7 @@ SUMA is a monolithic multi-node Docker management control plane. Nodes connect t
 ## Required stack
 
 - Web: React 19, TypeScript, Vite, Tailwind CSS v4, shadcn/ui conventions, Base UI, TanStack Router, TanStack Query, Zustand, Lucide React, Motion, Monaco Editor, xterm.js, and ECharts.
-- Server: Go, Gin, GORM, PostgreSQL 18.6, Docker Go SDK, WebSocket, and the `docker compose` CLI. SQLite is not supported; development databases are initialized fresh without historical migration.
+- Server: Go, Gin, GORM, PostgreSQL 18.6, Docker Go SDK, WebSocket, and the `docker compose` CLI. SQLite is not supported. Empty development/test databases are initialized fresh; production upgrades preserve existing data through versioned incremental migrations.
 - Deployment: one control-plane container with persistent application files, a PostgreSQL service, Compose, and optional Agent containers on remote Docker hosts. Unix sockets and mTLS Docker TCP endpoints remain supported.
 - TCP defaults to mutual TLS. Plaintext TCP is permitted only for loopback, private-network, or Tailscale IP endpoints and requires typed endpoint confirmation; never expose an unauthenticated Docker API to a public network. Do not add Redis, message brokers, microservices, Swarm, or Kubernetes.
 
@@ -46,3 +46,11 @@ SUMA is a monolithic multi-node Docker management control plane. Nodes connect t
 - Web gate: `npm run lint`, `npm run typecheck`, and `npm run build`.
 - Tests exercise services and HTTP behavior against an isolated PostgreSQL schema with controlled runtime/provider substitutes, without requiring a live Docker daemon. Configure SUMA_TEST_DATABASE_DSN in root .env.local or the process environment; native startup and tests read the private file without shell evaluation. Do not skip or fall back to an embedded database. Run a separate real-Docker smoke test before final completion.
 - Prefer simple, explicit composition. Avoid speculative abstractions, excessive interfaces, and repository layers with no behavior.
+
+## Production data and schema upgrades
+
+- Production is live as of 2026-10-11. Preserve accounts, nodes, credentials, settings, task/audit history, notification rules/subscriptions/delivery evidence, application files and the existing encryption key across upgrades.
+- Published migrations, including `0001_initial.sql`, are immutable. Add new numbered SQL migrations for schema/data changes using the existing transaction, advisory lock and migration ledger. Never rewrite an applied baseline, delete ledger entries or require a fresh production database to upgrade.
+- Database resets, data/volume deletion and encryption-key replacement require explicit approval for that specific destructive action. Earlier development resets or one-off migration approvals do not authorize future production resets.
+- Prepare conversion/backfill, validation and recovery steps before changing existing data. Preserve historical evidence; do not fabricate old policy snapshots or silently choose among conflicting configurations.
+- Database-change tests must cover both empty initialization and upgrades from the supported previous schema, including retained IDs, credentials, settings and queued/historical evidence. Development/test schemas may remain disposable; production data may not.

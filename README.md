@@ -118,7 +118,7 @@ mkdir -p /Data && docker compose up -d
 
 ### 方式二：docker run
 
-先准备空 PostgreSQL 18.6 数据库，将完整 `SUMA_DATABASE_DSN` 写入私密 `suma.env` 文件，通过 `--env-file` 传入容器；远程数据库使用验证服务器身份的 TLS。启动缺少 DSN、数据库不可用或迁移失败时会明确失败。不迁移旧开发数据。
+首次部署准备空 PostgreSQL 18.6 数据库，将完整 `SUMA_DATABASE_DSN` 写入私密 `suma.env` 文件，通过 `--env-file` 传入容器；远程数据库使用验证服务器身份的 TLS。启动缺少 DSN、数据库不可用或迁移失败时会明确失败。生产升级沿用原数据库、应用文件和加密密钥；结构变化通过新增版本化 SQL 迁移保留数据，已发布迁移不得改写。详见 [数据库与升级说明](doc/postgresql.md#生产数据与升级)。
 
 ```bash
 mkdir -p /Data

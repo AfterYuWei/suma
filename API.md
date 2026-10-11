@@ -343,4 +343,4 @@ Connection state is held in memory. Feishu returns `message_count`, `last_messag
 | GET | `/notifications/deliveries` | Latest 200 deliveries and suppression reasons |
 | POST | `/notifications/deliveries/:id/resend` | Queue a separate manual delivery using the original snapshot |
 
-Delivery evidence includes `chat_id`. Schema incompatibility returns HTTP 503 / `20802` with a fresh PostgreSQL initialization instruction. This version does not migrate old installations or automatically delete existing data.
+Delivery evidence includes `chat_id`. Schema incompatibility returns HTTP 503 / `20802`; the current legacy message mentions fresh initialization, but it does not authorize resetting production data. Production is live: future upgrades must retain existing state through new versioned SQL migrations, preserving published migration files and historical evidence. The application does not automatically delete existing data.
