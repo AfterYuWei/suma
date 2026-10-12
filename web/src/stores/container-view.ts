@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export const sortFields = ['created', 'name', 'image', 'uptime', 'cpu', 'memory', 'memory_ratio', 'receive', 'transmit', 'restarts'] as const
+export const sortFields = ['name', 'restarts', 'cpu', 'memory', 'memory_ratio', 'receive', 'transmit', 'image', 'created', 'uptime'] as const
 export type SortField = typeof sortFields[number]
 export interface ContainerView { search: string; states: string[]; health: string[]; source: string; project: string; diagnostic: string; sort: SortField; descending: boolean }
 export const defaultContainerView: ContainerView = { search: '', states: [], health: [], source: '', project: '', diagnostic: '', sort: 'created', descending: true }

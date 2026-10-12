@@ -199,12 +199,12 @@ export function ContainersPage() {
                   </div>
                 </TableHead>
                 <TableHead className="w-[176px]"><SortMenu view={view} update={update} zh={zh} label={zh ? '容器' : 'Container'} fields={['name']} /></TableHead>
-                <TableHead className="w-[300px]"><SortMenu view={view} update={update} zh={zh} label={zh ? '镜像' : 'Image'} fields={['image']} /></TableHead>
                 <TableHead className="w-[160px] text-center">{zh ? '状态' : 'Status'}</TableHead>
-                <TableHead className="w-[136px]"><SortMenu view={view} update={update} zh={zh} label={zh ? '时间' : 'Time'} fields={['created', 'uptime']} /></TableHead>
                 <TableHead className="w-[160px]"><SortMenu view={view} update={update} zh={zh} label={zh ? '资源' : 'Resources'} fields={['cpu', 'memory', 'memory_ratio']} /></TableHead>
                 <TableHead className="w-[128px]"><SortMenu view={view} update={update} zh={zh} label={zh ? '网络' : 'Network'} fields={['receive', 'transmit']} /></TableHead>
                 <TableHead className="w-[184px]">{zh ? '端口' : 'Ports'}</TableHead>
+                <TableHead className="w-[300px]"><SortMenu view={view} update={update} zh={zh} label={zh ? '镜像' : 'Image'} fields={['image']} /></TableHead>
+                <TableHead className="w-[136px]"><SortMenu view={view} update={update} zh={zh} label={zh ? '时间' : 'Time'} fields={['created', 'uptime']} /></TableHead>
                 <TableHead>{zh ? '操作' : 'Actions'}</TableHead>
               </TableRow>
             </TableHeader>
@@ -242,12 +242,6 @@ export function ContainersPage() {
                   </TableCell>
                   <TableCell>
                     <div className="grid h-10 min-w-0 grid-rows-2 justify-items-center leading-5">
-                      <TooltipHint content={row.image}><span className="truncate text-left">{row.image}</span></TooltipHint>
-                      {project ? <TooltipHint content={`Compose · ${project}${service ? ` / ${service}` : ''}`}><span className="truncate text-left text-xs leading-5 text-muted-foreground"><Link to="/projects/$backend/$projectName" params={{ backend: 'compose', projectName: project }} className="hover:underline">{project}</Link>{service && <> / {service}</>}</span></TooltipHint> : <span className="text-xs leading-5 text-muted-foreground">{zh ? '独立容器' : 'Standalone'}</span>}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="grid h-10 min-w-0 grid-rows-2 justify-items-center leading-5">
                       <div className="flex items-center justify-center gap-1"><StatusBadge tone="neutral" className="h-[18px] self-center justify-start rounded-sm border-border/60 bg-muted/40 px-1.5 py-0 text-sm leading-4 text-foreground">
                         <span aria-hidden="true" className="inline-flex size-3 shrink-0 items-center justify-center"><span className={`size-1.5 rounded-full ${row.state === 'running' ? 'bg-emerald-500' : row.state === 'paused' || row.state === 'restarting' ? 'bg-amber-500' : row.state === 'dead' ? 'bg-red-500' : 'bg-muted-foreground'}`} /></span>
                         <span className={row.state === 'dead' ? 'text-red-600 dark:text-red-400' : undefined}>{stateLabel(row.state, zh)}</span>
@@ -260,16 +254,22 @@ export function ContainersPage() {
                     </div>
                   </TableCell>
                   <TableCell>
+                    <ObservationOverlay open={overlay === `${row.id}:resources`} onOpenChange={open => setOverlay(open ? `${row.id}:resources` : '')} title={zh ? '资源趋势' : 'Resource trends'} trigger={<button type="button" className="w-full" aria-label={`${zh ? '资源趋势' : 'Resource trends'} ${row.name}`}><div className="grid h-10 min-w-0 grid-rows-2 justify-items-center leading-5 tabular-nums"><span className="text-sm leading-5">CPU {cpuAvailable ? `${sample.cpu_percent.toFixed(1)}%` : '—'}</span><span className="relative text-xs leading-5 text-muted-foreground">{memoryAvailable ? memory(sample.memory_bytes) : '—'} / {limit == null ? '—' : limit === 0 ? '∞' : memory(limit)}<MemoryBar used={memoryAvailable ? sample.memory_bytes : undefined} limit={limit} zh={zh} /></span></div></button>}><ResourceTrend points={metrics.history[row.id] ?? []} limit={limit} unavailable={!available} nodeID={nodeID} containerID={row.id} zh={zh} /></ObservationOverlay>
+                  </TableCell>
+                  <TableCell className="tabular-nums"><div className="grid h-10 min-w-0 grid-rows-2 justify-items-center leading-5"><span className="text-sm leading-5">↓ {row.state !== 'running' || syncing ? '—' : rate?.status === 'ready' ? rateLabel(rate.receive) : networkLabel}</span><span className="text-xs leading-5 text-muted-foreground">↑ {row.state !== 'running' || syncing ? '—' : rate?.status === 'ready' ? rateLabel(rate.transmit) : networkLabel}</span></div></TableCell>
+                  <TableCell><ContainerPorts ports={row.ports} zh={zh} /></TableCell>
+                  <TableCell>
+                    <div className="grid h-10 min-w-0 grid-rows-2 justify-items-center leading-5">
+                      <TooltipHint content={row.image}><span className="truncate text-left">{row.image}</span></TooltipHint>
+                      {project ? <TooltipHint content={`Compose · ${project}${service ? ` / ${service}` : ''}`}><span className="truncate text-left text-xs leading-5 text-muted-foreground"><Link to="/projects/$backend/$projectName" params={{ backend: 'compose', projectName: project }} className="hover:underline">{project}</Link>{service && <> / {service}</>}</span></TooltipHint> : <span className="text-xs leading-5 text-muted-foreground">{zh ? '独立容器' : 'Standalone'}</span>}
+                    </div>
+                  </TableCell>
+                  <TableCell>
                     <div className="grid h-10 min-w-0 grid-rows-2 justify-items-center leading-5 tabular-nums">
                       <TooltipHint content={createdAt !== '—' ? `${zh ? '创建时间' : 'Created at'}: ${formatDateTime(row.created)}` : undefined}><span className="truncate text-sm leading-5">{createdAt}</span></TooltipHint>
                       <TooltipHint content={startedAt !== '—' ? `${zh ? '启动时间' : 'Started at'}: ${startedAt}` : undefined} className="h-5"><span className="block h-5 min-w-0 truncate text-xs leading-5 text-muted-foreground">{uptimeAvailable ? uptime(sample.uptime_seconds) : '—'}</span></TooltipHint>
                     </div>
                   </TableCell>
-                  <TableCell>
-                    <ObservationOverlay open={overlay === `${row.id}:resources`} onOpenChange={open => setOverlay(open ? `${row.id}:resources` : '')} title={zh ? '资源趋势' : 'Resource trends'} trigger={<button type="button" className="w-full" aria-label={`${zh ? '资源趋势' : 'Resource trends'} ${row.name}`}><div className="grid h-10 min-w-0 grid-rows-2 justify-items-center leading-5 tabular-nums"><span className="text-sm leading-5">CPU {cpuAvailable ? `${sample.cpu_percent.toFixed(1)}%` : '—'}</span><span className="relative text-xs leading-5 text-muted-foreground">{memoryAvailable ? memory(sample.memory_bytes) : '—'} / {limit == null ? '—' : limit === 0 ? '∞' : memory(limit)}<MemoryBar used={memoryAvailable ? sample.memory_bytes : undefined} limit={limit} zh={zh} /></span></div></button>}><ResourceTrend points={metrics.history[row.id] ?? []} limit={limit} unavailable={!available} nodeID={nodeID} containerID={row.id} zh={zh} /></ObservationOverlay>
-                  </TableCell>
-                  <TableCell className="tabular-nums"><div className="grid h-10 min-w-0 grid-rows-2 justify-items-center leading-5"><span className="text-sm leading-5">↓ {row.state !== 'running' || syncing ? '—' : rate?.status === 'ready' ? rateLabel(rate.receive) : networkLabel}</span><span className="text-xs leading-5 text-muted-foreground">↑ {row.state !== 'running' || syncing ? '—' : rate?.status === 'ready' ? rateLabel(rate.transmit) : networkLabel}</span></div></TableCell>
-                  <TableCell><ContainerPorts ports={row.ports} zh={zh} /></TableCell>
                   <TableCell>
                     <ContainerActions row={row} zh={zh} pending={action.isPending && action.variables?.id === row.id} open={(tab) => void navigate({ to: '/containers/$containerId', params: { containerId: row.id }, hash: tab })} run={(name) => action.mutate({ id: row.id, name })} rename={() => void renameContainer(row)} kill={() => void killContainer(row)} remove={() => void removeContainer(row)} />
                   </TableCell>
