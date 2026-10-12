@@ -19,13 +19,15 @@ import { useI18n } from '../lib/i18n'
 import { nodePath } from '../lib/nodes'
 import { confirmDialog, promptDialog } from '../stores/dialog'
 import { useUIStore } from '../stores/ui'
+import { DiagnosticsContent, NetworkMountContent } from '../components/docker/container-observation'
 import { ResourceFrame } from './images'
 
 const LogViewer = lazy(() => import('../features/containers/log-viewer').then((module) => ({ default: module.LogViewer })))
 const StatsView = lazy(() => import('../features/containers/stats-view').then((module) => ({ default: module.StatsView })))
 const TerminalView = lazy(() => import('../features/containers/terminal-view').then((module) => ({ default: module.TerminalView })))
 const FileManager = lazy(() => import('../features/containers/file-manager').then((module) => ({ default: module.ContainerFileManager })))
-const tabs = ['Overview', 'Files', 'Logs', 'Terminal', 'Stats', 'Inspect'] as const
+const EventsView = lazy(() => import('../features/containers/events-view').then(module => ({ default: module.EventsView })))
+const tabs = ['Overview', 'Files', 'Logs', 'Terminal', 'Stats', 'Events', 'Inspect'] as const
 
 export function ContainerDetailPage() {
   const nodeID = useUIStore((state) => state.currentNodeID)
@@ -43,16 +45,16 @@ export function ContainerDetailPage() {
     enableBeforeUnload: filesDirty,
     shouldBlockFn: async () => bypassNavigationPrompt.current ? false : !await confirmDialog({ title: zh ? '放弃未保存的更改？' : 'Discard unsaved changes?', confirmLabel: zh ? '放弃' : 'Discard', danger: true }),
   })
-  const query = useQuery({ queryKey: ['container', nodeID, containerId], queryFn: () => api<ContainerDetail>(nodePath(nodeID, `/containers/${containerId}`)) })
+  const query = useQuery({ queryKey: ['container', nodeID, containerId], queryFn: ({ signal }) => api<ContainerDetail>(nodePath(nodeID, `/containers/${containerId}`), { signal }), refetchInterval: 10_000 })
   const environmentPagination = useListPagination(query.data?.environment ?? [])
-  const action = useMutation({ mutationFn: (name: string) => api(nodePath(nodeID, `/containers/${containerId}/${name}`), { method: 'POST' }), onSuccess: () => { client.invalidateQueries({ queryKey: ['container', nodeID, containerId] }); client.invalidateQueries({ queryKey: ['containers', nodeID] }) } })
+  const action = useMutation({ mutationFn: (name: string) => api(nodePath(nodeID, `/containers/${containerId}/${name}`), { method: 'POST' }), onSuccess: () => { client.invalidateQueries({ queryKey: ['container', nodeID, containerId] }); client.invalidateQueries({ queryKey: ['containers', nodeID] }); client.invalidateQueries({ queryKey: ['container-runtime', nodeID] }); client.invalidateQueries({ queryKey: ['container-diagnostics', nodeID, containerId] }); client.invalidateQueries({ queryKey: ['container-metrics', nodeID] }) } })
   const rename = async () => { const name = await promptDialog({ title: t('renameContainer'), confirmLabel: t('save'), input: { label: t('newContainerName'), initialValue: query.data?.name } }); if (!name) return; await api(nodePath(nodeID, `/containers/${containerId}`), { method: 'PATCH', body: JSON.stringify({ name }) }); await Promise.all([client.invalidateQueries({ queryKey: ['container', nodeID, containerId] }), client.invalidateQueries({ queryKey: ['containers', nodeID] })]) }
   const remove = async () => { const name = query.data?.name ?? containerId; if (!await confirmDialog({ title: t('removeContainer'), description: t('removeContainerDescription', { name }), confirmLabel: t('remove'), danger: true })) return; await api(nodePath(nodeID, `/containers/${containerId}`), { method: 'DELETE' }); await Promise.all([client.invalidateQueries({ queryKey: ['containers', nodeID] }), client.invalidateQueries({ queryKey: ['container-metrics', nodeID] })]); bypassNavigationPrompt.current = true; void navigate({ to: '/containers' }) }
   const kill = async () => { const name = query.data?.name ?? containerId; if (await confirmDialog({ title: t('killContainer'), description: t('killContainerDescription', { name }), confirmLabel: zh ? '强制终止' : 'Force kill', danger: true })) action.mutate('kill') }
   if (query.isPending) return <LoadingState label={zh ? '正在加载容器详情' : 'Loading container details'} rows={6} />
   if (!query.data) return <ErrorState description={zh ? '未找到容器。' : 'Container not found.'} />
   const row = query.data
-  const label = (name: (typeof tabs)[number]) => zh ? ({ Overview: '概览', Files: '文件', Logs: '日志', Terminal: '终端', Stats: '统计', Inspect: '检查' } as const)[name] : name
+  const label = (name: (typeof tabs)[number]) => zh ? ({ Overview: '概览', Files: '文件', Logs: '日志', Terminal: '终端', Stats: '统计', Events: '事件', Inspect: '检查' } as const)[name] : name
 
   const actions = <div className="flex flex-wrap items-center gap-2">
 
@@ -66,6 +68,7 @@ export function ContainerDetailPage() {
       <DropdownMenuContent align="end" className="w-44">
         {row.state === 'paused' ? <MenuAction label={zh ? '恢复' : 'Unpause'} icon={Play} run={() => action.mutate('unpause')} /> : <MenuAction label={zh ? '暂停' : 'Pause'} icon={Pause} run={() => action.mutate('pause')} />}
         <MenuAction label={zh ? '强制终止' : 'Kill process'} icon={OctagonX} danger run={() => void kill()} />
+        <MenuAction label={zh ? '查看事件' : 'View events'} icon={RefreshCw} run={() => void navigate({ to: '/containers/$containerId', params: { containerId }, hash: 'events' })} />
         <MenuAction label={t('renameContainer')} icon={Pencil} run={() => void rename()} />
         <DropdownMenuSeparator />
         <MenuAction label={t('remove')} icon={Trash2} danger run={() => void remove()} />
@@ -85,6 +88,8 @@ export function ContainerDetailPage() {
     </Tabs>
     <div className="mt-6 w-full">
       {tab === 'Overview' && <div className="grid gap-6 lg:grid-cols-2">
+        <section className="lg:col-span-2 border-b pb-5"><h3 className="mb-3 font-medium">{zh ? '运行诊断与健康检查' : 'Runtime diagnostics and health'}</h3><DiagnosticsContent nodeID={nodeID} containerID={containerId} zh={zh} /></section>
+        <section className="lg:col-span-2 border-b pb-5"><NetworkMountContent nodeID={nodeID} containerID={containerId} zh={zh} detail={row} /></section>
         <Card>
           <CardHeader><CardTitle>{zh ? '运行信息' : 'Runtime'}</CardTitle></CardHeader>
           <CardContent><div className="divide-y divide-border">
@@ -128,6 +133,7 @@ export function ContainerDetailPage() {
       {tab === 'Files' && <FileManager nodeID={nodeID} container={row} onDirtyChange={setFilesDirty} />}
       {tab === 'Terminal' && <TerminalView nodeID={nodeID} containerId={containerId} />}
       {tab === 'Stats' && <StatsView nodeID={nodeID} containerId={containerId} />}
+      {tab === 'Events' && <EventsView nodeID={nodeID} containerId={containerId} />}
       {tab === 'Inspect' && (
         <Card>
           <CardContent>

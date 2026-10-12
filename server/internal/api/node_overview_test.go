@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/auth"
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/node"
@@ -51,7 +52,7 @@ func overviewHTTPFixture(t *testing.T, handler http.Handler) (*gin.Engine, *node
 	if err != nil {
 		t.Fatal(err)
 	}
-	router := NewRouter(Dependencies{Nodes: nodes, Auth: authService})
+	router := NewRouter(Dependencies{Nodes: nodes, Auth: authService, Audit: audit.NewService(db)})
 	return router, nodes, func(ctx context.Context, path string, authenticated bool) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, path, nil).WithContext(ctx)
 		if authenticated {

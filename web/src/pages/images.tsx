@@ -325,12 +325,12 @@ function formatBytes(bytes: number) {
   return `${bytes} B`
 }
 
-export function ResourceFrame({ title, detail, lead, action, children }: { eyebrow?: string; title: string; detail: string; lead?: ReactNode; action?: ReactNode; children: ReactNode }) {
-  return <div className="flex w-full flex-col items-start gap-5">
-    <header className="flex w-full flex-wrap items-center gap-4">
-      <div className="min-w-0">
+export function ResourceFrame({ title, detail, lead, action, children, compact = false }: { eyebrow?: string; title: string; detail: string; lead?: ReactNode; action?: ReactNode; children: ReactNode; compact?: boolean }) {
+  return <div className={`flex w-full min-w-0 flex-col items-start ${compact ? 'gap-3' : 'gap-5'}`}>
+    <header className={`flex w-full flex-wrap items-center ${compact ? 'gap-3' : 'gap-4'}`}>
+      <div className={compact ? 'flex min-w-0 items-baseline gap-2' : 'min-w-0'}>
         <h2 className="cn-font-heading text-lg leading-none font-semibold tracking-tight">{title}</h2>
-        <p className="mt-1.5 text-sm text-muted-foreground">{detail}</p>
+        <p className={`${compact ? '' : 'mt-1.5'} text-sm text-muted-foreground`}>{detail}</p>
       </div>
       {lead}
       {action && <div className="ml-auto">{action}</div>}

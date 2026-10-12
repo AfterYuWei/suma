@@ -1,0 +1,2 @@
+import type { SortField } from '../../stores/container-view'
+export const sortLabel = (value: SortField, zh: boolean) => ({ name: zh ? '名称' : 'Name', image: zh ? '镜像' : 'Image', created: zh ? '创建时间' : 'Created', uptime: zh ? '运行时长' : 'Uptime', cpu: 'CPU', memory: zh ? '内存' : 'Memory', memory_ratio: zh ? '内存占限额' : 'Memory / limit', receive: zh ? '接收速率' : 'Receive rate', transmit: zh ? '发送速率' : 'Transmit rate', restarts: zh ? '重启次数' : 'Restarts' }[value])

@@ -1673,6 +1673,11 @@ func parseLogTail(value string) (int, error) {
 }
 
 func streamStats(c *gin.Context, service containerdomain.Service) {
+	format := c.Query("format")
+	if format != "" && format != "normalized" {
+		failure(c, 400, 20230, "Invalid statistics format")
+		return
+	}
 	connection, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		return
@@ -1680,13 +1685,22 @@ func streamStats(c *gin.Context, service containerdomain.Service) {
 	ctx, cancel := context.WithCancel(c.Request.Context())
 	defer cancel()
 	defer connection.Close()
-	stream, err := service.Stats(ctx, c.Param("id"))
+	go watchDisconnect(connection, cancel)
+	var stream io.ReadCloser
+	if format == "normalized" {
+		provider, ok := service.(containerdomain.ObservationProvider)
+		if !ok {
+			return
+		}
+		stream, err = containerdomain.OpenNormalizedStats(ctx, provider, c.Param("id"))
+	} else {
+		stream, err = service.Stats(ctx, c.Param("id"))
+	}
 	if err != nil {
 		_ = connection.WriteJSON(gin.H{"type": "error", "message": "Unable to open container stats"})
 		return
 	}
 	defer stream.Close()
-	go watchDisconnect(connection, cancel)
 	decoder := json.NewDecoder(stream)
 	for {
 		var sample json.RawMessage

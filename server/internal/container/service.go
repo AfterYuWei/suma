@@ -2,7 +2,9 @@ package container
 
 import (
 	"context"
+	"github.com/suma/suma/server/internal/redact"
 	"io"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -19,15 +21,20 @@ type Mount struct {
 	Source      string `json:"source"`
 	Destination string `json:"destination"`
 	ReadWrite   bool   `json:"read_write"`
+	Anonymous   *bool  `json:"anonymous"`
 }
 type Network struct {
-	Name       string `json:"name"`
-	IPAddress  string `json:"ip_address"`
-	Gateway    string `json:"gateway"`
-	MacAddress string `json:"mac_address"`
+	Name        string `json:"name"`
+	IPAddress   string `json:"ip_address"`
+	Gateway     string `json:"gateway"`
+	MacAddress  string `json:"mac_address"`
+	IPv6Address string `json:"ipv6_address"`
+	IPv6Gateway string `json:"ipv6_gateway"`
 }
 
 type Summary struct {
+	CPUAvailable    bool              `json:"cpu_available"`
+	MemoryAvailable bool              `json:"memory_available"`
 	ID              string            `json:"id"`
 	Name            string            `json:"name"`
 	Image           string            `json:"image"`
@@ -45,22 +52,28 @@ type Summary struct {
 	BlockReadBytes  uint64            `json:"block_read_bytes"`
 	BlockWriteBytes uint64            `json:"block_write_bytes"`
 	PIDs            uint64            `json:"pids"`
+	SampledAt       *time.Time        `json:"sampled_at,omitempty"`
+	StartedAt       *time.Time        `json:"started_at,omitempty"`
 }
 
 type Metrics struct {
-	ID              string  `json:"id"`
-	Name            string  `json:"name"`
-	Image           string  `json:"image"`
-	State           string  `json:"state"`
-	Available       bool    `json:"available"`
-	CPUPercent      float64 `json:"cpu_percent"`
-	MemoryBytes     uint64  `json:"memory_bytes"`
-	UptimeSeconds   int64   `json:"uptime_seconds"`
-	NetworkRXBytes  uint64  `json:"network_rx_bytes"`
-	NetworkTXBytes  uint64  `json:"network_tx_bytes"`
-	BlockReadBytes  uint64  `json:"block_read_bytes"`
-	BlockWriteBytes uint64  `json:"block_write_bytes"`
-	PIDs            uint64  `json:"pids"`
+	CPUAvailable    bool       `json:"cpu_available"`
+	MemoryAvailable bool       `json:"memory_available"`
+	ID              string     `json:"id"`
+	Name            string     `json:"name"`
+	Image           string     `json:"image"`
+	State           string     `json:"state"`
+	Available       bool       `json:"available"`
+	CPUPercent      float64    `json:"cpu_percent"`
+	MemoryBytes     uint64     `json:"memory_bytes"`
+	UptimeSeconds   int64      `json:"uptime_seconds"`
+	NetworkRXBytes  uint64     `json:"network_rx_bytes"`
+	NetworkTXBytes  uint64     `json:"network_tx_bytes"`
+	BlockReadBytes  uint64     `json:"block_read_bytes"`
+	BlockWriteBytes uint64     `json:"block_write_bytes"`
+	PIDs            uint64     `json:"pids"`
+	SampledAt       *time.Time `json:"sampled_at,omitempty"`
+	StartedAt       *time.Time `json:"started_at,omitempty"`
 }
 
 type Detail struct {
@@ -75,6 +88,7 @@ type Detail struct {
 	Entrypoint       []string          `json:"entrypoint"`
 	WorkingDirectory string            `json:"working_directory"`
 	RestartPolicy    string            `json:"restart_policy"`
+	NetworkMode      string            `json:"network_mode"`
 	ReadOnlyRootFS   bool              `json:"read_only_rootfs"`
 	Environment      []Environment     `json:"environment"`
 	Ports            []Port            `json:"ports"`
@@ -98,14 +112,27 @@ func MaskEnvironment(values []string) []Environment {
 	result := make([]Environment, 0, len(values))
 	for _, item := range values {
 		key, value, _ := strings.Cut(item, "=")
-		upper := strings.ToUpper(key)
-		sensitive := strings.Contains(upper, "PASSWORD") || strings.Contains(upper, "TOKEN") || strings.Contains(upper, "SECRET") || strings.Contains(upper, "API_KEY") || strings.Contains(upper, "PRIVATE_KEY")
+		sensitive := SensitiveEnvironmentKey(key) || redact.Text(value) != value
+		if address, err := url.Parse(value); err == nil && address.User != nil {
+			sensitive = true
+		}
 		if sensitive {
 			value = ""
 		}
 		result = append(result, Environment{Key: key, Value: value, Sensitive: sensitive})
 	}
 	return result
+}
+
+func SensitiveEnvironmentKey(key string) bool {
+	upper := strings.ToUpper(strings.ReplaceAll(key, "-", "_"))
+	compact := strings.ReplaceAll(upper, "_", "")
+	for _, marker := range []string{"PASSWORD", "PASSWD", "TOKEN", "SECRET", "APIKEY", "PRIVATEKEY", "ACCESSKEY", "CREDENTIAL", "AUTHORIZATION", "COOKIE", "SESSIONKEY", "ENCRYPTIONKEY", "SIGNINGKEY"} {
+		if strings.Contains(compact, marker) {
+			return true
+		}
+	}
+	return upper == "PASS" || strings.HasSuffix(upper, "_PASS") || upper == "KEY" || (strings.HasSuffix(upper, "_KEY") && !strings.Contains(upper, "PUBLIC"))
 }
 
 type Service interface {

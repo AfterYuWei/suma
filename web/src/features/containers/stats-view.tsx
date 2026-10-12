@@ -1,59 +1,40 @@
-import { useDateTime } from '../../lib/time-zone'
-import ReactECharts from 'echarts-for-react'
-import { Card, CardContent } from '../../components/ui/card'
 import { useEffect, useState } from 'react'
-import { useUIStore } from '../../stores/ui'
+import { Button } from '../../components/ui/button'
 import { demoMode, subscribeDemoStream } from '../../lib/api'
-
-interface Point { time: number; cpu: number; memory: number; rx: number; tx: number; read: number; write: number; pids: number }
+import { useI18n } from '../../lib/i18n'
+import { useObservationStream } from './use-observation-stream'
+import { MetricCharts } from './metric-charts'
+import { sizeLabel } from './observation'
+import type { ContainerMetrics, MetricPoint } from './types'
 
 export function StatsView({ nodeID, containerId }: { nodeID: string; containerId: string }) {
-  const { formatTime } = useDateTime()
-  const [points, setPoints] = useState<Point[]>([])
-  useUIStore((state) => state.resolvedDark)
-  useEffect(() => {
-    const consume = (payload: string) => {
-      const value = JSON.parse(payload)
-      const cpuDelta = value.cpu_stats?.cpu_usage?.total_usage - value.precpu_stats?.cpu_usage?.total_usage
-      const systemDelta = value.cpu_stats?.system_cpu_usage - value.precpu_stats?.system_cpu_usage
-      const cpu = systemDelta > 0 ? (cpuDelta / systemDelta) * (value.cpu_stats?.online_cpus || 1) * 100 : 0
-      const networks = Object.values(value.networks || {}) as { rx_bytes: number; tx_bytes: number }[]
-      const blocks = value.blkio_stats?.io_service_bytes_recursive || []
-      const point: Point = { time: Date.now(), cpu, memory: value.memory_stats?.usage || 0, rx: networks.reduce((sum, row) => sum + row.rx_bytes, 0), tx: networks.reduce((sum, row) => sum + row.tx_bytes, 0), read: blocks.filter((row: { op: string }) => row.op === 'read').reduce((sum: number, row: { value: number }) => sum + row.value, 0), write: blocks.filter((row: { op: string }) => row.op === 'write').reduce((sum: number, row: { value: number }) => sum + row.value, 0), pids: value.pids_stats?.current || 0 }
-      setPoints((current) => [...current, point].slice(-60))
-    }
-    if (demoMode) {
-      let disposed = false
-      let cleanup: () => void = () => undefined
-      void subscribeDemoStream('stats', consume).then((next) => { if (disposed) next(); else cleanup = next })
-      return () => { disposed = true; cleanup() }
-    }
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const socket = new WebSocket(`${protocol}//${location.host}/ws/nodes/${encodeURIComponent(nodeID)}/containers/${containerId}/stats`)
-    socket.onmessage = (event) => consume(String(event.data))
-    return () => socket.close()
-  }, [nodeID, containerId])
-  const last = points.at(-1)
-  const styles = getComputedStyle(document.documentElement)
-  const palette = {
-    label: styles.getPropertyValue('--muted-foreground'),
-    line: styles.getPropertyValue('--border'),
-    split: styles.getPropertyValue('--border'),
-    cpu: styles.getPropertyValue('--chart-1'),
-    cpuArea: styles.getPropertyValue('--primary'),
+  const { language } = useI18n(), zh = language === 'zh-CN'
+  const [points, setPoints] = useState<MetricPoint[]>([]), [last, setLast] = useState<ContainerMetrics>(), [minutes, setMinutes] = useState(1), [received, setReceived] = useState(0), [now, setNow] = useState(Date.now)
+  useEffect(() => { setPoints([]); setLast(undefined); setReceived(0) }, [nodeID, containerId])
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer) }, [])
+  const consume = (payload: string) => {
+    const sample = JSON.parse(payload) as ContainerMetrics & { type?: string }
+    if (sample.type === 'error') throw new Error('Stats unavailable')
+    if (!sample.available || !sample.sampled_at) return
+    const time = Date.parse(sample.sampled_at)
+    if (!Number.isFinite(time)) return
+    setReceived(Date.now()); setLast(sample)
+    setPoints(old => {
+      const prev = old.at(-1)
+      if (prev && prev.startedAt === sample.started_at && prev.time >= time) return old
+      const next = !sample.started_at || prev?.startedAt !== sample.started_at ? [] : old.filter(p => p.time >= time - 300_000)
+      if (prev && next.length && time - prev.time > 3000) next.push({ time: prev.time + 1, cpu: null, memory: null, startedAt: sample.started_at })
+      return [...next, { time, cpu: sample.cpu_available === false ? null : sample.cpu_percent, memory: sample.memory_available === false ? null : sample.memory_bytes, startedAt: sample.started_at }].slice(-301)
+    })
   }
-  const option = { animation: false, backgroundColor: 'transparent', textStyle: { fontFamily: '"JetBrains Mono", "HarmonyOS Sans SC", monospace' }, grid: { left: 42, right: 16, top: 22, bottom: 28 }, tooltip: { trigger: 'axis' }, xAxis: { type: 'category', data: points.map((item) => formatTime(item.time)), axisLabel: { color: palette.label, fontSize: 10 }, axisLine: { lineStyle: { color: palette.line } } }, yAxis: { type: 'value', axisLabel: { color: palette.label, fontSize: 10 }, splitLine: { lineStyle: { color: palette.split } } }, series: [{ name: 'CPU %', type: 'line', showSymbol: false, smooth: true, data: points.map((item) => item.cpu.toFixed(2)), lineStyle: { color: palette.cpu, width: 1.5 }, areaStyle: { color: palette.cpuArea } }] }
-  const size = (bytes = 0) => bytes > 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(2)} GB` : `${(bytes / 1024 ** 2).toFixed(1)} MB`
-  return <Card>
-    <CardContent className="flex flex-col gap-3">
-      <dl className="grid grid-cols-2 gap-x-8 gap-y-2.5 text-sm lg:grid-cols-4">
-        <div><dt className="text-xs text-muted-foreground">CPU</dt><dd>{last?.cpu.toFixed(1) ?? '0.0'}%</dd></div>
-        <div><dt className="text-xs text-muted-foreground">Memory</dt><dd>{size(last?.memory)}</dd></div>
-        <div><dt className="text-xs text-muted-foreground">Network RX / TX</dt><dd className="break-all">{size(last?.rx)} / {size(last?.tx)}</dd></div>
-        <div><dt className="text-xs text-muted-foreground">PIDs</dt><dd>{last?.pids ?? 0}</dd></div>
-      </dl>
-      <div className="h-[360px]"><ReactECharts option={option} style={{ height: '100%' }} /></div>
-      <p className="text-xs text-muted-foreground">Block read {size(last?.read)} · Block write {size(last?.write)}</p>
-    </CardContent>
-  </Card>
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const status = useObservationStream(demoMode ? null : `${protocol}//${location.host}/ws/nodes/${encodeURIComponent(nodeID)}/containers/${encodeURIComponent(containerId)}/stats?format=normalized`, consume)
+  useEffect(() => {
+    if (!demoMode) return
+    let disposed = false, cleanup = () => undefined as void
+    void subscribeDemoStream('normalized-stats', consume).then(fn => { if (disposed) fn(); else cleanup = fn })
+    return () => { disposed = true; cleanup() }
+  }, [nodeID, containerId])
+  const available = (demoMode || status === 'live') && received > 0 && now - received <= 15_000
+  return <section className="space-y-4"><div className="flex items-center justify-between"><span className="text-xs text-muted-foreground">{!received ? zh ? '采样中' : 'Sampling' : !available ? zh ? '数据不可用' : 'Data unavailable' : zh ? '实时统计' : 'Live statistics'}</span><div className="flex gap-1">{[1, 5].map(m => <Button key={m} size="sm" variant={m === minutes ? 'secondary' : 'ghost'} onClick={() => setMinutes(m)}>{m} min</Button>)}</div></div><dl className="flex flex-wrap gap-x-10 gap-y-3 text-sm">{[['CPU', available && last?.cpu_available !== false ? `${last!.cpu_percent.toFixed(1)}%` : '—'], [zh ? '内存' : 'Memory', available && last?.memory_available !== false ? sizeLabel(last!.memory_bytes) : '—'], [zh ? '网络 RX / TX' : 'Network RX / TX', available ? `${sizeLabel(last!.network_rx_bytes)} / ${sizeLabel(last!.network_tx_bytes)}` : '—'], ['PIDs', available ? String(last?.pids ?? '—') : '—'], [zh ? '磁盘读 / 写' : 'Block read / write', available ? `${sizeLabel(last?.block_read_bytes ?? 0)} / ${sizeLabel(last?.block_write_bytes ?? 0)}` : '—']].map(([label, value]) => <div key={label}><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 font-mono text-xs">{value}</dd></div>)}</dl><MetricCharts points={points} minutes={minutes} /></section>
 }

@@ -508,9 +508,10 @@ func (a *Adapter) MetricsWithOptions(ctx context.Context, options MetricsOptions
 	for index, summary := range summaries {
 		result[index] = domain.Metrics{
 			ID: summary.ID, Name: summary.Name, Image: summary.Image, State: summary.State,
-			Available: available[index], CPUPercent: summary.CPUPercent, MemoryBytes: summary.MemoryBytes, UptimeSeconds: summary.UptimeSeconds,
+			Available: available[index], CPUAvailable: summary.CPUAvailable, MemoryAvailable: summary.MemoryAvailable, CPUPercent: summary.CPUPercent, MemoryBytes: summary.MemoryBytes, UptimeSeconds: summary.UptimeSeconds,
 			NetworkRXBytes: summary.NetworkRXBytes, NetworkTXBytes: summary.NetworkTXBytes,
 			BlockReadBytes: summary.BlockReadBytes, BlockWriteBytes: summary.BlockWriteBytes, PIDs: summary.PIDs,
+			SampledAt: summary.SampledAt, StartedAt: summary.StartedAt,
 		}
 	}
 	return result, nil
@@ -523,44 +524,27 @@ func (a *Adapter) loadSummaryStats(ctx context.Context, summary *domain.Summary,
 		defer response.Body.Close()
 		var stats dockercontainer.StatsResponse
 		if json.NewDecoder(response.Body).Decode(&stats) == nil {
-			available = true
-			cpuDelta, systemDelta := uint64(0), uint64(0)
-			if stats.CPUStats.CPUUsage.TotalUsage >= stats.PreCPUStats.CPUUsage.TotalUsage {
-				cpuDelta = stats.CPUStats.CPUUsage.TotalUsage - stats.PreCPUStats.CPUUsage.TotalUsage
-			}
-			if stats.CPUStats.SystemUsage >= stats.PreCPUStats.SystemUsage {
-				systemDelta = stats.CPUStats.SystemUsage - stats.PreCPUStats.SystemUsage
-			}
-			cpus := stats.CPUStats.OnlineCPUs
-			if cpus == 0 {
-				cpus = uint32(len(stats.CPUStats.CPUUsage.PercpuUsage))
-			}
-			if systemDelta > 0 {
-				summary.CPUPercent = float64(cpuDelta) / float64(systemDelta) * float64(cpus) * 100
-			}
-			summary.MemoryBytes = stats.MemoryStats.Usage
-			if cache := stats.MemoryStats.Stats["inactive_file"]; cache < summary.MemoryBytes {
-				summary.MemoryBytes -= cache
-			}
-			for _, network := range stats.Networks {
-				summary.NetworkRXBytes += network.RxBytes
-				summary.NetworkTXBytes += network.TxBytes
-			}
-			for _, item := range stats.BlkioStats.IoServiceBytesRecursive {
-				switch strings.ToLower(item.Op) {
-				case "read":
-					summary.BlockReadBytes += item.Value
-				case "write":
-					summary.BlockWriteBytes += item.Value
-				}
-			}
-			summary.PIDs = stats.PidsStats.Current
+			value := normalizeStats(stats)
+			available = value.Available
+			summary.CPUAvailable = value.CPUAvailable
+			summary.MemoryAvailable = value.MemoryAvailable
+			summary.SampledAt = value.SampledAt
+			summary.CPUPercent = value.CPUPercent
+			summary.MemoryBytes = value.MemoryBytes
+			summary.NetworkRXBytes = value.NetworkRXBytes
+			summary.NetworkTXBytes = value.NetworkTXBytes
+			summary.BlockReadBytes = value.BlockReadBytes
+			summary.BlockWriteBytes = value.BlockWriteBytes
+			summary.PIDs = value.PIDs
 		}
 	}
 	if includeUptime && ctx.Err() == nil {
 		if inspect, err := a.client.ContainerInspect(ctx, summary.ID); err == nil && inspect.State != nil {
 			if started, err := time.Parse(time.RFC3339Nano, inspect.State.StartedAt); err == nil {
-				summary.UptimeSeconds = int64(time.Since(started).Seconds())
+				if !started.IsZero() {
+					summary.StartedAt = &started
+					summary.UptimeSeconds = max(0, int64(time.Since(started).Seconds()))
+				}
 			}
 		}
 	}
@@ -571,6 +555,13 @@ func (a *Adapter) Get(ctx context.Context, id string) (domain.Detail, error) {
 	row, err := a.client.ContainerInspect(ctx, id)
 	if err != nil {
 		return domain.Detail{}, fmt.Errorf("inspect container: %w", err)
+	}
+	return containerDetail(row), nil
+}
+
+func containerDetail(row dockercontainer.InspectResponse) domain.Detail {
+	if row.ContainerJSONBase == nil {
+		row.ContainerJSONBase = &dockercontainer.ContainerJSONBase{}
 	}
 	created, _ := time.Parse(time.RFC3339Nano, row.Created)
 	detail := domain.Detail{ID: row.ID, Name: strings.TrimPrefix(row.Name, "/"), Created: created}
@@ -584,6 +575,7 @@ func (a *Adapter) Get(ctx context.Context, id string) (domain.Detail, error) {
 	}
 	if row.HostConfig != nil {
 		detail.RestartPolicy = string(row.HostConfig.RestartPolicy.Name)
+		detail.NetworkMode = string(row.HostConfig.NetworkMode)
 		detail.ReadOnlyRootFS = row.HostConfig.ReadonlyRootfs
 	}
 	if row.State != nil {
@@ -607,14 +599,18 @@ func (a *Adapter) Get(ctx context.Context, id string) (domain.Detail, error) {
 		}
 	}
 	for _, mount := range row.Mounts {
-		detail.Mounts = append(detail.Mounts, domain.Mount{Type: string(mount.Type), Name: mount.Name, Source: mount.Source, Destination: mount.Destination, ReadWrite: mount.RW})
+		detail.Mounts = append(detail.Mounts, domain.Mount{Type: string(mount.Type), Name: mount.Name, Source: mount.Source, Destination: mount.Destination, ReadWrite: mount.RW, Anonymous: anonymousVolume(row, string(mount.Type), mount.Destination)})
 	}
 	if row.NetworkSettings != nil {
 		for name, network := range row.NetworkSettings.Networks {
-			detail.Networks = append(detail.Networks, domain.Network{Name: name, IPAddress: network.IPAddress, Gateway: network.Gateway, MacAddress: network.MacAddress})
+			if network == nil {
+				continue
+			}
+			detail.Networks = append(detail.Networks, domain.Network{Name: name, IPAddress: network.IPAddress, Gateway: network.Gateway, MacAddress: network.MacAddress, IPv6Address: network.GlobalIPv6Address, IPv6Gateway: network.IPv6Gateway})
 		}
 	}
-	return detail, nil
+	sort.Slice(detail.Networks, func(i, j int) bool { return detail.Networks[i].Name < detail.Networks[j].Name })
+	return detail
 }
 
 func (a *Adapter) Start(ctx context.Context, id string) error {

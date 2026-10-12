@@ -23,7 +23,7 @@ export async function getDemoCredentials(): Promise<DemoCredentials | null> {
   return demoCredentials
 }
 
-export type DemoStream = 'logs' | 'stats' | 'terminal'
+export type DemoStream = 'logs' | 'stats' | 'normalized-stats' | 'terminal'
 
 export async function subscribeDemoStream(stream: DemoStream, onMessage: (value: string) => void): Promise<() => void> {
   if (!demoMode) return () => undefined

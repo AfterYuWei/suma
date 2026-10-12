@@ -18,6 +18,8 @@ export default defineConfig(({ mode }) => {
         '@': path.resolve(__dirname, './src'),
       },
     },
+    // Prebuild lazy chart dependencies so opening a chart never reloads the app.
+    optimizeDeps: { include: ['echarts/core', 'echarts/charts', 'echarts/components', 'echarts/renderers'] },
     server: {
       proxy: {
         // Vite's string shorthand rewrites Host to the API target, breaking

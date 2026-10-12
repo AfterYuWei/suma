@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/suma/suma/server/internal/auth"
 	composeService "github.com/suma/suma/server/internal/compose"
+	containerdomain "github.com/suma/suma/server/internal/container"
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/docker"
 	"github.com/suma/suma/server/internal/image"
@@ -387,6 +389,12 @@ func registerNodeRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps Dependenci
 	})
 
 	ws := router.Group("/ws/nodes/:nodeID/containers", requireAuth(deps.Auth))
+	ws.GET("/:id/events", func(c *gin.Context) {
+		adapter, view, ok := resolveNode(c, deps)
+		if ok {
+			streamContainerEvents(c, adapter, view.ID)
+		}
+	})
 	ws.GET("/:id/logs", func(c *gin.Context) {
 		adapter, _, ok := resolveNode(c, deps)
 		if ok {
@@ -1196,6 +1204,22 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 
 func registerNodeContainerRoutes(group *gin.RouterGroup, _ *gin.Engine, deps Dependencies) {
 	containers := group.Group("/containers")
+	registerContainerObservationRoutes(containers, deps)
+	containers.GET("/runtime", func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), containerdomain.RuntimeReadTimeout)
+		defer cancel()
+		c.Request = c.Request.WithContext(ctx)
+		adapter, _, ok := resolveNode(c, deps)
+		if !ok {
+			return
+		}
+		rows, err := containerdomain.ReadRuntime(ctx, adapter)
+		if err != nil {
+			failure(c, http.StatusServiceUnavailable, 20209, "Unable to read container runtime metadata")
+			return
+		}
+		success(c, rows)
+	})
 	containers.GET("", func(c *gin.Context) {
 		adapter, _, ok := resolveNode(c, deps)
 		if !ok {

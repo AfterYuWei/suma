@@ -1,3 +1,4 @@
+import { useContainerViewStore } from '../../stores/container-view'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useMemo } from 'react'
@@ -41,6 +42,7 @@ export function CommandPalette({ open, close }: { open: boolean; close: () => vo
     }
 
     ;[
+      { id: 'abnormal-containers', label: zh ? '查看异常容器' : 'View abnormal containers', detail: zh ? '容器诊断' : 'Container diagnostics', type: zh ? '操作' : 'Actions', run: () => { useContainerViewStore.getState().update(nodeID, { diagnostic: 'abnormal', search: '', states: [], health: [], source: '', project: '' }); close(); void navigate({ to: '/containers' }) } },
       { id: 'containers', label: zh ? '打开容器' : 'Open containers', detail: zh ? '导航' : 'Navigation', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/containers' }) } },
       { id: 'projects', label: zh ? '创建项目' : 'Create project', detail: zh ? '可视化或 Compose 配置' : 'Visual or Compose configuration', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/projects/new' }) } },
       { id: 'continuous-delivery', label: zh ? '打开持续交付' : 'Open continuous delivery', detail: zh ? 'Git 发布与回滚' : 'Git releases and rollback', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/continuous-delivery' }) } },
@@ -54,6 +56,7 @@ export function CommandPalette({ open, close }: { open: boolean; close: () => vo
 
     rules.data?.forEach(r => push({ id: r.id, label: r.name, detail: zh ? '通知规则' : 'Notification rule', type: zh ? '通知规则' : 'Notification rules', run: () => { close(); void navigate({ to: '/settings', hash: 'notifications?tab=rules' }) } }))
  containers.data?.forEach((row) => {
+      for (const tab of ['events', 'stats'] as const) push({ id: `${tab}-${row.id}`, label: `${row.name} · ${tab === 'events' ? zh ? '查看事件' : 'View events' : zh ? '查看统计' : 'View stats'}`, detail: zh ? '容器排查' : 'Container inspection', type: zh ? '容器操作' : 'Container actions', run: () => { close(); void navigate({ to: '/containers/$containerId', params: { containerId: row.id }, hash: tab }) } })
       push({ id: `container-${row.id}`, label: row.name, detail: `${row.state} · ${row.image}`, type: zh ? '容器' : 'Containers', run: () => { close(); void navigate({ to: '/containers/$containerId', params: { containerId: row.id } }) } })
       push({ id: `logs-${row.id}`, label: zh ? `打开 ${row.name} 日志` : `Open ${row.name} logs`, detail: row.image, type: zh ? '容器操作' : 'Container actions', run: () => { close(); void navigate({ to: '/containers/$containerId', params: { containerId: row.id }, hash: 'logs' }) } })
       push({ id: `terminal-${row.id}`, label: zh ? `打开 ${row.name} 终端` : `Open ${row.name} terminal`, detail: row.image, type: zh ? '容器操作' : 'Container actions', run: () => { close(); void navigate({ to: '/containers/$containerId', params: { containerId: row.id }, hash: 'terminal' }) } })

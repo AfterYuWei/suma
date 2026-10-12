@@ -22,6 +22,7 @@ import (
 	"github.com/suma/suma/server/internal/agentwire"
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/auth"
+	containerdomain "github.com/suma/suma/server/internal/container"
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/node"
 	"github.com/suma/suma/server/internal/secret"
@@ -119,6 +120,8 @@ func TestAgentRevocationDuringControlHandshake(t *testing.T) {
 func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	root := t.TempDir()
+	observationID := strings.Repeat("c", 64)
+	eventCanceled := make(chan struct{}, 1)
 	dockerSocket := filepath.Join(root, "docker.sock")
 	listener, err := net.Listen("unix", dockerSocket)
 	if err != nil {
@@ -134,6 +137,18 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 		case "/info":
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{"ID": "agent-engine", "Name": "agent-test", "ServerVersion": "29.0", "OSType": "linux"})
+		case "/containers/" + observationID + "/json":
+			writeProjectDockerJSON(w, map[string]any{"Id": observationID, "RestartCount": 2, "Config": map[string]any{"Healthcheck": map[string]any{"Test": []string{"CMD", "check"}}}, "HostConfig": map[string]any{"Memory": 512}, "State": map[string]any{"Status": "running", "Running": true, "StartedAt": "2026-10-12T00:00:00Z", "OOMKilled": false, "Health": map[string]any{"Status": "healthy"}}})
+		case "/containers/" + observationID + "/stats":
+			writeProjectDockerJSON(w, map[string]any{"read": time.Now().UTC(), "memory_stats": map[string]any{"usage": 100, "stats": map[string]int{"inactive_file": 40}}})
+		case "/events":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"Type": "container", "Action": "start", "timeNano": time.Now().UnixNano(), "Actor": map[string]any{"ID": observationID}})
+			if r.URL.Query().Get("until") == "" {
+				w.(http.Flusher).Flush()
+				<-r.Context().Done()
+				eventCanceled <- struct{}{}
+			}
 		default:
 			http.NotFound(w, r)
 		}
@@ -349,6 +364,36 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 			info, err := client.Info(context.Background())
 			if err != nil || info.ID != "agent-engine" {
 				t.Fatalf("Docker runtime failed through Agent: %+v, %v", info, err)
+			}
+			diagnostic, err := containerdomain.ReadDiagnostics(context.Background(), client, observationID)
+			if err != nil || diagnostic.Runtime.RestartCount == nil || *diagnostic.Runtime.RestartCount != 2 {
+				t.Fatalf("Agent diagnostic failed: %v", err)
+			}
+			overview, err := containerdomain.ReadOverview(context.Background(), client, observationID)
+			if err != nil || overview.ID != observationID || overview.Networks == nil || overview.Mounts == nil {
+				t.Fatalf("Agent overview failed: %v", err)
+			}
+			pointStream, err := containerdomain.OpenNormalizedStats(context.Background(), client, observationID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var point containerdomain.Metrics
+			err = json.NewDecoder(pointStream).Decode(&point)
+			_ = pointStream.Close()
+			if err != nil || point.MemoryBytes != 60 {
+				t.Fatalf("Agent normalized statistics failed: %v", err)
+			}
+			history, err := containerdomain.ReadContainerEvents(context.Background(), client, issued.NodeID, observationID, containerdomain.EventQuery{Since: time.Now().Add(-time.Hour), Until: time.Now(), Limit: 200})
+			if err != nil || len(history.Events) != 1 || history.Events[0].NodeID != issued.NodeID {
+				t.Fatalf("Agent event history failed: %v", err)
+			}
+			watchCtx, cancelWatch := context.WithTimeout(context.Background(), time.Second)
+			_ = containerdomain.WatchContainerEvents(watchCtx, client, issued.NodeID, observationID, time.Now().Add(-time.Minute), func(containerdomain.ContainerEvent) error { cancelWatch(); return nil })
+			cancelWatch()
+			select {
+			case <-eventCanceled:
+			case <-time.After(time.Second):
+				t.Fatal("Agent event stream was not canceled")
 			}
 			expiredAt := time.Now().Add(-time.Second)
 			if err := db.Model(&database.AgentEnrollment{}).Where("node_id = ?", issued.NodeID).Update("expires_at", expiredAt).Error; err != nil {

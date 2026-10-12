@@ -285,12 +285,14 @@ func TestAdapterResourceCounts(t *testing.T) {
 
 func TestAdapterMetricsIncludesIOPIDsAndUptime(t *testing.T) {
 	startedAt := time.Now().Add(-90 * time.Second).UTC()
+	sampledAt := time.Now().UTC()
 	stub := newDockerStub(t, map[string]http.HandlerFunc{
 		"/containers/json": func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, []dockercontainer.Summary{{ID: "container-a", Names: []string{"/api"}, Image: "example/api:latest", State: dockercontainer.StateRunning}})
 		},
 		"/containers/container-a/stats": func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{
+				"read":         sampledAt.Format(time.RFC3339Nano),
 				"cpu_stats":    map[string]any{"cpu_usage": map[string]any{"total_usage": 300, "percpu_usage": []uint64{150, 150}}, "system_cpu_usage": 1000, "online_cpus": 2},
 				"precpu_stats": map[string]any{"cpu_usage": map[string]any{"total_usage": 100}, "system_cpu_usage": 500},
 				"memory_stats": map[string]any{"usage": 1024, "stats": map[string]uint64{"inactive_file": 128}},
@@ -313,6 +315,12 @@ func TestAdapterMetricsIncludesIOPIDsAndUptime(t *testing.T) {
 		t.Fatalf("metrics length = %d, want 1", len(metrics))
 	}
 	value := metrics[0]
+	if value.SampledAt == nil || !value.SampledAt.Equal(sampledAt) || value.StartedAt == nil || !value.StartedAt.Equal(startedAt) {
+		t.Fatalf("missing sample/start timestamps: %#v", value)
+	}
+	if got := len(stub.find(t, func(request stubRequest) bool { return request.Path == "/containers/container-a/json" })); got != 1 {
+		t.Fatalf("timestamps added duplicate inspection: %d calls", got)
+	}
 	if value.Name != "api" || value.Image != "example/api:latest" || value.State != "running" || !value.Available || value.CPUPercent != 80 || value.MemoryBytes != 896 || value.NetworkRXBytes != 2048 || value.NetworkTXBytes != 4096 || value.BlockReadBytes != 8192 || value.BlockWriteBytes != 16384 || value.PIDs != 7 {
 		t.Fatalf("unexpected metrics: %#v", value)
 	}
