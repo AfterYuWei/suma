@@ -13,7 +13,7 @@ import { ListPagination } from '../components/ui/list-pagination'
 import { useListPagination } from '../components/ui/use-list-pagination'
 import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../components/ui/sheet'
 import { Spinner } from '../components/ui/spinner'
 import { StatusBadge } from '../components/ui/status-badge'
@@ -230,11 +230,13 @@ export function NodesPage() {
           <div className="grid gap-1.5">
             <Label htmlFor="node-connection">{zh ? '连接方式' : 'Connection type'}</Label>
             <Select<'unix' | 'tcp' | 'agent'> value={values.connection_type} onValueChange={(next) => { if (next === null) return; const isTCP = next === 'tcp'; update({ connection_type: next, endpoint: next === 'agent' ? (editing?.connection_type === 'agent' ? editing.endpoint : '') : isTCP ? 'tcp://docker.example.com:2376' : 'unix:///var/run/docker.sock', tls_mode: isTCP ? 'required' : 'disabled', tls_credential_id: undefined }) }}>
-              <SelectTrigger id="node-connection" aria-label={zh ? '连接方式' : 'Connection type'} className="w-full"><SelectValue>{connectionLabels[values.connection_type]}</SelectValue></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="unix">Unix Socket</SelectItem>
-                <SelectItem value="tcp">Docker TCP</SelectItem>
-                <SelectItem value="agent">Agent (WSS)</SelectItem>
+              <SelectTrigger id="node-connection" aria-label={zh ? '连接方式' : 'Connection type'} className="w-full min-w-0"><SelectValue>{connectionLabels[values.connection_type]}</SelectValue></SelectTrigger>
+              <SelectContent align="start" alignItemWithTrigger={false}>
+                <SelectGroup>
+                  <SelectItem value="unix">Unix Socket</SelectItem>
+                  <SelectItem value="tcp">Docker TCP</SelectItem>
+                  <SelectItem value="agent">Agent (WSS)</SelectItem>
+                </SelectGroup>
               </SelectContent>
             </Select>
           </div>
@@ -247,10 +249,12 @@ export function NodesPage() {
             <div className="grid gap-1.5">
               <Label>TLS</Label>
               <Select<'required' | 'disabled'> value={values.tls_mode} onValueChange={(next) => { if (next !== null) update({ tls_mode: next }) }}>
-                <SelectTrigger aria-label="TLS" className="w-full"><SelectValue>{values.tls_mode === 'required' ? `mTLS (${zh ? '推荐' : 'recommended'})` : (zh ? '无 TLS（内网或 Tailscale）' : 'No TLS (private network or Tailscale)')}</SelectValue></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="required">{`mTLS (${zh ? '推荐' : 'recommended'})`}</SelectItem>
-                  <SelectItem value="disabled">{zh ? '无 TLS（内网或 Tailscale）' : 'No TLS (private network or Tailscale)'}</SelectItem>
+                <SelectTrigger aria-label="TLS" className="w-full min-w-0"><SelectValue><span className="truncate">{values.tls_mode === 'required' ? `mTLS (${zh ? '推荐' : 'recommended'})` : (zh ? '无 TLS（内网或 Tailscale）' : 'No TLS (private network or Tailscale)')}</span></SelectValue></SelectTrigger>
+                <SelectContent align="start" alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    <SelectItem value="required">{`mTLS (${zh ? '推荐' : 'recommended'})`}</SelectItem>
+                    <SelectItem value="disabled"><span className="whitespace-normal">{zh ? '无 TLS（内网或 Tailscale）' : 'No TLS (private network or Tailscale)'}</span></SelectItem>
+                  </SelectGroup>
                 </SelectContent>
               </Select>
             </div>
@@ -258,11 +262,13 @@ export function NodesPage() {
               <div className="grid gap-1.5">
                 <Label htmlFor="node-tls-credential">{zh ? 'Docker TLS 凭据' : 'Docker TLS credential'}</Label>
                 <Select<number> value={values.tls_credential_id ?? null} onValueChange={(next) => update({ tls_credential_id: next === null ? undefined : next })}>
-                  <SelectTrigger id="node-tls-credential" className="w-full"><SelectValue>{(selected: number | null) => selected == null ? (zh ? '选择凭据' : 'Choose credential') : (() => { const credential = credentials.data?.find((item) => item.id === selected); return credential ? `${credential.name} · ${credential.fingerprint}` : String(selected) })()}</SelectValue></SelectTrigger>
-                  <SelectContent>
-                    {(credentials.data ?? []).map((credential) => (
-                      <SelectItem key={credential.id} value={credential.id}>{`${credential.name} · ${credential.fingerprint}`}</SelectItem>
-                    ))}
+                  <SelectTrigger id="node-tls-credential" className="w-full min-w-0"><SelectValue>{(selected: number | null) => <span className="truncate">{selected == null ? (zh ? '选择凭据' : 'Choose credential') : (() => { const credential = credentials.data?.find((item) => item.id === selected); return credential ? `${credential.name} · ${credential.fingerprint}` : String(selected) })()}</span>}</SelectValue></SelectTrigger>
+                  <SelectContent align="start" alignItemWithTrigger={false}>
+                    <SelectGroup>
+                      {(credentials.data ?? []).map((credential) => (
+                        <SelectItem key={credential.id} value={credential.id}><span className="whitespace-normal break-all">{`${credential.name} · ${credential.fingerprint}`}</span></SelectItem>
+                      ))}
+                    </SelectGroup>
                   </SelectContent>
                 </Select>
               </div>
