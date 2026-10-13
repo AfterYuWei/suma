@@ -78,7 +78,7 @@ function MonitoringContent({ primary, compact = false, compareIDs }: { primary: 
   const events=useMemo(()=>Object.values(eventGroups).flat(),[eventGroups])
   const eventClick = (event: MonitorEvent) => { setFocusedEvent(event.id); document.getElementById('monitor-event-' + event.id)?.scrollIntoView({ block: 'nearest' }) }
   const coverage = (value: string) => ({ expired: zh ? '部分或全部历史已到期' : 'History partly or fully expired', not_collected: zh ? '尚未采集到历史' : 'No recorded history', excluded: zh ? '监控已关闭或对象已排除' : 'Monitoring disabled or excluded', partial: zh ? '包含采集覆盖缺口' : 'Contains collection coverage gaps', truncated: zh ? '分段过多，显示点已达上限' : 'Segment display limit reached' }[value])
-  return <section className="min-w-0 space-y-4 text-left" aria-label={zh ? '容器监控' : 'Container monitoring'} aria-busy={query.isFetching}>
+  return <section className="@container min-w-0 space-y-4 text-left" aria-label={zh ? '容器监控' : 'Container monitoring'} aria-busy={query.isFetching}>
     <div className="flex flex-wrap items-center justify-between gap-2">
       <span className="text-xs text-muted-foreground">{compact ? zh ? '最近 1 小时' : 'Last hour' : fixed ? zh ? '固定时间范围' : 'Fixed range' : zh ? '跟随最新 · 每 5 秒刷新' : 'Following latest · refresh every 5s'}</span>
       <div className="flex gap-1">

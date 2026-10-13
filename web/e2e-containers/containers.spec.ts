@@ -1,5 +1,5 @@
 import { createMonitoringMock } from '../src/features/monitoring/mock'
-import type { Instance } from '../src/features/monitoring/types'
+import type { Instance, QueryResult } from '../src/features/monitoring/types'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import type { ContainerMetrics, ContainerRuntime, ContainerSummary } from '../src/features/containers/types'
 
@@ -212,13 +212,33 @@ test('resource trends use shared samples and do not open per-row streams', async
   await setup(page)
   await page.clock.install({ time: new Date('2026-10-12T00:10:00Z') })
   const sockets: string[] = []
+  let chartModuleURL = ''
+  // The controlled clock replaces performance entries; capture the module request.
+  page.on('request', request => { if (new URL(request.url()).pathname.endsWith('/echarts_core.js')) chartModuleURL = request.url() })
   page.on('websocket', ws => sockets.push(ws.url()))
   await page.goto('/containers')
   await expect(rowFor(page, 'suma')).toContainText('19 MB / 1.00 GB')
   await page.clock.runFor(5000)
+  const historyResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/monitoring/query')
   await rowFor(page, 'suma').getByRole('button', { name: 'Resource trends suma', exact: true }).click()
-  await expect(page.getByRole('region',{name:'Container monitoring'})).toContainText('View full monitoring')
-  await expect(page.getByRole('region',{name:'Container monitoring'}).locator('canvas')).toHaveCount(2)
+  const monitoring = page.getByRole('region',{name:'Container monitoring'})
+  await expect(monitoring).toContainText('View full monitoring')
+  await expect(monitoring.locator('canvas')).toHaveCount(3)
+  const payload = await (await historyResponse).json() as { data: QueryResult }
+  for (const point of payload.data.series[0].points) point.values.network_tx = { avg: 10240, min: 10240, max: 10240, count: 1 }
+  await page.route('**/api/v1/monitoring/query', route => route.fulfill({ json: payload }))
+  await monitoring.getByRole('button', { name: 'Refresh monitoring', exact: true }).click()
+  await expect(monitoring).toContainText('10.0 KiB/s')
+  await page.clock.runFor(500)
+  expect(chartModuleURL).toBeTruthy()
+  const network = await monitoring.getByRole('img', { name: 'Network traffic trend', exact: true }).evaluate(async (element, moduleURL) => {
+    const core = await import(moduleURL), options = core.getInstanceByDom(element).getOption()
+    return { unit: options.yAxis[0].name, labels: options.series.map((line: { name: string }) => options.legend[0].formatter(line.name)), firstValues: options.series.map((line: { data: [number, number][] }) => line.data[0][1]) }
+  }, chartModuleURL)
+  expect(network.unit).toBe('KiB/s')
+  expect(network.labels).toEqual(['Receive', 'Send'])
+  expect(network.firstValues[0]).toBeCloseTo(payload.data.series[0].points[0].values.network_rx!.avg! / 1024)
+  expect(network.firstValues[1]).toBe(10)
   expect(sockets.filter(url => new URL(url).pathname.startsWith('/ws/nodes/'))).toHaveLength(0)
 })
 
@@ -229,10 +249,10 @@ for (const theme of ['dark', 'light']) {
   const trigger=rowFor(page,'suma').getByRole('button',{name:'Resource trends suma',exact:true})
   await trigger.click()
   const monitoring=page.getByRole('region',{name:'Container monitoring'})
-  await expect(monitoring.locator('canvas')).toHaveCount(2)
+  await expect(monitoring.locator('canvas')).toHaveCount(3)
   await expect(monitoring).toContainText('Last hour')
   await trigger.click();await expect(monitoring).toHaveCount(0)
-  await trigger.click();await expect(monitoring.locator('canvas')).toHaveCount(2)
+  await trigger.click();await expect(monitoring.locator('canvas')).toHaveCount(3)
   await page.screenshot({path:'/tmp/suma-monitoring-hour-'+theme+'.png'})
  })
 }
@@ -248,7 +268,7 @@ for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']
     await page.clock.runFor(5000)
     await rowFor(page, 'suma').getByRole('button', { name: `${language === 'zh-CN' ? '资源趋势' : 'Resource trends'} suma`, exact: true }).click()
     const popup = page.getByRole('region', { name: /Container monitoring|容器监控/ })
-    await expect(popup.locator('canvas')).toHaveCount(2)
+    await expect(popup.locator('canvas')).toHaveCount(3)
     await page.clock.pauseAt(await page.evaluate(() => new Date(Date.now() + 1000).toISOString()))
     await page.mouse.move(0, 0); await page.clock.runFor(500)
     const charts = popup.getByRole('img')
@@ -730,9 +750,20 @@ for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']
     const trend = rowFor(page, 'suma').getByRole('button', { name: (language === 'zh-CN' ? '资源趋势' : 'Resource trends') + ' suma', exact: true })
     await trend.click()
     const region = page.getByRole('region', { name: language === 'zh-CN' ? '容器监控' : 'Container monitoring' })
-    await expect(region.locator('canvas')).toHaveCount(2)
+    await expect(region.locator('canvas')).toHaveCount(3)
     if (width === 390) await expect(page.getByRole('dialog')).toBeVisible()
     const charts = region.getByRole('img')
+    const boxes = await Promise.all((await charts.all()).map(chart => chart.boundingBox()))
+    expect(boxes).toHaveLength(3)
+    for (let index = 1; index < boxes.length; index++) {
+      if (width === 390) {
+        expect(boxes[index]!.x).toBeCloseTo(boxes[0]!.x, 0)
+        expect(boxes[index]!.y).toBeGreaterThan(boxes[index - 1]!.y + boxes[index - 1]!.height)
+      } else {
+        expect(boxes[index]!.y).toBeCloseTo(boxes[0]!.y, 0)
+        expect(boxes[index]!.x).toBeGreaterThan(boxes[index - 1]!.x + boxes[index - 1]!.width)
+      }
+    }
     const memoryChart = charts.nth(1)
     await memoryChart.scrollIntoViewIfNeeded()
     await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
@@ -757,7 +788,7 @@ for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']
     for (let index = 1; index < ticks.length; index++) expect(ticks[index].y).toBeGreaterThanOrEqual(ticks[index - 1].y + ticks[index - 1].height)
     await hoverPlotEnd(page, memoryChart)
     const tooltips = page.locator('[data-slot="chart-tooltip"]:visible')
-    await expect(tooltips).toHaveCount(2)
+    await expect(tooltips).toHaveCount(3)
     for (const [index, tooltip] of (await tooltips.all()).entries()) {
       const area = await charts.nth(index).boundingBox()
       const wrapping = await tooltip.evaluate(element => {

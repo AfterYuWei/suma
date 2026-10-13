@@ -62,7 +62,7 @@ export function MonitoringCharts({ series, compact = false, relative = false, ev
     const end = series[0] ? Date.parse(series[0].target.until) : Date.now()
     charts.current.forEach((chart, index) => {
       const keys = groups[index]
-      const grid = { left: 55, right: 16, top: compact ? 10 : 35, bottom: compact ? 26 : 50 }
+      const grid = { left: 55, right: 16, top: compact ? keys.length > 1 ? 30 : 10 : 35, bottom: compact ? 26 : 50 }
       const plot: NonNullable<EChartsOption['series']> = []
       const tooltipMeta = new Map<string, { field: Field; offset: number; identity: string; caption: string; color: string }>()
       series.forEach((result, s) => {
@@ -72,7 +72,7 @@ export function MonitoringCharts({ series, compact = false, relative = false, ev
           const color = colors[(series.length > 1 ? s : index + k) % colors.length]
           const legend = result.instance.name + (series.length > 1 ? ' · ' + result.instance.node_name + ' · ' + (s + 1) : '')
           for (const statistic of ['avg', ...(compact || keys.length > 1 || field === 'pids' ? [] : ['max'])] as ('avg' | 'max')[]) {
-            const caption = metricLabel(field, zh) + (statistic === 'max' ? zh ? ' 峰值' : ' peak' : '')
+            const caption = (compact && keys[0] === 'network_rx' ? field === 'network_rx' ? zh ? '接收' : 'Receive' : zh ? '发送' : 'Send' : metricLabel(field, zh)) + (statistic === 'max' ? zh ? ' 峰值' : ' peak' : '')
             const name = legend + ' · ' + caption
             tooltipMeta.set(name, { field, offset, identity: legend, caption, color })
             const data: [number, number | null][] = []
@@ -98,7 +98,7 @@ export function MonitoringCharts({ series, compact = false, relative = false, ev
       chart.setOption({
         animation: false,
         textStyle: { fontFamily: getComputedStyle(document.body).fontFamily, color: label },
-        legend: compact ? { show: false } : { type: 'scroll', top: 0, textStyle: { color: label, fontSize: 10 } },
+        legend: { show: !compact || keys.length > 1, type: 'scroll', top: 0, textStyle: { color: label, fontSize: 10 }, formatter: compact ? (name: string) => tooltipMeta.get(name)?.caption ?? name : undefined },
         grid,
         xAxis: { type: 'time', min: start, max: end, splitNumber: compact ? 3 : 8, minInterval: compact ? 600_000 : Math.max(1000,(end-start)/12), axisLabel: { color: label, hideOverlap: true, fontSize: 10, formatter: (time: number) => formatTime(time) }, axisLine: { lineStyle: { color: border } } },
         yAxis: { type: 'value', min: 0, splitNumber: compact ? 2 : 5, name: keys[0] === 'cpu' ? '%' : keys[0] === 'memory' ? 'MiB' : keys[0] === 'pids' ? '' : 'KiB/s', nameTextStyle: { color: label }, axisLabel: { color: label, fontSize: 10, hideOverlap: true }, splitLine: { lineStyle: { color: border } } },
@@ -153,5 +153,8 @@ export function MonitoringCharts({ series, compact = false, relative = false, ev
       } satisfies EChartsOption, { notMerge: true, lazyUpdate: true })
     })
   }, [series, compact, relative, events, focusedEvent, dark, zh, formatDate, formatTime])
-  return <div className={compact ? 'space-y-4' : 'grid grid-cols-1 gap-x-6 gap-y-6 md:grid-cols-2'}>{groups.slice(0, compact ? 2 : groups.length).map((keys, i) => <section key={keys[0]} className="min-w-0"><h3 className="mb-1 text-xs font-medium">{keys.map(key => metricLabel(key, zh)).join(' / ')}</h3><div ref={element => { refs.current[i] = element }} role="img" aria-label={keys.map(key => metricLabel(key, zh)).join(' / ') + (zh ? '趋势' : ' trend')} className={compact ? 'h-28' : 'h-64'} /></section>)}</div>
+  return <div className={compact ? 'grid grid-cols-1 gap-x-6 gap-y-4 @min-[48rem]:grid-cols-3' : 'grid grid-cols-1 gap-x-6 gap-y-6 md:grid-cols-2'}>{groups.slice(0, compact ? 3 : groups.length).map((keys, i) => {
+    const caption = compact && keys[0] === 'network_rx' ? zh ? '网络流量' : 'Network traffic' : keys.map(key => metricLabel(key, zh)).join(' / ')
+    return <section key={keys[0]} className="min-w-0"><h3 className="mb-1 text-xs font-medium">{caption}</h3><div ref={element => { refs.current[i] = element }} role="img" aria-label={caption + (zh ? '趋势' : ' trend')} className={compact ? 'h-40' : 'h-64'} /></section>
+  })}</div>
 }
