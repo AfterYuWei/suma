@@ -572,14 +572,14 @@ for (const width of [390, 1440, 1870]) for (const language of ['zh-CN', 'en-US']
 
 test('monitoring history queries without live container reads and compares selected instances', async ({ page }) => {
   const state = await setup(page)
-  await page.goto('/containers#monitoring-history')
+  await page.goto('/monitoring-history')
   await expect(page.getByRole('heading', { name: 'Monitoring history', exact: true })).toBeVisible()
   await expect(page.getByRole('link', { name: 'suma', exact: true })).toHaveCount(2)
   expect(state.calls.filter(call => /nodes\/[^/]+\/containers/.test(call))).toHaveLength(0)
   await page.getByRole('checkbox', { name: 'Select historical instance suma', exact: true }).first().check()
   await page.getByRole('checkbox', { name: 'Select historical instance vaultwarden', exact: true }).first().check()
   await page.getByRole('button', { name: /Compare selected/ }).click()
-  await expect(page).toHaveURL(/\/containers\/history\/.*compare=/)
+  await expect(page).toHaveURL(/\/monitoring-history\/.*compare=/)
   await expect(page.getByRole('combobox', { name: 'Comparison mode' })).toContainText('Compare containers')
   await expect(page.locator('canvas')).toHaveCount(5)
   expect(state.calls.filter(call => /nodes\/[^/]+\/containers/.test(call))).toHaveLength(0)
@@ -854,7 +854,7 @@ for (const width of [390, 1440]) {
     expect(box!.y + box!.height).toBeLessThanOrEqual(area!.y + area!.height - 25)
     await page.screenshot({ path: '/tmp/suma-monitoring-tooltip-long-name-' + width + '.png', animations: 'disabled' })
     if (width === 1440) {
-      await page.goto('/containers#monitoring-history')
+      await page.goto('/monitoring-history')
       const selected = page.getByRole('checkbox', { name: /Select historical instance/ })
       for (let index = 0; index < 4; index++) await selected.nth(index).check()
       await page.getByRole('button', { name: /Compare selected/ }).click()

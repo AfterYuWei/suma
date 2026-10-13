@@ -1,6 +1,4 @@
-import { MonitoringHistory } from '../features/monitoring/history'
 import { MonitoringView } from '../features/monitoring/view'
-import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../components/ui/sheet'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useLocation } from '@tanstack/react-router'
@@ -60,12 +58,8 @@ const stateLabel = (state: string, zh: boolean) => zh ? ({ running: '运行中',
 const healthLabel = (health: string | null | undefined, zh: boolean) => ({ healthy: zh ? '健康' : 'Healthy', unhealthy: zh ? '不健康' : 'Unhealthy', starting: zh ? '检查启动中' : 'Starting', syncing: zh ? '同步中' : 'Syncing', none: zh ? '未配置' : 'No check' }[health ?? ''] ?? (zh ? '未知' : 'Unknown'))
 
 export function ContainersPage() {
- const hash=useLocation({select: location => location.hash}),navigate=useNavigate()
- const {language}=useI18n(),zh=language==='zh-CN'
- const pathname=useLocation({select: location=>location.pathname})
- const history=hash==='monitoring-history'
- if(pathname!=='/containers')return null
- return <div className="space-y-4"><Tabs value={history?'history':'live'} onValueChange={v=>void navigate({to:'/containers',hash:v==='history'?'monitoring-history':''})}><TabsList><TabsTrigger value="live">{zh?'容器':'Containers'}</TabsTrigger><TabsTrigger value="history">{zh?'监控历史':'Monitoring history'}</TabsTrigger></TabsList></Tabs>{history?<ResourceFrame title={zh?'监控历史':'Monitoring history'} detail={zh?'已记录的容器实例，包含已停止或删除的容器':'Recorded instances, including stopped or removed containers'}><MonitoringHistory /></ResourceFrame>:<LiveContainersPage />}</div>
+  const pathname = useLocation({ select: location => location.pathname })
+  return pathname === '/containers' ? <LiveContainersPage /> : null
 }
 function LiveContainersPage() {
   const navigate = useNavigate()

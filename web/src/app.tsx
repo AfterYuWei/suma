@@ -23,6 +23,7 @@ import { Spinner } from './components/ui/spinner'
 import { TooltipProvider } from './components/ui/tooltip'
 
 const MonitoringHistoryPage = lazy(() => import('./features/monitoring/history').then(module => ({ default: module.MonitoringHistoryPage })))
+const MonitoringHistoryDetailPage = lazy(() => import('./features/monitoring/history').then(module => ({ default: module.MonitoringHistoryDetailPage })))
 const ContainerDetailPage = lazy(() => import('./pages/container-detail').then((module) => ({ default: module.ContainerDetailPage })))
 const ComposeDetailPage = lazy(() => import('./pages/compose-detail').then((module) => ({ default: module.ComposeDetailPage })))
 const ProjectCreatePage = lazy(() => import('./pages/project-create').then((module) => ({ default: module.ProjectCreatePage })))
@@ -33,8 +34,10 @@ const deferred = (Component: ComponentType) => () => <Suspense fallback={<div ro
 
 const rootRoute = createRootRoute({ component: () => <AuthGate><TimeZoneProvider><AppShell><Outlet /></AppShell></TimeZoneProvider></AuthGate> })
 const overviewRoute = createRoute({ getParentRoute: () => rootRoute, path: '/', component: OverviewPage })
-const containersRoute = createRoute({ getParentRoute: () => rootRoute, path: '/containers', component: ContainersPage })
-const monitoringHistoryRoute = createRoute({ getParentRoute: () => rootRoute, path: '/containers/history/$instanceId', component: deferred(MonitoringHistoryPage), validateSearch: (search: Record<string, unknown>): { compare?: string } => ({ compare: typeof search.compare === 'string' ? search.compare : undefined }), remountDeps: ({ params }) => params.instanceId })
+const containersRoute = createRoute({ getParentRoute: () => rootRoute, path: '/containers', component: ContainersPage, beforeLoad: ({ location }) => { if (location.hash === 'monitoring-history') throw redirect({ to: '/monitoring-history', hash: '', replace: true }) } })
+const monitoringHistoryRoute = createRoute({ getParentRoute: () => rootRoute, path: '/monitoring-history', component: deferred(MonitoringHistoryPage) })
+const monitoringHistoryDetailRoute = createRoute({ getParentRoute: () => rootRoute, path: '/monitoring-history/$instanceId', component: deferred(MonitoringHistoryDetailPage), validateSearch: (search: Record<string, unknown>): { compare?: string } => ({ compare: typeof search.compare === 'string' ? search.compare : undefined }), remountDeps: ({ params }) => params.instanceId })
+const legacyMonitoringHistoryRoute = createRoute({ getParentRoute: () => rootRoute, path: '/containers/history/$instanceId', validateSearch: (search: Record<string, unknown>): { compare?: string } => ({ compare: typeof search.compare === 'string' ? search.compare : undefined }), beforeLoad: ({ params, search }) => { throw redirect({ to: '/monitoring-history/$instanceId', params: { instanceId: params.instanceId }, search, replace: true }) } })
 const containerDetailRoute = createRoute({ getParentRoute: () => rootRoute, path: '/containers/$containerId', component: deferred(ContainerDetailPage), remountDeps: ({ params }) => params.containerId })
 const imagesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/images', component: ImagesPage })
 const networksRoute = createRoute({ getParentRoute: () => rootRoute, path: '/networks', component: NetworksPage })
@@ -55,7 +58,7 @@ const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/set
 const authenticationRoute = createRoute({ getParentRoute: () => rootRoute, path: '/authentication', component: AuthenticationPage })
 const nodesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/nodes', component: NodesPage })
 const accountRoute = createRoute({ getParentRoute: () => rootRoute, path: '/account', component: AccountPage })
-const router = createRouter({ routeTree: rootRoute.addChildren([overviewRoute, containersRoute, monitoringHistoryRoute, containerDetailRoute, imagesRoute, networksRoute, volumesRoute, tasksRoute, auditRoute, projectsRoute, projectCreateRoute, projectDetailRoute, projectTakeoverRoute, composeRoute, composeDetailRoute, continuousDeliveryRoute, continuousDeliveryCreateRoute, continuousDeliveryDetailRoute, authenticationRoute, nodesRoute, settingsRoute, accountRoute, notificationsRoute]) })
+const router = createRouter({ routeTree: rootRoute.addChildren([overviewRoute, containersRoute, monitoringHistoryRoute, monitoringHistoryDetailRoute, legacyMonitoringHistoryRoute, containerDetailRoute, imagesRoute, networksRoute, volumesRoute, tasksRoute, auditRoute, projectsRoute, projectCreateRoute, projectDetailRoute, projectTakeoverRoute, composeRoute, composeDetailRoute, continuousDeliveryRoute, continuousDeliveryCreateRoute, continuousDeliveryDetailRoute, authenticationRoute, nodesRoute, settingsRoute, accountRoute, notificationsRoute]) })
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 5_000, retry: 1 } } })
 
 declare module '@tanstack/react-router' { interface Register { router: typeof router } }

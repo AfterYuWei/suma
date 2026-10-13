@@ -51,7 +51,7 @@ export function CommandPalette({ open, close }: { open: boolean; close: () => vo
       { id: 'image-updates', label: zh ? '打开镜像更新' : 'Open image updates', detail: zh ? '定时检测与仓库凭据' : 'Scheduled checks and registry credentials', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/images', hash: 'image-updates' }) } },
       { id: 'storage-cleanup', label: zh ? '打开存储清理' : 'Open storage cleanup', detail: zh ? '定时策略、预览与历史' : 'Schedules, preview and history', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/settings', hash: 'cleanup' }) } },
       { id: 'monitoring-settings', label: zh ? '打开监控设置' : 'Open monitoring settings', detail: '', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/settings', hash: 'monitoring' }) } },
-      { id: 'monitoring-history', label: zh ? '查看容器监控历史' : 'View container monitoring history', detail: '', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/containers', hash: 'monitoring-history' }) } },
+      { id: 'monitoring-history', label: zh ? '查看容器监控历史' : 'View container monitoring history', detail: '', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/monitoring-history' }) } },
       { id: 'notifications', label: zh ? '打开通知渠道' : 'Open notification channels', detail: '', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/settings', hash: 'notifications' }) } },
  { id: 'account', label: zh ? '打开账户设置' : 'Open account settings', detail: zh ? '头像、资料与密码' : 'Avatar, profile, and password', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/account' }) } },
     ].forEach(push)

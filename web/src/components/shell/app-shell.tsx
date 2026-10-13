@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import {
-  Bell, Activity, Boxes, CircleGauge, Container, FileClock, FolderTree, GitPullRequest,
+  Bell, Activity, Boxes, ChartNoAxesCombined, CircleGauge, Container, FileClock, FolderTree, GitPullRequest,
   HardDrive, KeyRound, Layers3, Network, PanelLeftClose,
   LogOut, PanelLeftOpen, Search, Server, Settings, UserRound,
 } from 'lucide-react'
@@ -30,7 +30,7 @@ import { CommandPalette } from './command-palette'
 
 const navigationSections = [
   { key: 'docker', label: 'Docker', rawLabel: false, items: [{ label: 'containers', path: '/containers', icon: Container }, { label: 'projects', path: '/projects', icon: Layers3 }, { label: 'images', path: '/images', icon: Boxes }, { label: 'networks', path: '/networks', icon: Network }, { label: 'volumes', path: '/volumes', icon: HardDrive }] },
-  { key: 'operations', label: 'operations', rawLabel: true, items: [{ label: 'continuousDelivery', path: '/continuous-delivery', icon: GitPullRequest }, { label: 'authenticationCenter', path: '/authentication', icon: KeyRound }, { label: 'tasks', path: '/tasks', icon: Activity }, { label: 'auditLogs', path: '/audit-logs', icon: FileClock }] },
+  { key: 'operations', label: 'operations', rawLabel: true, items: [{ label: 'continuousDelivery', path: '/continuous-delivery', icon: GitPullRequest }, { label: 'authenticationCenter', path: '/authentication', icon: KeyRound }, { label: 'monitoringHistory', path: '/monitoring-history', icon: ChartNoAxesCombined }, { label: 'tasks', path: '/tasks', icon: Activity }, { label: 'auditLogs', path: '/audit-logs', icon: FileClock }] },
   { key: 'system', label: 'system', rawLabel: true, items: [{ label: 'nodes', path: '/nodes', icon: Server }, { label: 'settings', path: '/settings', icon: Settings }] },
 ] as const
 
