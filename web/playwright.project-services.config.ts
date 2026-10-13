@@ -6,8 +6,8 @@ export default defineConfig({
   testDir: './e2e-project-services',
   use: { ...base.use, baseURL: 'http://127.0.0.1:5180' },
   webServer: {
-    command: 'npm run dev -- --host 127.0.0.1 --port 5180',
+    command: 'SUMA_VITE_CACHE_DIR=/tmp/suma-project-vite-cache npm run dev -- --host 127.0.0.1 --port 5180',
     url: 'http://127.0.0.1:5180',
-    reuseExistingServer: true
+    reuseExistingServer: false
   }
 })

@@ -13,6 +13,7 @@ export interface ProjectSummary {
   capabilities: ProjectCapability[]
   service_count: number
   instance_count: number
+  declared_service_names?: string[]
   status: string
   created_at: string
   updated_at: string

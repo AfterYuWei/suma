@@ -9,6 +9,7 @@ export default defineConfig(({ mode }) => {
   const demoMode = mode === 'demo'
 
   return {
+    cacheDir: process.env.SUMA_VITE_CACHE_DIR || 'node_modules/.vite',
     plugins: [react(), tailwindcss()],
     define: {
       'import.meta.env.VITE_SUMA_DEMO_MODE': JSON.stringify(demoMode ? 'true' : 'false'),

@@ -1,12 +1,11 @@
-let guard: (() => Promise<boolean>) | undefined
+const guards = new Set<() => Promise<boolean>>()
 
 export function registerProjectNavigationGuard(next: () => Promise<boolean>) {
-  guard = next
-  return () => {
-    if (guard === next) guard = undefined
-  }
+  guards.add(next)
+  return () => { guards.delete(next) }
 }
 
 export async function allowProjectNodeChange() {
-  return guard ? guard() : true
+  for (const guard of guards) if (!await guard()) return false
+  return true
 }

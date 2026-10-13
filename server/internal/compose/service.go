@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/goccy/go-yaml"
 	containerdomain "github.com/suma/suma/server/internal/container"
 	"github.com/suma/suma/server/internal/database"
 	projectdomain "github.com/suma/suma/server/internal/project"
@@ -536,9 +537,43 @@ func (s *Service) managedProjects() ([]Project, error) {
 		}
 		summary := projectdomain.ComposeSummary(s.effectiveNodeID(), entry.Name(), "managed", "stopped", true)
 		summary.CreatedAt, summary.UpdatedAt = metadata.ClaimedAt, info.ModTime()
+		summary.DeclaredServiceNames = s.readDeclaredServiceNames(composePath)
 		projects = append(projects, Project{Summary: summary, Path: path, CanManage: true, ConfigFiles: []string{composePath}, Metadata: &metadata})
 	}
 	return projects, nil
+}
+
+// Only service identities enter the public summary. Never return parser errors,
+// configuration values, environment files, or source paths from this read.
+func (s *Service) readDeclaredServiceNames(path string) *[]string {
+	root, err := filepath.EvalSymlinks(s.root)
+	if err != nil {
+		return nil
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil
+	}
+	relative, err := filepath.Rel(root, resolved)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return nil
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var document struct {
+		Services map[string]any `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(content, &document); err != nil || document.Services == nil {
+		return nil
+	}
+	names := make([]string, 0, len(document.Services))
+	for name := range document.Services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return &names
 }
 
 func (s *Service) managedProject(name string) (Project, error) {

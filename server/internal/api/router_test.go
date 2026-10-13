@@ -796,6 +796,9 @@ func TestProjectSummaryHTTPDoesNotExposeManagedConfiguration(t *testing.T) {
 		t.Fatalf("list Projects: %d %s", response.Code, response.Body.String())
 	}
 	text := response.Body.String()
+	if !strings.Contains(text, `"declared_service_names":["web"]`) {
+		t.Fatalf("missing safe service names: %s", text)
+	}
 	for _, forbidden := range []string{"list-secret", "example/private:v1", `"compose":`, `"environment":`, `"path":`, `"config_files":`} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("Project Summary HTTP response contains %q: %s", forbidden, text)

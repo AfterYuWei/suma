@@ -44,6 +44,7 @@ export function CommandPalette({ open, close }: { open: boolean; close: () => vo
     ;[
       { id: 'abnormal-containers', label: zh ? '查看异常容器' : 'View abnormal containers', detail: zh ? '容器诊断' : 'Container diagnostics', type: zh ? '操作' : 'Actions', run: () => { useContainerViewStore.getState().update(nodeID, { diagnostic: 'abnormal', search: '', states: [], health: [], source: '', project: '' }); close(); void navigate({ to: '/containers' }) } },
       { id: 'containers', label: zh ? '打开容器' : 'Open containers', detail: zh ? '导航' : 'Navigation', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/containers' }) } },
+      { id: 'create-container', label: zh ? '新增容器' : 'New container', detail: zh ? '当前节点' : 'Current node', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/containers/new' }) } },
       { id: 'projects', label: zh ? '创建项目' : 'Create project', detail: zh ? '可视化或 Compose 配置' : 'Visual or Compose configuration', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/projects/new' }) } },
       { id: 'continuous-delivery', label: zh ? '打开持续交付' : 'Open continuous delivery', detail: zh ? 'Git 发布与回滚' : 'Git releases and rollback', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/continuous-delivery' }) } },
       { id: 'pull', label: zh ? '拉取镜像' : 'Pull an image', detail: zh ? 'Docker 镜像' : 'Docker image', type: zh ? '操作' : 'Actions', run: () => { close(); void navigate({ to: '/images' }) } },

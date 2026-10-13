@@ -518,3 +518,53 @@ func (r *forceRemoveRunner) ForceDown(_ context.Context, _ string, preserveVolum
 	r.preserveVolumes = preserveVolumes
 	return nil
 }
+
+func TestSummaryDeclaredServicesAreSafeAndNodeScoped(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{"app": "services:\n  worker: {image: private:v1, environment: {PASSWORD: private-secret}}\n  web: {image: private:v2}\n", "empty": "services: {}\n", "broken": "services: [invalid\n"} {
+		path := filepath.Join(root, "node-a", name)
+		if err := os.MkdirAll(path, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "compose.yml"), []byte(content), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := &Service{root: root, nodeID: "node-a", containers: staticContainers{rows: []containerdomain.Summary{{ID: "web", State: "running", Labels: map[string]string{composeProjectLabel: "app", composeServiceLabel: "web"}}, {ID: "external", State: "running", Labels: map[string]string{composeProjectLabel: "external", composeServiceLabel: "db"}}}}}
+	rows, err := s.ListSummaries(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]projectdomain.Summary{}
+	for _, row := range rows {
+		byName[row.Name] = row
+	}
+	app := byName["app"]
+	if app.DeclaredServiceNames == nil || !reflect.DeepEqual(*app.DeclaredServiceNames, []string{"web", "worker"}) || app.ServiceCount != 1 || app.InstanceCount != 1 {
+		t.Fatalf("summary = %#v", app)
+	}
+	if byName["broken"].DeclaredServiceNames != nil || byName["external"].DeclaredServiceNames != nil || byName["empty"].DeclaredServiceNames == nil || len(*byName["empty"].DeclaredServiceNames) != 0 {
+		t.Fatal("unavailable, external and empty declarations were conflated")
+	}
+	payload, _ := json.Marshal(rows)
+	for _, secret := range []string{"private:v1", "private:v2", "private-secret", root} {
+		if strings.Contains(string(payload), secret) {
+			t.Fatal("summary exposed configuration")
+		}
+	}
+	other := s.ForNode("node-b", "B", nil, emptyContainers{}, true)
+	otherRows, err := other.ListSummaries(context.Background())
+	if err != nil || len(otherRows) != 0 {
+		t.Fatalf("node isolation = %v %v", otherRows, err)
+	}
+	outside := filepath.Join(t.TempDir(), "compose.yml")
+	if err := os.WriteFile(outside, []byte("services: {outside: {image: private}}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "node-a", "app", "outside.yml")); err != nil {
+		t.Fatal(err)
+	}
+	if s.readDeclaredServiceNames(filepath.Join(root, "node-a", "app", "outside.yml")) != nil {
+		t.Fatal("followed configuration outside Compose root")
+	}
+}

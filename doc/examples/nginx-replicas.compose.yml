@@ -1,0 +1,15 @@
+services:
+  nginx:
+    image: nginx:alpine
+    scale: 2
+    restart: unless-stopped
+    ports:
+      - target: 80
+        host_ip: 127.0.0.1
+        protocol: tcp
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s

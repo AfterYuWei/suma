@@ -47,6 +47,7 @@ type Summary struct {
 	ID               string            `json:"id"`
 	Name             string            `json:"name"`
 	Image            string            `json:"image"`
+	ImageID          string            `json:"image_id,omitempty"`
 	Command          string            `json:"command"`
 	Created          time.Time         `json:"created"`
 	State            string            `json:"state"`

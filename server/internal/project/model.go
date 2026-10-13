@@ -50,20 +50,21 @@ type Ref struct {
 // Summary is the backend-neutral Project list model. Backend-specific detail
 // stays in its backend package and is never forced into this common shape.
 type Summary struct {
-	Ref           Ref          `json:"ref"`
-	Backend       Backend      `json:"backend"`
-	Scope         Scope        `json:"scope"`
-	NodeID        string       `json:"node_id,omitempty"`
-	Name          string       `json:"name"`
-	NativeName    string       `json:"native_name"`
-	Managed       bool         `json:"managed"`
-	Source        string       `json:"source"`
-	Status        string       `json:"status"`
-	Capabilities  []Capability `json:"capabilities"`
-	ServiceCount  int          `json:"service_count"`
-	InstanceCount int          `json:"instance_count"`
-	CreatedAt     time.Time    `json:"created_at"`
-	UpdatedAt     time.Time    `json:"updated_at"`
+	Ref                  Ref          `json:"ref"`
+	Backend              Backend      `json:"backend"`
+	Scope                Scope        `json:"scope"`
+	NodeID               string       `json:"node_id,omitempty"`
+	Name                 string       `json:"name"`
+	NativeName           string       `json:"native_name"`
+	Managed              bool         `json:"managed"`
+	Source               string       `json:"source"`
+	Status               string       `json:"status"`
+	Capabilities         []Capability `json:"capabilities"`
+	ServiceCount         int          `json:"service_count"`
+	InstanceCount        int          `json:"instance_count"`
+	DeclaredServiceNames *[]string    `json:"declared_service_names,omitempty"`
+	CreatedAt            time.Time    `json:"created_at"`
+	UpdatedAt            time.Time    `json:"updated_at"`
 }
 
 func ComposeRef(nodeID, name string) Ref {

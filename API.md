@@ -16,6 +16,16 @@ Node-aware clients use these routes:
 - `GET /nodes/:nodeID/tasks`, `GET /nodes/:nodeID/tasks/:taskID`, `GET /nodes/:nodeID/tasks/:taskID/{logs|steps}`, `POST /nodes/:nodeID/tasks/:taskID/cancel`
 - `GET /nodes/:nodeID/audit-logs`
 
+### Standalone container creation
+
+`POST /nodes/:nodeID/containers` accepts `name`, `image`, `pull_policy` (`missing`, `always`, `never`), optional `credential_id`, `start` (defaults to `true`), `network` (defaults to `bridge`), `restart_policy` (`no`, `unless-stopped`, `always`, `on-failure`), `ports`, `mounts`, `environment`, `command`, `entrypoint`, `working_directory`, `user`, `memory_mb`, `cpus`, `read_only_rootfs`, `tty`, and `open_stdin`. It returns HTTP `202` with a node-scoped `container.create` Task. Registry credentials must be authorized for the selected node and match the image's registry.
+
+- Ports use `{ "container_port": 80, "host_port": 8080, "host_ip": "127.0.0.1", "protocol": "tcp" }`. Host port `0` requests an available port; the default host IP is loopback. TCP and UDP are supported. `host` and `none` networks cannot publish ports.
+- Mounts use `{ "type": "volume", "source": "app-data", "target": "/data", "read_only": false }` or `type: "bind"` with a non-interpolated absolute path on the Docker node. Targets must be distinct absolute paths below root. Docker socket sources/targets at `/var/run/docker.sock` or `/run/docker.sock` require `X-SUMA-Allow-Docker-Socket: true`, including read-only mounts.
+- Environment entries use `{ "key": "APP_ENV", "value": "production" }`; duplicate keys are rejected. Command and entrypoint are argument arrays, with no host shell evaluation. Empty arrays inherit image defaults. `memory_mb` and `cpus` use `0` for no limit; a nonzero memory limit must be at least 6 MiB.
+
+Progress streams through `/ws/nodes/:nodeID/tasks/:taskID`; polling, logs, steps, and cancellation use the existing node Task endpoints. A `container:<Docker ID>` step records creation before startup. Startup failure or cancellation after creation retains that container for inspection; cancellation does not delete resources. Task/audit evidence excludes environment values and registry secrets. Configuration is not persisted for automatic replay; interrupted tasks follow the existing restart recovery policy. Closing a progress stream releases its subscription while the task continues.
+
 ### Agent pairing and transport
 
 When `SUMA_AGENT_PUBLIC_URL` is unset, Agent pairing uses the authenticated administrator request's same-host HTTPS `Origin`. The Agent host must be able to reach that address and trust its TLS certificate. `SUMA_AGENT_PUBLIC_URL` remains an explicit override for deployments where the Agent needs a different HTTPS origin. HTTP page origins cannot be used for automatic pairing. Agent connections require trusted TLS and do not use browser cookies.

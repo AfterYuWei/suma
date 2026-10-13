@@ -6,6 +6,8 @@ import {
   configValue,
   configureServiceMount,
   configureServicePort,
+  configureServiceReplicas,
+  serviceReplicas,
   connectServiceNetwork,
   normalizeImage,
   nextUnnamedServiceName,
@@ -85,6 +87,63 @@ describe('Service image and port forms', () => {
     expect(() => configureServicePort(source, 'api', {target:80,published:'8090-8080'})).toThrow('Host port')
     const shared = 'x-ports: &ports ["8080:80"]\nservices:\n  api: {image: nginx, ports: *ports}\n'
     expect(() => configureServicePort(shared, 'api', {target:80,published:'8088'})).toThrow('Shared')
+  })
+})
+
+describe('Service replica configuration', () => {
+  it('defaults to one without writing defaults and preserves explicit zero', () => {
+    const source = '# keep\nservices:\n  api: {image: nginx}\n'
+    expect(serviceReplicas(source, 'api').count).toBe(1)
+    expect(configureServiceReplicas(source, 'api', 1)).toBe(source)
+    const stopped = configureServiceReplicas(source, 'api', 0)
+    expect(serviceReplicas(stopped, 'api').count).toBe(0)
+    expect(configValue(stopped, ['services', 'api', 'scale'])).toBe(0)
+  })
+  it('preserves comments and other services when changing scale', () => {
+    const source = '# project\nservices:\n  api:\n    image: nginx\n    scale: 2 # keep count\n    x-extra: keep\n  db:\n    image: postgres\n'
+    const changed = configureServiceReplicas(source, 'api', 3)
+    expect(changed).toContain('scale: 3 # keep count')
+    expect(configValue(changed, ['services', 'api', 'x-extra'])).toBe('keep')
+    expect(changed.slice(changed.indexOf('  db:'))).toBe(source.slice(source.indexOf('  db:')))
+  })
+  it('edits existing deployment replicas and retains resource settings', () => {
+    const source = 'services:\n  api:\n    image: nginx\n    deploy:\n      replicas: 3 # retained\n      resources: {limits: {cpus: "0.5"}}\n'
+    expect(serviceReplicas(source, 'api').count).toBe(3)
+    const changed = configureServiceReplicas(source, 'api', 2)
+    expect(configValue(changed, ['services', 'api', 'scale'])).toBeUndefined()
+    expect(configValue(changed, ['services', 'api', 'deploy', 'replicas'])).toBe(2)
+    expect(configValue(changed, ['services', 'api', 'deploy', 'resources'])).toEqual({limits: {cpus: '0.5'}})
+    expect(changed).toContain('# retained')
+  })
+  it('updates both consistent counts and never chooses among conflicts', () => {
+    const source = 'services:\n  api: {image: nginx, scale: "2", deploy: {replicas: 2, restart_policy: {condition: any}}}\n'
+    const changed = configureServiceReplicas(source, 'api', 4)
+    expect(configValue(changed, ['services', 'api', 'scale'])).toBe(4)
+    expect(configValue(changed, ['services', 'api', 'deploy', 'replicas'])).toBe(4)
+    expect(configValue(changed, ['services', 'api', 'deploy', 'restart_policy'])).toEqual({condition: 'any'})
+    const conflict = source.replace('replicas: 2', 'replicas: 3')
+    expect(serviceReplicas(conflict, 'api')).toMatchObject({count: null, issue: 'conflict'})
+    expect(() => configureServiceReplicas(conflict, 'api', 1)).toThrow('conflict')
+    expect(configurationIssues(conflict).map(issue => issue.code)).toContain('replicas')
+  })
+  it('protects variables, aliases and unsupported shapes', () => {
+    for (const source of [
+      'services:\n  api: {image: nginx, scale: "${COUNT}"}\n',
+      'x-count: &count 2\nservices:\n  api: {image: nginx, scale: *count}\n',
+      'x-deploy: &deployment {replicas: 2}\nservices:\n  api: {image: nginx, deploy: *deployment}\n',
+      'services:\n  api: {image: nginx, scale: [2]}\n'
+    ]) {
+      expect(serviceReplicas(source, 'api').issue).toBe('source')
+      expect(() => configureServiceReplicas(source, 'api', 3)).toThrow('source')
+    }
+  })
+  it('rejects invalid counts and scaling fixed names', () => {
+    const source = 'services:\n  api: {image: nginx, container_name: api}\n'
+    for (const count of [-1, 1.5, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1])
+      expect(() => configureServiceReplicas(source, 'api', count)).toThrow('non-negative')
+    expect(() => configureServiceReplicas(source, 'api', 2)).toThrow('automatic container names')
+    expect(configureServiceReplicas(source, 'api', 1)).toBe(source)
+    expect(configurationIssues(source.replace('image: nginx', 'image: nginx, scale: 2')).map(issue => issue.code)).toContain('replica_name')
   })
 })
 

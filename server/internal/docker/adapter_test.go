@@ -361,6 +361,7 @@ func TestAdapterListContainers(t *testing.T) {
 			ID:      fullID,
 			Names:   []string{"/web"},
 			Image:   "nginx:1.27",
+			ImageID: "sha256:" + fullID,
 			Command: "nginx -g 'daemon off;'",
 			Created: created,
 			State:   "running",
@@ -409,7 +410,7 @@ func TestAdapterListContainers(t *testing.T) {
 		t.Fatalf("expected 2 summaries, got %d", len(list))
 	}
 	first, second := list[0], list[1]
-	if first.ID != fullID || first.Name != "web" || first.Image != "nginx:1.27" || first.Command != "nginx -g 'daemon off;'" ||
+	if first.ID != fullID || first.Name != "web" || first.Image != "nginx:1.27" || first.ImageID != "sha256:"+fullID || first.Command != "nginx -g 'daemon off;'" ||
 		first.State != "running" || first.Status != "Up 2 hours" || !reflect.DeepEqual(first.Labels, map[string]string{"app": "web"}) {
 		t.Fatalf("unexpected first summary: %#v", first)
 	}

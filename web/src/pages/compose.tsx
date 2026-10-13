@@ -1,35 +1,39 @@
+import { useContainerWorkspace } from '../features/containers/use-container-workspace'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { CheckCircle2, ChevronRight, CircleAlert, Download, Eye, FileText, FolderOpen, Pencil, Play, Plus, PowerOff, RefreshCw, Square, SquareTerminal, Trash2 } from 'lucide-react'
-import { type ReactElement, type ReactNode, useState } from 'react'
+import { CheckCircle2, ChevronDown, ChevronRight, CircleAlert, Download, Eye, MoreHorizontal, Pencil, Play, Plus, PowerOff, RefreshCw, Search, Square, Trash2, X } from 'lucide-react'
+import { Fragment, type ReactElement, type ReactNode, useRef, useState } from 'react'
 import { Alert, AlertDescription } from '../components/ui/alert'
-import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Checkbox } from '../components/ui/checkbox'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../components/ui/dropdown-menu'
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '../components/ui/input-group'
 import { ErrorState } from '../components/ui/error-state'
-import { ListShell } from '../components/ui/list-shell'
 import { ListPagination } from '../components/ui/list-pagination'
 import { useListPagination } from '../components/ui/use-list-pagination'
 import { LoadingState } from '../components/ui/loading-state'
 import { Spinner } from '../components/ui/spinner'
 import { StatusBadge } from '../components/ui/status-badge'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { TooltipHint } from '../components/ui/tooltip-hint'
+import { ProjectServices, ProjectResourceSummary } from '../components/docker/project-services'
+import { ContainerWorkspaceDialog } from '../components/docker/container-workspace-dialog'
 import { confirmExternalProjectCleanup } from '../features/compose/external-project-cleanup'
 import { confirmManagedProjectRemoval } from '../features/compose/managed-project-removal'
 import { TakeoverWarningDialog } from '../features/compose/takeover-warning-dialog'
-import type { ProjectSummary } from '../features/compose/types'
+import type { ProjectCapability, ProjectSummary } from '../features/compose/types'
+import { aggregate, defaultProjectView, groupServices, projectStatus, selectProjects, type ProjectView } from '../features/compose/observation'
+import { useProjectObservation } from '../features/compose/use-project-observation'
 import type { ContainerSummary } from '../features/containers/types'
+import { useFreshness } from '../features/containers/use-freshness'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
 import { nodePath } from '../lib/nodes'
 import { confirmDialog } from '../stores/dialog'
 import { useUIStore } from '../stores/ui'
+import { useProjectViewStore } from '../stores/project-view'
 import { ResourceFrame } from './images'
 
-
-const projectTone = (status: string) => status === 'running' ? 'success' : status === 'degraded' ? 'warning' : 'neutral'
-const containerTone = (state: string) => state === 'running' ? 'success' : state === 'paused' || state === 'restarting' ? 'warning' : 'neutral'
+const statusLabel = (status: string, zh: boolean) => ({ running: zh ? '运行中' : 'Running', degraded: zh ? '部分运行' : 'Partially running', stopped: zh ? '已停止' : 'Stopped', paused: zh ? '已暂停' : 'Paused', not_created: zh ? '未创建' : 'Not created' }[status] ?? status)
 interface ProjectTask { id: string; status: string; message: string }
 type ProjectFeedback =
   | { kind: 'pending'; projectName: string; action: string }
@@ -38,68 +42,106 @@ type ProjectFeedback =
   | { kind: 'error'; projectName: string; action: string; message: string }
 
 export function ComposePage() {
-  const nodeID = useUIStore((state) => state.currentNodeID)
-  const client = useQueryClient()
-  const navigate = useNavigate()
+  const nodeID = useUIStore(state => state.currentNodeID)
+  return <ComposeNodePage key={nodeID} nodeID={nodeID} />
+}
+function ComposeNodePage({ nodeID }: { nodeID: string }) {
+  const client = useQueryClient(), navigate = useNavigate()
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [takeoverName, setTakeoverName] = useState('')
   const [feedback, setFeedback] = useState<ProjectFeedback | null>(null)
-  const { t, language } = useI18n()
-  const zh = language === 'zh-CN'
-  const query = useQuery({ queryKey: ['projects', nodeID], queryFn: () => api<ProjectSummary[]>(nodePath(nodeID, '/projects')), refetchInterval: 5_000 })
-  const trackedTasks = useQuery({
-    queryKey: ['tasks', 'current', nodeID],
-    queryFn: () => api<ProjectTask[]>(nodePath(nodeID, '/tasks')),
-    enabled: feedback?.kind === 'task',
-    refetchInterval: (current) => {
-      if (feedback?.kind !== 'task') return false
-      const task = current.state.data?.find((row) => row.id === feedback.taskID)
-      return !task || task.status === 'pending' || task.status === 'running' ? 1_000 : false
-    },
-  })
-  const batch = useMutation({
-    mutationFn: ({ names, action }: { names: string[]; action: string }) => api(nodePath(nodeID, '/projects/batch'), { method: 'POST', body: JSON.stringify({ backend: 'compose', names, action }) }),
-    onSuccess: async () => { setSelected(new Set()); await Promise.all([client.invalidateQueries({ queryKey: ['projects', nodeID] }), client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] })]) },
-  })
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [serviceOverlay, setServiceOverlay] = useState(false)
+  const { t, language } = useI18n(), zh = language === 'zh-CN'
+  const workspace = useContainerWorkspace(nodeID, zh)
+  const view = useProjectViewStore(state => state.views[nodeID]) ?? defaultProjectView
+  const updateView = useProjectViewStore(state => state.update)
+  const order = useRef<string[]>([])
+  const update = (patch: Partial<ProjectView>) => { updateView(nodeID, patch); setSelected(new Set()); order.current = [] }
+  const query = useQuery({ queryKey: ['projects', nodeID], queryFn: ({ signal }) => api<ProjectSummary[]>(nodePath(nodeID, '/projects'), { signal }), refetchInterval: 5_000 })
+  const containers = useQuery({ queryKey: ['containers', nodeID], queryFn: ({ signal }) => api<ContainerSummary[]>(nodePath(nodeID, '/containers'), { signal }), refetchInterval: 10_000, retry: false })
+  const fresh = useFreshness(containers.dataUpdatedAt)
+  const available = !!containers.data && !containers.isError && fresh
+  const observedRows = available ? containers.data! : []
+  const observation = useProjectObservation(nodeID, observedRows)
   const rows = query.data ?? []
-  const pagination = useListPagination(rows)
-  const manageable = rows.filter((row) => row.managed)
-  const pageManageable = pagination.items.filter((row) => row.managed)
-  const selectedRows = manageable.filter((row) => selected.has(row.name))
-  const allSelected = pageManageable.length > 0 && pageManageable.every((row) => selected.has(row.name))
-  const someSelected = !allSelected && pageManageable.some((row) => selected.has(row.name))
-  const add = () => navigate({ to: '/projects/new' })
+  const byProject = new Map<string, ContainerSummary[]>()
+  for (const container of observedRows) {
+    const name = container.labels['com.docker.compose.project']
+    if (name) byProject.set(name, [...(byProject.get(name) ?? []), container])
+  }
+  const entries = rows.map(project => { const instances = byProject.get(project.name) ?? []; return { project, containers: instances, summary: aggregate(instances, observation), available } })
+  const sorted = selectProjects(entries, view)
+  if (!(selected.size || menuOpen || serviceOverlay || workspace.active || takeoverName) || !order.current.length) order.current = sorted.map(entry => entry.project.name)
+  const ranks = new Map(order.current.map((name, index) => [name, index]))
+  const visible = [...sorted].sort((a, b) => (ranks.get(a.project.name) ?? Infinity) - (ranks.get(b.project.name) ?? Infinity))
+  const pagination = useListPagination(visible, `${nodeID}:${JSON.stringify(view)}`)
+  const selectedRows = rows.filter(row => row.managed && selected.has(row.name))
+  const pageManageable = pagination.items.filter(entry => entry.project.managed)
+  const allSelected = pageManageable.length > 0 && pageManageable.every(entry => selected.has(entry.project.name))
+  const someSelected = !allSelected && pageManageable.some(entry => selected.has(entry.project.name))
+  const trackedTasks = useQuery({ queryKey: ['tasks', 'current', nodeID], queryFn: () => api<ProjectTask[]>(nodePath(nodeID, '/tasks')), enabled: feedback?.kind === 'task', refetchInterval: current => {
+    if (feedback?.kind !== 'task') return false
+    const task = current.state.data?.find(row => row.id === feedback.taskID)
+    return !task || task.status === 'pending' || task.status === 'running' ? 1000 : false
+  } })
+  const batch = useMutation({ mutationFn: ({ names, action }: { names: string[]; action: string }) => api(nodePath(nodeID, '/projects/batch'), { method: 'POST', body: JSON.stringify({ backend: 'compose', names, action }) }), onSuccess: async () => { setSelected(new Set()); await Promise.all(['projects', 'containers', 'container-runtime', 'container-metrics', 'tasks'].map(key => client.invalidateQueries({ queryKey: [key, nodeID] }))) } })
   const runBatch = async (action: string) => {
     if (!selectedRows.length) return
-    if (action === 'down' && !await confirmDialog({ title: zh ? `Down ${selectedRows.length} 个项目？` : `Down ${selectedRows.length} projects?`, description: zh ? '这会移除项目容器和网络，但保留托管文件和命名卷。' : 'This removes project containers and networks while preserving managed files and named volumes.', confirmLabel: 'Down', danger: true })) return
-    batch.mutate({ names: selectedRows.map((row) => row.name), action })
+    if (action === 'down' && !await confirmDialog({ title: zh ? `Down ${selectedRows.length} 个项目？` : `Down ${selectedRows.length} projects?`, description: zh ? '移除项目容器和网络，保留托管文件和命名卷。' : 'Remove project containers and networks; retain managed files and named volumes.', confirmLabel: 'Down', danger: true })) return
+    batch.mutate({ names: selectedRows.map(row => row.name), action })
   }
-  const toggleAll = (checked: boolean) => setSelected((current) => { const next = new Set(current); for (const row of pageManageable) { if (checked) next.add(row.name); else next.delete(row.name) }; return next })
-  const toggleRow = (name: string, checked: boolean) => setSelected((current) => { const next = new Set(current); if (checked) next.add(name); else next.delete(name); return next })
-  const toggleExpanded = (name: string) => setExpanded((current) => { const next = new Set(current); if (next.has(name)) next.delete(name); else next.add(name); return next })
-  const running = rows.filter((row) => row.status === 'running').length
-  const trackedTask = feedback?.kind === 'task' ? trackedTasks.data?.find((row) => row.id === feedback.taskID) : undefined
+  const toggleRow = (name: string, checked: boolean) => setSelected(old => { const next = new Set(old); if (checked) next.add(name); else next.delete(name); return next })
+  const toggleExpanded = (name: string) => setExpanded(old => { const next = new Set(old); if (next.has(name)) next.delete(name); else next.add(name); return next })
+  const toggleAll = (checked: boolean) => setSelected(old => { const next = new Set(old); for (const entry of pageManageable) { if (checked) next.add(entry.project.name); else next.delete(entry.project.name) } return next })
+  const trackedTask = feedback?.kind === 'task' ? trackedTasks.data?.find(row => row.id === feedback.taskID) : undefined
   const feedbackView = projectFeedbackView(feedback, trackedTask, zh)
-  const toolbar = <div className="flex flex-wrap items-center gap-2"><StatusBadge tone="success">{running} {zh ? '运行中' : 'running'}</StatusBadge><StatusBadge tone="neutral">{rows.length - running} {zh ? '其他' : 'other'}</StatusBadge><Button onClick={() => void add()} ><Plus />{t('newProject')}</Button></div>
-
-  return <ResourceFrame title={zh ? '项目' : 'Projects'} detail={zh ? `${rows.length} 个 Project` : `${rows.length} Projects`} action={toolbar}>
-    <div className="flex w-full flex-col gap-4">
-      {!!selected.size && <div className="flex flex-wrap items-center gap-2"><span className="text-sm font-medium">{selected.size} {zh ? '已选' : 'selected'}</span>{[['up', Play], ['stop', Square], ['restart', RefreshCw], ['update', Download], ['down', PowerOff]].map(([name, Icon]) => <Button key={String(name)} variant={name === 'down' ? 'destructive' : 'outline'} size="sm" disabled={batch.isPending} onClick={() => void runBatch(String(name))}><Icon />{actionLabel(String(name), zh)}</Button>)}</div>}
+  const menu = (key: 'status' | 'source', label: string, options: [string, string][]) => <DropdownMenu><DropdownMenuTrigger render={<Button size="sm" variant={view[key] ? 'secondary' : 'ghost'}>{options.find(([value]) => value === view[key])?.[1] || label}<ChevronDown /></Button>} /><DropdownMenuContent>{options.map(([value, text]) => <DropdownMenuItem key={value} onClick={() => update({ [key]: value })}>{text}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
+  const toolbar = <div className="flex flex-wrap items-center gap-2">
+    {menu('status', zh ? '状态' : 'Status', [['', zh ? '全部状态' : 'All states'], ...['running', 'degraded', 'paused', 'stopped', 'not_created'].map(value => [value, statusLabel(value, zh)] as [string, string])])}
+    {menu('source', zh ? '来源' : 'Source', [['', zh ? '全部来源' : 'All sources'], ['managed', zh ? '托管' : 'Managed'], ['external', zh ? '外部' : 'External']])}
+    <Button size="sm" variant={view.abnormal ? 'secondary' : 'ghost'} aria-pressed={view.abnormal} onClick={() => update({ abnormal: !view.abnormal })}>{zh ? '异常' : 'Abnormal'} · {entries.filter(entry => entry.summary.abnormal > 0).length}</Button>
+    <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="sm">{zh ? '排序' : 'Sort'}<ChevronDown /></Button>} /><DropdownMenuContent>{([['abnormal', zh ? '异常优先' : 'Abnormal first'], ['name', zh ? '名称' : 'Name'], ['cpu', 'CPU'], ['memory', zh ? '内存' : 'Memory']] as const).map(([value, label]) => <DropdownMenuItem key={value} onClick={() => update({ sort: value, descending: value === view.sort ? !view.descending : value === 'cpu' || value === 'memory' })}>{label}{view.sort === value ? view.descending ? ' ↓' : ' ↑' : ''}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
+    {(view.search || view.status || view.source || view.abnormal) && <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => update({ ...defaultProjectView, sort: view.sort, descending: view.descending })}>{zh ? '清除筛选' : 'Clear filters'}<X data-icon="inline-end" aria-hidden="true" /></Button>}
+    <InputGroup className="ml-auto w-[260px]">
+      <InputGroupAddon align="inline-start"><Search /></InputGroupAddon>
+      <InputGroupInput value={view.search} onChange={event => update({ search: event.target.value })} aria-label={zh ? '搜索项目、服务或镜像' : 'Search projects, services or images'} placeholder={zh ? '项目、服务、镜像…' : 'Name, service, image…'} />
+      {!!view.search && <InputGroupAddon align="inline-end"><InputGroupButton size="icon-xs" aria-label={zh ? '清空筛选' : 'Clear filter'} onClick={() => update({ search: '' })}><X /></InputGroupButton></InputGroupAddon>}
+    </InputGroup>
+  </div>
+  const grid = 'grid grid-cols-[3.5rem_minmax(0,1fr)_minmax(5.5rem,auto)] items-center gap-x-3 gap-y-2 lg:grid-cols-[3.5rem_minmax(0,2fr)_minmax(8rem,1fr)_minmax(7rem,0.9fr)_7rem]'
+  return <ResourceFrame compact title={zh ? '项目' : 'Projects'} detail={zh ? `${visible.length} / ${rows.length} 个项目` : `${visible.length} / ${rows.length} projects`} action={toolbar}>
+    <div className="flex w-full min-w-0 flex-col gap-3">
+      <Button className="self-end" onClick={() => void navigate({ to: '/projects/new' })}><Plus />{t('newProject')}</Button>
+      {!!selectedRows.length && <div className="flex flex-wrap items-center gap-2"><span className="text-sm">{selectedRows.length} {zh ? '已选' : 'selected'}</span>{[['up', Play], ['stop', Square], ['restart', RefreshCw], ['down', PowerOff]].map(([name, Icon]) => <Button key={String(name)} variant={name === 'down' ? 'destructive' : 'outline'} size="sm" disabled={batch.isPending} onClick={() => void runBatch(String(name))}><Icon />{actionLabel(String(name), zh)}</Button>)}</div>}
       {feedbackView && <Alert variant={feedbackView.error ? 'destructive' : 'default'}>{feedbackView.error ? <CircleAlert /> : feedbackView.pending ? <Spinner /> : <CheckCircle2 />}<AlertDescription>{feedbackView.message}{feedback?.kind === 'task' && <> <Link to="/tasks">{zh ? '查看任务' : 'View task'}</Link></>}</AlertDescription></Alert>}
       {batch.isError && <ErrorState description={batch.error.message} />}
-      {query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载项目' : 'Loading Projects'} /> : query.isError ? <ErrorState description={query.error.message} /> : rows.length === 0 ? <div className="rounded-xl bg-surface px-4 py-10 text-center"><p className="text-sm font-medium">{zh ? '未发现 Project' : 'No Projects discovered'}</p><p className="text-sm text-muted-foreground">{zh ? 'Compose Project 会根据 Docker 标签自动聚合显示。' : 'Compose Projects are aggregated automatically from Docker labels.'}</p></div> : <><ListShell><Table>
-        <TableHeader><TableRow><TableHead className="w-9 pr-0"><Checkbox checked={allSelected} indeterminate={someSelected} onCheckedChange={(value) => toggleAll(value === true)} aria-label={allSelected ? (zh ? '取消选择本页' : 'Deselect this page') : (zh ? '选择本页托管项目' : 'Select managed Projects on this page')} /></TableHead><TableHead className="w-9" /><TableHead>{zh ? '项目' : 'Project'}</TableHead><TableHead className="w-24">Backend</TableHead><TableHead className="w-28">{zh ? '状态' : 'Status'}</TableHead><TableHead className="w-40">{zh ? '运行资源' : 'Runtime'}</TableHead><TableHead className="w-56">{zh ? '操作' : 'Actions'}</TableHead></TableRow></TableHeader>
-        <TableBody>{pagination.items.flatMap((row) => {
-          const open = expanded.has(row.name)
-          return [<TableRow key={row.name}><TableCell className="pr-0"><Checkbox disabled={!row.managed} checked={selected.has(row.name)} onCheckedChange={(value) => toggleRow(row.name, value === true)} aria-label={row.managed ? row.name : (zh ? '外部项目不可批量操作' : 'External Project cannot be batch operated')} /></TableCell><TableCell><Button variant="ghost" size="icon-xs" onClick={() => toggleExpanded(row.name)} aria-label={zh ? '展开服务' : 'Expand services'}><ChevronRight className={open ? 'rotate-90 transition-transform' : 'transition-transform'} /></Button></TableCell><TableCell><div className="flex flex-col gap-1"><div className="flex items-center gap-2"><Link to="/projects/$backend/$projectName" params={{ backend: row.backend, projectName: row.name }} className="font-medium hover:underline">{row.name}</Link><StatusBadge tone={row.managed ? 'outline' : 'neutral'}>{row.managed ? (zh ? '托管' : 'Managed') : (zh ? '外部' : 'External')}</StatusBadge></div><span className="max-w-72 truncate text-xs text-muted-foreground">{row.source === 'managed' ? (zh ? 'SUMA 托管配置' : 'SUMA managed configuration') : (zh ? 'Docker 运行态发现' : 'Discovered from Docker runtime')} · {row.scope.id}</span></div></TableCell><TableCell><Badge variant="outline">{row.backend === 'compose' ? 'Compose' : 'Swarm'}</Badge></TableCell><TableCell><StatusBadge tone={projectTone(row.status)}>{row.status}</StatusBadge></TableCell><TableCell>{row.service_count} {zh ? '服务' : 'services'} · <span className="text-muted-foreground">{row.instance_count} {zh ? '实例' : 'instances'}</span></TableCell><TableCell><ProjectActions row={row} zh={zh} onTakeover={() => setTakeoverName(row.name)} onFeedback={setFeedback} /></TableCell></TableRow>, ...(open ? [<TableRow key={`${row.name}-services`}><TableCell colSpan={7} className="bg-muted/30 p-4"><ProjectServices project={row} zh={zh} /></TableCell></TableRow>] : [])]
-        })}</TableBody>
-      </Table></ListShell><ListPagination {...pagination} zh={zh} /></>}
+      {(containers.isError || !fresh) && <p role="alert" className="text-xs text-muted-foreground">{zh ? '容器运行信息暂不可用。' : 'Container runtime information unavailable.'}<Button variant="ghost" size="sm" onClick={() => void containers.refetch()}>{zh ? '重试' : 'Retry'}</Button></p>}
+      {query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载项目' : 'Loading projects'} /> : query.isError ? <ErrorState description={query.error.message} /> : <>
+        <div className={`${grid} rounded-md bg-surface px-3 py-2 text-xs text-muted-foreground`}><Checkbox checked={allSelected} indeterminate={someSelected} onCheckedChange={value => toggleAll(value === true)} aria-label={zh ? '选择本页托管项目' : 'Select managed projects on this page'} /><span>{zh ? '项目' : 'Project'}</span><span className="hidden lg:block">{zh ? '运行' : 'Runtime'}</span><span className="hidden lg:block">{zh ? '资源' : 'Resources'}</span><span className="text-right">{zh ? '操作' : 'Actions'}</span></div>
+        {!visible.length && <p className="rounded-lg bg-surface p-8 text-center text-sm text-muted-foreground">{rows.length ? zh ? '没有符合条件的项目。' : 'No matching projects.' : zh ? '未发现项目。' : 'No projects discovered.'}</p>}
+        <div className="space-y-2">{pagination.items.map(entry => {
+          const row = entry.project, status = projectStatus(entry), open = expanded.has(row.name)
+          const serviceCount = available ? groupServices(entry.containers, row.declared_service_names ?? []).length : row.service_count
+          return <Fragment key={row.name}><div className={`${grid} cursor-pointer rounded-lg px-3 py-3 hover:bg-muted/25`} data-testid="project-row" data-project={row.name} onClick={event => { if (event.currentTarget.contains(event.target as Node) && !(event.target as Element).closest('a, button, input, [data-slot="checkbox"]')) toggleExpanded(row.name) }}>
+            <div className="flex items-center gap-3">
+              <Checkbox disabled={!row.managed} checked={selected.has(row.name)} onCheckedChange={value => toggleRow(row.name, value === true)} aria-label={row.name} />
+              <Button variant="ghost" size="icon-xs" aria-expanded={open} aria-label={`${zh ? '展开服务' : 'Expand services'} · ${row.name}`} onClick={() => toggleExpanded(row.name)}><ChevronRight className={`transition-transform ${open ? 'rotate-90' : ''}`} /></Button>
+            </div>
+            <div className="min-w-0"><div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1"><Link to="/projects/$backend/$projectName" params={{ backend: row.backend, projectName: row.name }} className="max-w-full truncate text-sm font-medium hover:underline">{row.name}</Link><StatusBadge tone={row.managed ? 'outline' : 'neutral'}>{row.managed ? zh ? '托管' : 'Managed' : zh ? '外部' : 'External'}</StatusBadge></div><p className="mt-1 text-xs text-muted-foreground">{serviceCount} {zh ? '服务' : 'services'}{row.managed && !row.declared_service_names && ` · ${zh ? '声明不可用' : 'Declarations unavailable'}`}</p></div>
+            <div className="col-start-2 flex flex-col items-start gap-1 lg:col-start-auto lg:row-start-auto"><StatusBadge tone={status === 'running' ? 'success' : status === 'degraded' ? 'warning' : 'neutral'}>{statusLabel(status, zh)}</StatusBadge><span className="text-xs text-muted-foreground">{available ? `${entry.summary.running}/${entry.summary.total}` : '—'} {zh ? '容器运行中' : 'containers running'}{entry.summary.abnormal > 0 && <span className="ml-2 text-destructive">{entry.summary.abnormal} {zh ? '异常' : 'abnormal'}</span>}{available && entry.summary.unknown > 0 && <span className="ml-2">{entry.summary.unknown} {zh ? '健康未知' : 'health unknown'}</span>}</span></div>
+            <div className="col-start-3 row-start-2 lg:col-start-auto lg:row-start-auto"><ProjectResourceSummary summary={entry.summary} zh={zh} /></div>
+            <div className="col-start-3 row-start-1 lg:col-start-auto lg:row-start-auto"><ProjectActions row={{ ...row, status }} zh={zh} onTakeover={() => setTakeoverName(row.name)} onFeedback={setFeedback} onMenuChange={setMenuOpen} /></div>
+          </div>{open && <div className="p-3 lg:ml-[4.25rem]"><ProjectServices key={`${nodeID}/${row.name}`} nodeID={nodeID} projectName={row.name} rows={entry.containers} declared={row.declared_service_names ?? []} declarationUnavailable={row.managed && !row.declared_service_names} loading={containers.isPending} error={!available && !containers.isPending ? zh ? '运行信息暂不可用' : 'Runtime information unavailable' : undefined} observation={observation} showUpdates={false} onOverlayChange={setServiceOverlay} zh={zh} onOpenContainer={(row, tab, opener) => void workspace.open(row, tab, opener)} /></div>}</Fragment>
+        })}</div>
+        {visible.length > pagination.pageSize && <ListPagination {...pagination} zh={zh} />}
+      </>}
     </div>
-    <TakeoverWarningDialog open={!!takeoverName} projectName={takeoverName} zh={zh} onOpenChange={(open) => { if (!open) setTakeoverName('') }} onContinue={() => { const name = takeoverName; setTakeoverName(''); void navigate({ to: '/projects/$backend/$projectName/takeover', params: { backend: 'compose', projectName: name } }) }} />
+    <ContainerWorkspaceDialog workspace={workspace} rows={observedRows} available={available} zh={zh} />
+    <TakeoverWarningDialog open={!!takeoverName} projectName={takeoverName} zh={zh} onOpenChange={open => { if (!open) setTakeoverName('') }} onContinue={() => { const name = takeoverName; setTakeoverName(''); void navigate({ to: '/projects/$backend/$projectName/takeover', params: { backend: 'compose', projectName: name } }) }} />
   </ResourceFrame>
 }
-
 function actionLabel(action: string, zh: boolean) {
   const values: Record<string, [string, string]> = { up: ['启动', 'Start'], start: ['启动现有容器', 'Start existing containers'], stop: ['停止', 'Stop'], restart: ['重启', 'Restart'], update: ['更新', 'Update'], down: ['Down', 'Down'], remove: ['删除', 'Remove'], cleanup: ['删除清理', 'Delete and clean'] }
   return values[action]?.[zh ? 0 : 1] ?? action
@@ -117,7 +159,7 @@ function projectFeedbackView(feedback: ProjectFeedback | null, task: ProjectTask
   return { error: true, pending: false, message: zh ? `${feedback.projectName} ${operation}失败：${task.message || task.status}` : `${operation} failed for ${feedback.projectName}: ${task.message || task.status}` }
 }
 
-function ProjectActions({ row, zh, onTakeover, onFeedback }: { row: ProjectSummary; zh: boolean; onTakeover: () => void; onFeedback: (feedback: ProjectFeedback) => void }) {
+function ProjectActions({ row, zh, onTakeover, onFeedback, onMenuChange }: { row: ProjectSummary; zh: boolean; onTakeover: () => void; onFeedback: (feedback: ProjectFeedback) => void; onMenuChange: (open: boolean) => void }) {
   const nodeID = useUIStore((state) => state.currentNodeID)
   const client = useQueryClient()
   const action = useMutation({ mutationFn: (name: string) => api<ProjectTask>(nodePath(nodeID, `/projects/compose/${encodeURIComponent(row.name)}/actions/${name}`), { method: 'POST' }), onMutate: (name) => onFeedback({ kind: 'pending', projectName: row.name, action: name }), onSuccess: (task, name) => { onFeedback({ kind: 'task', projectName: row.name, action: name, taskID: task.id }); void client.invalidateQueries({ queryKey: ['projects', nodeID] }); void client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] }) }, onError: (error, name) => onFeedback({ kind: 'error', projectName: row.name, action: name, message: error.message }) })
@@ -152,23 +194,18 @@ function ProjectActions({ row, zh, onTakeover, onFeedback }: { row: ProjectSumma
     const result = await confirmExternalProjectCleanup(row.name, zh)
     if (result) cleanup.mutate(result.checked)
   }
-  if (!row.managed) return <div className="flex items-center" aria-busy={cleanup.isPending}><ActionIcon label={zh ? '查看项目' : 'View Project'}><Link to="/projects/$backend/$projectName" params={{ backend: row.backend, projectName: row.name }}><Eye /></Link></ActionIcon><ActionIcon label={zh ? '接管项目' : 'Take over Project'} disabled={cleanup.isPending} onClick={onTakeover}><Download /></ActionIcon>{row.capabilities.includes('cleanup') && <ActionIcon label={zh ? '删除并清理项目' : 'Delete and clean Project'} destructive disabled={cleanup.isPending} onClick={() => void cleanupProject()}>{cleanup.isPending ? <Spinner /> : <Trash2 />}</ActionIcon>}</div>
-  const supported = (capability: string) => row.capabilities.includes(capability as never)
-  const primaryAction = row.status === 'running' || row.status === 'degraded' ? 'down' : 'up'
-  const PrimaryIcon = primaryAction === 'down' ? PowerOff : Play
-  return <div className="flex items-center" aria-busy={action.isPending || remove.isPending}><ActionIcon label={zh ? '编辑项目' : 'Edit Project'}><Link to="/projects/$backend/$projectName" params={{ backend: row.backend, projectName: row.name }}><Pencil /></Link></ActionIcon>{supported('deploy') && <ActionIcon label={actionLabel(primaryAction, zh)} destructive={primaryAction === 'down'} onClick={() => void run(primaryAction)}>{action.isPending && action.variables === primaryAction ? <Spinner /> : <PrimaryIcon />}</ActionIcon>}{[['stop', Square], ['restart', RefreshCw], ['update', Download]].map(([name, Icon]) => supported(String(name)) && <ActionIcon key={String(name)} label={actionLabel(String(name), zh)} onClick={() => void run(String(name))}>{action.isPending && action.variables === name ? <Spinner /> : <Icon />}</ActionIcon>)}{supported('delete') && <ActionIcon label={zh ? '删除项目' : 'Remove Project'} destructive onClick={() => void removeProject()}>{remove.isPending ? <Spinner /> : <Trash2 />}</ActionIcon>}</div>
+  const busy = action.isPending || remove.isPending || cleanup.isPending
+  const primaryAction = row.status === 'running' || row.status === 'degraded' ? 'stop' : 'up'
+  const supported = (capability: ProjectCapability) => row.capabilities.includes(capability)
+  return <div className="flex items-center justify-end" aria-busy={busy}>
+    <ActionIcon label={row.managed ? (zh ? '编辑项目' : 'Edit Project') : (zh ? '查看项目' : 'View Project')}><Link to="/projects/$backend/$projectName" params={{ backend: row.backend, projectName: row.name }}>{row.managed ? <Pencil /> : <Eye />}</Link></ActionIcon>
+    {row.managed && supported(primaryAction === 'stop' ? 'stop' : 'deploy') && <ActionIcon label={actionLabel(primaryAction, zh)} disabled={busy} onClick={() => void run(primaryAction)}>{action.isPending ? <Spinner /> : primaryAction === 'stop' ? <Square /> : <Play />}</ActionIcon>}
+    <DropdownMenu onOpenChange={onMenuChange}><DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" disabled={busy} aria-label={zh ? '更多项目操作' : 'More project actions'}><MoreHorizontal /></Button>} /><DropdownMenuContent align="end">
+      {row.managed ? <>{supported('restart') && <DropdownMenuItem onClick={() => void run('restart')}><RefreshCw />{actionLabel('restart', zh)}</DropdownMenuItem>}{supported('deploy') && <DropdownMenuItem variant="destructive" onClick={() => void run('down')}><PowerOff />Down</DropdownMenuItem>}{supported('delete') && <DropdownMenuItem variant="destructive" onClick={() => void removeProject()}><Trash2 />{zh ? '删除项目' : 'Remove Project'}</DropdownMenuItem>}</> : <>{supported('takeover') && <DropdownMenuItem onClick={onTakeover}><Download />{zh ? '接管项目' : 'Take over Project'}</DropdownMenuItem>}{supported('cleanup') && <DropdownMenuItem variant="destructive" onClick={() => void cleanupProject()}><Trash2 />{zh ? '删除并清理项目' : 'Delete and clean Project'}</DropdownMenuItem>}</>}
+    </DropdownMenuContent></DropdownMenu>
+  </div>
 }
 
 function ActionIcon({ label, destructive, disabled, onClick, children }: { label: string; destructive?: boolean; disabled?: boolean; onClick?: () => void; children: ReactNode }) {
-  return <TooltipHint content={label}><Button variant="ghost" size="icon-sm" className={destructive ? 'text-destructive' : undefined} disabled={disabled} onClick={onClick} aria-label={label} render={!onClick && typeof children === 'object' ? children as ReactElement : undefined}>{onClick ? children : null}</Button></TooltipHint>
-}
-
-function ProjectServices({ project, zh }: { project: ProjectSummary; zh: boolean }) {
-  const navigate = useNavigate()
-  const nodeID = useUIStore((state) => state.currentNodeID)
-  const query = useQuery({ queryKey: ['project-services', nodeID, project.name], queryFn: () => api<ContainerSummary[]>(nodePath(nodeID, `/projects/compose/${encodeURIComponent(project.name)}/services`)), refetchInterval: 5_000 })
-  const pagination = useListPagination(query.data ?? [])
-  if (query.isPending) return <LoadingState embedded compact rows={2} label={zh ? '正在加载实例' : 'Loading instances'} />
-  if (query.isError) return <ErrorState description={query.error.message} />
-  return <><Table><TableHeader><TableRow><TableHead>{zh ? '服务' : 'Service'}</TableHead><TableHead>{zh ? '容器实例' : 'Container instance'}</TableHead><TableHead>{zh ? '镜像' : 'Image'}</TableHead><TableHead>{zh ? '状态' : 'State'}</TableHead><TableHead className="w-32">{zh ? '操作' : 'Actions'}</TableHead></TableRow></TableHeader><TableBody>{pagination.items.map((row) => <TableRow key={row.id}><TableCell>{row.labels['com.docker.compose.service'] || row.name}</TableCell><TableCell className="text-muted-foreground">{row.name}</TableCell><TableCell className="max-w-72 truncate">{row.image}</TableCell><TableCell><StatusBadge tone={containerTone(row.state)}>{row.state}</StatusBadge></TableCell><TableCell><div className="flex"><ActionIcon label={zh ? '日志' : 'Logs'} onClick={() => void navigate({ to: '/containers/$containerId', params: { containerId: row.id }, hash: 'logs' })}><FileText /></ActionIcon><ActionIcon label={zh ? '文件' : 'Files'} disabled={row.state !== 'running'} onClick={() => void navigate({ to: '/containers/$containerId', params: { containerId: row.id }, hash: 'files' })}><FolderOpen /></ActionIcon><ActionIcon label={zh ? '终端' : 'Terminal'} disabled={row.state !== 'running'} onClick={() => void navigate({ to: '/containers/$containerId', params: { containerId: row.id }, hash: 'terminal' })}><SquareTerminal /></ActionIcon></div></TableCell></TableRow>)}</TableBody></Table><ListPagination {...pagination} zh={zh} /></>
+  return <TooltipHint content={label}><Button variant="ghost" size="icon-sm" className={destructive ? 'text-destructive' : undefined} disabled={disabled} onClick={onClick} aria-label={label} nativeButton={!!onClick} render={!onClick && typeof children === 'object' ? children as ReactElement : undefined}>{onClick ? children : null}</Button></TooltipHint>
 }

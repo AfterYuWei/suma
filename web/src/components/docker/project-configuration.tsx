@@ -45,6 +45,7 @@ import {
 import { Spinner } from '../ui/spinner'
 import { confirmDialog, promptDialog } from '../../stores/dialog'
 import { useUIStore } from '../../stores/ui'
+import { useI18n } from '../../lib/i18n'
 import { AddNetworkDialog, MountForm } from './project-resource-dialogs'
 import { PortMappings } from './project-port-mappings'
 import {
@@ -54,6 +55,7 @@ import {
   normalizeImage,
   composeProblems,
   configurationIssues,
+  configureServiceReplicas,
   configKeys,
   configValue,
   editConfig,
@@ -68,6 +70,7 @@ import {
   sensitiveKey,
   setEnv,
   sourceLine,
+  serviceReplicas,
   variableReferences,
   type ConfigPath
 } from '../../features/compose/document'
@@ -83,11 +86,27 @@ const serviceLabel = (name: string, zh: boolean) => {
   return number === undefined ? name : zh ? `未命名${number}` : `Unnamed ${number}`
 }
 
-function FieldCaption({ zh, chinese, english, field }: { zh: boolean; chinese: string; english: string; field: string }) {
-  return <span className="inline-flex flex-wrap items-baseline gap-x-1.5">{zh ? chinese : english}{' '}<span className="text-xs font-normal text-muted-foreground">{field}</span></span>
+const fieldNames: Record<string, [string, string]> = {
+  image: ['镜像', 'Image'],
+  container_name: ['容器名称', 'Container name'],
+  working_dir: ['工作目录', 'Working directory'],
+  user: ['运行用户', 'User'],
+  command: ['启动命令', 'Command'],
+  entrypoint: ['入口命令', 'Entrypoint'],
+  expose: ['服务内部端口', 'Internal service ports'],
+  tmpfs: ['临时挂载', 'Temporary mounts'],
+  scale: ['副本数量', 'Replica count'],
+  build: ['镜像构建', 'Image build'],
+  deploy: ['部署配置', 'Deployment configuration'],
+  network_mode: ['网络模式', 'Network mode']
+}
+const fieldName = (field: string, zh: boolean) => fieldNames[field]?.[zh ? 0 : 1] ?? field
+
+function FieldCaption({ zh, chinese, english }: { zh: boolean; chinese: string; english: string }) {
+  return zh ? chinese : english
 }
 function TabCaption({ zh, chinese, english }: { zh: boolean; chinese: string; english: string }) {
-  return zh ? <span className="flex flex-col items-start gap-0.5 leading-tight"><span>{chinese}</span><span className="text-[10px] font-normal text-muted-foreground">{english}</span></span> : english
+  return zh ? chinese : english
 }
 
 export function Choice({
@@ -149,6 +168,7 @@ export function ValueInput({
   const id = useId(),
     [draft, setDraft] = useState(value),
     [reveal, setReveal] = useState(false)
+  const zh = useI18n().language === 'zh-CN'
   useEffect(() => setDraft(value), [value])
   return (
     <div className="min-w-0 space-y-1.5">
@@ -183,7 +203,7 @@ export function ValueInput({
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label={reveal ? 'Hide / 隐藏' : 'Reveal / 显示'}
+            aria-label={zh ? reveal ? '隐藏敏感值' : '显示敏感值' : reveal ? 'Hide sensitive value' : 'Reveal sensitive value'}
             onClick={() => setReveal(!reveal)}
           >
             {reveal ? <EyeOff /> : <Eye />}
@@ -384,7 +404,7 @@ export function ProjectConfiguration(props: EditorProps) {
         <Tabs value={mode} onValueChange={value => void changeWorkspace(() => setMode(value))}>
           <TabsList>
             <TabsTrigger value="visual">{zh ? '可视化' : 'Visual'}</TabsTrigger>
-            <TabsTrigger value="source">Compose</TabsTrigger>
+            <TabsTrigger value="source">{zh ? '源码' : 'Compose'}</TabsTrigger>
           </TabsList>
         </Tabs>
         <div className="flex items-center gap-2">
@@ -447,7 +467,7 @@ export function ProjectConfiguration(props: EditorProps) {
                     {
                       {
                         image: zh
-                          ? '需要 image 或 build'
+                          ? '需要指定镜像或构建配置'
                           : 'Image or build required',
                         port: zh
                           ? '目标端口须为 1–65535'
@@ -457,7 +477,13 @@ export function ProjectConfiguration(props: EditorProps) {
                           : 'Container path must be absolute',
                         dependency: zh
                           ? '依赖服务不存在或指向自身'
-                          : 'Dependency is missing or refers to itself'
+                          : 'Dependency is missing or refers to itself',
+                        replicas: zh
+                          ? '副本数量配置不一致，请在源码中统一。'
+                          : 'Replica counts conflict. Make them consistent in source.',
+                        replica_name: zh
+                          ? '多副本须使用自动容器名称。'
+                          : 'Multiple replicas require automatic container names.'
                       }[issue.code]
                     }
                   </Button>
@@ -606,7 +632,7 @@ function ConfigGroup({
 }) {
   const base = ['services', context.service],
     configured = fields.filter(
-      (field) => configValue(context.compose, [...base, field]) !== undefined
+      (field) => configValue(context.compose, [...base, ...field.split('.')]) !== undefined
     ),
     count = configured.length
   return (
@@ -638,7 +664,7 @@ function Field({
   return (
     <div>
       <ValueInput
-        label={label ?? field}
+        label={label ?? fieldName(field, context.zh)}
         value={text(value)}
         disabled={!!reason || shape}
         placeholder={context.zh ? '未配置' : 'Not configured'}
@@ -653,7 +679,7 @@ function Field({
           )
         }
       />
-      {field === 'image' && <p className="mt-1 text-xs text-muted-foreground">{context.zh ? '省略 tag 时使用 latest；digest 与变量表达式保留原文。' : 'Omitted tags use latest; digests and variable expressions keep their source.'}</p>}
+      {field === 'image' && <p className="mt-1 text-xs text-muted-foreground">{context.zh ? '未指定镜像标签时使用默认最新标签；镜像摘要与变量表达式保留原文。' : 'Omitted tags use latest; digests and variable expressions keep their source.'}</p>}
       {(reason || shape) && <SourceLink context={context} path={path} />}
     </div>
   )
@@ -692,12 +718,12 @@ function BooleanField({
     value = configValue(context.compose, path)
   return (
     <Choice
-      label={label ?? field}
+      label={label ?? fieldName(field, context.zh)}
       value={value === undefined ? 'default' : String(value)}
       options={[
         ['default', context.zh ? '未配置' : 'Not configured'],
-        ['true', 'true'],
-        ['false', 'false']
+        ['true', context.zh ? '是' : 'Yes'],
+        ['false', context.zh ? '否' : 'No']
       ]}
       disabled={
         !!readonlyReason(context.compose, path) ||
@@ -752,18 +778,18 @@ function CommandField({
   return (
     <div className="space-y-2">
       <Choice
-        label={label ?? field}
+        label={label ?? fieldName(field, context.zh)}
         value={mode}
         disabled={disabled}
         options={[
           ['default', context.zh ? '使用默认' : 'Use default'],
           [
             'empty',
-            health ? 'NONE' : context.zh ? '显式清空' : 'Explicit empty'
+            health ? context.zh ? '禁用检查' : 'Disable check' : context.zh ? '显式清空' : 'Explicit empty'
           ],
           ['string', context.zh ? '字符串' : 'String'],
-          ...(health ? [['shell', 'CMD-SHELL'] as [string, string]] : []),
-          ['list', health ? 'CMD · argv' : 'argv']
+          ...(health ? [['shell', context.zh ? '命令解释器执行' : 'Run in shell'] as [string, string]] : []),
+          ['list', context.zh ? '命令和参数' : 'Command and arguments']
         ]}
         onChange={(next) =>
           context.set(
@@ -791,7 +817,7 @@ function CommandField({
               ? context.zh
                 ? '每行一个参数'
                 : 'One argument per line'
-              : label ?? field
+              : label ?? fieldName(field, context.zh)
           }
           value={
             Array.isArray(value)
@@ -823,12 +849,12 @@ function RestartField({ context: c }: { context: FormContext }) {
   if (readonlyReason(c.compose, path) || (raw !== undefined && !['no', 'always', 'unless-stopped'].includes(value) && !match))
     return <SourceLink context={c} path={path} />
   return <div className="space-y-2">
-    <Choice label={c.zh ? '重启策略 restart' : 'Restart policy restart'} value={match ? 'on-failure' : value || '__unset'} options={[
+    <Choice label={c.zh ? '重启策略' : 'Restart policy'} value={match ? 'on-failure' : value || '__unset'} options={[
       ['__unset', c.zh ? '未配置 · 默认不重启' : 'Unset · no restart by default'],
-      ['no', c.zh ? '不重启 · no' : 'Do not restart · no'],
-      ['unless-stopped', c.zh ? '除非手动停止 · unless-stopped' : 'Unless manually stopped · unless-stopped'],
-      ['always', c.zh ? '总是重启 · always' : 'Always restart · always'],
-      ['on-failure', c.zh ? '失败时重启 · on-failure' : 'Restart on failure · on-failure']
+      ['no', c.zh ? '不重启' : 'Do not restart'],
+      ['unless-stopped', c.zh ? '除非手动停止' : 'Unless manually stopped'],
+      ['always', c.zh ? '总是重启' : 'Always restart'],
+      ['on-failure', c.zh ? '失败时重启' : 'Restart on failure']
     ]} onChange={next => c.set(path, next === '__unset' ? REMOVE : next === 'on-failure' && match ? value : next)} />
     {match && <ValueInput label={c.zh ? '最大重试次数 · 可选' : 'Maximum retries · optional'} value={match[1] ?? ''} placeholder={c.zh ? '不限制' : 'Unlimited'} onChange={next => {
       if (next && !/^\d+$/.test(next)) { c.fail(c.zh ? '重试次数须为非负整数。' : 'Retries must be a non-negative integer.'); return }
@@ -876,6 +902,49 @@ function ServiceNameField({ context: c }: { context: FormContext }) {
   </div>
 }
 
+function ReplicaField({ context: c }: { context: FormContext }) {
+  const id = useId(), replicas = serviceReplicas(c.compose, c.service)
+  const value = replicas.count === null ? '' : String(replicas.count)
+  const [draft, setDraft] = useState(value), [error, setError] = useState('')
+  const { pending, service } = c
+  useEffect(() => { setDraft(value); setError('') }, [value])
+  useEffect(() => {
+    pending(`replicas:${service}`, draft !== value)
+    return () => pending(`replicas:${service}`, false)
+  }, [pending, service, draft, value])
+  const commit = () => {
+    if (replicas.issue) return
+    const next = draft.trim() || '1'
+    if (!/^\d+$/.test(next) || !Number.isSafeInteger(Number(next))) {
+      setError(c.zh ? '副本数量须为非负整数。' : 'Replica count must be a non-negative integer.')
+      return
+    }
+    try {
+      const changed = configureServiceReplicas(c.compose, c.service, Number(next))
+      if (changed !== c.compose) c.onCompose(changed)
+      setDraft(String(Number(next))); setError(''); pending(`replicas:${service}`, false)
+    } catch (failure) {
+      const message = failure instanceof Error ? failure.message : String(failure)
+      setError(message === 'Multiple replicas require automatic container names'
+        ? c.zh ? '请先清空容器名称，再配置多个副本。' : 'Clear the container name before configuring multiple replicas.'
+        : c.zh ? '副本配置无法修改，请在源码中编辑。' : 'Edit this replica configuration in source.')
+    }
+  }
+  return <div className="min-w-0 space-y-1.5">
+    <Label htmlFor={id}>{c.zh ? '副本数量' : 'Replica count'}</Label>
+    <Input id={id} inputMode="numeric" autoComplete="off" value={draft} disabled={!!replicas.issue} placeholder={replicas.issue ? c.zh ? '源码配置' : 'Source configuration' : '1'} aria-invalid={!!error || replicas.issue === 'conflict'} aria-describedby={`${id}-hint${error ? ` ${id}-error` : ''}`} onChange={event => { setDraft(event.target.value); setError('') }} onBlur={commit} onKeyDown={event => {
+      if (event.key === 'Enter') { event.preventDefault(); commit() }
+      if (event.key === 'Escape') { setDraft(value); setError('') }
+    }} />
+    <p id={`${id}-hint`} className="text-xs text-muted-foreground">{replicas.issue === 'conflict'
+      ? c.zh ? '两处副本数量不一致，请先在源码中统一。' : 'The two replica counts conflict. Make them consistent in source first.'
+      : replicas.issue ? c.zh ? '副本数量使用变量或共享、复杂配置，请在源码中编辑。' : 'This replica count uses variables or shared, complex configuration. Edit it in source.'
+        : c.zh ? '默认 1；0 表示不运行此服务。保存并部署后生效。' : 'Default 1; 0 runs no containers. Takes effect when saved and deployed.'}</p>
+    {replicas.issue && <SourceLink context={c} path={replicas.path} />}
+    {error && <p id={`${id}-error`} className="text-xs text-destructive" role="alert">{error}</p>}
+  </div>
+}
+
 function ServiceForm({ context: c, tab, onTabChange }: { context: FormContext; tab: string; onTabChange: (tab: string) => void }) {
   const servicePath = ['services', c.service],
     locked = readonlyReason(c.compose, servicePath)
@@ -910,6 +979,7 @@ function ServiceForm({ context: c, tab, onTabChange }: { context: FormContext; t
     'command',
     'entrypoint',
     'restart',
+    'scale',
     'container_name',
     'working_dir',
     'user',
@@ -952,7 +1022,7 @@ function ServiceForm({ context: c, tab, onTabChange }: { context: FormContext; t
       )}
       <fieldset disabled={!!locked} className="min-w-0">
         <Tabs value={tab} onValueChange={onTabChange} className="gap-0" data-testid="service-configuration-tabs">
-          <TabsList aria-label={c.zh ? `${serviceLabel(c.service, c.zh)} 服务配置` : `${serviceLabel(c.service, c.zh)} service configuration`} className="group-data-horizontal/tabs:h-auto w-full flex-wrap justify-start">
+          <TabsList aria-label={c.zh ? `${serviceLabel(c.service, c.zh)} 服务配置` : `${serviceLabel(c.service, c.zh)} service configuration`} className="group-data-horizontal/tabs:h-auto min-h-8 w-full flex-wrap justify-start gap-y-1.5">
             {[
               ['basics', '基础', 'Basics'],
               ['ports', '端口', 'Ports'],
@@ -962,7 +1032,7 @@ function ServiceForm({ context: c, tab, onTabChange }: { context: FormContext; t
               ['health', '健康检查', 'Health checks'],
               ['resources', '资源限制', 'Resources'],
               ['advanced', '高级', 'Advanced']
-            ].map(([value, chinese, english]) => <TabsTrigger key={value} value={value} className="h-auto min-h-10 flex-none px-2 py-1.5"><TabCaption zh={c.zh} chinese={chinese} english={english} /></TabsTrigger>)}
+            ].map(([value, chinese, english]) => <TabsTrigger key={value} value={value} className="h-6.5 flex-none px-2 py-0.5"><TabCaption zh={c.zh} chinese={chinese} english={english} /></TabsTrigger>)}
           </TabsList>
         <ConfigGroup
           context={c}
@@ -973,6 +1043,8 @@ function ServiceForm({ context: c, tab, onTabChange }: { context: FormContext; t
             'command',
             'entrypoint',
             'restart',
+            'scale',
+            'deploy.replicas',
             'container_name',
             'working_dir',
             'user'
@@ -983,12 +1055,13 @@ function ServiceForm({ context: c, tab, onTabChange }: { context: FormContext; t
             <Field
               context={c}
               field="image"
-              label={c.zh ? '镜像 image' : 'Image image'}
+              label={c.zh ? '镜像' : 'Image'}
             />
             <RestartField context={c} />
             <Field context={c} field="container_name" />
             <Field context={c} field="working_dir" />
             <Field context={c} field="user" />
+            <ReplicaField context={c} />
           </div>
           <CommandField context={c} field="command" />
           <CommandField context={c} field="entrypoint" />
@@ -1001,7 +1074,7 @@ function ServiceForm({ context: c, tab, onTabChange }: { context: FormContext; t
         >
           <Ports context={c} />
           <details open={configValue(c.compose, [...servicePath, 'expose']) !== undefined} className="text-sm">
-            <summary className="cursor-pointer py-1 text-muted-foreground">{c.zh ? '服务内部端口 expose · 可选' : 'Internal service ports expose · optional'}</summary>
+            <summary className="cursor-pointer py-1 text-muted-foreground">{c.zh ? '服务内部端口 · 可选' : 'Internal service ports · optional'}</summary>
             <div className="pt-2"><StringList context={c} field="expose" /></div>
           </details>
         </ConfigGroup>
@@ -1028,7 +1101,7 @@ function ServiceForm({ context: c, tab, onTabChange }: { context: FormContext; t
         >
           <Mounts context={c} />
           {configValue(c.compose, [...servicePath, 'tmpfs']) !== undefined && <details open className="text-sm">
-            <summary className="cursor-pointer py-1 text-muted-foreground">{c.zh ? '其他临时挂载 tmpfs' : 'Additional temporary mounts tmpfs'}</summary>
+            <summary className="cursor-pointer py-1 text-muted-foreground">{c.zh ? '其他临时挂载' : 'Additional temporary mounts'}</summary>
             <div className="pt-2"><StringList context={c} field="tmpfs" /></div>
           </details>}
         </ConfigGroup>
@@ -1041,9 +1114,9 @@ function ServiceForm({ context: c, tab, onTabChange }: { context: FormContext; t
           <ServiceNetworks context={c} />
           <Dependencies context={c} />
         </ConfigGroup>
-        <ConfigGroup context={c} value="health" title={<FieldCaption zh={c.zh} chinese="健康检查" english="Health checks" field="healthcheck" />} fields={['healthcheck']}>
-          <CommandField context={c} field="healthcheck.test" health label={<FieldCaption zh={c.zh} chinese="检查命令" english="Check command" field="healthcheck.test" />} />
-          <BooleanField context={c} field="healthcheck.disable" label={<FieldCaption zh={c.zh} chinese="禁用健康检查" english="Disable health check" field="healthcheck.disable" />} />
+        <ConfigGroup context={c} value="health" title={<FieldCaption zh={c.zh} chinese="健康检查" english="Health checks" />} fields={['healthcheck']}>
+          <CommandField context={c} field="healthcheck.test" health label={<FieldCaption zh={c.zh} chinese="检查命令" english="Check command" />} />
+          <BooleanField context={c} field="healthcheck.disable" label={<FieldCaption zh={c.zh} chinese="禁用健康检查" english="Disable health check" />} />
           <div className="grid gap-3 sm:grid-cols-2">
             {[
               ['healthcheck.interval', '检查间隔', 'Check interval'],
@@ -1051,7 +1124,7 @@ function ServiceForm({ context: c, tab, onTabChange }: { context: FormContext; t
               ['healthcheck.retries', '失败重试次数', 'Retries'],
               ['healthcheck.start_period', '启动等待', 'Start period'],
               ['healthcheck.start_interval', '启动期间检查间隔', 'Start interval']
-            ].map(([field, chinese, english]) => <Field key={field} context={c} field={field} number={field.endsWith('retries')} label={<FieldCaption zh={c.zh} chinese={chinese} english={english} field={field} />} />)}
+            ].map(([field, chinese, english]) => <Field key={field} context={c} field={field} number={field.endsWith('retries')} label={<FieldCaption zh={c.zh} chinese={chinese} english={english} />} />)}
           </div>
         </ConfigGroup>
         <ConfigGroup context={c} value="resources" title={<TabCaption zh={c.zh} chinese="资源限制" english="Resources" />} fields={['cpus', 'mem_limit', 'mem_reservation', 'stop_grace_period']}>
@@ -1061,7 +1134,7 @@ function ServiceForm({ context: c, tab, onTabChange }: { context: FormContext; t
               ['mem_limit', '内存上限', 'Memory limit'],
               ['mem_reservation', '内存预留', 'Memory reservation'],
               ['stop_grace_period', '停止等待时间', 'Stop grace period']
-            ].map(([field, chinese, english]) => <Field key={field} context={c} field={field} number={field === 'cpus'} label={<FieldCaption zh={c.zh} chinese={chinese} english={english} field={field} />} />)}
+            ].map(([field, chinese, english]) => <Field key={field} context={c} field={field} number={field === 'cpus'} label={<FieldCaption zh={c.zh} chinese={chinese} english={english} />} />)}
           </div>
           {fields.includes('deploy') && <SourceLink context={c} path={[...servicePath, 'deploy']} />}
         </ConfigGroup>
@@ -1080,8 +1153,8 @@ function ServiceForm({ context: c, tab, onTabChange }: { context: FormContext; t
         >
           <MapFields context={c} path={[...servicePath, 'labels']} />
           <section className="section-surface space-y-3" data-testid="service-logging">
-            <h5 className="text-sm font-medium"><FieldCaption zh={c.zh} chinese="日志" english="Logging" field="logging" /></h5>
-            <Field context={c} field="logging.driver" label={<FieldCaption zh={c.zh} chinese="日志驱动" english="Log driver" field="logging.driver" />} />
+            <h5 className="text-sm font-medium"><FieldCaption zh={c.zh} chinese="日志" english="Logging" /></h5>
+            <Field context={c} field="logging.driver" label={<FieldCaption zh={c.zh} chinese="日志驱动" english="Log driver" />} />
             <details open={configValue(c.compose, [...servicePath, 'logging', 'options']) !== undefined}>
               <summary className="cursor-pointer text-sm text-muted-foreground">{c.zh ? '日志驱动选项' : 'Log driver options'}</summary>
           <MapFields
@@ -1092,25 +1165,25 @@ function ServiceForm({ context: c, tab, onTabChange }: { context: FormContext; t
           </section>
           <div className="grid gap-3 sm:grid-cols-2">
             {[['read_only', '只读根文件系统', 'Read-only root filesystem'], ['init', '初始化进程', 'Init process'], ['stdin_open', '保持标准输入', 'Keep standard input open'], ['tty', '分配终端', 'Allocate a TTY']].map(([field, chinese, english]) => (
-              <BooleanField key={field} context={c} field={field} label={<FieldCaption zh={c.zh} chinese={chinese} english={english} field={field} />} />
+              <BooleanField key={field} context={c} field={field} label={<FieldCaption zh={c.zh} chinese={chinese} english={english} />} />
             ))}
           </div>
         </ConfigGroup>
         </Tabs>
       </fieldset>
       {!!fields.filter((field) => !supported.has(field)).length && (
-        <div className="rounded-md bg-surface p-3 text-xs text-muted-foreground">
-          {c.zh ? '保留的源码配置：' : 'Preserved source configuration: '}
+        <div className="flex min-h-8 flex-wrap items-center gap-x-2 rounded-md bg-surface px-3 text-xs text-muted-foreground">
+          <span>{c.zh ? '保留的源码配置：' : 'Preserved source configuration: '}</span>
           {fields
             .filter((field) => !supported.has(field))
             .map((field) => (
               <Button
                 key={field}
                 variant="link"
-                size="sm"
+                size="xs"
                 onClick={() => c.locate([...servicePath, field])}
               >
-                {field}
+                {fieldName(field, c.zh)}
               </Button>
             ))}
         </div>
@@ -1137,7 +1210,7 @@ function StringList({
   return (
     <>
       <ValueInput
-        label={`${field} · ${c.zh ? '每行一项' : 'one per line'}`}
+        label={`${fieldName(field, c.zh)} · ${c.zh ? '每行一项' : 'one per line'}`}
         value={
           Array.isArray(value) ? value.map(String).join('\n') : text(value)
         }
@@ -1179,7 +1252,7 @@ function MapFields({ context: c, path }: { context: FormContext; path: ConfigPat
   }
   const addLabel = labels ? c.zh ? '添加标签' : 'Add label' : c.zh ? '添加日志选项' : 'Add log option'
   return <section className="space-y-3" data-testid={labels ? 'service-labels' : 'service-log-options'}>
-    <div className="flex items-center gap-2"><h5 className="text-sm font-medium"><FieldCaption zh={c.zh} chinese={labels ? '标签' : '日志选项'} english={labels ? 'Labels' : 'Log options'} field={labels ? 'labels' : 'logging.options'} /></h5><span className="text-xs text-muted-foreground">{Object.keys(map).length}</span></div>
+    <div className="flex items-center gap-2"><h5 className="text-sm font-medium"><FieldCaption zh={c.zh} chinese={labels ? '标签' : '日志选项'} english={labels ? 'Labels' : 'Log options'} /></h5><span className="text-xs text-muted-foreground">{Object.keys(map).length}</span></div>
     <p className="text-xs text-muted-foreground">{labels ? c.zh ? '容器元数据，以键和值填写，例如 com.example.role = api。' : 'Container metadata as key/value pairs, such as com.example.role = api.' : c.zh ? '传给所选日志驱动的选项，例如 max-size = 10m。' : 'Options passed to the selected log driver, such as max-size = 10m.'}</p>
     {complex || readonlyGroupReason(c.compose, path) ? <SourceLink context={c} path={path} /> : <>
       {Object.entries(map).map(([key, item]) => <div key={key} className="flex items-end gap-2 pb-3"><div className="min-w-0 flex-1"><ValueInput label={key} value={text(item)} secret={sensitiveKey(key)} disabled={!!readonlyReason(c.compose, [...path, key]) || (item !== null && typeof item === 'object')} onChange={next => update(key, next)} /></div><DeleteButton zh={c.zh} onClick={() => update(key, REMOVE)} /></div>)}
@@ -1192,8 +1265,8 @@ function MapFields({ context: c, path }: { context: FormContext; path: ConfigPat
         catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)) }
       }}>
         <div className="grid gap-3 sm:grid-cols-2">
-          <div className="flex min-w-0 flex-col gap-1.5"><Label htmlFor={`${id}-key`}>{labels ? c.zh ? '标签键 key' : 'Label key' : c.zh ? '选项键 key' : 'Option key'}</Label><Input ref={keyInput} autoFocus id={`${id}-key`} value={key} autoComplete="off" placeholder={labels ? 'com.example.role' : 'max-size'} onChange={event => { setKey(event.target.value); setError('') }} /></div>
-          <div className="flex min-w-0 flex-col gap-1.5"><Label htmlFor={`${id}-value`}>{labels ? c.zh ? '标签值 value' : 'Label value' : c.zh ? '选项值 value' : 'Option value'}</Label><div className="flex items-center gap-1"><Input id={`${id}-value`} type={sensitiveKey(key) && !reveal ? 'password' : 'text'} value={draft} autoComplete="off" placeholder={labels ? 'api' : '10m'} onChange={event => { setDraft(event.target.value); setError('') }} />{sensitiveKey(key) && <Button type="button" size="icon-sm" variant="ghost" aria-label={c.zh ? '切换敏感值显示' : 'Toggle sensitive value'} onClick={() => setReveal(!reveal)}>{reveal ? <EyeOff /> : <Eye />}</Button>}</div></div>
+          <div className="flex min-w-0 flex-col gap-1.5"><Label htmlFor={`${id}-key`}>{labels ? c.zh ? '标签键' : 'Label key' : c.zh ? '选项键' : 'Option key'}</Label><Input ref={keyInput} autoFocus id={`${id}-key`} value={key} autoComplete="off" placeholder={labels ? 'com.example.role' : 'max-size'} onChange={event => { setKey(event.target.value); setError('') }} /></div>
+          <div className="flex min-w-0 flex-col gap-1.5"><Label htmlFor={`${id}-value`}>{labels ? c.zh ? '标签值' : 'Label value' : c.zh ? '选项值' : 'Option value'}</Label><div className="flex items-center gap-1"><Input id={`${id}-value`} type={sensitiveKey(key) && !reveal ? 'password' : 'text'} value={draft} autoComplete="off" placeholder={labels ? 'api' : '10m'} onChange={event => { setDraft(event.target.value); setError('') }} />{sensitiveKey(key) && <Button type="button" size="icon-sm" variant="ghost" aria-label={c.zh ? '切换敏感值显示' : 'Toggle sensitive value'} onClick={() => setReveal(!reveal)}>{reveal ? <EyeOff /> : <Eye />}</Button>}</div></div>
         </div>
         {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
         <div className="flex gap-2"><Button type="submit" size="sm">{addLabel}</Button><Button type="button" size="sm" variant="ghost" onClick={() => { setAdding(false); setKey(''); setDraft(''); setError('') }}>{c.zh ? '取消' : 'Cancel'}</Button></div>
@@ -1385,14 +1458,14 @@ function EnvironmentFields({ context: c }: { context: FormContext }) {
                         item.key
                       ]),
                       ...(!vars.some((item) => item.key === ref)
-                        ? [[ref!, `${ref} · missing`] as [string, string]]
+                        ? [[ref!, `${ref} · ${c.zh ? '缺失' : 'missing'}`] as [string, string]]
                         : [])
                     ]}
                     onChange={(next) => update(key, '${' + next + '}')}
                   />
                 ) : mode === 'literal' ? (
                   <ValueInput
-                    label="value"
+                    label={c.zh ? '值' : 'Value'}
                     value={text(value)}
                     secret={sensitiveKey(key)}
                     onChange={(next) => update(key, next)}
@@ -1512,7 +1585,7 @@ function EnvironmentVariableDialog({ context: c, keys, onAdd, onClose }: {
         onAdd(name, mode === 'reference' ? '${' + reference + '}' : mode === 'inherit' ? null : value)
         onClose()
       }}>
-        <div className="space-y-1.5"><Label htmlFor={`${id}-key`}>{c.zh ? '变量名 KEY' : 'Variable name KEY'}</Label><Input id={`${id}-key`} autoFocus autoComplete="off" value={key} onChange={event => { setKey(event.target.value); setError('') }} placeholder="APP_MODE" /></div>
+        <div className="space-y-1.5"><Label htmlFor={`${id}-key`}>{c.zh ? '变量名' : 'Variable name'}</Label><Input id={`${id}-key`} autoFocus autoComplete="off" value={key} onChange={event => { setKey(event.target.value); setError('') }} placeholder="APP_MODE" /></div>
         <Choice label={c.zh ? '值来源' : 'Value source'} value={mode} options={[
           ['literal', c.zh ? '直接值 / 表达式' : 'Direct value / expression'],
           ['reference', c.zh ? '.env 变量' : '.env variable'],
@@ -1521,7 +1594,7 @@ function EnvironmentVariableDialog({ context: c, keys, onAdd, onClose }: {
         {mode === 'reference' ? <Choice label={c.zh ? '.env 变量' : '.env variable'} value={reference || '__select'} options={[
           ['__select', c.zh ? '请选择变量' : 'Select a variable'],
           ...variables.map((variable): [string, string] => [variable.key, variable.key])
-        ]} onChange={next => { setReference(next === '__select' ? '' : next); setError('') }} /> : mode === 'literal' ? <div className="space-y-1.5"><Label htmlFor={`${id}-value`}>{c.zh ? '值 value' : 'Value value'}</Label><div className="flex gap-2"><Input id={`${id}-value`} autoComplete="off" type={sensitiveKey(key) && !reveal ? 'password' : 'text'} value={value} onChange={event => setValue(event.target.value)} />{sensitiveKey(key) && <Button type="button" size="icon" variant="ghost" aria-label={c.zh ? '切换敏感值显示' : 'Toggle sensitive value visibility'} onClick={() => setReveal(!reveal)}>{reveal ? <EyeOff /> : <Eye />}</Button>}</div></div> : <p className="text-xs text-muted-foreground">{c.zh ? '保留无值声明，由 Compose 运行环境解析。' : 'Keep a valueless declaration, resolved from the Compose process environment.'}</p>}
+        ]} onChange={next => { setReference(next === '__select' ? '' : next); setError('') }} /> : mode === 'literal' ? <div className="space-y-1.5"><Label htmlFor={`${id}-value`}>{c.zh ? '值' : 'Value'}</Label><div className="flex gap-2"><Input id={`${id}-value`} autoComplete="off" type={sensitiveKey(key) && !reveal ? 'password' : 'text'} value={value} onChange={event => setValue(event.target.value)} />{sensitiveKey(key) && <Button type="button" size="icon" variant="ghost" aria-label={c.zh ? '切换敏感值显示' : 'Toggle sensitive value visibility'} onClick={() => setReveal(!reveal)}>{reveal ? <EyeOff /> : <Eye />}</Button>}</div></div> : <p className="text-xs text-muted-foreground">{c.zh ? '保留无值声明，由 Compose 运行环境解析。' : 'Keep a valueless declaration, resolved from the Compose process environment.'}</p>}
         {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
         <DialogFooter><Button type="button" variant="outline" onClick={onClose}>{c.zh ? '取消' : 'Cancel'}</Button><Button type="submit" disabled={c.disabled}>{c.zh ? '添加到服务' : 'Add to service'}</Button></DialogFooter>
       </form>
@@ -1533,7 +1606,7 @@ function ServiceNetworks({ context: c }: { context: FormContext }) {
   const [adding, setAdding] = useState(false)
   const path = ['services', c.service, 'networks'], raw = configValue(c.compose, path)
   if (configValue(c.compose, ['services', c.service, 'network_mode']) !== undefined)
-    return <div className="space-y-2"><p className="text-sm text-muted-foreground">{c.zh ? '此服务使用 network_mode，请在源码中调整网络模式。' : 'This service uses network_mode. Edit its network mode in source.'}</p><SourceLink context={c} path={['services', c.service, 'network_mode']} /></div>
+    return <div className="space-y-2"><p className="text-sm text-muted-foreground">{c.zh ? '此服务已配置网络模式，请在源码中调整。' : 'This service uses network_mode. Edit its network mode in source.'}</p><SourceLink context={c} path={['services', c.service, 'network_mode']} /></div>
   if (readonlyGroupReason(c.compose, path) || (raw != null && (typeof raw !== 'object' || (Array.isArray(raw) && raw.some(item => typeof item !== 'string')))))
     return <SourceLink context={c} path={path} />
   const entries: [string, unknown][] = Array.isArray(raw) ? raw.map(item => [String(item), null]) : Object.entries(record(raw))
@@ -1584,8 +1657,8 @@ function Dependencies({ context: c }: { context: FormContext }) {
     }
   }
   const choices = configKeys(c.compose, ['services']).filter(name => name !== c.service && !entries.some(([key]) => key === name))
-  return <div className="section-surface space-y-3"><h4 className="text-sm font-medium">{c.zh ? '启动依赖 depends_on' : 'Startup dependencies depends_on'}</h4>
-    {entries.map(([name, value]) => <div key={name} className="space-y-2"><div className="flex items-center justify-between"><span className="text-sm">{serviceLabel(name, c.zh)}</span><DeleteButton zh={c.zh} onClick={() => update(name, REMOVE)} /></div><Choice label="condition" value={text(record(value).condition) || 'service_started'} options={['service_started', 'service_healthy', 'service_completed_successfully'].map(condition => [condition, condition])} onChange={condition => update(name, { ...record(value), condition })} /></div>)}
+  return <div className="section-surface space-y-3"><h4 className="text-sm font-medium">{c.zh ? '启动依赖' : 'Startup dependencies'}</h4>
+    {entries.map(([name, value]) => <div key={name} className="space-y-2"><div className="flex items-center justify-between"><span className="text-sm">{serviceLabel(name, c.zh)}</span><DeleteButton zh={c.zh} onClick={() => update(name, REMOVE)} /></div><Choice label={c.zh ? '启动条件' : 'Startup condition'} value={text(record(value).condition) || 'service_started'} options={[['service_started', c.zh ? '服务已启动' : 'Service started'], ['service_healthy', c.zh ? '服务健康' : 'Service healthy'], ['service_completed_successfully', c.zh ? '服务成功完成' : 'Service completed successfully']]} onChange={condition => update(name, { ...record(value), condition })} /></div>)}
     <div className="flex items-end gap-2"><div className="min-w-0 flex-1"><Choice label={c.zh ? '依赖服务' : 'Dependency service'} value={select || '__select'} options={[[ '__select', c.zh ? '选择服务' : 'Select service'], ...choices.map((name): [string,string] => [name,serviceLabel(name, c.zh)])]} onChange={name => setSelect(name === '__select' ? '' : name)} /></div><Button variant="outline" size="sm" disabled={!choices.includes(select)} onClick={() => { update(select, { condition: 'service_started' }); setSelect('') }}><Plus />{c.zh ? '添加依赖' : 'Add dependency'}</Button></div>
   </div>
 }

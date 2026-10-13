@@ -1,5 +1,8 @@
+import { useContainerWorkspace } from '../features/containers/use-container-workspace'
 import { useDateTime } from '../lib/time-zone'
 import { useImageUpdates } from '../features/image-updates/hooks'
+import { useProjectObservation } from '../features/compose/use-project-observation'
+import { ContainerWorkspaceDialog } from '../components/docker/container-workspace-dialog'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   useBlocker,
@@ -55,7 +58,6 @@ import { ProjectLogs } from '../features/project-logs/project-logs'
 import { ProjectServices } from '../components/docker/project-services'
 import { useLogAutoScroll } from '../features/containers/use-log-auto-scroll'
 import type {
-  ContainerMetrics,
   ContainerSummary
 } from '../features/containers/types'
 import { compactTaskLogs } from '../features/tasks/compact-task-logs'
@@ -217,21 +219,12 @@ export function ComposeDetailPage() {
 
   const services = useQuery({
     queryKey: ['project-services', nodeID, projectName],
-    queryFn: async () => {
-      const [rows, metrics] = await Promise.all([
-        api<ContainerSummary[]>(
-          nodePath(nodeID, `/projects/compose/${encodedName}/services`)
-        ),
-        api<ContainerMetrics[]>(nodePath(nodeID, '/containers/metrics')).catch(
-          () => []
-        )
-      ])
-      const metricsByID = new Map(metrics.map((row) => [row.id, row]))
-      return rows.map((row) => ({ ...row, ...metricsByID.get(row.id) }))
-    },
+    queryFn: ({ signal }) => api<ContainerSummary[]>(nodePath(nodeID, `/projects/compose/${encodedName}/services`), { signal }),
     enabled: view === 'Services',
     refetchInterval: 5_000
   })
+  const observation = useProjectObservation(nodeID, services.data ?? [], view === 'Services')
+  const workspace = useContainerWorkspace(nodeID, zh, projectName)
   const save = useMutation({
     mutationFn: (allowDockerSocket: boolean) =>
       api<Project>(nodePath(nodeID, `/projects/compose/${encodedName}`), {
@@ -834,7 +827,9 @@ export function ComposeDetailPage() {
               projectName={projectName}
               rows={services.data}
               updates={imageUpdates.data?.results || []}
-              declared={project.managed ? configKeys(project.compose, ['services']) : []}
+              declared={project.managed ? project.declared_service_names ?? configKeys(project.compose, ['services']) : []}
+              observation={observation}
+              onOpenContainer={(row, tab, opener) => void workspace.open(row, tab, opener)}
               loading={services.isPending}
               error={services.error?.message}
               updateError={imageUpdates.error?.message}
@@ -844,6 +839,7 @@ export function ComposeDetailPage() {
           {view === 'Logs' && <ProjectLogs key={`${nodeID}/${projectName}`} nodeID={nodeID} projectName={projectName} />}
         </div>
       </ResourceFrame>
+      <ContainerWorkspaceDialog workspace={workspace} rows={services.data ?? []} available={!!services.data && !services.isError} zh={zh} />
       <Dialog
         open={!!review}
         onOpenChange={(open) => {

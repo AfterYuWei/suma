@@ -22,6 +22,11 @@ const containers = [
   container('redis', 3, { image: 'redis:alpine', cpu_percent: 0.2, memory_bytes: 16 * 1024 ** 2, ports: [] })
 ]
 
+async function openContainerAction(page: Page, name: string, action: string) {
+  await page.getByRole('button', { name: `Container actions · ${name}`, exact: true }).click()
+  await page.getByRole('menuitem', { name: `${action} · ${name}`, exact: true }).click()
+}
+
 async function setup(page: Page, options: {
   language?: string; theme?: string; rows?: ContainerSummary[]; declared?: string[];
   managed?: boolean; error?: 'services' | 'image-updates'
@@ -48,7 +53,8 @@ async function setup(page: Page, options: {
       name: 'database', native_name: 'database', node_id: edge ? 'edge-hk' : 'local', backend: 'compose',
       managed: options.managed !== false, capabilities: ['view', 'edit', 'deploy', 'services', 'logs', 'takeover'],
       status: 'running', revision: 'r1', services: declared.length, containers: nodeRows.length,
-      compose: 'services:\n' + declared.map(name => `  ${name}: {image: ${name}:latest}\n`).join(''), environment: '', metadata: { origin: 'created', last_deployed_at: created }
+      declared_service_names: edge ? ['edge-only'] : declared,
+      compose: 'services:\n' + (edge ? ['edge-only'] : declared).map(name => `  ${name}: {image: ${name}:latest}\n`).join(''), environment: '', metadata: { origin: 'created', last_deployed_at: created }
     }
     const updates: ImageUpdateResult[] = nodeRows.map((row, index) => ({
       reference: row.image.startsWith('docker.io/') ? row.image : `docker.io/library/${row.image}`, registry: 'docker.io',
@@ -67,8 +73,11 @@ async function setup(page: Page, options: {
     else if (path.endsWith('/projects/compose/database/services')) {
       if (options.error === 'services') return route.fulfill({ status: 503, json: { code: 1, message: 'Engine unavailable', data: null } })
       data = nodeRows
-    } else if (path.endsWith('/projects/compose/database')) data = project
-    else if (path.endsWith('/containers/metrics')) data = nodeRows.map(row => ({ id: row.id, cpu_percent: row.cpu_percent, memory_bytes: row.memory_bytes, uptime_seconds: row.uptime_seconds }))
+    } else if (path.endsWith('/projects/compose/database-other/services')) data = []
+    else if (path.endsWith('/projects/compose/database-other')) data = { ...project, name: 'database-other' }
+    else if (path.endsWith('/projects/compose/database')) data = project
+    else if (path.endsWith('/containers/runtime')) data = nodeRows.map(row => ({ id: row.id, state: row.state, health_status: 'none', restart_count: 0, memory_limit_bytes: 0 }))
+    else if (path.endsWith('/containers/metrics')) data = nodeRows.filter(row => row.state === 'running').map(row => ({ id: row.id, available: true, sampled_at: new Date().toISOString(), cpu_percent: row.cpu_percent, memory_bytes: row.memory_bytes, uptime_seconds: row.uptime_seconds }))
     else if (path.endsWith('/image-updates')) {
       if (options.error === 'image-updates') return route.fulfill({ status: 503, json: { code: 1, message: 'Image checks unavailable', data: null } })
       data = { results: updates }
@@ -90,28 +99,35 @@ for (const language of ['en-US', 'zh-CN']) for (const theme of ['dark', 'light']
     const errors: string[] = []
     page.on('pageerror', error => errors.push(error.message))
     const { zh, list, writes } = await setup(page, { language, theme })
-    const mysql = list.getByRole('button', { name: /(?:Service details|服务详情) mysql/ })
-    await expect(mysql).toHaveAttribute('aria-expanded', 'false')
+    const mysql = list.getByTestId('service-group').filter({ hasText: 'mysql' })
     await expect(mysql).toContainText(zh ? '有更新' : 'Update available')
-    await expect(list.getByRole('link', { name: 'database-mysql-1', exact: true })).toHaveCount(0)
+    await expect(mysql.getByRole('link', { name: 'database-mysql-1', exact: true })).toBeVisible()
+    await expect(mysql.getByRole('link', { name: 'database-mysql-1', exact: true })).toHaveAttribute('href', `/containers/${containers[0].id}`)
+    await expect(mysql.getByText(zh ? 'CPU 合计' : 'Total CPU', { exact: true })).toBeVisible()
+    await expect(mysql.getByText('0.4%', { exact: true })).toHaveCount(1)
+    if (width === 1440) expect((await mysql.boundingBox())?.width).toBeGreaterThan(700)
     await expect(page.getByRole('button', { name: zh ? '保存' : 'Save', exact: true })).toHaveCount(0)
     await expect(page.getByRole('button', { name: zh ? '校验' : 'Validate', exact: true })).toHaveCount(0)
     await expect(page.getByRole('button', { name: zh ? '拉取并重建' : 'Pull & recreate', exact: true })).toHaveCount(1)
     await expect(page.getByRole('navigation', { name: zh ? '列表分页' : 'List pagination', exact: true })).toHaveCount(0)
-    await mysql.focus()
+    const details = mysql.getByRole('button', { name: `${zh ? '镜像更新详情' : 'Image update details'} · mysql`, exact: true })
+    await details.focus()
     await page.keyboard.press('Enter')
-    await expect(mysql).toHaveAttribute('aria-expanded', 'true')
-    await expect(list.getByRole('link', { name: 'database-mysql-1', exact: true })).toHaveAttribute('href', `/containers/${containers[0].id}`)
-    await expect(list.getByRole('link', { name: 'database-delivery', exact: true })).toHaveAttribute('href', '/continuous-delivery/database-delivery')
-    await expect(list.getByText('docker.io/library/mysql:8.4.6', { exact: true })).toBeVisible()
-    await expect(list.getByText('[::]:3306 → 3306/tcp', { exact: true })).toBeVisible()
-    await expect(list.getByText('10.0.0.2:8080 → 80/udp', { exact: true })).toBeVisible()
+    const imageDetails = page.getByRole('dialog', { name: `${zh ? '镜像更新详情' : 'Image update details'} · mysql`, exact: true })
+    await expect(imageDetails).toBeVisible()
+    await expect(imageDetails.getByRole('link', { name: 'database-mysql-1', exact: true })).toHaveAttribute('href', `/containers/${containers[0].id}`)
+    await expect(imageDetails.getByRole('link', { name: /database-delivery/ })).toHaveAttribute('href', '/continuous-delivery/database-delivery')
     const date = await page.evaluate(({ language, created }) => new Intl.DateTimeFormat(language, { timeZone: 'Asia/Shanghai', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(new Date(created)), { language, created })
-    await expect(list.getByText(date, { exact: true }).first()).toBeVisible()
-    await list.getByRole('button', { name: /(?:Service details|服务详情) redis/ }).click()
-    await expect(mysql).toHaveAttribute('aria-expanded', 'false')
-    const nameWidth = await mysql.locator('span').filter({ hasText: /^mysql$/ }).first().evaluate(element => element.getBoundingClientRect().width)
-    expect(nameWidth).toBeGreaterThan(25)
+    await expect(imageDetails).toContainText(date)
+    await page.keyboard.press('Escape'); await expect(details).toBeFocused()
+    await mysql.getByRole('button', { name: zh ? '查看完整端口映射' : 'View full port mappings', exact: true }).click()
+    const portDetails = page.getByRole('dialog', { name: zh ? '完整端口映射' : 'Full port mappings', exact: true })
+    await expect(portDetails.getByText('[::]:3306:3306/tcp', { exact: true })).toBeVisible()
+    await expect(portDetails.getByText('10.0.0.2:8080:80/udp', { exact: true })).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(portDetails).toHaveCount(0)
+    await page.mouse.move(0, 0)
+    await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCount(0)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
     await page.locator('main > div').first().evaluate(element => { element.scrollTop = 0 })
     await page.evaluate(() => window.scrollTo(0, 0))
@@ -133,14 +149,19 @@ test('replicas, stopped instances and undeployed services stay distinct', async 
   await page.setViewportSize({ width: 320, height: 900 })
   const replica = container('mysql', 4, { name: 'database-mysql-2', state: 'exited', ports: [], labels: { ...containers[0].labels, 'com.docker.compose.container-number': '2' } })
   const { list } = await setup(page, { rows: [...containers, replica], declared: ['mysql', 'postgres', 'redis', 'worker'] })
-  await expect(list.getByRole('button', { name: /Service details mysql/ })).toHaveCount(2)
-  const stopped = list.getByRole('button', { name: /Service details mysql · #2/ })
+  await expect(list.getByRole('button', { name: /Service details mysql/ })).toHaveCount(1)
+  await list.getByRole('button', { name: /Service details mysql/ }).click()
+  const stopped = list.getByTestId('service-instance').filter({ hasText: 'database-mysql-2' })
   await expect(stopped).toContainText('exited')
-  await expect(stopped).not.toContainText('CPU')
-  await stopped.click()
+  await expect(stopped).toContainText('CPU —')
+  await stopped.getByRole('button', { name: 'Container actions · database-mysql-2' }).click()
+  await expect(page.getByRole('menuitem', { name: 'Terminal · database-mysql-2' })).toBeDisabled()
+  await expect(page.getByRole('menuitem', { name: 'Logs · database-mysql-2' })).toBeEnabled()
+  await page.keyboard.press('Escape')
+  await expect(stopped.getByRole('button', { name: 'Container actions · database-mysql-2' })).toBeFocused()
   await expect(list.getByRole('link', { name: 'database-mysql-2', exact: true })).toBeVisible()
-  await expect(list).toContainText('Not deployed · no local runtime version to check')
-  await expect(list).toContainText('4 services · 4 containers')
+  await expect(list).toContainText('Not created')
+  await expect(list).toContainText('4 · 3/4 containers running')
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 })
 
@@ -153,7 +174,7 @@ test('pagination includes undeployed services and resets on node change', async 
   await page.getByRole('combobox', { name: 'Current Docker node', exact: true }).click()
   await page.getByRole('option', { name: /edge-hk/ }).click()
   await expect(list.getByRole('button', { name: /Service details edge-only/ })).toBeVisible()
-  await expect(pagination).toContainText('1 / 2')
+  await expect(pagination).toHaveCount(0)
   await expect(list.getByRole('button', { name: /Service details mysql/ })).toHaveCount(0)
 })
 
@@ -161,7 +182,6 @@ test('external projects preserve container navigation and takeover', async ({ pa
   const { list } = await setup(page, { managed: false })
   await expect(page.getByRole('tab', { name: 'Configuration', exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Take over', exact: true }).first()).toBeVisible()
-  await list.getByRole('button', { name: /Service details postgres/ }).click()
   await expect(list.getByRole('link', { name: 'database-postgres-1', exact: true })).toBeVisible()
 })
 
@@ -172,3 +192,16 @@ for (const error of ['services', 'image-updates'] as const) {
     if (error === 'image-updates') await expect(list.getByRole('button', { name: /Service details mysql/ })).toBeVisible()
   })
 }
+
+test('changing project routes releases the old container Dialog and its stream', async ({ page }) => {
+  let opened = 0, closed = 0
+  await page.routeWebSocket('**/ws/**', socket => { opened++; socket.onClose(() => closed++); socket.send('project route log\n') })
+  await setup(page)
+  await openContainerAction(page, 'database-mysql-1', 'Logs')
+  const dialog = page.getByRole('dialog', { name: 'database-mysql-1', exact: true })
+  await expect(dialog).toContainText('project route log')
+  await page.evaluate(() => { history.pushState(null, '', '/projects/compose/database-other'); window.dispatchEvent(new PopStateEvent('popstate')) })
+  await expect(page).toHaveURL(/database-other$/)
+  await expect(dialog).toHaveCount(0)
+  await expect.poll(() => opened > 0 && closed === opened).toBe(true)
+})

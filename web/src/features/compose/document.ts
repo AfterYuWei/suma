@@ -61,12 +61,16 @@ export function configKeys(source: string, path: ConfigPath): string[] {
 
 export function configurationIssues(
   source: string
-): { path: ConfigPath; code: 'image' | 'port' | 'mount' | 'dependency' }[] {
+): { path: ConfigPath; code: 'image' | 'port' | 'mount' | 'dependency' | 'replicas' | 'replica_name' }[] {
   const issues: ReturnType<typeof configurationIssues> = []
   const services = configKeys(source, ['services'])
   for (const name of services) {
     const path = ['services', name]
     if (readonlyReason(source, path)) continue
+    const replicas = serviceReplicas(source, name)
+    if (replicas.issue === 'conflict') issues.push({ path: [...path, 'scale'], code: 'replicas' })
+    if (replicas.count !== null && replicas.count > 1 && configValue(source, [...path, 'container_name']))
+      issues.push({ path: [...path, 'container_name'], code: 'replica_name' })
     const image = configValue(source, [...path, 'image'])
     if (
       (image === undefined || image === '') &&
@@ -282,6 +286,38 @@ export function editConfig(
   else doc.setIn(path, updateNode(doc, existing, value))
   const next = doc.getIn(parent, true) as Node
   return replaceNode(source, original, next)
+}
+
+export function serviceReplicas(source: string, service: string): {
+  count: number | null; issue?: 'source' | 'conflict'; path: ConfigPath
+} {
+  const scalePath = ['services', service, 'scale']
+  const replicasPath = ['services', service, 'deploy', 'replicas']
+  const scale = configValue(source, scalePath), replicas = configValue(source, replicasPath)
+  const path = scale !== undefined || replicas === undefined ? scalePath : replicasPath
+  const number = (value: unknown) => typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN
+  const valid = (value: unknown) => value === undefined || (Number.isSafeInteger(number(value)) && number(value) >= 0)
+  if (readonlyReason(source, scalePath) || readonlyReason(source, replicasPath) || !valid(scale) || !valid(replicas))
+    return { count: null, issue: 'source', path }
+  if (scale !== undefined && replicas !== undefined && number(scale) !== number(replicas))
+    return { count: null, issue: 'conflict', path }
+  return { count: scale !== undefined ? number(scale) : replicas !== undefined ? number(replicas) : 1, path }
+}
+
+export function configureServiceReplicas(source: string, service: string, count: number): string {
+  if (!Number.isSafeInteger(count) || count < 0) throw new Error('Replica count must be a non-negative safe integer')
+  const current = serviceReplicas(source, service)
+  if (current.issue === 'conflict') throw new Error('Replica counts conflict')
+  if (current.issue) throw new Error('Edit replica configuration in source')
+  if (count > 1 && configValue(source, ['services', service, 'container_name']))
+    throw new Error('Multiple replicas require automatic container names')
+  if (count === current.count) return source
+  const scalePath = ['services', service, 'scale'], replicasPath = ['services', service, 'deploy', 'replicas']
+  const scale = configValue(source, scalePath), replicas = configValue(source, replicasPath)
+  let next = source
+  if (scale !== undefined || replicas === undefined) next = editConfig(next, scalePath, count)
+  if (replicas !== undefined) next = editConfig(next, replicasPath, count)
+  return next
 }
 
 export function sourceLine(source: string, path: ConfigPath): number {

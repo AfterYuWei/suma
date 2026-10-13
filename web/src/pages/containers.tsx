@@ -2,7 +2,7 @@ import { MonitoringView } from '../features/monitoring/view'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../components/ui/sheet'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useLocation } from '@tanstack/react-router'
-import { ChartNoAxesCombined, CircleAlert, FileText, FolderOpen, HeartPulse, MoreHorizontal, OctagonX, Pause, Pencil, Play, RefreshCw, Search, Square, SquareTerminal, Trash2, X } from 'lucide-react'
+import { ChartNoAxesCombined, CircleAlert, FileText, FolderOpen, HeartPulse, MoreHorizontal, OctagonX, Pause, Pencil, Play, Plus, RefreshCw, Search, Square, SquareTerminal, Trash2, X } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { ContainerFilters, SortMenu } from '../components/docker/container-filters'
 import { DiagnosticsContent, MemoryBar, ObservationOverlay } from '../components/docker/container-observation'
@@ -165,7 +165,7 @@ function LiveContainersPage() {
     <Button size="sm" variant="destructive" disabled={batch.isPending} onClick={() => void runBatch('remove')}>{batch.isPending ? <Spinner /> : <Trash2 />}{zh ? '删除' : 'Remove'}</Button>
   </div>
 
-  const toolbar = <div className="flex flex-wrap items-center gap-2">
+  const toolbar = <div className="flex flex-wrap items-center justify-end gap-2">
     {selectionBar}
     <ContainerFilters view={view} update={update} projects={projects} zh={zh} />
     {(view.search || view.states.length > 0 || view.health.length > 0 || view.source || view.project || view.diagnostic) && <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => update({ ...defaultContainerView, sort: view.sort, descending: view.descending })}>{zh ? '清除筛选' : 'Clear filters'}<X data-icon="inline-end" aria-hidden="true" /></Button>}
@@ -183,6 +183,7 @@ function LiveContainersPage() {
   </>
 
   return <ResourceFrame compact title={t('containers')} detail={zh ? `${rows.length === query.data?.length ? '' : `${rows.length} / `}${query.data?.length ?? 0} 个容器` : `${rows.length === query.data?.length ? '' : `${rows.length} / `}${query.data?.length ?? 0} containers`} lead={statusStrip} action={toolbar}>
+      <div className="mb-3 flex justify-end"><Button size="sm" disabled={!nodeID} nativeButton={false} render={<Link to="/containers/new" />}><Plus />{zh ? '新增容器' : 'New container'}</Button></div>
       {query.isPending && <LoadingState compact rows={7} label={zh ? '正在加载容器' : 'Loading containers'} />}
       {query.isError && <ErrorState description={zh ? '无法连接 Docker Engine。' : 'Unable to reach the Docker Engine.'} />}
       {!!operationError && (
@@ -262,7 +263,7 @@ function LiveContainersPage() {
                   <TableCell>
                     <button type="button" aria-expanded={expanded===row.id} onClick={()=>toggleTrend(row.id)} className="w-full" aria-label={`${zh ? '资源趋势' : 'Resource trends'} ${row.name}`}><div className="grid h-10 min-w-0 grid-rows-2 justify-items-center leading-5 tabular-nums"><span className="text-sm leading-5">CPU {cpuAvailable ? `${sample.cpu_percent.toFixed(1)}%` : '—'}</span><span className="relative text-xs leading-5 text-muted-foreground">{memoryAvailable ? memory(sample.memory_bytes) : '—'} / {limit == null ? '—' : limit === 0 ? '∞' : memory(limit)}<MemoryBar used={memoryAvailable ? sample.memory_bytes : undefined} limit={limit} zh={zh} /></span></div></button>
                   </TableCell>
-                  <TableCell className="tabular-nums"><div className="grid h-10 min-w-0 grid-rows-2 justify-items-center leading-5"><span className="text-sm leading-5">↓ {row.state !== 'running' || syncing ? '—' : rate?.status === 'ready' ? rateLabel(rate.receive) : networkLabel}</span><span className="text-xs leading-5 text-muted-foreground">↑ {row.state !== 'running' || syncing ? '—' : rate?.status === 'ready' ? rateLabel(rate.transmit) : networkLabel}</span></div></TableCell>
+                  <TableCell className="tabular-nums"><div className="grid h-10 min-w-0 grid-rows-2 justify-items-center leading-5"><span className="text-sm leading-5">↓ {row.state !== 'running' || syncing ? '—' : rate?.status === 'ready' ? rateLabel(rate.receive) : networkLabel}</span><span className="text-sm leading-5 text-muted-foreground">↑ {row.state !== 'running' || syncing ? '—' : rate?.status === 'ready' ? rateLabel(rate.transmit) : networkLabel}</span></div></TableCell>
                   <TableCell><ContainerNetworks networks={row.networks} zh={zh} /></TableCell>
                   <TableCell><ContainerPorts ports={row.ports} zh={zh} /></TableCell>
                   <TableCell>

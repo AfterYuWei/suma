@@ -1204,6 +1204,7 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 
 func registerNodeContainerRoutes(group *gin.RouterGroup, _ *gin.Engine, deps Dependencies) {
 	containers := group.Group("/containers")
+	registerContainerCreationRoutes(containers, deps)
 	registerContainerObservationRoutes(containers, deps)
 	containers.GET("/runtime", func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), containerdomain.RuntimeReadTimeout)

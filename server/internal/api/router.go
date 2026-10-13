@@ -1606,7 +1606,10 @@ func streamTask(c *gin.Context, service *task.Service) {
 		return
 	}
 	defer connection.Close()
-	logs, _ := service.Logs(c.Request.Context(), c.Param("id"))
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	defer cancel()
+	go watchDisconnect(connection, cancel)
+	logs, _ := service.Logs(ctx, c.Param("id"))
 	for _, log := range logs {
 		if connection.WriteJSON(task.Event{Type: "log", Message: log.Message, Time: log.CreatedAt}) != nil {
 			return
@@ -1614,7 +1617,29 @@ func streamTask(c *gin.Context, service *task.Service) {
 	}
 	events, unsubscribe := service.Subscribe(c.Param("id"))
 	defer unsubscribe()
-	for event := range events {
+	// Subscribe before reading the current status so completion between the
+	// handshake and subscription cannot leave a finished task stream waiting.
+	current, err := service.Get(ctx, c.Param("id"))
+	if err != nil {
+		return
+	}
+	if connection.WriteJSON(task.Event{Type: "status", Status: current.Status, Progress: current.Progress, Message: current.Message, Time: time.Now()}) != nil {
+		return
+	}
+	if current.Status == task.StatusSuccess || current.Status == task.StatusFailed || current.Status == task.StatusCanceled {
+		return
+	}
+	for {
+		var event task.Event
+		select {
+		case <-ctx.Done():
+			return
+		case value, open := <-events:
+			if !open {
+				return
+			}
+			event = value
+		}
 		connection.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		if connection.WriteJSON(event) != nil {
 			return

@@ -209,7 +209,7 @@ func (a *Adapter) List(ctx context.Context) ([]domain.Summary, error) {
 			}
 			sort.Slice(networks, func(i, j int) bool { return networks[i].Name < networks[j].Name })
 		}
-		result = append(result, domain.Summary{ID: row.ID, Name: name, Image: row.Image, Command: row.Command, Created: time.Unix(row.Created, 0), State: string(row.State), Status: row.Status, Ports: ports, Networks: networks, Labels: row.Labels})
+		result = append(result, domain.Summary{ID: row.ID, Name: name, Image: row.Image, ImageID: row.ImageID, Command: row.Command, Created: time.Unix(row.Created, 0), State: string(row.State), Status: row.Status, Ports: ports, Networks: networks, Labels: row.Labels})
 	}
 	return result, nil
 }

@@ -55,13 +55,13 @@ export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nod
   const [conflictContent, setConflictContent] = useState<Content | null>(null)
   const [showConflictDiff, setShowConflictDiff] = useState(false)
   const base = nodePath(nodeID, `/containers/${encodeURIComponent(container.id)}/files`)
-  const listing = useQuery({ queryKey: ['container-files', nodeID, container.id, folder, cursor], queryFn: () => api<Listing>(`${base}?path=${encodeURIComponent(folder)}&cursor=${encodeURIComponent(cursor)}`), enabled: container.state === 'running', refetchInterval: 5_000 })
-  const content = useQuery({ queryKey: ['container-file-content', nodeID, container.id, selected], queryFn: () => api<Content>(`${base}/content?path=${encodeURIComponent(selected ?? '')}`), enabled: !!selected && container.state === 'running', retry: false })
-  const history = useQuery({ queryKey: ['container-file-history', nodeID, container.id, selected], queryFn: () => api<Revision[]>(`${base}/history?path=${encodeURIComponent(selected ?? '')}`), enabled: !!selected && historyOpen })
-  const revision = useQuery({ queryKey: ['container-file-revision', nodeID, container.id, selected, revisionID], queryFn: () => api<Content>(`${base}/history/${revisionID}?path=${encodeURIComponent(selected ?? '')}`), enabled: !!selected && revisionID !== null })
+  const listing = useQuery({ queryKey: ['container-files', nodeID, container.id, folder, cursor], queryFn: ({ signal }) => api<Listing>(`${base}?path=${encodeURIComponent(folder)}&cursor=${encodeURIComponent(cursor)}`, { signal }), enabled: container.state === 'running', refetchInterval: 5_000 })
+  const content = useQuery({ queryKey: ['container-file-content', nodeID, container.id, selected], queryFn: ({ signal }) => api<Content>(`${base}/content?path=${encodeURIComponent(selected ?? '')}`, { signal }), enabled: !!selected && container.state === 'running', retry: false })
+  const history = useQuery({ queryKey: ['container-file-history', nodeID, container.id, selected], queryFn: ({ signal }) => api<Revision[]>(`${base}/history?path=${encodeURIComponent(selected ?? '')}`, { signal }), enabled: !!selected && historyOpen })
+  const revision = useQuery({ queryKey: ['container-file-revision', nodeID, container.id, selected, revisionID], queryFn: ({ signal }) => api<Content>(`${base}/history/${revisionID}?path=${encodeURIComponent(selected ?? '')}`, { signal }), enabled: !!selected && revisionID !== null })
   const task = useQuery({ queryKey: ['container-file-task', nodeID, taskID], queryFn: () => api<FileTask>(nodePath(nodeID, `/tasks/${taskID}`)), enabled: !!taskID, refetchInterval: (query) => { const state = query.state.data?.status; return state === 'success' || state === 'failed' || state === 'canceled' ? false : 1000 } })
   const dirty = content.data && draft !== null && draft !== content.data.content
-  const canSave = !!content.data && !content.data.read_only && !!dirty
+  const canSave = container.state === 'running' && !!content.data && !content.data.read_only && !!dirty
   const sensitive = !!selected && (/(^|\/)(\.env(?:\..*)?|[^/]*(?:secret|token|credential|private[_-]?key)[^/]*)$/i.test(selected) || /\.(?:pem|p12|pfx|key)$/i.test(selected) || /(?:PASSWORD|TOKEN|SECRET|API_KEY|PRIVATE_KEY)\s*[:=]/i.test(content.data?.content ?? ''))
 
   useEffect(() => { if (content.data && draft === null) setDraft(content.data.content) }, [content.data, draft])
@@ -109,6 +109,7 @@ export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nod
   })
 
   const action = async (kind: string, file?: Entry) => {
+    if (container.state !== 'running') return
     let source = file?.path ?? folder
     let target = ''
     if (file && selected === file.path && dirty && ['rename', 'move', 'delete'].includes(kind) && !await confirmDialog({ title: tx('放弃未保存的更改？', 'Discard unsaved changes?'), description: file.path, confirmLabel: tx('放弃', 'Discard'), danger: true })) return
@@ -141,7 +142,7 @@ export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nod
   const mountShortcuts = mounts.filter((mount) => mount.type === 'bind' || mount.type === 'volume')
   const folderReadOnly = listing.data?.current_mount ? !listing.data.current_mount.read_write : container.read_only_rootfs
   const crumbs = folder === '/' ? [] : folder.split('/').filter(Boolean)
-  if (container.state !== 'running') return <Alert><AlertTriangle /><AlertDescription>{tx('文件工具需要运行中的容器。启动容器后可浏览和编辑文件。', 'File tools require a running container. Start it to browse and edit files.')}</AlertDescription></Alert>
+  if (container.state !== 'running' && !dirty) return <Alert><AlertTriangle /><AlertDescription>{tx('文件工具需要运行中的容器。启动容器后可浏览和编辑文件。', 'File tools require a running container. Start it to browse and edit files.')}</AlertDescription></Alert>
 
   return <div className="space-y-4">
     {mountShortcuts.length > 0 && <div className="flex flex-wrap items-center gap-2">
@@ -182,7 +183,7 @@ export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nod
         {content.data && <>
           {content.data.warning && <Alert variant="destructive" className="m-2 w-auto"><AlertTriangle /><AlertDescription>{tx('上次保存中断，当前内容与已验证版本不一致。请检查文件或从历史恢复。', content.data.warning)}</AlertDescription></Alert>}
           {content.data.single_file_bind && <Alert className="m-2 w-auto"><AlertTriangle /><AlertDescription>{tx('此文件是单文件 bind mount。保存会短暂原位写入；请避免应用同时读取或修改它。', 'This file is a single-file bind mount. Saving writes in place briefly; avoid concurrent reads or writes by the application.')}</AlertDescription></Alert>}
-          {sensitive && !revealed ? <div className="grid h-[50vh] min-h-80 place-content-center gap-3 px-4 text-center"><p className="text-sm text-muted-foreground">{tx('检测到可能包含密码或密钥的内容，默认隐藏。', 'Potential passwords or keys were detected. Content is hidden by default.')}</p><Button variant="outline" onClick={() => setRevealed(true)}>{tx('显示敏感内容', 'Reveal sensitive content')}</Button></div> : showConflictDiff && conflictContent ? <div className="h-[50vh] min-h-80"><Suspense fallback={<Spinner />}><MonacoDiff original={conflictContent.content} modified={draft ?? content.data.content} language={languageFor(selected)} theme={dark ? 'vs-dark' : 'light'} /></Suspense></div> : revisionID !== null && revision.data ? <div className="h-[50vh] min-h-80"><Suspense fallback={<Spinner />}><MonacoDiff original={revision.data.content} modified={draft ?? content.data.content} language={languageFor(selected)} theme={dark ? 'vs-dark' : 'light'} /></Suspense></div> : <div className="h-[50vh] min-h-80"><Suspense fallback={<Spinner />}><Monaco key={selected} value={draft ?? content.data.content} onChange={(value) => setDraft(value ?? '')} language={languageFor(selected)} theme={dark ? 'vs-dark' : 'light'} options={{ readOnly: content.data.read_only, automaticLayout: true, minimap: { enabled: false }, wordWrap: 'on', fontFamily: '"JetBrains Mono", monospace', scrollBeyondLastLine: false, wordBasedSuggestions: 'allDocuments' }} /></Suspense></div>}
+          {sensitive && !revealed ? <div className="grid h-[50vh] min-h-80 place-content-center gap-3 px-4 text-center"><p className="text-sm text-muted-foreground">{tx('检测到可能包含密码或密钥的内容，默认隐藏。', 'Potential passwords or keys were detected. Content is hidden by default.')}</p><Button variant="outline" onClick={() => setRevealed(true)}>{tx('显示敏感内容', 'Reveal sensitive content')}</Button></div> : showConflictDiff && conflictContent ? <div className="h-[50vh] min-h-80"><Suspense fallback={<Spinner />}><MonacoDiff original={conflictContent.content} modified={draft ?? content.data.content} language={languageFor(selected)} theme={dark ? 'vs-dark' : 'light'} /></Suspense></div> : revisionID !== null && revision.data ? <div className="h-[50vh] min-h-80"><Suspense fallback={<Spinner />}><MonacoDiff original={revision.data.content} modified={draft ?? content.data.content} language={languageFor(selected)} theme={dark ? 'vs-dark' : 'light'} /></Suspense></div> : <div className="h-[50vh] min-h-80"><Suspense fallback={<Spinner />}><Monaco key={selected} value={draft ?? content.data.content} onChange={(value) => setDraft(value ?? '')} language={languageFor(selected)} theme={dark ? 'vs-dark' : 'light'} options={{ readOnly: container.state !== 'running' || content.data.read_only, automaticLayout: true, minimap: { enabled: false }, wordWrap: 'on', fontFamily: '"JetBrains Mono", monospace', scrollBeyondLastLine: false, wordBasedSuggestions: 'allDocuments' }} /></Suspense></div>}
           {historyOpen && <div className="max-h-44 space-y-1 overflow-auto bg-surface p-3"><p className="mb-1 text-xs text-muted-foreground">{tx('最近版本', 'Recent versions')}</p>{history.data?.map((item) => <div key={item.id} className="flex items-center justify-between gap-2 py-1 text-xs"><button className="truncate text-left hover:underline" onClick={() => setRevisionID(item.id)}>{formatDateTime(item.created_at)} {item.baseline ? tx('原始版本', 'Original') : `#${item.id}`}</button><Button size="sm" variant="ghost" disabled={busy || content.data?.read_only} onClick={() => { setRevisionID(item.id); void restoreRevision(item.id) }}><RotateCcw />{tx('恢复', 'Restore')}</Button></div>)}{history.data?.length === 0 && <p className="text-sm text-muted-foreground">{tx('还没有保存历史。', 'No saved versions yet.')}</p>}</div>}
           {(revisionID !== null || showConflictDiff) && <div className="bg-surface p-3"><Button size="sm" variant="outline" onClick={() => { setRevisionID(null); setShowConflictDiff(false) }}>{tx('返回编辑', 'Back to editor')}</Button></div>}
         </>}
@@ -194,7 +195,7 @@ export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nod
   </div>
 
   async function restoreRevision(id: number) {
-    if (!selected || !content.data) return
+    if (container.state !== 'running' || !selected || !content.data) return
     if (!await confirmDialog({ title: tx('恢复此版本？', 'Restore this version?'), description: dirty ? tx('未保存更改将丢失；服务器上的当前内容会保留在编辑历史中。', 'Unsaved changes will be lost; the current saved content remains in history.') : tx('当前内容会保留在编辑历史中。', 'The current content will remain in editor history.'), confirmLabel: tx('恢复', 'Restore') })) return
     setBusy(true)
     try {

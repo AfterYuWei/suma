@@ -8,7 +8,7 @@ import type { MetricPoint, ContainerMetrics } from './types'
 
 interface ListMetrics extends ContainerMetrics { rate: NetworkRate }
 
-export function useListMetrics(nodeID: string) {
+export function useListMetrics(nodeID: string, enabled = true) {
   const client = useQueryClient()
   const session = useRef({ nodeID, fresh: true })
   if (session.current.nodeID !== nodeID) session.current = { nodeID, fresh: true }
@@ -19,6 +19,7 @@ export function useListMetrics(nodeID: string) {
   }, [])
   const queryKey = ['container-metrics', nodeID, 'list']
   const query = useQuery({
+    enabled,
     queryKey,
     queryFn: async ({ signal }) => {
       const identity = session.current

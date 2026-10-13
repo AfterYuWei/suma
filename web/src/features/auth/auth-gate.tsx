@@ -24,7 +24,7 @@ const setupKeyCommand = String.raw`docker logs suma 2>&1 | sed -n 's/.*"msg":"SU
 function AuthFrame({ title, description, children }: { title: string; description: string; children: ReactNode }) {
   return <main className="grid min-h-screen place-items-center p-6">
     <div className="fixed top-6 right-6"><ThemeToggle /></div>
-    <Card className="w-full max-w-[420px]">
+    <Card className="w-full max-w-[420px] rounded-xl bg-card ring-1 ring-foreground/10">
       <CardContent className="flex flex-col items-start gap-6">
         <div className="flex items-center gap-2.5">
           <LogoMark width={32} height={32} />
@@ -62,12 +62,12 @@ function AuthForm({ setup, pending, error, initialValues, onSubmit }: { setup: b
     onSubmit({ username, password, ...(setup ? { nickname, email, confirm_password: confirmPassword, setup_token: setupToken.trim() } : {}) })
   }
   return <form onSubmit={submit} autoComplete="on" className="flex w-full flex-col gap-4">
-    {setup && <div className="flex flex-col gap-2 rounded-md bg-surface p-3 text-xs">
+    {setup && <div className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-3 text-xs">
       <p className="text-muted-foreground">{zh ? '在部署主机的终端运行下面的指令，直接取得最新初始化密钥。自定义容器名时请替换 suma。密钥 30 分钟后过期；过期后重启尚未初始化的容器，再运行指令。' : 'Run this command on the deployment host to print the latest initialization key. Replace suma if you use a different container name. The key expires after 30 minutes; restart the uninitialized container and run the command again.'}</p>
       <code className="select-all whitespace-pre-wrap break-all rounded bg-background p-2 font-mono text-[11px]">{setupKeyCommand}</code>
       <Button type="button" variant="outline" size="sm" className="self-start" onClick={async () => { try { await navigator.clipboard.writeText(setupKeyCommand); setCommandCopied(true) } catch { setCommandCopied(false) } }}><Copy />{commandCopied ? (zh ? '已复制指令' : 'Command copied') : (zh ? '复制指令' : 'Copy command')}</Button>
     </div>}
-    {!setup && initialValues && <div className="flex items-center justify-between gap-4 rounded-md bg-surface px-3 py-2 text-xs">
+    {!setup && initialValues && <div className="flex items-center justify-between gap-4 rounded-lg border bg-muted/40 px-3 py-2 text-xs">
       <span className="text-muted-foreground">{zh ? '演示账号已填入' : 'Demo credentials filled'}</span>
       <code className="font-mono">{initialValues.username} / {initialValues.password}</code>
     </div>}
@@ -190,7 +190,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     return <AuthFrame title={zh ? '登录 SUMA' : 'Sign in to SUMA'} description={zh ? '使用本地管理员账户管理此 Docker 主机。' : 'Manage this Docker host with your local administrator account.'}>
       <AuthForm setup={false} pending={login.isPending} error={error} initialValues={credentials.data} onSubmit={(values) => login.mutate(values)} />
       {!demoMode && passkeysAvailable() && <div className="flex w-full flex-col gap-4">
-        <div className="flex items-center justify-center text-xs text-muted-foreground"><span>{zh ? '或' : 'or'}</span></div>
+        <div className="flex items-center gap-3 text-xs text-muted-foreground"><span className="h-px flex-1 bg-border" /><span>{zh ? '或' : 'or'}</span><span className="h-px flex-1 bg-border" /></div>
         <Button type="button" variant="outline" size="lg" className="w-full" disabled={passkeyLogin.isPending || login.isPending} onClick={() => passkeyLogin.mutate()}>{passkeyLogin.isPending ? <Spinner /> : <Fingerprint />}{zh ? '使用 Passkey 登录' : 'Sign in with a passkey'}</Button>
       </div>}
     </AuthFrame>

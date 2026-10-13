@@ -36,9 +36,10 @@ export function TerminalView({ nodeID, containerId }: { nodeID: string; containe
     socket.binaryType = 'arraybuffer'
     socket.onopen = () => terminal.focus()
     socket.onmessage = (event) => terminal.write(typeof event.data === 'string' ? event.data : new Uint8Array(event.data))
-    socket.onclose = () => terminal.write('\r\n\x1b[90mSession disconnected\x1b[0m')
+    let disposed = false
+    socket.onclose = () => { if (!disposed) terminal.write('\r\n\x1b[90mSession disconnected\x1b[0m') }
     const input = terminal.onData((data) => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'input', data })) })
-    return () => { resize.disconnect(); input.dispose(); socket.close(); terminal.dispose() }
+    return () => { disposed = true; socket.onmessage = null; socket.onclose = null; resize.disconnect(); input.dispose(); socket.close(); terminal.dispose() }
   }, [nodeID, containerId, dark])
   return <div ref={host} className="h-[56vh] overflow-hidden" />
 }

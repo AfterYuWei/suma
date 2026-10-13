@@ -9,6 +9,7 @@ import { createMockCleanup } from './mock-cleanup'
 import type { User } from '../features/auth/types'
 import type { Project, ProjectSummary, ProjectTakeoverDraft, ShadowAssessment, ShadowPreviewSession, ShadowPreviewStatus } from '../features/compose/types'
 import type { ContainerDetail, ContainerDiagnostics, ContainerMetrics, ContainerSummary } from '../features/containers/types'
+import { containerCreateRequest, type ContainerCreateDraft, type CreateContainerRequest } from '../features/containers/create'
 import type { CDConfiguration, CDConfigureInput, CDDrift, DeliveryProject, DeliveryRelease, GitCredential } from '../features/delivery/types'
 import type { DockerNode, NodeGroup } from './nodes'
 import { ApiError, type DemoCredentials, type DemoStream } from './api'
@@ -78,9 +79,11 @@ const projects: ProjectSummary[] = [
   { ref: { backend: 'compose', scope: { kind: 'engine', id: 'local' }, native_name: 'legacy-tools' }, backend: 'compose', scope: { kind: 'engine', id: 'local' }, node_id: 'local', name: 'legacy-tools', native_name: 'legacy-tools', managed: false, source: 'external', capabilities: ['view', 'services', 'logs', 'takeover', 'cleanup'], service_count: 1, instance_count: 1, status: 'stopped', created_at: earlier, updated_at: now },
 ]
 
+for (const project of projects) if (project.managed) project.declared_service_names = [...new Set(containerSets.local.filter(row => row.labels['com.docker.compose.project'] === project.name).map(row => row.labels['com.docker.compose.service']).filter(Boolean))]
+
 const projectConfigurations = new Map<string, Project>()
 let projectRevision = 0
-const projectDetail = (row: ProjectSummary): Project => ({ ...row, path: `/srv/compose/${row.name}`, can_manage: row.managed, config_files: ['compose.yml'], services: row.service_count, containers: row.instance_count, compose: `services:\n  app:\n    image: ghcr.io/example/${row.name}:latest\n    restart: unless-stopped\n`, environment: 'APP_ENV=production\n', metadata: { origin: row.managed ? 'created' : 'takeover', claimed_at: earlier, last_deployed_at: now } })
+const projectDetail = (row: ProjectSummary): Project => ({ ...row, path: `/srv/compose/${row.name}`, can_manage: row.managed, config_files: ['compose.yml'], services: row.service_count, containers: row.instance_count, compose: 'services:\n' + (row.declared_service_names ?? ['app']).map(name => `  ${name}:\n    image: ghcr.io/example/${row.name}:latest\n    restart: unless-stopped\n`).join(''), environment: 'APP_ENV=production\n', metadata: { origin: row.managed ? 'created' : 'takeover', claimed_at: earlier, last_deployed_at: now } })
 
 const images = [
   { id: `sha256:${'1'.repeat(64)}`, tags: ['ghcr.io/afteryuwei/gateway:1.8.2'], digests: ['sha256:7e992d8a'], size: 186_646_528, created: earlier, containers: 1, architecture: 'amd64', os: 'linux', author: 'SUMA Demo', docker_version: '28.3.3', layers: ['sha256:base', 'sha256:app'] },
@@ -106,6 +109,8 @@ const tasks = [
   { id: 'task-pull-183', scope: 'node', node_id: 'local', node_name: 'homelab-01', type: 'image_pull', name: 'Pull ghcr.io/afteryuwei/gateway:1.8.2', status: 'success', progress: 100, message: 'Image pulled', created_at: '2026-08-29T07:52:00.000Z' },
   { id: 'task-prune-182', scope: 'node', node_id: 'local', node_name: 'homelab-01', type: 'system_prune', name: 'Docker system prune', status: 'success', progress: 100, message: 'Reclaimed 768 MB', created_at: '2026-08-28T22:30:00.000Z' },
 ]
+const createdContainerIDs = new Map<string, string>()
+const createdContainerDetails = new Map<string, ContainerDetail>()
 
 const audits = [
   { id: 18, scope: 'node', node_id: 'local', node_name: 'homelab-01', user_id: 1, action: 'container.restart', resource_type: 'container', resource_name: containerSets.local[0].id, ip: '192.168.1.36', result: 'success', created_at: '2026-08-29T08:25:00.000Z' },
@@ -432,6 +437,25 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     const nodeID = nodeMatch[1]
     const suffix = nodeMatch[2] || ''
     const containers = nodeContainers(nodeID)
+    if (suffix === '/containers' && method === 'POST') {
+      const node = nodes.find(node => node.id === nodeID && node.enabled && node.status !== 'offline')
+      if (!node) throw new ApiError('Docker node is unavailable', 20008, 503)
+      const raw = body as unknown as CreateContainerRequest
+      const input = containerCreateRequest({ ...raw, command: raw.command.join('\n'), entrypoint: raw.entrypoint.join('\n'), memory_mb: String(raw.memory_mb), cpus: String(raw.cpus) } satisfies ContainerCreateDraft, false)
+      if (containers.some(row => row.name === input.name)) throw new ApiError('Container name is already in use', 20262, 409)
+      const id = [...crypto.getRandomValues(new Uint8Array(32))].map(value => value.toString(16).padStart(2, '0')).join('')
+      const created = new Date().toISOString()
+      const row: ContainerSummary = { id, name: input.name, image: input.image, command: input.command.join(' '), created, state: input.start ? 'running' : 'created', status: input.start ? 'Up' : 'Created', ports: input.ports.map(port => ({ private_port: port.container_port, public_port: port.host_port || 32768, type: port.protocol, ip: port.host_ip })), networks: input.network === 'none' ? [] : [{ name: input.network }], labels: {}, cpu_percent: 0, memory_bytes: 0, uptime_seconds: 0 }
+      containers.push(row)
+      createdContainerDetails.set(nodeID + ':' + id, { ...row, pid: input.start ? 1 : 0, entrypoint: input.entrypoint, working_directory: input.working_directory, restart_policy: input.restart_policy, read_only_rootfs: input.read_only_rootfs, network_mode: input.network, environment: input.environment.map(variable => ({ key: variable.key, sensitive: true })), mounts: input.mounts.map(mount => ({ type: mount.type, name: mount.type === 'volume' ? mount.source : undefined, source: mount.source, destination: mount.target, read_write: !mount.read_only })), networks: (row.networks ?? []).map(network => ({ name: network.name, ip_address: '', gateway: '', mac_address: '' })) })
+      const task = { id: crypto.randomUUID(), scope: 'node', node_id: nodeID, node_name: node.name, type: 'container.create', name: 'Create ' + input.name, status: 'success', progress: 100, message: 'Container ready: ' + id, created_at: created }
+      createdContainerIDs.set(task.id, id)
+      tasks.unshift(task)
+      audits.unshift({ id: Math.max(...audits.map(row => row.id)) + 1, scope: 'node', node_id: nodeID, node_name: node.name, user_id: 1, action: 'container.create', resource_type: 'container', resource_name: id, task_id: task.id, ip: '127.0.0.1', result: 'success', created_at: created })
+      return clone(task) as T
+    }
+    const creationSteps = suffix.match(/^\/tasks\/([^/]+)\/steps$/)
+    if (creationSteps && createdContainerIDs.has(creationSteps[1])) return clone([{ id: 'container:' + createdContainerIDs.get(creationSteps[1]), status: 'Created', current: 1, total: 1, progress: 100 }]) as T
     if (['/overview/info', '/overview/metrics', '/overview/resources', '/overview/disk'].includes(suffix)) {
       const fleet = await demoApi<{ nodes: import('../components/docker/node-overview-card').FleetNode[] }>('/fleet/overview')
       const node = fleet.nodes.find((item) => item.id === nodeID)
@@ -532,7 +556,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
       const action = containerMatch[2]
       if (action) { row.state = action === 'stop' ? 'exited' : action === 'pause' ? 'paused' : 'running'; row.status = row.state === 'running' ? 'Up a few seconds' : row.state }
       if (method === 'PATCH' && typeof body.name === 'string') row.name = body.name
-      const detail: ContainerDetail = { ...row, pid: row.state === 'running' ? 12984 : 0, entrypoint: ['/docker-entrypoint.sh'], working_directory: '/app', restart_policy: 'unless-stopped', read_only_rootfs: false, network_mode: 'bridge', environment: [{ key: 'APP_ENV', value: 'production', sensitive: false }, { key: 'DATABASE_PASSWORD', sensitive: true }], mounts: [{ type: 'volume', name: 'gateway-prod_data', source: '/var/lib/docker/volumes/gateway-prod_data/_data', destination: '/data', read_write: true }], networks: (row.networks ?? []).map(network => ({ ...network, ip_address: network.ip_address ?? '', gateway: '172.22.0.1', mac_address: '02:42:ac:16:00:03' })) }
+      const detail: ContainerDetail = createdContainerDetails.get(nodeID + ':' + row.id) ?? { ...row, pid: row.state === 'running' ? 12984 : 0, entrypoint: ['/docker-entrypoint.sh'], working_directory: '/app', restart_policy: 'unless-stopped', read_only_rootfs: false, network_mode: 'bridge', environment: [{ key: 'APP_ENV', value: 'production', sensitive: false }, { key: 'DATABASE_PASSWORD', sensitive: true }], mounts: [{ type: 'volume', name: 'gateway-prod_data', source: '/var/lib/docker/volumes/gateway-prod_data/_data', destination: '/data', read_write: true }], networks: (row.networks ?? []).map(network => ({ ...network, ip_address: network.ip_address ?? '', gateway: '172.22.0.1', mac_address: '02:42:ac:16:00:03' })) }
       return clone(detail) as T
     }
 
@@ -547,7 +571,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     if (suffix === '/volumes' && method === 'GET') return clone(volumes) as T
     if (suffix.startsWith('/volumes')) return {} as T
 
-    if (suffix === '/projects' && method === 'GET') return clone(projects.map((item) => ({ ...item, node_id: nodeID, scope: { kind: 'engine', id: nodeID }, ref: { ...item.ref, scope: { kind: 'engine', id: nodeID } } }))) as T
+    if (suffix === '/projects' && method === 'GET') return clone(projects.map((item) => ({ ...item, declared_service_names: projectConfigurations.get(`${nodeID}/${item.name}`)?.declared_service_names ?? item.declared_service_names, node_id: nodeID, scope: { kind: 'engine', id: nodeID }, ref: { ...item.ref, scope: { kind: 'engine', id: nodeID } } }))) as T
     if (suffix === '/projects/validate') {
       const content = String(body.compose ?? '')
       if (composeProblems(content).length || !configKeys(content, ['services']).length || configKeys(content, ['services']).some((service) => !configValue(content, ['services', service, 'image']) && !configValue(content, ['services', service, 'build']))) throw new ApiError('Compose validation failed', 20412, 422)
@@ -557,7 +581,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
       const name = String(body.name ?? '')
       if (!/^[a-z0-9][a-z0-9_-]*$/.test(name) || composeProblems(String(body.compose)).length) throw new ApiError('Invalid Project configuration', 20403, 422)
       if (projects.some((row) => row.name === name)) throw new ApiError('Project already exists', 20405, 409)
-      const summary: ProjectSummary = { ...clone(projects[0]), name, native_name: name, node_id: nodeID, managed: true, source: 'managed', service_count: configKeys(String(body.compose), ['services']).length, instance_count: 0, status: 'stopped', scope: { kind: 'engine', id: nodeID }, ref: { backend: 'compose', scope: { kind: 'engine', id: nodeID }, native_name: name }, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+      const summary: ProjectSummary = { ...clone(projects[0]), name, native_name: name, node_id: nodeID, managed: true, source: 'managed', declared_service_names: configKeys(String(body.compose), ['services']), service_count: 0, instance_count: 0, status: 'stopped', scope: { kind: 'engine', id: nodeID }, ref: { backend: 'compose', scope: { kind: 'engine', id: nodeID }, native_name: name }, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
       projects.push(summary)
       const detail: Project = { ...projectDetail(summary), compose: String(body.compose), environment: String(body.environment ?? ''), revision: `demo-config-${++projectRevision}` }
       projectConfigurations.set(`${nodeID}/${name}`, detail)
@@ -575,7 +599,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
       if (!rest && method === 'PUT') {
         if (body.expected_revision && body.expected_revision !== detail.revision) throw new ApiError('Project configuration changed', 20411, 409)
         if (composeProblems(String(body.compose)).length) throw new ApiError('Compose YAML cannot be parsed', 20404, 422)
-        const saved = { ...detail, compose: String(body.compose), environment: String(body.environment ?? ''), revision: `demo-config-${++projectRevision}` }
+        const saved = { ...detail, declared_service_names: configKeys(String(body.compose), ['services']), compose: String(body.compose), environment: String(body.environment ?? ''), revision: `demo-config-${++projectRevision}` }
         projectConfigurations.set(configurationKey, saved)
         return clone(saved) as T
       }

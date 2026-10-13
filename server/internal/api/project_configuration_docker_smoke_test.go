@@ -9,6 +9,7 @@ import (
 	"github.com/suma/suma/server/internal/testutil"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,10 +17,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/suma/suma/server/internal/agenthub"
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/auth"
 	"github.com/suma/suma/server/internal/compose"
+	containerdomain "github.com/suma/suma/server/internal/container"
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/node"
 	"github.com/suma/suma/server/internal/secret"
@@ -157,7 +160,7 @@ func projectConfigurationTransportSmoke(t *testing.T, transport, unixHost string
 	notificationTransportSmoke(t, ctx, root, nodeID, transport, db, adapter, tasks, current)
 	name := fmt.Sprintf("visual-%s-%d", transport, time.Now().UnixNano())
 	path := "/api/v1/nodes/" + nodeID + "/projects"
-	content := "# visual source\nservices:\n  app:\n    image: alpine:3.24\n    command: [sleep, '300']\n    environment:\n      APP_VALUE: ${APP_VALUE}\n    volumes:\n      - data:/data\n    healthcheck:\n      test: [CMD, 'true']\n      interval: 1s\n    cpus: 0.25\n    mem_limit: 32M\n    x-preserved: value\nvolumes:\n  data: {}\n"
+	content := "# visual source\nservices:\n  app:\n    image: alpine:3.24\n    command: [sh, -c, 'echo project-dialog; exec sleep 300']\n    environment:\n      APP_VALUE: ${APP_VALUE}\n    volumes:\n      - data:/data\n    healthcheck:\n      test: [CMD, 'true']\n      interval: 1s\n    cpus: 0.25\n    mem_limit: 32M\n    x-preserved: value\nvolumes:\n  data: {}\n"
 	body, _ := json.Marshal(map[string]string{"backend": "compose", "name": name, "compose": content, "environment": "APP_VALUE=project-smoke\n"})
 	validated := h.request(http.MethodPost, path+"/validate", body)
 	if validated.Code != 200 {
@@ -226,13 +229,113 @@ func projectConfigurationTransportSmoke(t *testing.T, transport, unixHost string
 		}
 	}
 	rows, err = current.Services(ctx, name)
-	if err != nil || len(rows) != 1 || rows[0].State != "running" {
+	if err != nil || len(rows) != 1 || rows[0].State != "running" || !strings.HasPrefix(rows[0].ImageID, "sha256:") {
 		t.Fatalf("runtime mismatch: %v", err)
 	}
+	projectDialogRuntimeSmoke(t, ctx, h, nodeID, name, rows[0].ID)
 	if transport != "unix" {
 		unsafe, _ := json.Marshal(map[string]string{"name": name, "compose": "services: {app: {image: alpine:3.24, volumes: ['./relative:/data']}}\n", "environment": ""})
 		if result := h.request(http.MethodPost, path+"/validate", unsafe); result.Code != 422 {
 			t.Fatal("remote relative bind accepted")
 		}
+	}
+}
+
+// Exercise the exact HTTP/WS interfaces used by the project list and its Dialog.
+// All resources belong to the disposable Engine provisioned by the script.
+func projectDialogRuntimeSmoke(t *testing.T, ctx context.Context, h projectHTTPHarness, nodeID, name, containerID string) {
+	t.Helper()
+	base := "/api/v1/nodes/" + nodeID
+	read := func(path string, dst any) {
+		t.Helper()
+		response := h.request(http.MethodGet, base+path, nil)
+		if response.Code != 200 {
+			t.Fatalf("Dialog read %s: HTTP %d", path, response.Code)
+		}
+		var envelope struct {
+			Data json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(envelope.Data, dst); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var summaries []compose.Project
+	read("/projects", &summaries)
+	found := false
+	for _, summary := range summaries {
+		if summary.Name == name {
+			found = summary.DeclaredServiceNames != nil && len(*summary.DeclaredServiceNames) == 1 && (*summary.DeclaredServiceNames)[0] == "app" && summary.InstanceCount == 1
+		}
+	}
+	if !found {
+		t.Fatal("real Project summary missing service identities/runtime count")
+	}
+	var runtime []containerdomain.RuntimeMetadata
+	for attempt := 0; attempt < 15; attempt++ {
+		read("/containers/runtime", &runtime)
+		found = false
+		for _, row := range runtime {
+			if row.ID == containerID && row.HealthStatus != nil && *row.HealthStatus == "healthy" {
+				found = true
+			}
+		}
+		if found {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(time.Second):
+		}
+	}
+	if !found {
+		t.Fatal("real container health did not become healthy")
+	}
+	var metrics []containerdomain.Metrics
+	read("/containers/metrics", &metrics)
+	found = false
+	for _, row := range metrics {
+		if row.ID == containerID && row.Available && row.MemoryAvailable {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("real container metrics unavailable")
+	}
+	server := httptest.NewServer(h.router)
+	defer server.Close()
+	headers := http.Header{"Cookie": {h.cookie.String()}, "Origin": {server.URL}}
+	for _, tab := range []string{"logs", "terminal"} {
+		address := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/nodes/" + nodeID + "/containers/" + containerID + "/" + tab
+		if tab == "logs" {
+			address += "?tail=20"
+		}
+		socket, _, err := websocket.DefaultDialer.DialContext(ctx, address, headers)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = socket.SetReadDeadline(time.Now().Add(15 * time.Second))
+		marker := "project-dialog"
+		if tab == "terminal" {
+			marker = "DIALOG_OK_4"
+			if err := socket.WriteJSON(map[string]string{"type": "input", "data": "printf 'DIALOG_%s_%s\\n' OK 4\r"}); err != nil {
+				socket.Close()
+				t.Fatal(err)
+			}
+		}
+		output := ""
+		for !strings.Contains(output, marker) {
+			_, message, err := socket.ReadMessage()
+			if err != nil {
+				socket.Close()
+				t.Fatal(err)
+			}
+			output += string(message)
+		}
+		_ = socket.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "done"))
+		_ = socket.Close()
 	}
 }
