@@ -57,12 +57,6 @@ export function CopyValue({ value }: { value: string }) {
   const [copied, setCopied] = useState(false)
   return <button type="button" className="break-all text-left font-mono text-xs hover:underline" title={value} aria-label={`Copy ${value}`} onClick={() => { void navigator.clipboard.writeText(value).then(() => setCopied(true)).catch(() => setCopied(false)) }}>{value}{copied && ' ✓'}</button>
 }
-export function NetworkMountContent({ nodeID, containerID, zh, detail }: { nodeID: string; containerID: string; zh: boolean; detail?: ContainerDetail }) {
-  const query = useQuery({ queryKey: ['container', nodeID, containerID], queryFn: ({ signal }) => api<ContainerDetail>(nodePath(nodeID, `/containers/${containerID}`), { signal }), enabled: !detail, refetchInterval: detail ? false : 10_000, retry: false })
-  const fresh = useFreshness(query.dataUpdatedAt)
-  const data = detail ?? (!query.isError && fresh ? query.data : undefined)
-  return <div className="text-left"><QueryMessage pending={!detail && query.isPending} error={!detail && (query.isError || !fresh)} retry={() => void query.refetch()} zh={zh} />{data && <ContainerTopologyContent data={data} zh={zh} />}</div>
-}
 export function ContainerTopologyContent({ data, zh }: { data: Pick<ContainerDetail, 'networks' | 'mounts'> & { network_mode?: string | null }; zh: boolean }) {
   return <div className="grid gap-5 md:grid-cols-2">
     <section><h4 className="mb-2 text-sm font-medium">{zh ? '网络' : 'Networks'} <span className="text-xs font-normal text-muted-foreground">{data.network_mode ?? '—'}</span></h4>{!data.networks?.length && <p className="text-xs text-muted-foreground">{zh ? '无独立网络端点' : 'No independent network endpoints'}</p>}{data.networks?.map(n => <div key={n.name} className="space-y-1 border-t py-2"><CopyValue value={n.name} /><dl className="space-y-1 text-xs">{[['IPv4', n.ip_address], ['IPv6', n.ipv6_address], [zh ? '网关' : 'Gateway', n.gateway], [zh ? 'IPv6 网关' : 'IPv6 gateway', n.ipv6_gateway], ['MAC', n.mac_address]].map(([label, value]) => <div key={label} className="flex justify-between gap-3"><dt className="text-muted-foreground">{label}</dt><dd>{value ? <CopyValue value={value} /> : zh ? '未分配' : 'Unassigned'}</dd></div>)}</dl></div>)}</section>

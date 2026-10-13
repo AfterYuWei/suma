@@ -42,9 +42,10 @@ SUMA is a monolithic multi-node Docker management control plane. Nodes connect t
 ## Testing and progress
 
 - `PLANS.md` is the progress source of truth. Check an item only after its listed verification passes.
-- Server gate: `go test ./...` and `go build ./...`.
-- Web gate: `npm run lint`, `npm run typecheck`, and `npm run build`.
-- Tests exercise services and HTTP behavior against an isolated PostgreSQL schema with controlled runtime/provider substitutes, without requiring a live Docker daemon. Configure SUMA_TEST_DATABASE_DSN in root .env.local or the process environment; native startup and tests read the private file without shell evaluation. Do not skip or fall back to an embedded database. Run a separate real-Docker smoke test before final completion.
+- Scale verification to the change. Small, localized changes (such as copy, styling, tooltip layout, or documentation) need only the necessary targeted checks for the affected area; do not run full browser regression, both Go/Web gates, or real-Docker smoke tests for these changes. Large changes (such as new features, architecture, cross-cutting behavior, or schema changes) require full browser regression, both gates below, and a separate real-Docker smoke test before completion.
+- Full server gate: `go test ./...` and `go build ./...`.
+- Full Web gate: `npm run lint`, `npm run typecheck`, and `npm run build`.
+- Tests exercise services and HTTP behavior against an isolated PostgreSQL schema with controlled runtime/provider substitutes, without requiring a live Docker daemon. Configure SUMA_TEST_DATABASE_DSN in root .env.local or the process environment; native startup and tests read the private file without shell evaluation. Do not skip or fall back to an embedded database.
 - Prefer simple, explicit composition. Avoid speculative abstractions, excessive interfaces, and repository layers with no behavior.
 
 ## Production data and schema upgrades

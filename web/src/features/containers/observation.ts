@@ -24,7 +24,7 @@ export function selectContainers(rows: ContainerSummary[], view: ContainerView, 
   const names: Record<string, string> = { running: '运行中', exited: '已停止', paused: '已暂停', restarting: '重启中', created: '已创建', dead: '异常', healthy: '健康', unhealthy: '不健康', starting: '检查启动中', none: '未配置', unknown: '未知', inactive: '未运行' }
   const filtered = rows.filter(row => {
     const meta = metadata.get(row.id), health = effectiveHealth(row, meta), project = row.labels['com.docker.compose.project'] ?? ''
-    const text = `${row.name} ${row.id} ${row.image} ${row.state} ${row.status} ${zh ? names[row.state] : ''} ${health} ${zh ? names[health] : ''} ${row.ports.map(fullPortLabel).join(' ')} ${project} ${row.labels['com.docker.compose.service'] ?? ''}`
+    const text = `${row.name} ${row.id} ${row.image} ${row.state} ${row.status} ${zh ? names[row.state] : ''} ${health} ${zh ? names[health] : ''} ${row.ports.map(fullPortLabel).join(' ')} ${row.networks?.map(network => `${network.name} ${network.ip_address ?? ''} ${network.ipv6_address ?? ''}`).join(' ') ?? ''} ${project} ${row.labels['com.docker.compose.service'] ?? ''}`
     return text.toLowerCase().includes(view.search.toLowerCase()) && (!view.states.length || view.states.includes(row.state)) && (!view.health.length || view.health.includes(health)) && (!view.source || (view.source === 'compose' ? !!project : !project)) && (!view.project || project === view.project) && (!view.diagnostic || (view.diagnostic === 'abnormal' ? isAbnormal(row, meta) : (meta?.restart_count ?? 0) > 0))
   })
   const value = (row: ContainerSummary): string | number | null => {

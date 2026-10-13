@@ -1,5 +1,7 @@
+import { createMonitoringMock } from '../src/features/monitoring/mock'
+import type { Instance } from '../src/features/monitoring/types'
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import type { ContainerMetrics, ContainerOverview, ContainerRuntime, ContainerSummary } from '../src/features/containers/types'
+import type { ContainerMetrics, ContainerRuntime, ContainerSummary } from '../src/features/containers/types'
 
 const started = '2026-10-12T00:00:00Z'
 const names = ['suma', 'vaultwarden', 'derp-server', 'traefik', 'postgres', 'redis']
@@ -13,20 +15,20 @@ const containers: ContainerSummary[] = names.map((name, index) => ({
     { ip: '127.0.0.1', public_port: 32831, private_port: 8081, type: 'tcp' },
     { ip: '10.0.0.5', public_port: 32832, private_port: 8082, type: 'udp' },
   ] : [{ private_port: 80 + index, type: 'tcp' }],
+  networks: [{ name: 'app_default', ip_address: `172.20.0.${index + 2}`, ipv6_address: `fd00::${index + 2}` }],
   cpu_percent: 0, memory_bytes: 0, uptime_seconds: 0,
 }))
 const runtime: ContainerRuntime[] = containers.map((row, index) => ({ id: row.id, health_status: ['healthy', 'none', 'unhealthy', 'starting', 'none', null][index], restart_count: index === 5 ? null : index === 2 ? 3 : 0, memory_limit_bytes: index === 5 ? null : index % 2 ? 0 : 1024 ** 3 }))
-const overviews: ContainerOverview[] = containers.map(row => ({
-  id: row.id, network_mode: 'bridge', counts: { networks: 1, mounts: 1, ports: row.ports.length },
-  ports: row.ports.slice(0, 4).map(port => ({ ...port, host_binding: !!port.public_port })),
-  networks: [{ name: 'app_default', ip_address: '172.20.0.2', ipv6_address: 'fd00::2' }],
-  mounts: [{ type: 'volume', name: 'app_data', destination: '/data', read_write: true, anonymous: false }],
-}))
-const nodes = ['local', 'edge'].map(id => ({ id, name: id, connection_type: 'unix', endpoint: 'unix:///var/run/docker.sock', tls_mode: 'disabled', enabled: true, status: 'online', last_latency_ms: 12, group_ids: [] }))
+const nodes = ['local', 'edge'].map(id => ({ id, name: id, engine_id: 'engine-'+id, connection_type: 'unix', endpoint: 'unix:///var/run/docker.sock', tls_mode: 'disabled', enabled: true, status: 'online', last_latency_ms: 12, group_ids: [] }))
 const gate = () => { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done }); return { promise, resolve } }
 
+const browserErrors=new WeakMap<Page,string[]>()
+test.afterEach(async({page})=>{expect(browserErrors.get(page)??[]).toEqual([])})
+
 async function setup(page: Page, language = 'en-US', theme = 'dark') {
-  const state = { calls: [] as string[], gates: new Map<string, Promise<void>>(), failures: new Set<string>(), rows: structuredClone(containers), metadata: structuredClone(runtime), overviews: structuredClone(overviews), seconds: 0, start: started, rollback: false, cpu: 0.2, memory: 19 * 1024 ** 2 }
+  const state = { calls: [] as string[], gates: new Map<string, Promise<void>>(), failures: new Set<string>(), rows: structuredClone(containers), metadata: structuredClone(runtime), seconds: 0, start: started, rollback: false, cpu: 0.2, memory: 19 * 1024 ** 2 }
+  const errors:string[]=[];browserErrors.set(page,errors);page.on('pageerror',error=>errors.push(error.message))
+  const monitoring = createMonitoringMock(() => nodes.flatMap((node, index) => state.rows.map(row => ({ id: String(index+1).padStart(4,'0')+row.id.slice(4), node_id: node.id, node_name: node.name, engine_id: node.engine_id, container_id: row.id, name: row.name, image: row.image, project: row.labels['com.docker.compose.project'] ?? '', service: row.labels['com.docker.compose.service'] ?? '', first_seen: new Date(Date.now()-3*86400_000).toISOString(), last_seen: new Date().toISOString() } satisfies Instance))))
   await page.addInitScript(({ language, theme }) => {
     localStorage.setItem('suma-language', language)
     localStorage.setItem('suma-theme', theme)
@@ -42,11 +44,12 @@ async function setup(page: Page, language = 'en-US', theme = 'dark') {
     else if (path === '/auth/session') data = { id: 1, username: 'admin', nickname: 'Admin', email: 'admin@example.test' }
     else if (path === '/settings') data = {}
     else if (path === '/nodes') data = nodes
+    else if (/^\/nodes\/[^/]+$/.test(path)) data=nodes.find(n=>n.id===path.split('/').at(-1))
+    else if (path.startsWith('/monitoring')) data=monitoring(path,route.request().method(),JSON.parse(route.request().postData()??'{}'),new URL(route.request().url()))
     else if (path === '/node-groups') data = []
     else if (path === '/notifications/inbox') data = { unread: 0, events: [] }
     else if (path.endsWith('/image-updates')) data = { results: [] }
     else if (path.endsWith('/containers/runtime')) data = state.metadata
-    else if (/\/containers\/[^/]+\/overview$/.test(path)) data = state.overviews.find(row => row.id === path.split('/').at(-2))
     else if (/\/containers\/[^/]+\/runtime$/.test(path)) {
       const id = path.split('/').at(-2)!, row = state.rows.find(r => r.id === id)!, meta = state.metadata.find(r => r.id === id)!
       data = { runtime: { ...meta, state: row.state, started_at: started, finished_at: row.state === 'exited' ? started : null, exit_code: row.state === 'exited' ? 0 : null, oom_killed: false, observed_at: started }, restart_policy: 'unless-stopped', health: { configured: meta.health_status !== 'none', failing_streak: meta.health_status === 'unhealthy' ? 3 : 0, last_checked_at: started, command: 'CMD check token=[REDACTED]', interval_ms: 30000, timeout_ms: 3000, start_period_ms: 0, start_interval_ms: 0, retries: 3, logs: meta.health_status === 'none' ? [] : [{ started_at: started, finished_at: started, exit_code: meta.health_status === 'unhealthy' ? 1 : 0, output: 'controlled health output token=[REDACTED]', output_redacted: true, output_truncated: false }] } }
@@ -72,14 +75,29 @@ async function setup(page: Page, language = 'en-US', theme = 'dark') {
 
 const rowFor = (page: Page, name: string) => page.locator('tbody tr').filter({ has: page.getByRole('link', { name, exact: true }) })
 
-async function strokeBounds(chart: Locator, sparkline = true) {
-  return chart.evaluate((element, sparkline) => {
+async function hoverPlotEnd(page: Page, chart: Locator) {
+  const point = await chart.evaluate(async element => {
+    const resource = performance.getEntriesByType('resource').find(entry => new URL(entry.name).pathname.endsWith('/echarts_core.js'))
+    if (!resource) throw new Error('Monitoring chart engine was not loaded')
+    const core = await import(resource.name)
+    const instance = core.getInstanceByDom(element)
+    const rect = instance.getModel().getComponent('grid').coordinateSystem.getRect()
+    const x = rect.x + rect.width - 10, y = rect.y + rect.height / 2
+    if (!instance.containPixel({ gridIndex: 0 }, [x, y])) throw new Error('Hover point is outside the plotted data')
+    return { x, y }
+  })
+  const bounds = await chart.boundingBox()
+  await page.mouse.move(bounds!.x + point.x, bounds!.y + point.y)
+}
+
+async function strokeBounds(chart: Locator) {
+  return chart.evaluate(element => {
     const host = element as HTMLElement
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
-    const left = sparkline ? 3 : 46, right = sparkline ? 3 : 12
-    const top = sparkline ? 3 : 26, bottom = sparkline ? 3 : 24
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, pixels = 0
+    const left = 46, right = 12
+    const top = 26, bottom = 24
     const cpu = element.getAttribute('aria-label')?.startsWith('CPU')
-    const token = sparkline ? cpu ? '--foreground' : '--muted-foreground' : cpu ? '--chart-1' : '--chart-2'
+    const token = cpu ? '--chart-1' : '--chart-2'
     const swatch = document.createElement('canvas'); swatch.width = swatch.height = 1
     const context = swatch.getContext('2d')!
     context.fillStyle = getComputedStyle(document.documentElement).getPropertyValue(token).trim()
@@ -88,17 +106,19 @@ async function strokeBounds(chart: Locator, sparkline = true) {
     for (const canvas of element.querySelectorAll('canvas')) {
       const scale = canvas.width / host.clientWidth
       const rgba = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data
-      for (let y = Math.ceil(top * scale); y < (host.clientHeight - bottom) * scale; y++) {
-        for (let x = Math.ceil(left * scale); x < (host.clientWidth - right) * scale; x++) {
+      for (let y = Math.ceil(top * scale); y <= (host.clientHeight - bottom) * scale; y++) {
+        for (let x = Math.ceil(left * scale); x <= (host.clientWidth - right) * scale; x++) {
           const offset = (y * canvas.width + x) * 4
-          if (rgba[offset + 3] < 128 || color.slice(0, 3).some((value, channel) => Math.abs(value - rgba[offset + channel]) > 2)) continue
+          // Anti-aliasing blends a stroke at the axis maximum with its grid line.
+          if (rgba[offset + 3] < 128 || color.slice(0, 3).some((value, channel) => Math.abs(value - rgba[offset + channel]) > 8)) continue
+          pixels++
           minX = Math.min(minX, x / scale); maxX = Math.max(maxX, x / scale)
           minY = Math.min(minY, y / scale); maxY = Math.max(maxY, y / scale)
         }
       }
     }
-    return { width: (maxX - minX) / (host.clientWidth - left - right), height: maxY - minY }
-  }, sparkline)
+    return { width: (maxX - minX) / (host.clientWidth - left - right), height: maxY - minY, pixels }
+  })
 }
 
 test('diagnostics and health disclose controlled facts and close with focus restored', async ({ page }) => {
@@ -116,31 +136,59 @@ test('diagnostics and health disclose controlled facts and close with focus rest
   await expect(popup).toContainText('No health check configured')
 })
 
-test('network and mount disclosures are lazy and mobile uses a sheet', async ({ page }) => {
+test('network summaries use list data and show all addresses without extra reads', async ({ page }) => {
   const state = await setup(page)
+  state.rows[0].networks!.push({ name: 'private', ipv6_address: 'fd01::2' })
   await page.goto('/containers')
-  const detailPath = `/nodes/local/containers/${containers[0].id}`
-  expect(state.calls).not.toContain(`GET ${detailPath}`)
+  const row = rowFor(page, 'suma'), network = row.getByRole('cell').nth(5)
+  await expect(page.locator('tbody tr')).toHaveCount(containers.length)
+  await expect(row.getByRole('cell')).toHaveCount(10)
+  await expect(row.getByRole('cell').first().getByRole('button')).toHaveCount(0)
+  await expect(network).toHaveText('app_default+1172.20.0.2')
+  await network.getByText('app_default', { exact: true }).hover()
+  const tooltip = page.locator('[data-slot="tooltip-content"]')
+  await expect(tooltip).toContainText('172.20.0.2')
+  await expect(tooltip).toContainText('fd00::2')
+  await expect(tooltip).toContainText('private')
+  await expect(tooltip).toContainText('fd01::2')
   expect(state.calls.some(call => call.endsWith('/overview'))).toBe(false)
-  await rowFor(page, 'suma').getByRole('button', { name: 'Container overview suma' }).click()
-  const expansion = page.locator(`#container-expansion-${containers[0].id}`)
-  await expect(expansion).toContainText('172.20.0.2')
-  await expect(expansion).toContainText('fd00::2')
-  await expect(expansion).toContainText('app_data')
-  await expect(expansion).toContainText('Read/write')
-  await expect(expansion).not.toContainText('2.5 CPU')
-  await expect(expansion).not.toContainText('1000:1000')
-  await expect(expansion.getByRole('status')).toHaveCount(0)
-  await expect(expansion).toContainText('[::]:32830 → 8080')
-  expect(state.calls).toContain(`GET ${detailPath}/overview`)
-  expect(state.calls).not.toContain(`GET ${detailPath}`)
-  await page.setViewportSize({ width: 390, height: 844 })
-  await expect(page.locator('[data-slot="sheet-content"]')).toContainText('app_data')
-  await page.keyboard.press('Escape')
-  await expect(page.locator('[data-slot="sheet-content"]')).not.toBeVisible()
-  await page.setViewportSize({ width: 1440, height: 1000 })
-  await rowFor(page, 'derp-server').getByRole('button', { name: 'Container overview derp-server' }).click()
-  await expect(page.locator(`#container-expansion-${containers[2].id}`).getByRole('status').filter({ hasText: 'Health check failed' })).toBeVisible()
+  expect(state.calls.filter(call => /GET .*containers\/[^/]+$/.test(call) && !call.endsWith('/runtime') && !call.endsWith('/metrics'))).toHaveLength(0)
+  const search = page.getByRole('textbox', { name: 'Filter containers' })
+  for (const text of ['private', '172.20.0.2', 'fd01::2']) {
+    await search.fill(text)
+    await expect(page.locator('tbody tr')).toHaveCount(1)
+    await expect(row).toBeVisible()
+  }
+})
+
+test('missing, empty, host, stopped and IPv6-only networks remain distinct and refresh with the list', async ({ page }) => {
+  const state = await setup(page)
+  state.rows[0].networks = null
+  state.rows[1].networks = []
+  state.rows[2].networks = [{ name: 'host' }]
+  state.rows[3].networks = [{ name: 'private-v6', ipv6_address: 'fd01::4' }]
+  state.rows[4].networks = [{ name: 'app_default' }]
+  delete state.rows[5].networks
+  await page.clock.install({ time: new Date('2026-10-12T00:10:00Z') })
+  await page.goto('/containers')
+  for (const [name, text] of [['suma', '——'], ['vaultwarden', 'No network—'], ['derp-server', 'host—'], ['traefik', 'private-v6fd01::4'], ['postgres', 'app_default—'], ['redis', '——']]) {
+    await expect(rowFor(page, name).getByRole('cell').nth(5)).toHaveText(text)
+  }
+  state.rows[0].networks = [{ name: 'new_default', ip_address: '10.1.0.2' }]
+  await page.clock.runFor(10_000)
+  await expect(rowFor(page, 'suma').getByRole('cell').nth(5)).toHaveText('new_default10.1.0.2')
+  expect(state.calls.some(call => call.endsWith('/overview'))).toBe(false)
+})
+
+test('container detail retains full networks and mounts', async ({ page }) => {
+  const state = await setup(page)
+  await page.goto(`/containers/${containers[0].id}`)
+  await expect(page.getByRole('button', { name: 'Copy app_default', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Copy 172.20.0.2', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Copy fd00::2', exact: true })).toBeVisible()
+  await expect(page.getByText('volume app_data', { exact: true })).toBeVisible()
+  expect(state.calls).toContain(`GET /nodes/local/containers/${containers[0].id}`)
+  expect(state.calls.some(call => call.endsWith('/overview'))).toBe(false)
 })
 
 test('status filters, multi-filter intersection, sorting and persisted node views work', async ({ page }) => {
@@ -160,62 +208,6 @@ test('status filters, multi-filter intersection, sorting and persisted node view
   await expect(page.locator('tbody > tr')).toHaveCount(1)
 })
 
-test('overview cancellation and row switches keep queries independent', async ({ page }) => {
-  const state = await setup(page), delayed = gate()
-  const path = `/nodes/local/containers/${containers[0].id}/overview`
-  state.gates.set(path, delayed.promise)
-  await page.goto('/containers')
-  const trigger = rowFor(page, 'suma').getByRole('button', { name: 'Container overview suma' })
-  await trigger.click()
-  const expansion = page.locator(`#container-expansion-${containers[0].id}`)
-  await expect(expansion).toContainText('Loading')
-  const canceled = page.waitForEvent('requestfailed', request => request.url().endsWith(path))
-  await trigger.click()
-  await canceled
-  await expect(expansion).toHaveCount(0)
-  delayed.resolve()
-  await rowFor(page, 'vaultwarden').getByRole('button', { name: 'Container overview vaultwarden' }).click()
-  const other = page.locator(`#container-expansion-${containers[1].id}`)
-  await expect(other).toContainText('81')
-  await expect(other).not.toContainText('32830')
-  await expect(other.getByRole('link', { name: 'View details →', exact: true })).toHaveAttribute('href', `/containers/${containers[1].id}`)
-  expect(state.calls.filter(call => /GET .*containers\/[^/]+$/.test(call) && !call.endsWith('/runtime') && !call.endsWith('/metrics'))).toHaveLength(0)
-})
-
-test('overview failures retry and the quick view stays focused', async ({ page }) => {
-  const state = await setup(page), path = `/nodes/local/containers/${containers[0].id}/overview`
-  state.failures.add(path)
-  await page.goto('/containers')
-  await rowFor(page, 'suma').getByRole('button', { name: 'Container overview suma' }).click()
-  const expansion = page.locator(`#container-expansion-${containers[0].id}`)
-  await expect(expansion).toContainText('Data unavailable')
-  state.failures.delete(path)
-  await expansion.getByRole('button', { name: 'Retry', exact: true }).click()
-  await expect(expansion).toContainText('[::]:32830 → 8080')
-  await expect(expansion.getByRole('heading')).toHaveText(['Resource trends', 'Networks', 'Mounts', 'Ports'])
-  await expect(expansion.locator('summary')).toHaveCount(0)
-  await expect(expansion).not.toContainText('DATABASE_PASSWORD')
-  await expect(expansion).not.toContainText('serve --token')
-  await expect(expansion).not.toContainText('PID limit')
-  await expect(expansion).not.toContainText('Container ID')
-  const readsBeforeRefresh = state.calls.filter(call => call === `GET ${path}`).length
-  await expansion.getByRole('button', { name: 'Refresh container overview' }).click()
-  await expect.poll(() => state.calls.filter(call => call === `GET ${path}`).length).toBeGreaterThan(readsBeforeRefresh)
-})
-
-test('unknown overview fields do not imply unlimited resources or defaults', async ({ page }) => {
-  const state = await setup(page)
-  state.overviews[0] = { id: containers[0].id, network_mode: null, counts: { networks: 0, mounts: 0, ports: 0 }, networks: [], mounts: [], ports: [] }
-
-  await page.goto('/containers')
-  await rowFor(page, 'suma').getByRole('button', { name: 'Container overview suma' }).click()
-  const expansion = page.locator(`#container-expansion-${containers[0].id}`)
-  await expect(expansion).toContainText('No network, mount or port information available')
-  await expect(expansion).not.toContainText('∞')
-  await expect(expansion).not.toContainText('Default (root)')
-  await expect(expansion.getByRole('heading')).toHaveText(['Resource trends'])
-})
-
 test('resource trends use shared samples and do not open per-row streams', async ({ page }) => {
   await setup(page)
   await page.clock.install({ time: new Date('2026-10-12T00:10:00Z') })
@@ -224,90 +216,25 @@ test('resource trends use shared samples and do not open per-row streams', async
   await page.goto('/containers')
   await expect(rowFor(page, 'suma')).toContainText('19 MB / 1.00 GB')
   await page.clock.runFor(5000)
-  await rowFor(page, 'suma').getByRole('button', { name: 'Resource trends suma' }).click()
-  await expect(page.locator('[data-slot="popover-content"]')).toContainText('View full statistics')
-  await expect(page.locator('[data-slot="popover-content"] canvas')).toHaveCount(2)
-  expect(sockets.filter(url => new URL(url).pathname.startsWith('/ws/nodes/'))).toHaveLength(0)
-})
-
-test('quick-view charts share list samples and topology never polls', async ({ page }) => {
-  const state = await setup(page)
-  await page.clock.install({ time: new Date('2026-10-12T00:10:00Z') })
-  const sockets: string[] = []
-  page.on('websocket', socket => sockets.push(socket.url()))
-  await page.goto('/containers')
-  const row = rowFor(page, 'suma'), path = `/nodes/local/containers/${containers[0].id}/overview`
-  const sampleReads = () => state.calls.filter(call => call === 'GET /nodes/local/containers/metrics').length
-  const topologyReads = () => state.calls.filter(call => call === `GET ${path}`).length
-  await expect(row).toContainText('19 MB / 1.00 GB')
-  await page.clock.runFor(5000)
-  const before = sampleReads()
-  const trigger = row.getByRole('button', { name: 'Container overview suma' })
-  await trigger.click()
-  const expansion = page.locator(`#container-expansion-${containers[0].id}`)
-  const trends = expansion.getByRole('region', { name: 'Resource trends' })
-  await expect(expansion.locator('canvas')).toHaveCount(2)
-  await expect(expansion).toContainText('app_data')
-  expect(sampleReads()).toBe(before)
-  const loaded = topologyReads()
-  state.cpu = 200; state.memory = 32 * 1024 ** 2
-  await page.clock.runFor(15_000)
-  await expect(trends).toContainText('200.0%')
-  await expect(trends).toContainText('32 MB')
-  expect(topologyReads()).toBe(loaded)
-  expect(sampleReads()).toBe(before + 3)
-  await trigger.click(); await trigger.click()
-  await expect(expansion).toContainText('app_data')
-  expect(topologyReads()).toBe(loaded)
-  state.failures.add(path)
-  await expansion.getByRole('button', { name: 'Refresh container overview' }).click()
-  await expect(expansion).toContainText('Data unavailable')
-  await expect(trends).toContainText('200.0%')
-  await expect(expansion.locator('canvas')).toHaveCount(2)
-  state.failures.add('/nodes/local/containers/metrics')
-  await page.clock.runFor(5000)
-  await expect(trends).toContainText('Samples unavailable')
-  await expect(trends).not.toContainText('200.0%')
-  await expect(trends).not.toContainText('0.0%')
+  await rowFor(page, 'suma').getByRole('button', { name: 'Resource trends suma', exact: true }).click()
+  await expect(page.getByRole('region',{name:'Container monitoring'})).toContainText('View full monitoring')
+  await expect(page.getByRole('region',{name:'Container monitoring'}).locator('canvas')).toHaveCount(2)
   expect(sockets.filter(url => new URL(url).pathname.startsWith('/ws/nodes/'))).toHaveLength(0)
 })
 
 for (const theme of ['dark', 'light']) {
-  test(`quick-view charts fill the width from the first sample and reshape ${theme}`, async ({ page }) => {
-    const state = await setup(page, 'en-US', theme)
-    state.cpu = 20; state.memory = 296 * 1024 ** 2
-    await page.clock.install({ time: new Date('2026-10-12T00:10:00Z') })
-    await page.goto('/containers')
-    await expect(rowFor(page, 'suma')).toContainText('296 MB')
-    await rowFor(page, 'suma').getByRole('button', { name: 'Container overview suma' }).click()
-    const expansion = page.locator(`#container-expansion-${containers[0].id}`)
-    await expect(expansion.locator('canvas')).toHaveCount(2)
-    await page.clock.pauseAt(await page.evaluate(() => new Date(Date.now() + 500).toISOString()))
-    await page.clock.runFor(100)
-    await expect(expansion.getByRole('region', { name: 'Resource trends' })).toContainText('Sampling')
-    const charts = expansion.getByRole('img')
-    for (const index of [0, 1]) {
-      const first = await strokeBounds(charts.nth(index))
-      expect(first.width).toBeGreaterThan(0.95)
-      expect(first.height).toBeLessThan(3)
-      const bounds = await charts.nth(index).boundingBox()
-      await page.mouse.move(bounds!.x + bounds!.width / 4, bounds!.y + bounds!.height / 2)
-      await page.clock.runFor(100)
-      await expect(page.locator('[data-slot="chart-tooltip"]:visible')).toContainText(index === 0 ? '20.0%' : '296.0 MB')
-    }
-    await page.screenshot({ path: `/tmp/suma-chart-first-sample-${theme}.png`, animations: 'disabled' })
-    await page.mouse.move(0, 0)
-    state.cpu = 80; state.memory = 128 * 1024 ** 2
-    await page.clock.runFor(5000)
-    await expect(rowFor(page, 'suma')).toContainText('128 MB')
-    await page.clock.runFor(100)
-    for (const index of [0, 1]) {
-      const next = await strokeBounds(charts.nth(index))
-      expect(next.width).toBeGreaterThan(0.95)
-      expect(next.height).toBeGreaterThan(20)
-    }
-    await page.screenshot({ path: `/tmp/suma-chart-growing-samples-${theme}.png`, animations: 'disabled' })
-  })
+ test('persisted one-hour charts remain after reopening '+theme, async ({page})=>{
+  await setup(page,'en-US',theme)
+  await page.goto('/containers')
+  const trigger=rowFor(page,'suma').getByRole('button',{name:'Resource trends suma',exact:true})
+  await trigger.click()
+  const monitoring=page.getByRole('region',{name:'Container monitoring'})
+  await expect(monitoring.locator('canvas')).toHaveCount(2)
+  await expect(monitoring).toContainText('Last hour')
+  await trigger.click();await expect(monitoring).toHaveCount(0)
+  await trigger.click();await expect(monitoring.locator('canvas')).toHaveCount(2)
+  await page.screenshot({path:'/tmp/suma-monitoring-hour-'+theme+'.png'})
+ })
 }
 
 for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']) {
@@ -319,29 +246,21 @@ for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']
     await page.goto('/containers')
     await expect(rowFor(page, 'suma')).toContainText('296 MB')
     await page.clock.runFor(5000)
-    await rowFor(page, 'suma').getByRole('button', { name: `${language === 'zh-CN' ? '容器概览' : 'Container overview'} suma` }).click()
-    const expansion = page.locator(`#container-expansion-${containers[0].id}`)
-    await expect(expansion.locator('canvas')).toHaveCount(2)
+    await rowFor(page, 'suma').getByRole('button', { name: `${language === 'zh-CN' ? '资源趋势' : 'Resource trends'} suma`, exact: true }).click()
+    const popup = page.getByRole('region', { name: /Container monitoring|容器监控/ })
+    await expect(popup.locator('canvas')).toHaveCount(2)
     await page.clock.pauseAt(await page.evaluate(() => new Date(Date.now() + 1000).toISOString()))
     await page.mouse.move(0, 0); await page.clock.runFor(500)
-    const charts = expansion.getByRole('img')
-    const opaquePixels = async (index: number) => charts.nth(index).evaluate(element => {
-      let pixels = 0
-      for (const canvas of element.querySelectorAll('canvas')) {
-        const context = canvas.getContext('2d')!
-        const rgba = context.getImageData(0, 0, canvas.width, canvas.height).data
-        for (let i = 3; i < rgba.length; i += 4) if (rgba[i] >= 220) pixels++
-      }
-      return pixels
-    })
+    const charts = popup.getByRole('img')
+    const seriesPixels = async (index: number) => (await strokeBounds(charts.nth(index))).pixels
     for (const index of [0, 1]) {
       await page.mouse.move(0, 0); await page.clock.runFor(300)
-      const before = await opaquePixels(index)
+      const before = await seriesPixels(index)
       expect(before).toBeGreaterThan(100)
       const bounds = await charts.nth(index).boundingBox()
       await page.mouse.move(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2)
       await page.clock.runFor(300)
-      const during = await opaquePixels(index)
+      const during = await seriesPixels(index)
       expect(during).toBeGreaterThanOrEqual(before * 0.9)
       await charts.nth(index).evaluate(element => {
         const host = element as HTMLElement
@@ -358,11 +277,11 @@ for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']
       const idleSamples = gate()
       state.gates.set('/nodes/local/containers/metrics', idleSamples.promise)
       await page.clock.runFor(1000)
-      expect(await opaquePixels(index)).toBeGreaterThanOrEqual(before * 0.9)
+      expect(await seriesPixels(index)).toBeGreaterThanOrEqual(before * 0.9)
       await expect(charts.nth(index)).toHaveAttribute('data-canvas-clears', '0')
       state.gates.delete('/nodes/local/containers/metrics'); idleSamples.resolve()
       await page.clock.runFor(5000)
-      expect(await opaquePixels(index)).toBeGreaterThanOrEqual(before * 0.9)
+      expect(await seriesPixels(index)).toBeGreaterThanOrEqual(before * 0.9)
       await page.screenshot({ path: `/tmp/suma-chart-hover-${language}-${theme}-${index}.png`, animations: 'disabled' })
     }
   })
@@ -384,38 +303,16 @@ test('events merge replay with nanosecond precision and disconnect when leaving 
   await expect.poll(() => closed).toBe(true)
 })
 
-test('normalized statistics render both charts, allow CPU above 100 and hide unavailable counters', async ({ page }) => {
-  await setup(page)
-  let closed = false
-  let send: (payload: string) => void = () => undefined
-  const now = Date.now(), id = containers[0].id
-  const sample = { id, available: true, cpu_available: true, memory_available: true, cpu_percent: 200, memory_bytes: 64 * 1024 ** 2, network_rx_bytes: 1000, network_tx_bytes: 2000, pids: 4, block_read_bytes: 0, block_write_bytes: 0, sampled_at: new Date(now).toISOString(), started_at: started, uptime_seconds: 100 }
-  await page.routeWebSocket('**/ws/nodes/local/containers/*/stats?format=normalized', ws => {
-    send = payload => ws.send(payload)
-    ws.onClose(() => { closed = true })
-    send(JSON.stringify(sample))
-  })
-  await page.goto(`/containers/${id}#stats`)
-  await expect(page.getByText('200.0%', { exact: true })).toBeVisible()
-  await expect(page.getByText('64 MB', { exact: true })).toBeVisible()
-  await expect(page.locator('canvas')).toHaveCount(2)
-  const charts = page.getByRole('img')
-  for (const index of [0, 1]) {
-    await expect.poll(async () => (await strokeBounds(charts.nth(index), false)).width).toBeGreaterThan(0.95)
-    expect((await strokeBounds(charts.nth(index), false)).height).toBeLessThan(3)
-  }
-  send(JSON.stringify({ ...sample, cpu_percent: 50, memory_bytes: 128 * 1024 ** 2, sampled_at: new Date(now + 1000).toISOString() }))
-  await expect(page.getByText('50.0%', { exact: true })).toBeVisible()
-  for (const index of [0, 1]) {
-    await expect.poll(async () => (await strokeBounds(charts.nth(index), false)).height).toBeGreaterThan(20)
-    expect((await strokeBounds(charts.nth(index), false)).width).toBeGreaterThan(0.95)
-  }
-  send(JSON.stringify({ ...sample, cpu_available: false, cpu_percent: 0, sampled_at: new Date(now + 2000).toISOString() }))
-  await expect(page.getByText('50.0%', { exact: true })).not.toBeVisible()
-  await expect(page.getByText('0.0%', { exact: true })).not.toBeVisible()
-  await expect.poll(async () => (await strokeBounds(charts.nth(0), false)).width).toBeLessThan(0.6)
-  await page.getByRole('tab', { name: 'Events', exact: true }).click()
-  await expect.poll(() => closed).toBe(true)
+test('legacy stats links open persisted monitoring without a dedicated stats stream', async ({page})=>{
+ const state=await setup(page)
+ const sockets:string[]=[];page.on('websocket',ws=>sockets.push(ws.url()))
+ await page.goto('/containers/'+containers[0].id+'#stats')
+ await expect(page).toHaveURL(/#monitoring$/)
+ await expect(page.getByRole('region',{name:'Container monitoring'}).locator('canvas')).toHaveCount(5)
+ expect(state.calls.some(call=>call==='POST /monitoring/query')).toBe(true)
+ expect(sockets.filter(url=>url.includes('/stats'))).toHaveLength(0)
+ await page.getByRole('tab',{name:'Events',exact:true}).click()
+ await expect(page.getByRole('region',{name:'Container monitoring'})).toHaveCount(0)
 })
 
 test('contradictory snapshots show syncing and suppress old live values until the list catches up', async ({ page }) => {
@@ -460,8 +357,8 @@ test('health, limits, stopped containers and partial metadata remain distinct', 
   await expect(page.getByRole('columnheader', { name: 'Image', exact: true })).toBeVisible()
   await expect(page.getByRole('columnheader', { name: 'Time', exact: true })).toBeVisible()
   await expect(rowFor(page, 'suma')).toContainText('Healthy')
-  await expect(rowFor(page, 'suma').getByRole('cell').nth(7)).toContainText('Up 34d 0h')
-  await expect(rowFor(page, 'suma').getByRole('cell').nth(7)).toContainText('10-11')
+  await expect(rowFor(page, 'suma').getByRole('cell').nth(8)).toContainText('Up 34d 0h')
+  await expect(rowFor(page, 'suma').getByRole('cell').nth(8)).toContainText('10-11')
   await expect(rowFor(page, 'suma').getByRole('cell').nth(2)).not.toContainText('Up 34d 0h')
   await expect(rowFor(page, 'suma').getByRole('cell').nth(2).locator('[data-slot="badge"]')).toHaveText(['running', 'Healthy'])
   await expect(rowFor(page, 'vaultwarden')).toContainText('No check')
@@ -547,16 +444,16 @@ test('port summaries group duplicate bindings while the popover keeps every IP',
   await setup(page); await page.goto('/containers')
   const row = rowFor(page, 'suma')
   const ports = row.getByRole('button', { name: 'View full port mappings' })
-  await expect(ports.locator('[data-slot="port-summary"]')).toHaveText(['32830→ 8080tcp', '32831→ 8081tcp+1'])
+  await expect(ports.locator('[data-slot="port-summary"]')).toHaveText(['32830:8080', '32831:8081+1'])
   await ports.click()
-  await expect(page.getByText('0.0.0.0:32830→8080/tcp', { exact: true })).toBeVisible()
-  await expect(page.getByText('[::]:32830→8080/tcp', { exact: true })).toBeVisible()
-  await expect(page.getByText('127.0.0.1:32831→8081/tcp', { exact: true })).toBeVisible()
-  await expect(page.getByText('10.0.0.5:32832→8082/udp', { exact: true })).toBeVisible()
+  await expect(page.getByText('0.0.0.0:32830:8080/tcp', { exact: true })).toBeVisible()
+  await expect(page.getByText('[::]:32830:8080/tcp', { exact: true })).toBeVisible()
+  await expect(page.getByText('127.0.0.1:32831:8081/tcp', { exact: true })).toBeVisible()
+  await expect(page.getByText('10.0.0.5:32832:8082/udp', { exact: true })).toBeVisible()
   await page.keyboard.press('Escape'); await expect(ports).toBeFocused()
 })
 
-test('segmented port summaries fit five-digit mappings and keep protocols distinct', async ({ page }) => {
+test('port tags fit five-digit mappings and keep protocols distinct', async ({ page }) => {
   const state = await setup(page)
   state.rows[0].ports = [
     { ip: '0.0.0.0', public_port: 65535, private_port: 65535, type: 'tcp' },
@@ -567,7 +464,7 @@ test('segmented port summaries fit five-digit mappings and keep protocols distin
   state.rows[5].ports = []
   await page.goto('/containers')
   const ports = rowFor(page, 'suma').getByRole('button', { name: 'View full port mappings' })
-  await expect(ports.locator('[data-slot="port-summary"]')).toHaveText(['65535→ 65535tcp', '65535→ 65535udp+1'])
+  await expect(ports.locator('[data-slot="port-summary"]')).toHaveText(['65535:65535', '65535:65535/udp+1'])
   const layout = await ports.evaluate(button => {
     const bounds = button.getBoundingClientRect(), center = (bounds.left + bounds.right) / 2
     return [...button.children].map(line => {
@@ -576,11 +473,11 @@ test('segmented port summaries fit five-digit mappings and keep protocols distin
     })
   })
   expect(layout).toEqual([{ height: 20, centered: true, fits: true }, { height: 20, centered: true, fits: true }])
-  await expect(rowFor(page, 'vaultwarden').getByRole('cell').nth(5)).toHaveText('81tcp')
-  await expect(rowFor(page, 'redis').getByRole('cell').nth(5)).toHaveText('—')
+  await expect(rowFor(page, 'vaultwarden').getByRole('cell').nth(6)).toHaveText('81')
+  await expect(rowFor(page, 'redis').getByRole('cell').nth(6)).toHaveText('—')
   await ports.click()
-  await expect(page.getByText('[::]:65535→65535/tcp', { exact: true })).toBeVisible()
-  await expect(page.getByText('0.0.0.0:65535→65535/udp', { exact: true })).toBeVisible()
+  await expect(page.getByText('[::]:65535:65535/tcp', { exact: true })).toBeVisible()
+  await expect(page.getByText('0.0.0.0:65535:65535/udp', { exact: true })).toBeVisible()
   await expect(page.getByText('443/tcp', { exact: true })).toBeVisible()
 })
 
@@ -649,19 +546,444 @@ for (const width of [390, 1440, 1870]) for (const language of ['zh-CN', 'en-US']
     await page.clock.runFor(500)
     await expect(page.getByRole('tooltip')).toBeHidden()
     await page.screenshot({ path: `/tmp/suma-containers-${language}-${theme}-${width}.png` })
-    await row.getByRole('button', { name: `${language === 'zh-CN' ? '容器概览' : 'Container overview'} suma` }).click()
-    const overview = width === 390 ? page.locator('[data-slot="sheet-content"]') : page.locator(`#container-expansion-${containers[0].id}`)
-    await expect(overview).toContainText('172.20.0.2')
-    await expect(overview).toContainText('app_data')
-    await expect(overview.locator('canvas')).toHaveCount(2)
-    await page.clock.runFor(500)
-    await expect(overview).toBeVisible()
-    if (width === 390) await expect(overview).toHaveCSS('opacity', '1')
-    const fieldOverflow = await overview.locator('section button').evaluateAll(fields => fields.some(field => field.scrollWidth > field.clientWidth + 1))
-    expect(fieldOverflow).toBe(false)
-    const summaryHeight = await overview.evaluate(element => element.getBoundingClientRect().height)
-    expect(summaryHeight).toBeLessThan(width === 390 ? 600 : 260)
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
-    await page.screenshot({ path: `/tmp/suma-container-overview-${language}-${theme}-${width}.png`, animations: 'disabled' })
+
   })
 }
+
+test('monitoring history queries without live container reads and compares selected instances', async ({ page }) => {
+  const state = await setup(page)
+  await page.goto('/containers#monitoring-history')
+  await expect(page.getByRole('heading', { name: 'Monitoring history', exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'suma', exact: true })).toHaveCount(2)
+  expect(state.calls.filter(call => /nodes\/[^/]+\/containers/.test(call))).toHaveLength(0)
+  await page.getByRole('checkbox', { name: 'Select historical instance suma', exact: true }).first().check()
+  await page.getByRole('checkbox', { name: 'Select historical instance vaultwarden', exact: true }).first().check()
+  await page.getByRole('button', { name: /Compare selected/ }).click()
+  await expect(page).toHaveURL(/\/containers\/history\/.*compare=/)
+  await expect(page.getByRole('combobox', { name: 'Comparison mode' })).toContainText('Compare containers')
+  await expect(page.locator('canvas')).toHaveCount(5)
+  expect(state.calls.filter(call => /nodes\/[^/]+\/containers/.test(call))).toHaveLength(0)
+})
+
+test('monitoring retains charts and scroll while a new range loads', async ({ page }) => {
+  const state = await setup(page)
+  await page.setViewportSize({ width: 1440, height: 700 })
+  await page.goto('/containers/' + containers[0].id + '#monitoring')
+  await expect(page.locator('canvas')).toHaveCount(5)
+  const scroller = page.locator('main > div')
+  await scroller.evaluate(element => { element.scrollTop = 400 })
+  const before = await scroller.evaluate(element => element.scrollTop)
+  expect(before).toBeGreaterThan(100)
+  const delayed = gate()
+  const previousCalls = state.calls.filter(call => call === 'POST /monitoring/query').length
+  state.gates.set('/monitoring/query', delayed.promise)
+  await page.getByRole('button', { name: '6h', exact: true }).evaluate(button => (button as HTMLButtonElement).click())
+  await expect.poll(() => state.calls.filter(call => call === 'POST /monitoring/query').length).toBeGreaterThan(previousCalls)
+  await expect(page.locator('canvas')).toHaveCount(5)
+  await expect(page.getByRole('button', { name: 'CSV', exact: true })).toBeDisabled()
+  expect(await scroller.evaluate(element => element.scrollTop)).toBeCloseTo(before, 0)
+  delayed.resolve()
+  await expect(page.getByRole('button', { name: 'CSV', exact: true })).toBeEnabled()
+  expect(await scroller.evaluate(element => element.scrollTop)).toBeCloseTo(before, 0)
+})
+
+test('monitoring automatic and manual refresh preserve reading position', async ({ page }) => {
+  const state = await setup(page)
+  await page.clock.install()
+  await page.setViewportSize({ width: 1440, height: 700 })
+  await page.goto('/containers/' + containers[0].id + '#monitoring')
+  const monitoring = page.getByRole('region', { name: 'Container monitoring' })
+  await expect(monitoring.locator('canvas')).toHaveCount(5)
+  const canvas = await monitoring.locator('canvas').first().elementHandle()
+  const scroller = page.locator('main > div')
+  await scroller.evaluate(element => { element.scrollTop = 400 })
+  const before = await scroller.evaluate(element => element.scrollTop)
+  expect(before).toBeGreaterThan(100)
+  const calls = () => state.calls.filter(call => call === 'POST /monitoring/query').length
+  const initialCalls = calls()
+  await page.clock.runFor(11000)
+  await expect.poll(calls).toBeGreaterThan(initialCalls)
+  expect(state.calls.filter(call => call === 'GET /nodes/local/containers/' + containers[0].id).length).toBeGreaterThan(1)
+  expect(await scroller.evaluate(element => element.scrollTop)).toBeCloseTo(before, 0)
+  expect(await canvas!.evaluate(element => element.isConnected)).toBe(true)
+  await expect(page.getByText('Following latest · refresh every 5s', { exact: true })).toBeVisible()
+  const beforeManual = calls()
+  await page.getByRole('button', { name: 'Refresh monitoring', exact: true }).evaluate(button => (button as HTMLButtonElement).click())
+  await expect.poll(calls).toBeGreaterThan(beforeManual)
+  await expect(monitoring).toHaveAttribute('aria-busy', 'false')
+  expect(await scroller.evaluate(element => element.scrollTop)).toBeCloseTo(before, 0)
+  expect(await canvas!.evaluate(element => element.isConnected)).toBe(true)
+})
+
+for (const [language, theme, width] of [['zh-CN', 'light', 1440], ['en-US', 'dark', 390]] as const) {
+  test('monitoring organized controls and chart columns ' + width, async ({ page }) => {
+    await setup(page, language, theme)
+    await page.setViewportSize({ width, height: 1000 })
+    await page.goto('/containers/' + containers[0].id + '#monitoring')
+    const region = page.getByRole('region', { name: language === 'zh-CN' ? '容器监控' : 'Container monitoring' })
+    await expect(region.locator('canvas')).toHaveCount(5)
+    await expect(region.getByRole('group', { name: language === 'zh-CN' ? /^时间范围/ : /^Time range/ })).toContainText('Asia/Shanghai')
+    await expect(region.getByRole('group', { name: language === 'zh-CN' ? '对比方式' : 'Comparison', exact: true }).getByRole('combobox')).toHaveCount(1)
+    const summary = region.getByRole('region', { name: language === 'zh-CN' ? '范围统计' : 'Range statistics' })
+    const tables = summary.getByRole('table')
+    await expect(tables).toHaveCount(2)
+    let rowHeight: number | undefined
+    for (const table of await tables.all()) {
+      await expect(table.getByRole('columnheader')).toHaveText(language === 'zh-CN' ? ['指标', '平均值', '峰值'] : ['Metric', 'Average', 'Peak'])
+      const rows = table.getByRole('row').filter({ has: page.getByRole('rowheader') })
+      const reference = await rows.first().getByRole('cell').first().boundingBox()
+      for (const row of await rows.all()) {
+        await expect(row.getByRole('cell')).toHaveCount(2)
+        const rowBox = await row.boundingBox()
+        rowHeight ??= rowBox!.height
+        expect(Math.abs(rowBox!.height - rowHeight)).toBeLessThanOrEqual(1)
+        const cell = await row.getByRole('cell').first().boundingBox()
+        expect(cell!.x + cell!.width).toBeCloseTo(reference!.x + reference!.width, 0)
+      }
+    }
+    const charts = region.getByRole('img')
+    const boxes = await Promise.all((await charts.all()).map(chart => chart.boundingBox()))
+    if (width === 1440) {
+      expect(boxes[0]!.y).toBeCloseTo(boxes[1]!.y, 0)
+      expect(boxes[2]!.y).toBeCloseTo(boxes[3]!.y, 0)
+      expect(boxes[1]!.x).toBeGreaterThan(boxes[0]!.x + boxes[0]!.width)
+      expect(boxes[2]!.y).toBeGreaterThan(boxes[0]!.y + boxes[0]!.height)
+      expect(boxes[4]!.width).toBeCloseTo(boxes[0]!.width, 0)
+    } else {
+      for (let i = 1; i < boxes.length; i++) expect(boxes[i]!.y).toBeGreaterThan(boxes[i - 1]!.y + boxes[i - 1]!.height)
+    }
+    expect(await region.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+    await page.screenshot({ path: '/tmp/suma-monitoring-organized-' + width + '.png', animations: 'disabled' })
+    await charts.nth(2).scrollIntoViewIfNeeded()
+    await page.screenshot({ path: '/tmp/suma-monitoring-organized-charts-' + width + '.png', animations: 'disabled' })
+  })
+}
+
+test('monitoring custom ranges freeze following and CSV includes queried data', async ({ page }) => {
+  await setup(page)
+  await page.goto('/containers/' + containers[0].id + '#monitoring')
+  await expect(page.locator('canvas')).toHaveCount(5)
+  await page.getByRole('button', { name: '6h', exact: true }).click()
+  await expect(page.getByRole('region', { name: 'Container monitoring' })).toContainText('Resolution')
+  await page.getByRole('button', { name: 'Apply range', exact: true }).click()
+  await expect(page.getByText('Fixed range', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Back to latest' })).toBeVisible()
+  const download = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'CSV', exact: true }).click()
+  const file = await download
+  expect(file.suggestedFilename()).toBe('container-monitoring.csv')
+  await page.getByRole('button', { name: 'Back to latest' }).click()
+  await expect(page.getByText('Following latest · refresh every 5s', { exact: true })).toBeVisible()
+})
+
+test('monitoring period comparisons retain actual timestamps and surface expired history', async ({ page }) => {
+  await setup(page)
+  await page.goto('/containers/' + containers[0].id + '#monitoring')
+  await page.getByRole('combobox', { name: 'Comparison mode' }).click()
+  await page.getByRole('option', { name: 'Compare periods', exact: true }).click()
+  await expect(page.getByRole('combobox', { name: 'Comparison period' })).toContainText('Previous period')
+  await page.getByRole('combobox', { name: 'Comparison period' }).click()
+  await page.getByRole('option', { name: 'Yesterday', exact: true }).click()
+  await page.getByRole('button', { name: '3d', exact: true }).click()
+  await expect(page.getByRole('region', { name: 'Container monitoring' })).toContainText('History partly or fully expired')
+})
+
+test('monitoring retention reduction requires confirmation and sends a versioned policy', async ({ page }) => {
+  const state = await setup(page)
+  await page.goto('/settings#monitoring')
+  await expect(page.getByRole('button', { name: 'Save monitoring settings' })).toBeVisible()
+  await page.getByRole('combobox', { name: 'Retention', exact: true }).click()
+  await page.getByRole('option', { name: '1 days', exact: true }).click()
+  await page.getByRole('button', { name: 'Save monitoring settings' }).click()
+  await expect(page.getByRole('dialog')).toContainText('Reduce monitoring history retention')
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  expect(state.calls.filter(call => call === 'PUT /monitoring/settings')).toHaveLength(0)
+  await page.getByRole('button', { name: 'Save monitoring settings' }).click()
+  const request = page.waitForRequest(r => r.method() === 'PUT' && r.url().endsWith('/monitoring/settings'))
+  await page.getByRole('button', { name: 'Save and clean history', exact: true }).click()
+  const input = (await request).postDataJSON()
+  expect(input).toMatchObject({ retention_days: 1, revision: 1, confirm_retention_reduction: true })
+  await expect(page.getByText('Settings saved', { exact: true })).toBeVisible()
+})
+
+test('monitoring settings persist Compose service exclusions', async ({ page }) => {
+  await setup(page)
+  await page.goto('/settings#monitoring')
+  await page.getByRole('combobox', { name: 'Exclusion kind' }).click()
+  await page.getByRole('option', { name: 'Compose project/service', exact: true }).click()
+  await page.getByRole('combobox', { name: 'Excluded node' }).click()
+  await page.getByRole('option', { name: 'local', exact: true }).click()
+  await page.getByRole('textbox', { name: 'Excluded Compose project' }).fill('project')
+  await page.getByRole('textbox', { name: 'Excluded Compose service' }).fill('web')
+  await page.getByRole('button', { name: 'Add rule' }).click()
+  await page.getByRole('button', { name: 'Save monitoring settings' }).click()
+  await expect(page.getByText('Settings saved', { exact: true })).toBeVisible()
+  await page.reload()
+  await expect(page.getByText('local · project / web', { exact: true })).toBeVisible()
+})
+
+for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']) for (const width of [390, 1440, 2112]) {
+  test('monitoring layout ' + language + ' ' + theme + ' ' + width, async ({ page }) => {
+    await setup(page, language, theme)
+    await page.setViewportSize({ width, height: 900 })
+    await page.goto('/containers')
+    const trend = rowFor(page, 'suma').getByRole('button', { name: (language === 'zh-CN' ? '资源趋势' : 'Resource trends') + ' suma', exact: true })
+    await trend.click()
+    const region = page.getByRole('region', { name: language === 'zh-CN' ? '容器监控' : 'Container monitoring' })
+    await expect(region.locator('canvas')).toHaveCount(2)
+    if (width === 390) await expect(page.getByRole('dialog')).toBeVisible()
+    const charts = region.getByRole('img')
+    const memoryChart = charts.nth(1)
+    await memoryChart.scrollIntoViewIfNeeded()
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    const bounds = await memoryChart.boundingBox()
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width)
+    const ticks = await memoryChart.evaluate(async element => {
+      const resource = performance.getEntriesByType('resource').find(entry => new URL(entry.name).pathname.endsWith('/echarts_core.js'))
+      if (!resource) throw new Error('Monitoring chart engine was not loaded')
+      const core = await import(resource.name)
+      const chart = core.getInstanceByDom(element)
+      const labels: { y: number; height: number }[] = []
+      for (const item of chart.getZr().storage.getDisplayList()) {
+        if (item.type !== 'tspan' || !/^\d+(\.\d+)?$/.test(item.style.text) || item.ignore || item.invisible) continue
+        const rect = item.getBoundingRect().clone()
+        rect.applyTransform(item.transform)
+        if (rect.x >= 0 && rect.x + rect.width < 55) labels.push({ y: rect.y, height: rect.height })
+      }
+      return labels.sort((a, b) => a.y - b.y)
+    })
+    expect(ticks.length).toBeGreaterThanOrEqual(2)
+    expect(ticks.length).toBeLessThanOrEqual(4)
+    for (let index = 1; index < ticks.length; index++) expect(ticks[index].y).toBeGreaterThanOrEqual(ticks[index - 1].y + ticks[index - 1].height)
+    await hoverPlotEnd(page, memoryChart)
+    const tooltips = page.locator('[data-slot="chart-tooltip"]:visible')
+    await expect(tooltips).toHaveCount(2)
+    for (const [index, tooltip] of (await tooltips.all()).entries()) {
+      const area = await charts.nth(index).boundingBox()
+      const wrapping = await tooltip.evaluate(element => {
+        const item = element.firstElementChild!, header = item.firstElementChild!, time = item.querySelector('time')!
+        const tokens = [...item.querySelectorAll('[data-slot="chart-tooltip-value"], time > span')]
+        return {
+          timestampOnNewLine: time.getBoundingClientRect().top >= header.getBoundingClientRect().bottom,
+          wholeTokens: tokens.every(token => { const range = document.createRange(); range.selectNodeContents(token); return range.getClientRects().length === 1 }),
+          noOverflow: element.scrollWidth <= element.clientWidth && element.scrollHeight <= element.clientHeight,
+        }
+      })
+      expect(wrapping).toEqual({ timestampOnNewLine: true, wholeTokens: true, noOverflow: true })
+      await expect.poll(async () => {
+        const box = await tooltip.boundingBox()
+        return !!box && box.x >= area!.x + 55 && box.x + box.width <= area!.x + area!.width - 15 && box.y >= area!.y + 10 && box.y + box.height <= area!.y + area!.height - 25
+      }).toBe(true)
+    }
+    if (width > 390) {
+      const scroller = page.locator('[data-slot="table-container"]')
+      await scroller.evaluate(element => { element.scrollLeft = element.scrollWidth })
+      const visible = await scroller.boundingBox()
+      const plot = await memoryChart.boundingBox()
+      expect(plot!.x).toBeGreaterThanOrEqual(visible!.x)
+      expect(plot!.x + plot!.width).toBeLessThanOrEqual(visible!.x + visible!.width)
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+    await page.screenshot({ path: '/tmp/suma-monitoring-layout-' + language + '-' + theme + '-' + width + '.png', animations: 'disabled' })
+    await page.goto('/containers/' + containers[0].id + '#monitoring')
+    await expect(page.locator('canvas')).toHaveCount(5)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+    await page.screenshot({ path: '/tmp/suma-monitoring-detail-' + language + '-' + theme + '-' + width + '.png', animations: 'disabled' })
+    await page.goto('/settings#monitoring')
+    await expect(page.getByRole('button', { name: language === 'zh-CN' ? '保存监控设置' : 'Save monitoring settings' })).toBeVisible()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+    await page.screenshot({ path: '/tmp/suma-monitoring-settings-' + language + '-' + theme + '-' + width + '.png', animations: 'disabled' })
+  })
+}
+
+for (const width of [390, 1440]) {
+  test('monitoring tooltips wrap long names and keep comparison content accessible ' + width, async ({ page }) => {
+    const state = await setup(page)
+    const longName = 'postgres-container-for-resource-monitoring-'.repeat(3)
+    state.rows[0].name = longName
+    state.rows[1].name = longName + 'other'
+    await page.setViewportSize({ width, height: 900 })
+    await page.goto('/containers')
+    await rowFor(page, longName).getByRole('button', { name: 'Resource trends ' + longName, exact: true }).click()
+    const chart = page.getByRole('region', { name: 'Container monitoring' }).getByRole('img', { name: 'Memory trend', exact: true })
+    await expect(chart.locator('canvas')).toHaveCount(1)
+    await chart.scrollIntoViewIfNeeded()
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    const area = await chart.boundingBox()
+    await hoverPlotEnd(page, chart)
+    const tooltip = page.locator('[data-slot="chart-tooltip"]:visible').filter({ hasText: 'Memory:' })
+    await expect(tooltip).toContainText(longName)
+    expect(await tooltip.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+    await tooltip.hover()
+    await tooltip.evaluate(element => { element.scrollTop = element.scrollHeight })
+    expect(await tooltip.evaluate(element => element.scrollTop)).toBeGreaterThan(0)
+    const box = await tooltip.boundingBox()
+    expect(box!.x).toBeGreaterThanOrEqual(area!.x + 55)
+    expect(box!.x + box!.width).toBeLessThanOrEqual(area!.x + area!.width - 15)
+    expect(box!.y + box!.height).toBeLessThanOrEqual(area!.y + area!.height - 25)
+    await page.screenshot({ path: '/tmp/suma-monitoring-tooltip-long-name-' + width + '.png', animations: 'disabled' })
+    if (width === 1440) {
+      await page.goto('/containers#monitoring-history')
+      const selected = page.getByRole('checkbox', { name: /Select historical instance/ })
+      for (let index = 0; index < 4; index++) await selected.nth(index).check()
+      await page.getByRole('button', { name: /Compare selected/ }).click()
+      const comparison = page.getByRole('region', { name: 'Container monitoring' }).getByRole('img', { name: 'CPU trend', exact: true })
+      await expect(comparison.locator('canvas')).toHaveCount(1)
+      await comparison.scrollIntoViewIfNeeded()
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+      const plot = await comparison.boundingBox()
+      await hoverPlotEnd(page, comparison)
+      const popup = page.locator('[data-slot="chart-tooltip"]:visible').filter({ hasText: 'CPU:' })
+      await expect(popup).toContainText('other')
+      expect(await popup.locator(':scope > div').count()).toBe(8)
+      expect(await popup.evaluate(element => element.scrollWidth <= element.clientWidth && element.scrollHeight > element.clientHeight)).toBe(true)
+      await popup.hover()
+      await popup.evaluate(element => { element.scrollTop = element.scrollHeight })
+      expect(await popup.evaluate(element => element.scrollTop)).toBeGreaterThan(0)
+      const popupBounds = await popup.boundingBox()
+      expect(popupBounds!.x + popupBounds!.width).toBeLessThanOrEqual(plot!.x + plot!.width - 15)
+      expect(popupBounds!.y).toBeGreaterThanOrEqual(plot!.y + 35)
+      expect(popupBounds!.y + popupBounds!.height).toBeLessThanOrEqual(plot!.y + plot!.height - 49)
+      await page.screenshot({ path: '/tmp/suma-monitoring-tooltip-comparison.png', animations: 'disabled' })
+    }
+  })
+}
+
+for (const theme of ['light', 'dark']) {
+  test('monitoring hover preserves outer scroll size and renders distinct colors ' + theme, async ({ page }) => {
+    await setup(page, 'en-US', theme)
+    await page.setViewportSize({ width: 1440, height: 700 })
+    await page.goto('/containers/' + containers[0].id + '#monitoring')
+    const region = page.getByRole('region', { name: 'Container monitoring' })
+    await expect(region.locator('canvas')).toHaveCount(5)
+    const chart = region.getByRole('img', { name: 'CPU trend', exact: true })
+    await chart.scrollIntoViewIfNeeded()
+    await chart.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+    const size = () => page.evaluate(() => ({ width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight, bodyHeight: document.body.scrollHeight, panelHeight: document.querySelector('main > div')!.scrollHeight }))
+    const before = await size()
+    await hoverPlotEnd(page, chart)
+    await expect(page.locator('[data-slot="chart-tooltip"]:visible')).toHaveCount(5)
+    expect(await size()).toEqual(before)
+    const colors = await region.getByRole('img').evaluateAll(elements => elements.map(element => {
+      const host = element as HTMLElement
+      const hits = new Set<number>()
+      const swatch = document.createElement('canvas'); swatch.width = swatch.height = 1
+      const context = swatch.getContext('2d')!
+      const palette = [1, 2, 3, 4, 5].map(index => {
+        context.clearRect(0, 0, 1, 1)
+        context.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--chart-' + index).trim()
+        context.fillRect(0, 0, 1, 1)
+        return [...context.getImageData(0, 0, 1, 1).data].slice(0, 3)
+      })
+      for (const canvas of element.querySelectorAll('canvas')) {
+        const scale = canvas.width / host.clientWidth
+        const pixels = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data
+        for (let y = Math.ceil(35 * scale); y < (host.clientHeight - 50) * scale; y++) for (let x = Math.ceil(55 * scale); x < (host.clientWidth - 16) * scale; x++) {
+          const offset = (y * canvas.width + x) * 4, rgb = [...pixels.slice(offset, offset + 3)]
+          if (pixels[offset + 3] < 180 || Math.max(...rgb) - Math.min(...rgb) < 45) continue
+          palette.forEach((color, index) => { if (color.every((value, channel) => Math.abs(value - rgb[channel]) < 12)) hits.add(index) })
+        }
+      }
+      return [...hits]
+    }))
+    expect(colors[0]).toContain(0)
+    expect(colors[1]).toContain(1)
+    expect(colors[2]).toEqual(expect.arrayContaining([2, 3]))
+    expect(colors[3]).toEqual(expect.arrayContaining([3, 4]))
+    expect(colors[4]).toContain(4)
+    await page.screenshot({ path: '/tmp/suma-monitoring-color-' + theme + '.png', animations: 'disabled' })
+  })
+}
+
+test('mouse wheel over monitoring charts scrolls the page without changing the hour range', async ({ page }) => {
+  await setup(page)
+  const durations: number[] = []
+  page.on('request', request => {
+    if (request.method() === 'POST' && request.url().endsWith('/monitoring/query')) {
+      const targets = request.postDataJSON().targets as { since: string; until: string }[]
+      durations.push(...targets.map(target => Date.parse(target.until) - Date.parse(target.since)))
+    }
+  })
+  await page.goto('/containers/' + containers[0].id + '#monitoring')
+  const region = page.getByRole('region', { name: 'Container monitoring' })
+  const chart = region.getByRole('img', { name: 'CPU trend', exact: true })
+  await expect(chart.locator('canvas')).toHaveCount(1)
+  await expect(region).toHaveAttribute('aria-busy', 'false')
+  await chart.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  await chart.scrollIntoViewIfNeeded()
+  await hoverPlotEnd(page, chart)
+  const scroller = page.locator('main > div')
+  const before = await scroller.evaluate(element => element.scrollTop)
+  await page.mouse.wheel(0, 240)
+  await expect.poll(() => scroller.evaluate(element => element.scrollTop)).toBeGreaterThan(before + 100)
+  await chart.scrollIntoViewIfNeeded()
+  await hoverPlotEnd(page, chart)
+  const beforeUp = await scroller.evaluate(element => element.scrollTop)
+  await page.mouse.wheel(0, -160)
+  await expect.poll(() => scroller.evaluate(element => element.scrollTop)).toBeLessThan(beforeUp)
+  expect(durations.length).toBeGreaterThan(0)
+  expect(durations.every(duration => duration === 3600_000)).toBe(true)
+  await expect(page.getByText('Following latest · refresh every 5s', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Back to latest' })).toHaveCount(0)
+})
+
+test('monitoring opens and reopens with a selected one-hour range', async ({ page }) => {
+  await setup(page)
+  const initialQuery = page.waitForRequest(request => request.method() === 'POST' && request.url().endsWith('/monitoring/query'))
+  await page.goto('/containers/' + containers[0].id + '#monitoring')
+  const target = (await initialQuery).postDataJSON().targets[0]
+  expect(Date.parse(target.until) - Date.parse(target.since)).toBe(3600_000)
+  const region = page.getByRole('region', { name: 'Container monitoring' })
+  await expect(region.locator('canvas')).toHaveCount(5)
+  await expect(page.getByRole('button', { name: '1h', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: '6h', exact: true }).click()
+  await expect(page.getByRole('button', { name: '6h', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('button', { name: 'CSV', exact: true })).toBeEnabled()
+  await page.getByRole('tab', { name: 'Overview', exact: true }).click()
+  await expect(region).toHaveCount(0)
+  await page.getByRole('tab', { name: 'Monitoring', exact: true }).click()
+  await expect(region.locator('canvas')).toHaveCount(5)
+  await expect(page.getByRole('button', { name: '1h', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  const duration = await region.getByRole('img', { name: 'CPU trend', exact: true }).evaluate(async element => {
+    const resource = performance.getEntriesByType('resource').find(entry => new URL(entry.name).pathname.endsWith('/echarts_core.js'))!
+    const core = await import(resource.name)
+    const axis = core.getInstanceByDom(element).getOption().xAxis[0]
+    return axis.max - axis.min
+  })
+  expect(duration).toBe(3600_000)
+})
+
+test('chart range selection freezes following and queries the selected interval', async ({ page }) => {
+  await setup(page)
+  await page.goto('/containers/' + containers[0].id + '#monitoring')
+  const chart = page.getByRole('region', { name: 'Container monitoring' }).getByRole('img', { name: 'CPU trend', exact: true })
+  await expect(chart.locator('canvas')).toHaveCount(1)
+  await chart.scrollIntoViewIfNeeded()
+  const box = await chart.boundingBox()
+  await chart.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))
+  const queried = page.waitForRequest(request => {
+    if (!request.url().endsWith('/monitoring/query') || request.method() !== 'POST') return false
+    const target = request.postDataJSON().targets[0]
+    const duration = Date.parse(target.until) - Date.parse(target.since)
+    return duration > 1000 && duration < 3500_000
+  })
+  await page.mouse.move(box!.x + 59, box!.y + box!.height - 7)
+  await page.mouse.down()
+  await page.mouse.move(box!.x + box!.width * 0.3, box!.y + box!.height - 7, { steps: 8 })
+  await page.mouse.up()
+  await queried
+  await expect(page.getByText('Fixed range', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Back to latest' })).toBeVisible()
+})
+
+test('leaving monitoring cancels an in-flight historical query', async ({ page }) => {
+  const state = await setup(page)
+  const delayed = gate()
+  state.gates.set('/monitoring/query', delayed.promise)
+  await page.goto('/containers/' + containers[0].id + '#monitoring')
+  await expect.poll(() => state.calls).toContain('POST /monitoring/query')
+  const canceled = page.waitForEvent('requestfailed', request => request.url().endsWith('/monitoring/query'))
+  await page.getByRole('tab', { name: 'Events', exact: true }).click()
+  await canceled
+  delayed.resolve()
+})

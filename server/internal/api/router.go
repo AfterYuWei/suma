@@ -21,6 +21,7 @@ import (
 	composeService "github.com/suma/suma/server/internal/compose"
 	containerdomain "github.com/suma/suma/server/internal/container"
 	"github.com/suma/suma/server/internal/containerfiles"
+	containermonitor "github.com/suma/suma/server/internal/containermonitor"
 	credentialService "github.com/suma/suma/server/internal/credential"
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/docker"
@@ -42,6 +43,7 @@ import (
 const sessionCookie = "suma_session"
 
 type Dependencies struct {
+	ContainerMonitoring *containermonitor.Service
 	Notifications       *notification.Service
 	ImageUpdates        *imageupdate.Service
 	ProjectLogs         *projectlogs.Service
@@ -110,6 +112,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	loginAttempts := newLoginLimiter()
 	setupAttempts := newLoginLimiter()
 	v1 := router.Group("/api/v1")
+	registerMonitoringRoutes(v1, deps)
 	registerNotificationRoutes(v1, deps)
 	registerImageUpdateRoutes(v1, deps)
 	registerProjectLogRoutes(router, v1, deps)

@@ -21,6 +21,7 @@ import (
 
 	"github.com/docker/docker/client"
 	domain "github.com/suma/suma/server/internal/container"
+	monitor "github.com/suma/suma/server/internal/containermonitor"
 )
 
 func TestContainerObservationMutualTLS(t *testing.T) {
@@ -51,6 +52,8 @@ func TestContainerObservationMutualTLS(t *testing.T) {
 		case "/_ping":
 			w.Header().Set("Api-Version", "1.44")
 			_, _ = w.Write([]byte("OK"))
+		case "/containers/json":
+			writeJSON(w, 200, []map[string]any{{"Id": id, "NetworkSettings": map[string]any{"Networks": map[string]any{"app_default": map[string]any{"IPAddress": "172.20.0.2"}}}}})
 		case "/containers/" + id + "/json":
 			writeJSON(w, 200, map[string]any{"Id": id, "Config": map[string]any{}, "State": map[string]any{"Status": "running", "Running": true, "StartedAt": time.Now().Add(-time.Hour).Format(time.RFC3339Nano)}, "HostConfig": map[string]any{"Memory": 0}, "RestartCount": 0})
 		case "/containers/" + id + "/stats":
@@ -80,8 +83,8 @@ func TestContainerObservationMutualTLS(t *testing.T) {
 	defer cli.Close()
 	a := &Adapter{client: cli}
 	ctx := context.Background()
-	if result, err := domain.ReadOverview(ctx, a, id); err != nil || result.ID != id || result.Networks == nil || result.Mounts == nil {
-		t.Fatalf("mTLS overview failed: %v", err)
+	if result, err := a.List(ctx); err != nil || len(result) != 1 || len(result[0].Networks) != 1 || result[0].Networks[0].IPAddress != "172.20.0.2" {
+		t.Fatalf("mTLS list networks failed: %v", err)
 	}
 	if result, err := domain.ReadDiagnostics(ctx, a, id); err != nil || result.Runtime.MemoryLimitBytes == nil || *result.Runtime.MemoryLimitBytes != 0 {
 		t.Fatalf("mTLS diagnostic failed: %v", err)
@@ -106,6 +109,26 @@ func TestContainerObservationMutualTLS(t *testing.T) {
 	case <-canceled:
 	case <-time.After(time.Second):
 		t.Fatal("mTLS event request was not canceled")
+	}
+	inventory, err := a.MonitoringInventory(ctx)
+	if err != nil || len(inventory) != 1 || inventory[0].ID != id {
+		t.Fatalf("mTLS monitoring inventory failed: %v", err)
+	}
+	monitorCtx, stopMonitor := context.WithTimeout(ctx, time.Second)
+	seenMonitor := false
+	_ = a.MonitoringEvents(monitorCtx, time.Now().Add(-time.Minute), func(e domain.ContainerEvent, _ monitor.Inventory) error {
+		seenMonitor = e.ContainerID == id && e.Action == "start"
+		stopMonitor()
+		return nil
+	})
+	stopMonitor()
+	if !seenMonitor {
+		t.Fatal("mTLS monitoring event absent")
+	}
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("mTLS monitoring stream did not close")
 	}
 	anonymousTransport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}
 	defer anonymousTransport.CloseIdleConnections()

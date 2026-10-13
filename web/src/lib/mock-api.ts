@@ -1,3 +1,5 @@
+import { createMonitoringMock } from '../features/monitoring/mock'
+import type { Instance } from '../features/monitoring/types'
 import { mockNotifications, persistMockNotifications } from '../features/notifications/mock'
 import { validTimeZone } from './date-time'
 import { operationsDemo, demoProjectLogStream } from './mock-operations'
@@ -6,7 +8,7 @@ import { composeProblems, configKeys, configValue } from '../features/compose/do
 import { createMockCleanup } from './mock-cleanup'
 import type { User } from '../features/auth/types'
 import type { Project, ProjectSummary, ProjectTakeoverDraft, ShadowAssessment, ShadowPreviewSession, ShadowPreviewStatus } from '../features/compose/types'
-import type { ContainerDetail, ContainerDiagnostics, ContainerMetrics, ContainerOverview, ContainerSummary } from '../features/containers/types'
+import type { ContainerDetail, ContainerDiagnostics, ContainerMetrics, ContainerSummary } from '../features/containers/types'
 import type { CDConfiguration, CDConfigureInput, CDDrift, DeliveryProject, DeliveryRelease, GitCredential } from '../features/delivery/types'
 import type { DockerNode, NodeGroup } from './nodes'
 import { ApiError, type DemoCredentials, type DemoStream } from './api'
@@ -41,7 +43,7 @@ const nodeGroups: NodeGroup[] = [
 const syncNodeGroupCounts = () => nodeGroups.forEach((group) => { group.node_count = nodes.filter((node) => node.group_ids.includes(group.id)).length })
 
 const makeContainer = (id: string, name: string, image: string, state: string, cpu: number, memory: number, labels: Record<string, string>, ports: ContainerSummary['ports']): ContainerSummary => ({
-  id: id.repeat(64).slice(0, 64), name, image, command: '/docker-entrypoint.sh', created: earlier, state, status: state === 'running' ? `Up 6 hours${name === 'gateway' ? ' (healthy)' : name === 'immich-server' ? ' (unhealthy)' : ''}` : 'Exited (0) 2 hours ago', ports, labels, cpu_percent: state === 'running' ? cpu : 0, memory_bytes: state === 'running' ? memory : 0, uptime_seconds: state === 'running' ? 21_840 : 0,
+  id: id.repeat(64).slice(0, 64), name, image, command: '/docker-entrypoint.sh', created: earlier, state, status: state === 'running' ? `Up 6 hours${name === 'gateway' ? ' (healthy)' : name === 'immich-server' ? ' (unhealthy)' : ''}` : 'Exited (0) 2 hours ago', ports, networks: [{ name: labels['com.docker.compose.project'] ? `${labels['com.docker.compose.project']}_default` : 'bridge', ip_address: state === 'running' ? `172.22.0.${parseInt(id, 16) + 2}` : undefined }], labels, cpu_percent: state === 'running' ? cpu : 0, memory_bytes: state === 'running' ? memory : 0, uptime_seconds: state === 'running' ? 21_840 : 0,
 })
 
 const containerMetricsEpoch = Date.now()
@@ -68,6 +70,7 @@ const containerSets: Record<string, ContainerSummary[]> = {
   ],
 }
 
+const mockMonitoring = createMonitoringMock(() => Object.entries(containerSets).flatMap(([nodeID, rows], nodeIndex) => rows.map(row => ({ id: String(nodeIndex+1).padStart(4,'0')+row.id.slice(4), node_id: nodeID, engine_id: nodes.find(n=>n.id===nodeID)?.engine_id ?? ('demo-engine-'+nodeID), container_id: row.id, node_name: nodes.find(n=>n.id===nodeID)?.name ?? nodeID, name: row.name, image: row.image, project: row.labels['com.docker.compose.project'] ?? '', service: row.labels['com.docker.compose.service'] ?? '', first_seen: new Date(Date.now()-3*86400_000).toISOString(), last_seen: new Date().toISOString() } satisfies Instance))))
 const projectCapabilities: ProjectSummary['capabilities'] = ['view', 'edit', 'deploy', 'stop', 'restart', 'update', 'delete', 'services', 'logs']
 const projects: ProjectSummary[] = [
   { ref: { backend: 'compose', scope: { kind: 'engine', id: 'local' }, native_name: 'gateway-prod' }, backend: 'compose', scope: { kind: 'engine', id: 'local' }, node_id: 'local', name: 'gateway-prod', native_name: 'gateway-prod', managed: true, source: 'managed', capabilities: projectCapabilities, service_count: 2, instance_count: 2, status: 'running', created_at: earlier, updated_at: now },
@@ -163,6 +166,8 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
   if (pathname === '/auth/session') { requireSession(); return clone(user) as T }
 
   requireSession()
+  const monitoringResult = mockMonitoring(pathname, method, body, url)
+  if (monitoringResult !== undefined) return monitoringResult as T
   const operationsResult = mockNotifications(pathname, method, body)
  if (operationsResult !== undefined) { persistMockNotifications(); return clone(operationsResult) as T }
  const cleanupResult = mockCleanup(pathname, method, body, url)
@@ -514,15 +519,9 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
         return clone(['copy', 'move', 'delete'].includes(String(body.action)) ? { id: `task-file-${Date.now()}`, status: 'success', progress: 100, message: 'Completed' } : { path: name, target }) as T
       }
     }
-    const observationMatch = suffix.match(/^\/containers\/([^/]+)\/(runtime|events|overview)$/)
+    const observationMatch = suffix.match(/^\/containers\/([^/]+)\/(runtime|events)$/)
     if (observationMatch) {
       const row = containers.find(item => item.id === observationMatch[1]) ?? containers[0]
-      if (observationMatch[2] === 'overview') return clone({
-        id: row.id, network_mode: 'bridge', counts: { networks: 1, mounts: 1, ports: row.ports.length },
-        ports: row.ports.slice(0, 4).map(port => ({ ...port, host_binding: !!port.public_port })),
-        networks: [{ name: 'gateway-prod_default', ip_address: '172.22.0.3', ipv6_address: 'fd00::3' }],
-        mounts: [{ type: 'volume', name: 'gateway-prod_data', destination: '/data', read_write: true, anonymous: false }],
-      } satisfies ContainerOverview) as T
       if (observationMatch[2] === 'runtime') return clone(demoContainerDiagnostics(row)) as T
       const actions = ['create', 'start', 'health_status', 'restart', 'health_status']
       return clone({ source: 'docker', coverage: 'engine_retained', requested_since: url.searchParams.get('since'), requested_until: url.searchParams.get('until'), truncated: false, events: actions.map((action, i) => { const time = Date.now() - (actions.length - i) * 60_000; return { id: `demo-${row.id}-${i}`, node_id: nodeID, container_id: row.id, time: new Date(time).toISOString(), time_nano: String(BigInt(time) * 1000000n), action, exit_code: null, health_status: action === 'health_status' ? i === 2 ? 'unhealthy' : 'healthy' : undefined } }) }) as T
@@ -533,7 +532,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
       const action = containerMatch[2]
       if (action) { row.state = action === 'stop' ? 'exited' : action === 'pause' ? 'paused' : 'running'; row.status = row.state === 'running' ? 'Up a few seconds' : row.state }
       if (method === 'PATCH' && typeof body.name === 'string') row.name = body.name
-      const detail: ContainerDetail = { ...row, pid: row.state === 'running' ? 12984 : 0, entrypoint: ['/docker-entrypoint.sh'], working_directory: '/app', restart_policy: 'unless-stopped', read_only_rootfs: false, network_mode: 'bridge', environment: [{ key: 'APP_ENV', value: 'production', sensitive: false }, { key: 'DATABASE_PASSWORD', sensitive: true }], mounts: [{ type: 'volume', name: 'gateway-prod_data', source: '/var/lib/docker/volumes/gateway-prod_data/_data', destination: '/data', read_write: true }], networks: [{ name: 'gateway-prod_default', ip_address: '172.22.0.3', ipv6_address: 'fd00::3', ipv6_gateway: 'fd00::1', gateway: '172.22.0.1', mac_address: '02:42:ac:16:00:03' }] }
+      const detail: ContainerDetail = { ...row, pid: row.state === 'running' ? 12984 : 0, entrypoint: ['/docker-entrypoint.sh'], working_directory: '/app', restart_policy: 'unless-stopped', read_only_rootfs: false, network_mode: 'bridge', environment: [{ key: 'APP_ENV', value: 'production', sensitive: false }, { key: 'DATABASE_PASSWORD', sensitive: true }], mounts: [{ type: 'volume', name: 'gateway-prod_data', source: '/var/lib/docker/volumes/gateway-prod_data/_data', destination: '/data', read_write: true }], networks: (row.networks ?? []).map(network => ({ ...network, ip_address: network.ip_address ?? '', gateway: '172.22.0.1', mac_address: '02:42:ac:16:00:03' })) }
       return clone(detail) as T
     }
 

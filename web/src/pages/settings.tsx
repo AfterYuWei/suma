@@ -1,3 +1,4 @@
+import { MonitoringSettings } from '../features/monitoring/settings'
 import { NotificationSettings } from '../features/notifications/notification-settings'
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from '@tanstack/react-router'
@@ -33,14 +34,14 @@ export function SettingsPage() {
   const hash = useLocation({ select: location => location.hash })
   const navigate = useNavigate()
   const section = hash.split('?')[0]
-  const tab = ['cleanup', 'notifications'].includes(section) ? section : 'general'
+  const tab = ['cleanup', 'notifications', 'monitoring'].includes(section) ? section : 'general'
   useEffect(() => {
     if (hash === 'image-updates') void navigate({ to: '/images', hash: 'image-updates', replace: true })
   }, [hash, navigate])
   return <ResourceFrame title={t('settings')} detail={t('localConfiguration')}>
     <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-6">
-      <Tabs value={tab} onValueChange={value => { void navigate({ to: '/settings', hash: value === 'general' ? '' : value }) }}><TabsList><TabsTrigger value="general">{zh ? '常规设置' : 'General settings'}</TabsTrigger><TabsTrigger value="cleanup">{zh ? '存储清理' : 'Storage cleanup'}</TabsTrigger><TabsTrigger value="notifications">{zh ? '通知渠道' : 'Notification channels'}</TabsTrigger></TabsList></Tabs>
-      {tab === 'notifications' ? <NotificationSettings /> : tab === 'cleanup' ? <StorageCleanup /> : <GeneralSettings />}
+      <Tabs value={tab} onValueChange={value => { void navigate({ to: '/settings', hash: value === 'general' ? '' : value }) }}><TabsList className="max-w-full justify-start overflow-x-auto"><TabsTrigger value="general">{zh ? '常规设置' : 'General settings'}</TabsTrigger><TabsTrigger value="monitoring">{zh ? '监控' : 'Monitoring'}</TabsTrigger><TabsTrigger value="cleanup">{zh ? '存储清理' : 'Storage cleanup'}</TabsTrigger><TabsTrigger value="notifications">{zh ? '通知渠道' : 'Notification channels'}</TabsTrigger></TabsList></Tabs>
+      {tab === 'monitoring' ? <MonitoringSettings /> : tab === 'notifications' ? <NotificationSettings /> : tab === 'cleanup' ? <StorageCleanup /> : <GeneralSettings />}
     </div>
   </ResourceFrame>
 }

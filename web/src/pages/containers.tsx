@@ -1,14 +1,16 @@
-import { useSmallScreen } from '../features/containers/use-small-screen'
+import { MonitoringHistory } from '../features/monitoring/history'
+import { MonitoringView } from '../features/monitoring/view'
+import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../components/ui/sheet'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate } from '@tanstack/react-router'
-import { ChevronDown, ChevronRight, CircleAlert, FileText, FolderOpen, HeartPulse, MoreHorizontal, OctagonX, Pause, Pencil, Play, RefreshCw, Search, Square, SquareTerminal, Trash2, X } from 'lucide-react'
+import { Link, useNavigate, useLocation } from '@tanstack/react-router'
+import { ChartNoAxesCombined, CircleAlert, FileText, FolderOpen, HeartPulse, MoreHorizontal, OctagonX, Pause, Pencil, Play, RefreshCw, Search, Square, SquareTerminal, Trash2, X } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { ContainerFilters, SortMenu } from '../components/docker/container-filters'
-import { DiagnosticsContent, MemoryBar, ObservationOverlay, ResourceTrend } from '../components/docker/container-observation'
-import { ContainerOverviewContent } from '../components/docker/container-overview'
+import { DiagnosticsContent, MemoryBar, ObservationOverlay } from '../components/docker/container-observation'
+import { ContainerNetworks } from '../components/docker/container-networks'
 import { defaultContainerView, useContainerViewStore, type ContainerView } from '../stores/container-view'
 import { isAbnormal, selectContainers } from '../features/containers/observation'
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../components/ui/sheet'
 import { ContainerPorts } from '../components/docker/container-ports'
 import { Alert, AlertAction, AlertDescription } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
@@ -58,16 +60,27 @@ const stateLabel = (state: string, zh: boolean) => zh ? ({ running: '运行中',
 const healthLabel = (health: string | null | undefined, zh: boolean) => ({ healthy: zh ? '健康' : 'Healthy', unhealthy: zh ? '不健康' : 'Unhealthy', starting: zh ? '检查启动中' : 'Starting', syncing: zh ? '同步中' : 'Syncing', none: zh ? '未配置' : 'No check' }[health ?? ''] ?? (zh ? '未知' : 'Unknown'))
 
 export function ContainersPage() {
+ const hash=useLocation({select: location => location.hash}),navigate=useNavigate()
+ const {language}=useI18n(),zh=language==='zh-CN'
+ const pathname=useLocation({select: location=>location.pathname})
+ const history=hash==='monitoring-history'
+ if(pathname!=='/containers')return null
+ return <div className="space-y-4"><Tabs value={history?'history':'live'} onValueChange={v=>void navigate({to:'/containers',hash:v==='history'?'monitoring-history':''})}><TabsList variant="line"><TabsTrigger value="live">{zh?'容器':'Containers'}</TabsTrigger><TabsTrigger value="history">{zh?'监控历史':'Monitoring history'}</TabsTrigger></TabsList></Tabs>{history?<ResourceFrame title={zh?'监控历史':'Monitoring history'} detail={zh?'已记录的容器实例，包含已停止或删除的容器':'Recorded instances, including stopped or removed containers'}><MonitoringHistory /></ResourceFrame>:<LiveContainersPage />}</div>
+}
+function LiveContainersPage() {
   const navigate = useNavigate()
   const nodeID = useUIStore((state) => state.currentNodeID)
   const view = useContainerViewStore(state => state.views[nodeID]) ?? defaultContainerView
   const updateView = useContainerViewStore(state => state.update)
   const filter = view.search
-  const [expanded, setExpanded] = useState('')
   const [overlay, setOverlay] = useState('')
+  const [expanded,setExpanded]=useState('')
+  const [mobile,setMobile]=useState(()=>window.matchMedia('(max-width: 767px)').matches)
+  useEffect(()=>{const media=window.matchMedia('(max-width: 767px)');const change=()=>setMobile(media.matches);media.addEventListener('change',change);return()=>media.removeEventListener('change',change)},[])
+  useEffect(()=>setExpanded(''),[nodeID])
+  const toggleTrend=(id:string)=>setExpanded(old=>old===id?'':id)
   const [interacting, setInteracting] = useState(false)
-  const small = useSmallScreen()
-  const update = (patch: Partial<ContainerView>) => { updateView(nodeID, patch); setSelected(new Set()); setExpanded(''); setOverlay(''); order.current = [] }
+  const update = (patch: Partial<ContainerView>) => { updateView(nodeID, patch); setSelected(new Set()); setOverlay(''); order.current = [] }
   const setFilter = (search: string) => update({ search })
   const order = useRef<string[]>([])
   const reconciledAt = useRef(0)
@@ -83,9 +96,9 @@ export function ContainersPage() {
   const query = useQuery({ queryKey: ['containers', nodeID], queryFn: ({ signal }) => api<ContainerSummary[]>(nodePath(nodeID, '/containers'), { signal }), refetchInterval: 10_000 })
   const runtime = useQuery({ queryKey: ['container-runtime', nodeID], queryFn: ({ signal }) => api<ContainerRuntime[]>(nodePath(nodeID, '/containers/runtime'), { signal }), refetchInterval: 10_000, retry: false })
   const metrics = useListMetrics(nodeID)
-  const invalidateContainers = () => Promise.all(['containers', 'container-metrics', 'container-runtime', 'container-diagnostics', 'container-overview', 'container'].map(key => queryClient.invalidateQueries({ queryKey: [key, nodeID] })))
+  const invalidateContainers = () => Promise.all(['containers', 'container-metrics', 'container-runtime', 'container-diagnostics', 'container'].map(key => queryClient.invalidateQueries({ queryKey: [key, nodeID] })))
   const action = useMutation({ mutationFn: ({ id, name }: { id: string; name: string }) => api(nodePath(nodeID, `/containers/${id}/${name}`), { method: 'POST' }), onMutate: () => setOperationError(''), onSuccess: invalidateContainers, onError: (error) => setOperationError(error.message) })
-  useEffect(() => { setSelected(new Set()); setOperationError(''); setExpanded(''); setOverlay(''); order.current = [] }, [nodeID])
+  useEffect(() => { setSelected(new Set()); setOperationError(''); setOverlay(''); order.current = [] }, [nodeID])
   const batch = useMutation({
     mutationFn: ({ ids, name }: { ids: string[]; name: string }) => api<{ results: { id: string; success: boolean; error?: string }[] }>(nodePath(nodeID, '/containers/batch'), { method: 'POST', body: JSON.stringify({ ids, action: name, remove_volumes: false, force: name === 'remove' }) }),
     onMutate: () => setOperationError(''),
@@ -106,7 +119,7 @@ export function ContainersPage() {
   const snapshotsByID = new Map(runtimeFresh ? runtime.data?.map(row => [row.id, row]) : [])
   const runtimeById = new Map(runtimeFresh ? runtime.data?.filter(meta => !meta.state || baseByID.get(meta.id)?.state === meta.state).map(row => [row.id, row]) : [])
   const rowsSorted = selectContainers(query.data ?? [], view, runtimeById, metricsById, zh)
-  const frozen = (interacting || selected.size > 0 || !!expanded || !!overlay) && ['cpu', 'memory', 'memory_ratio', 'receive', 'transmit', 'uptime'].includes(view.sort)
+  const frozen = (interacting || selected.size > 0 || !!overlay) && ['cpu', 'memory', 'memory_ratio', 'receive', 'transmit', 'uptime'].includes(view.sort)
   if (!frozen || !order.current.length) order.current = rowsSorted.map(row => row.id)
   const ranks = new Map(order.current.map((id, i) => [id, i]))
   const rows = frozen ? [...rowsSorted].sort((a, b) => (ranks.get(a.id) ?? Infinity) - (ranks.get(b.id) ?? Infinity)) : rowsSorted
@@ -118,8 +131,8 @@ export function ContainersPage() {
   const abnormal = query.data?.filter(row => isAbnormal(row, runtimeById.get(row.id))).length ?? 0
   const unknown = query.data?.filter(row => (!runtimeById.get(row.id) || runtimeById.get(row.id)?.health_status == null || runtimeById.get(row.id)?.restart_count == null) && !isAbnormal(row)).length ?? 0
   const projects = [...new Set(query.data?.map(row => row.labels['com.docker.compose.project']).filter(Boolean))].sort()
-  useEffect(() => { const ids = new Set(query.data?.map(row => row.id)); setSelected(current => { const next = new Set([...current].filter(id => ids.has(id))); return next.size === current.size ? current : next }); if (expanded && !ids.has(expanded)) setExpanded('') }, [query.data, expanded])
-  useEffect(() => { setExpanded(''); setOverlay('') }, [pagination.page, resetKey])
+  useEffect(() => { const ids = new Set(query.data?.map(row => row.id)); setSelected(current => { const next = new Set([...current].filter(id => ids.has(id))); return next.size === current.size ? current : next }) }, [query.data])
+  useEffect(() => { setOverlay('') }, [pagination.page, resetKey])
   useEffect(() => { const states = new Map(query.data?.map(row => [row.id, row.state])); if (runtimeFresh && reconciledAt.current !== runtime.dataUpdatedAt && runtime.data?.some(meta => meta.state && states.has(meta.id) && states.get(meta.id) !== meta.state)) { reconciledAt.current = runtime.dataUpdatedAt; void queryClient.invalidateQueries({ queryKey: ['containers', nodeID] }) } }, [runtime.data, runtime.dataUpdatedAt, runtimeFresh, nodeID, queryClient, query.data])
   const selectedRows = query.data?.filter((row) => selected.has(row.id)) ?? []
   const allSelected = pagination.items.length > 0 && pagination.items.every((row) => selected.has(row.id))
@@ -164,7 +177,7 @@ export function ContainersPage() {
     {(view.search || view.states.length > 0 || view.health.length > 0 || view.source || view.project || view.diagnostic) && <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => update({ ...defaultContainerView, sort: view.sort, descending: view.descending })}>{zh ? '清除筛选' : 'Clear filters'}<X data-icon="inline-end" aria-hidden="true" /></Button>}
     <InputGroup className="w-[260px]">
       <InputGroupAddon align="inline-start"><Search /></InputGroupAddon>
-      <InputGroupInput value={filter} onChange={(event) => setFilter(event.target.value)} placeholder={zh ? '名称、镜像、状态、端口…' : 'Name, image, status, port…'} aria-label={zh ? '筛选容器' : 'Filter containers'} />
+      <InputGroupInput value={filter} onChange={(event) => setFilter(event.target.value)} placeholder={zh ? '名称、镜像、网络、端口…' : 'Name, image, network, port…'} aria-label={zh ? '筛选容器' : 'Filter containers'} />
       {!!filter && <InputGroupAddon align="inline-end"><InputGroupButton size="icon-xs" aria-label={zh ? '清空筛选' : 'Clear filter'} onClick={() => setFilter('')}><X /></InputGroupButton></InputGroupAddon>}
     </InputGroup>
     {frozen && <span className="text-xs text-muted-foreground">{zh ? '排序待更新' : 'Sort pending'}</span>}
@@ -192,19 +205,19 @@ export function ContainersPage() {
           <Table onMouseEnter={() => setInteracting(true)} onMouseLeave={() => setInteracting(false)} onFocus={() => setInteracting(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setInteracting(false) }} className="min-w-[1500px] table-fixed [&_td]:py-[7px] [&_td]:text-center [&_th]:h-8 [&_th]:text-center">
             <TableHeader>
               <TableRow>
-                <TableHead className="w-16 px-0">
-                  <div className="flex items-center justify-center gap-3">
+                <TableHead className="w-10 px-0">
+                  <div className="flex items-center justify-center">
                     <Checkbox checked={allSelected} indeterminate={someSelected} onCheckedChange={(checked) => toggleAll(checked)} aria-label={allSelected ? (zh ? '取消选择本页' : 'Deselect this page') : (zh ? '选择本页' : 'Select this page')} />
-                    <span aria-hidden="true" className="size-6 shrink-0" />
                   </div>
                 </TableHead>
-                <TableHead className="w-[176px]"><SortMenu view={view} update={update} zh={zh} label={zh ? '容器' : 'Container'} fields={['name']} /></TableHead>
+                <TableHead className="w-[164px]"><SortMenu view={view} update={update} zh={zh} label={zh ? '容器' : 'Container'} fields={['name']} /></TableHead>
                 <TableHead className="w-[160px] text-center">{zh ? '状态' : 'Status'}</TableHead>
-                <TableHead className="w-[160px]"><SortMenu view={view} update={update} zh={zh} label={zh ? '资源' : 'Resources'} fields={['cpu', 'memory', 'memory_ratio']} /></TableHead>
-                <TableHead className="w-[128px]"><SortMenu view={view} update={update} zh={zh} label={zh ? '网络' : 'Network'} fields={['receive', 'transmit']} /></TableHead>
-                <TableHead className="w-[184px]">{zh ? '端口' : 'Ports'}</TableHead>
-                <TableHead className="w-[300px]"><SortMenu view={view} update={update} zh={zh} label={zh ? '镜像' : 'Image'} fields={['image']} /></TableHead>
-                <TableHead className="w-[136px]"><SortMenu view={view} update={update} zh={zh} label={zh ? '时间' : 'Time'} fields={['created', 'uptime']} /></TableHead>
+                <TableHead className="w-[144px]"><SortMenu view={view} update={update} zh={zh} label={zh ? '资源' : 'Resources'} fields={['cpu', 'memory', 'memory_ratio']} /></TableHead>
+                <TableHead className="w-[128px]"><SortMenu view={view} update={update} zh={zh} label={zh ? '流量' : 'Traffic'} fields={['receive', 'transmit']} /></TableHead>
+                <TableHead className="w-[160px]">{zh ? '网络' : 'Network'}</TableHead>
+                <TableHead className="w-[156px]">{zh ? '端口' : 'Ports'}</TableHead>
+                <TableHead className="w-[224px]"><SortMenu view={view} update={update} zh={zh} label={zh ? '镜像' : 'Image'} fields={['image']} /></TableHead>
+                <TableHead className="w-[128px]"><SortMenu view={view} update={update} zh={zh} label={zh ? '时间' : 'Time'} fields={['created', 'uptime']} /></TableHead>
                 <TableHead>{zh ? '操作' : 'Actions'}</TableHead>
               </TableRow>
             </TableHeader>
@@ -229,9 +242,8 @@ export function ContainersPage() {
                 return (
                 <Fragment key={row.id}><TableRow data-state={selected.has(row.id) ? 'selected' : undefined}>
                   <TableCell className="px-0">
-                    <div className="flex items-center justify-center gap-3">
+                    <div className="flex items-center justify-center">
                       <Checkbox checked={selected.has(row.id)} onCheckedChange={(checked) => toggleOne(row.id, Boolean(checked))} aria-label={`${zh ? '选择' : 'Select'} ${row.name}`} />
-                      <button type="button" className="inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={`${zh ? '容器概览' : 'Container overview'} ${row.name}`} aria-expanded={expanded === row.id} aria-controls={`container-expansion-${row.id}`} onClick={() => { setExpanded(expanded === row.id ? '' : row.id); setOverlay('') }}>{expanded === row.id ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}</button>
                     </div>
                   </TableCell>
                   <TableCell>
@@ -254,9 +266,10 @@ export function ContainersPage() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <ObservationOverlay open={overlay === `${row.id}:resources`} onOpenChange={open => setOverlay(open ? `${row.id}:resources` : '')} title={zh ? '资源趋势' : 'Resource trends'} trigger={<button type="button" className="w-full" aria-label={`${zh ? '资源趋势' : 'Resource trends'} ${row.name}`}><div className="grid h-10 min-w-0 grid-rows-2 justify-items-center leading-5 tabular-nums"><span className="text-sm leading-5">CPU {cpuAvailable ? `${sample.cpu_percent.toFixed(1)}%` : '—'}</span><span className="relative text-xs leading-5 text-muted-foreground">{memoryAvailable ? memory(sample.memory_bytes) : '—'} / {limit == null ? '—' : limit === 0 ? '∞' : memory(limit)}<MemoryBar used={memoryAvailable ? sample.memory_bytes : undefined} limit={limit} zh={zh} /></span></div></button>}><ResourceTrend points={metrics.history[row.id] ?? []} limit={limit} unavailable={!available} nodeID={nodeID} containerID={row.id} zh={zh} /></ObservationOverlay>
+                    <button type="button" aria-expanded={expanded===row.id} onClick={()=>toggleTrend(row.id)} className="w-full" aria-label={`${zh ? '资源趋势' : 'Resource trends'} ${row.name}`}><div className="grid h-10 min-w-0 grid-rows-2 justify-items-center leading-5 tabular-nums"><span className="text-sm leading-5">CPU {cpuAvailable ? `${sample.cpu_percent.toFixed(1)}%` : '—'}</span><span className="relative text-xs leading-5 text-muted-foreground">{memoryAvailable ? memory(sample.memory_bytes) : '—'} / {limit == null ? '—' : limit === 0 ? '∞' : memory(limit)}<MemoryBar used={memoryAvailable ? sample.memory_bytes : undefined} limit={limit} zh={zh} /></span></div></button>
                   </TableCell>
                   <TableCell className="tabular-nums"><div className="grid h-10 min-w-0 grid-rows-2 justify-items-center leading-5"><span className="text-sm leading-5">↓ {row.state !== 'running' || syncing ? '—' : rate?.status === 'ready' ? rateLabel(rate.receive) : networkLabel}</span><span className="text-xs leading-5 text-muted-foreground">↑ {row.state !== 'running' || syncing ? '—' : rate?.status === 'ready' ? rateLabel(rate.transmit) : networkLabel}</span></div></TableCell>
+                  <TableCell><ContainerNetworks networks={row.networks} zh={zh} /></TableCell>
                   <TableCell><ContainerPorts ports={row.ports} zh={zh} /></TableCell>
                   <TableCell>
                     <div className="grid h-10 min-w-0 grid-rows-2 justify-items-center leading-5">
@@ -271,23 +284,24 @@ export function ContainersPage() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    <ContainerActions row={row} zh={zh} pending={action.isPending && action.variables?.id === row.id} open={(tab) => void navigate({ to: '/containers/$containerId', params: { containerId: row.id }, hash: tab })} run={(name) => action.mutate({ id: row.id, name })} rename={() => void renameContainer(row)} kill={() => void killContainer(row)} remove={() => void removeContainer(row)} />
+                    <ContainerActions trend={()=>toggleTrend(row.id)} expanded={expanded===row.id} row={row} zh={zh} pending={action.isPending && action.variables?.id === row.id} open={(tab) => void navigate({ to: '/containers/$containerId', params: { containerId: row.id }, hash: tab })} run={(name) => action.mutate({ id: row.id, name })} rename={() => void renameContainer(row)} kill={() => void killContainer(row)} remove={() => void removeContainer(row)} />
                   </TableCell>
                 </TableRow>
-                {expanded === row.id && !small && <TableRow><TableCell colSpan={9} id={`container-expansion-${row.id}`} className="bg-muted/20 p-5"><div className="sticky left-5 w-[calc(100cqw-2.5rem)]"><ContainerOverviewContent nodeID={nodeID} containerID={row.id} zh={zh} pending={metrics.isPending} points={metrics.history[row.id] ?? []} available={!!available} state={syncing ? 'syncing' : row.state} runtime={meta} /></div></TableCell></TableRow>}
+                {expanded===row.id&&!mobile&&<TableRow><TableCell colSpan={10} className="bg-muted/20 !p-0"><div className="sticky left-0 w-[100cqw] max-w-full px-4 py-4"><MonitoringView nodeID={nodeID} containerID={row.id} name={row.name} compact /></div></TableCell></TableRow>}
                 </Fragment>
               )})}
             </TableBody>
           </Table>
         </ListShell><ListPagination {...pagination} zh={zh} /></>)}
-    {small && <Sheet open={!!expanded} onOpenChange={open => { if (!open) setExpanded('') }}><SheetContent side="bottom" className="max-h-[85dvh] overflow-y-auto"><SheetHeader><SheetTitle>{zh ? '快速查看' : 'Quick view'}</SheetTitle></SheetHeader><div className="px-4 pb-5">{expanded && <ContainerOverviewContent nodeID={nodeID} containerID={expanded} zh={zh} pending={metrics.isPending} points={metrics.history[expanded] ?? []} available={!!metricsById.get(expanded)?.available && !metrics.unavailable && baseByID.get(expanded)?.state === 'running' && (!snapshotsByID.get(expanded)?.state || snapshotsByID.get(expanded)?.state === baseByID.get(expanded)?.state)} state={snapshotsByID.get(expanded)?.state && snapshotsByID.get(expanded)?.state !== baseByID.get(expanded)?.state ? 'syncing' : baseByID.get(expanded)?.state ?? 'unknown'} runtime={runtimeById.get(expanded)} />}</div></SheetContent></Sheet>}
+      <Sheet open={mobile&&!!expanded} onOpenChange={open=>{if(!open)setExpanded('')}}><SheetContent side="bottom" className="max-h-[85vh] overflow-auto"><SheetHeader><SheetTitle>{query.data?.find(row=>row.id===expanded)?.name} · {zh?'资源趋势':'Resource trends'}</SheetTitle></SheetHeader>{mobile&&expanded&&<div className="px-4 pb-4"><MonitoringView nodeID={nodeID} containerID={expanded} name={query.data?.find(row=>row.id===expanded)?.name} compact /></div>}</SheetContent></Sheet>
   </ResourceFrame>
 }
 
-function ContainerActions({ row, zh, pending, open, run, rename, kill, remove }: { row: ContainerSummary; zh: boolean; pending: boolean; open: (tab: 'logs' | 'files' | 'terminal' | 'events') => void; run: (name: string) => void; rename: () => void; kill: () => void; remove: () => void }) {
+function ContainerActions({ trend, expanded, row, zh, pending, open, run, rename, kill, remove }: { trend: () => void; expanded: boolean; row: ContainerSummary; zh: boolean; pending: boolean; open: (tab: 'logs' | 'files' | 'terminal' | 'events') => void; run: (name: string) => void; rename: () => void; kill: () => void; remove: () => void }) {
   const primary = row.state === 'running' ? 'stop' : row.state === 'paused' ? 'unpause' : 'start'
   const primaryLabel = row.state === 'running' ? (zh ? '停止' : 'Stop') : row.state === 'paused' ? (zh ? '恢复' : 'Unpause') : (zh ? '启动' : 'Start')
   return <div className="flex items-center justify-center gap-0.5">
+    <TooltipHint content={zh?'资源趋势':'Resource trends'}><Button variant="ghost" size="icon-sm" aria-label={(zh?'展开资源趋势 ':'Expand resource trends ')+row.name} aria-expanded={expanded} onClick={trend}><ChartNoAxesCombined /></Button></TooltipHint>
     <TooltipHint content={zh ? '日志' : 'Logs'}><Button variant="ghost" size="icon-sm" aria-label={zh ? '日志' : 'Logs'} onClick={() => open('logs')}><FileText /></Button></TooltipHint>
     <TooltipHint content={zh ? '文件' : 'Files'}><Button variant="ghost" size="icon-sm" disabled={row.state !== 'running'} aria-label={zh ? '文件' : 'Files'} onClick={() => open('files')}><FolderOpen /></Button></TooltipHint>
     <TooltipHint content={zh ? '终端' : 'Terminal'}><Button variant="ghost" size="icon-sm" disabled={row.state !== 'running'} aria-label={zh ? '终端' : 'Terminal'} onClick={() => open('terminal')}><SquareTerminal /></Button></TooltipHint>

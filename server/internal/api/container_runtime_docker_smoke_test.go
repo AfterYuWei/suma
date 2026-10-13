@@ -53,10 +53,21 @@ func TestRealDockerContainerRuntimeReads(t *testing.T) {
 	if len(containers) == 0 || len(metadata) != len(containers) {
 		t.Fatalf("cannot verify runtime metadata: containers=%d metadata=%d", len(containers), len(metadata))
 	}
-	var overview containerdomain.Overview
-	read(base+"/"+containers[0].ID+"/overview", &overview)
-	if overview.ID != containers[0].ID || overview.Counts.Networks < len(overview.Networks) || overview.Counts.Mounts < len(overview.Mounts) || overview.Counts.Ports < len(overview.Ports) || len(overview.Networks) > 3 || len(overview.Mounts) > 3 || len(overview.Ports) > 4 {
-		t.Fatal("real Docker overview was incomplete or had the wrong identity")
+	var detail containerdomain.Detail
+	read(base+"/"+containers[0].ID, &detail)
+	for _, network := range containers[0].Networks {
+		found := false
+		for _, expected := range detail.Networks {
+			if network.Name == expected.Name && network.IPAddress == expected.IPAddress && network.IPv6Address == expected.IPv6Address {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("list network summary did not match real Docker Inspect")
+		}
+	}
+	if response := request(ctx, base+"/"+containers[0].ID+"/overview", true); response.Code != 404 {
+		t.Fatal("removed overview endpoint was still registered")
 	}
 	ids := map[string]bool{}
 	for _, row := range containers {

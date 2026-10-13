@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useBlocker, useNavigate, useParams, useRouterState } from '@tanstack/react-router'
 import { ChevronLeft, MoreHorizontal, OctagonX, Pause, Pencil, Play, RefreshCw, Square, Trash2 } from 'lucide-react'
-import { lazy, useRef, useState } from 'react'
+import { lazy, useEffect, useRef, useState } from 'react'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '../components/ui/dropdown-menu'
@@ -19,15 +19,15 @@ import { useI18n } from '../lib/i18n'
 import { nodePath } from '../lib/nodes'
 import { confirmDialog, promptDialog } from '../stores/dialog'
 import { useUIStore } from '../stores/ui'
-import { DiagnosticsContent, NetworkMountContent } from '../components/docker/container-observation'
+import { DiagnosticsContent, ContainerTopologyContent } from '../components/docker/container-observation'
 import { ResourceFrame } from './images'
 
 const LogViewer = lazy(() => import('../features/containers/log-viewer').then((module) => ({ default: module.LogViewer })))
-const StatsView = lazy(() => import('../features/containers/stats-view').then((module) => ({ default: module.StatsView })))
+const MonitoringView = lazy(() => import('../features/monitoring/view').then(module => ({ default: module.MonitoringView })))
 const TerminalView = lazy(() => import('../features/containers/terminal-view').then((module) => ({ default: module.TerminalView })))
 const FileManager = lazy(() => import('../features/containers/file-manager').then((module) => ({ default: module.ContainerFileManager })))
 const EventsView = lazy(() => import('../features/containers/events-view').then(module => ({ default: module.EventsView })))
-const tabs = ['Overview', 'Files', 'Logs', 'Terminal', 'Stats', 'Events', 'Inspect'] as const
+const tabs = ['Overview', 'Files', 'Logs', 'Terminal', 'Monitoring', 'Events', 'Inspect'] as const
 
 export function ContainerDetailPage() {
   const nodeID = useUIStore((state) => state.currentNodeID)
@@ -37,7 +37,8 @@ export function ContainerDetailPage() {
   const { t, language } = useI18n()
   const zh = language === 'zh-CN'
   const hash = useRouterState({ select: (state) => state.location.hash })
-  const tab = tabs.find((name) => name.toLowerCase() === hash.toLowerCase()) ?? 'Overview'
+  useEffect(() => { if (hash.toLowerCase() === 'stats') void navigate({ to: '/containers/$containerId', params: { containerId }, hash: 'monitoring', replace: true, resetScroll: false }) }, [hash, containerId, navigate])
+  const tab = tabs.find((name) => name.toLowerCase() === (hash.toLowerCase() === 'stats' ? 'monitoring' : hash.toLowerCase())) ?? 'Overview'
   const [filesDirty, setFilesDirty] = useState(false)
   const bypassNavigationPrompt = useRef(false)
   useBlocker({
@@ -54,7 +55,7 @@ export function ContainerDetailPage() {
   if (query.isPending) return <LoadingState label={zh ? '正在加载容器详情' : 'Loading container details'} rows={6} />
   if (!query.data) return <ErrorState description={zh ? '未找到容器。' : 'Container not found.'} />
   const row = query.data
-  const label = (name: (typeof tabs)[number]) => zh ? ({ Overview: '概览', Files: '文件', Logs: '日志', Terminal: '终端', Stats: '统计', Events: '事件', Inspect: '检查' } as const)[name] : name
+  const label = (name: (typeof tabs)[number]) => zh ? ({ Overview: '概览', Files: '文件', Logs: '日志', Terminal: '终端', Monitoring: '监控', Events: '事件', Inspect: '检查' } as const)[name] : name
 
   const actions = <div className="flex flex-wrap items-center gap-2">
 
@@ -89,7 +90,7 @@ export function ContainerDetailPage() {
     <div className="mt-6 w-full">
       {tab === 'Overview' && <div className="grid gap-6 lg:grid-cols-2">
         <section className="lg:col-span-2 border-b pb-5"><h3 className="mb-3 font-medium">{zh ? '运行诊断与健康检查' : 'Runtime diagnostics and health'}</h3><DiagnosticsContent nodeID={nodeID} containerID={containerId} zh={zh} /></section>
-        <section className="lg:col-span-2 border-b pb-5"><NetworkMountContent nodeID={nodeID} containerID={containerId} zh={zh} detail={row} /></section>
+        <section className="lg:col-span-2 border-b pb-5"><ContainerTopologyContent data={row} zh={zh} /></section>
         <Card>
           <CardHeader><CardTitle>{zh ? '运行信息' : 'Runtime'}</CardTitle></CardHeader>
           <CardContent><div className="divide-y divide-border">
@@ -132,7 +133,7 @@ export function ContainerDetailPage() {
       {tab === 'Logs' && <LogViewer nodeID={nodeID} containerId={containerId} />}
       {tab === 'Files' && <FileManager nodeID={nodeID} container={row} onDirtyChange={setFilesDirty} />}
       {tab === 'Terminal' && <TerminalView nodeID={nodeID} containerId={containerId} />}
-      {tab === 'Stats' && <StatsView nodeID={nodeID} containerId={containerId} />}
+      {tab === 'Monitoring' && <MonitoringView nodeID={nodeID} containerID={containerId} name={row.name} />}
       {tab === 'Events' && <EventsView nodeID={nodeID} containerId={containerId} />}
       {tab === 'Inspect' && (
         <Card>

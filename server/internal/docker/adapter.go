@@ -197,7 +197,19 @@ func (a *Adapter) List(ctx context.Context) ([]domain.Summary, error) {
 		for _, port := range row.Ports {
 			ports = append(ports, domain.Port{PrivatePort: port.PrivatePort, PublicPort: port.PublicPort, Type: port.Type, IP: port.IP})
 		}
-		result = append(result, domain.Summary{ID: row.ID, Name: name, Image: row.Image, Command: row.Command, Created: time.Unix(row.Created, 0), State: string(row.State), Status: row.Status, Ports: ports, Labels: row.Labels})
+		var networks []domain.NetworkSummary
+		if row.NetworkSettings != nil {
+			networks = make([]domain.NetworkSummary, 0, len(row.NetworkSettings.Networks))
+			for name, endpoint := range row.NetworkSettings.Networks {
+				network := domain.NetworkSummary{Name: name}
+				if endpoint != nil {
+					network.IPAddress, network.IPv6Address = endpoint.IPAddress, endpoint.GlobalIPv6Address
+				}
+				networks = append(networks, network)
+			}
+			sort.Slice(networks, func(i, j int) bool { return networks[i].Name < networks[j].Name })
+		}
+		result = append(result, domain.Summary{ID: row.ID, Name: name, Image: row.Image, Command: row.Command, Created: time.Unix(row.Created, 0), State: string(row.State), Status: row.Status, Ports: ports, Networks: networks, Labels: row.Labels})
 	}
 	return result, nil
 }
@@ -467,6 +479,7 @@ func shortDockerID(value string) string {
 }
 
 type MetricsOptions struct {
+	Cached        func(string) (domain.Metrics, bool)
 	IncludeUptime bool
 }
 
@@ -500,6 +513,29 @@ func (a *Adapter) MetricsWithOptions(ctx context.Context, options MetricsOptions
 				return
 			}
 			defer func() { <-limit }()
+			if options.Cached != nil {
+				if cached, ok := options.Cached(row.ID); ok {
+					summaries[index].NetworkAvailable = cached.NetworkAvailable
+					summaries[index].BlockAvailable = cached.BlockAvailable
+					summaries[index].PIDsAvailable = cached.PIDsAvailable
+					summaries[index].CPUAvailable = cached.CPUAvailable
+					summaries[index].MemoryAvailable = cached.MemoryAvailable
+					summaries[index].CPUPercent = cached.CPUPercent
+					summaries[index].MemoryBytes = cached.MemoryBytes
+					summaries[index].SampledAt = cached.SampledAt
+					summaries[index].StartedAt = cached.StartedAt
+					if cached.StartedAt != nil {
+						summaries[index].UptimeSeconds = max(0, int64(time.Since(*cached.StartedAt).Seconds()))
+					}
+					summaries[index].NetworkRXBytes = cached.NetworkRXBytes
+					summaries[index].NetworkTXBytes = cached.NetworkTXBytes
+					summaries[index].BlockReadBytes = cached.BlockReadBytes
+					summaries[index].BlockWriteBytes = cached.BlockWriteBytes
+					summaries[index].PIDs = cached.PIDs
+					available[index] = true
+					return
+				}
+			}
 			available[index] = a.loadSummaryStats(ctx, &summaries[index], options.IncludeUptime)
 		}(index)
 	}
@@ -508,7 +544,7 @@ func (a *Adapter) MetricsWithOptions(ctx context.Context, options MetricsOptions
 	for index, summary := range summaries {
 		result[index] = domain.Metrics{
 			ID: summary.ID, Name: summary.Name, Image: summary.Image, State: summary.State,
-			Available: available[index], CPUAvailable: summary.CPUAvailable, MemoryAvailable: summary.MemoryAvailable, CPUPercent: summary.CPUPercent, MemoryBytes: summary.MemoryBytes, UptimeSeconds: summary.UptimeSeconds,
+			NetworkAvailable: summary.NetworkAvailable, BlockAvailable: summary.BlockAvailable, PIDsAvailable: summary.PIDsAvailable, Available: available[index], CPUAvailable: summary.CPUAvailable, MemoryAvailable: summary.MemoryAvailable, CPUPercent: summary.CPUPercent, MemoryBytes: summary.MemoryBytes, UptimeSeconds: summary.UptimeSeconds,
 			NetworkRXBytes: summary.NetworkRXBytes, NetworkTXBytes: summary.NetworkTXBytes,
 			BlockReadBytes: summary.BlockReadBytes, BlockWriteBytes: summary.BlockWriteBytes, PIDs: summary.PIDs,
 			SampledAt: summary.SampledAt, StartedAt: summary.StartedAt,
@@ -526,6 +562,9 @@ func (a *Adapter) loadSummaryStats(ctx context.Context, summary *domain.Summary,
 		if json.NewDecoder(response.Body).Decode(&stats) == nil {
 			value := normalizeStats(stats)
 			available = value.Available
+			summary.NetworkAvailable = value.NetworkAvailable
+			summary.BlockAvailable = value.BlockAvailable
+			summary.PIDsAvailable = value.PIDsAvailable
 			summary.CPUAvailable = value.CPUAvailable
 			summary.MemoryAvailable = value.MemoryAvailable
 			summary.SampledAt = value.SampledAt

@@ -62,26 +62,6 @@ func eventQuery(c *gin.Context, live bool) (domain.EventQuery, bool) {
 	return q, true
 }
 func registerContainerObservationRoutes(containers *gin.RouterGroup, deps Dependencies) {
-	containers.GET("/:id/overview", func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(c.Request.Context(), domain.RuntimeReadTimeout)
-		defer cancel()
-		c.Request = c.Request.WithContext(ctx)
-		if err := domain.ValidateOverviewID(c.Param("id")); err != nil {
-			observationFailure(c, err)
-			return
-		}
-		adapter, _, ok := resolveNode(c, deps)
-		if !ok {
-			return
-		}
-		result, err := domain.ReadOverview(ctx, adapter, c.Param("id"))
-		if err != nil {
-			observationFailure(c, err)
-			return
-		}
-		c.Header("Cache-Control", "no-store")
-		success(c, result)
-	})
 	containers.GET("/:id/runtime", func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), domain.RuntimeReadTimeout)
 		defer cancel()

@@ -4,11 +4,8 @@ export interface ApiEnvelope<T> {
   data: T
 }
 
-export class ApiError extends Error {
-  constructor(message: string, readonly code: number, readonly status: number, readonly data?: unknown) {
-    super(message)
-  }
-}
+import { ApiError } from './api-error'
+export { ApiError } from './api-error'
 
 export const demoMode = import.meta.env.VITE_SUMA_DEMO_MODE === 'true'
 

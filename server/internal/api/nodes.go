@@ -1233,11 +1233,17 @@ func registerNodeContainerRoutes(group *gin.RouterGroup, _ *gin.Engine, deps Dep
 		success(c, rows)
 	})
 	containers.GET("/metrics", func(c *gin.Context) {
-		adapter, _, ok := resolveNode(c, deps)
+		adapter, view, ok := resolveNode(c, deps)
 		if !ok {
 			return
 		}
-		rows, err := adapter.Metrics(c.Request.Context())
+		options := docker.MetricsOptions{IncludeUptime: true}
+		if deps.ContainerMonitoring != nil {
+			options.Cached = func(id string) (containerdomain.Metrics, bool) {
+				return deps.ContainerMonitoring.Latest(view.ID, view.EngineID, id)
+			}
+		}
+		rows, err := adapter.MetricsWithOptions(c.Request.Context(), options)
 		if err != nil {
 			failure(c, 503, 20211, "Unable to read container metrics")
 			return

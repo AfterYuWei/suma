@@ -262,6 +262,9 @@ func normalizeStats(stats dockertypes.StatsResponse) domain.Metrics {
 	if cache <= out.MemoryBytes {
 		out.MemoryBytes -= cache
 	}
+	out.NetworkAvailable = stats.Networks != nil
+	out.BlockAvailable = stats.BlkioStats.IoServiceBytesRecursive != nil
+	out.PIDsAvailable = stats.PidsStats.Current > 0
 	for _, n := range stats.Networks {
 		out.NetworkRXBytes += n.RxBytes
 		out.NetworkTXBytes += n.TxBytes
@@ -322,6 +325,10 @@ func (a *Adapter) NormalizedStats(ctx context.Context, id string) (io.ReadCloser
 			}
 			point := normalizeStats(raw)
 			point.ID = row.ID
+			if row.HostConfig != nil {
+				limit := row.HostConfig.Memory
+				point.MemoryLimitBytes = &limit
+			}
 			if row.State != nil {
 				point.StartedAt = parsedTime(row.State.StartedAt)
 				if point.StartedAt != nil {

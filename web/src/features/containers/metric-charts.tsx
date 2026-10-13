@@ -54,7 +54,7 @@ function metricTooltip(params: TooltipComponentFormatterCallbackParams, name: st
   return popup
 }
 
-export function MetricCharts({ points, minutes, compact = false, sparkline = false }: { points: MetricPoint[]; minutes: number; compact?: boolean; sparkline?: boolean }) {
+export function MetricCharts({ points, minutes, compact = false }: { points: MetricPoint[]; minutes: number; compact?: boolean }) {
   useUIStore(state => state.resolvedDark)
   const zh = useUIStore(state => state.language) === 'zh-CN'
   const { formatTime, formatDateTime } = useDateTime()
@@ -68,8 +68,8 @@ export function MetricCharts({ points, minutes, compact = false, sparkline = fal
   const styles = getComputedStyle(document.documentElement)
   const rawLabel = styles.getPropertyValue('--muted-foreground').trim()
   const rawBorder = styles.getPropertyValue('--border').trim()
-  const rawCPU = styles.getPropertyValue(sparkline ? '--foreground' : '--chart-1').trim()
-  const rawMemory = styles.getPropertyValue(sparkline ? '--muted-foreground' : '--chart-2').trim()
+  const rawCPU = styles.getPropertyValue('--chart-1').trim()
+  const rawMemory = styles.getPropertyValue('--chart-2').trim()
   const [label, border, cpuColor, memoryColor] = useMemo(() => chartColors([rawLabel, rawBorder, rawCPU, rawMemory]), [rawLabel, rawBorder, rawCPU, rawMemory])
 
   useEffect(() => {
@@ -98,8 +98,7 @@ export function MetricCharts({ points, minutes, compact = false, sparkline = fal
       if (!chart || chart.isDisposed()) continue
       const color = index === 0 ? cpuColor : memoryColor
       const name = key === 'cpu' ? 'CPU' : zh ? '内存' : 'Memory'
-      const width = sparkline ? 2 : 1.5
-      const area = { color, opacity: sparkline ? 0.08 : 0 }
+      const width = 1.5
       const tooltipPosition: TooltipComponentPositionCallback = (point, _params, _dom, _rect, size) => {
         const bounds = chart.getDom().getBoundingClientRect()
         const left = Math.max(8, Math.min(bounds.left + point[0] + 12, window.innerWidth - size.contentSize[0] - 8))
@@ -109,15 +108,15 @@ export function MetricCharts({ points, minutes, compact = false, sparkline = fal
       chart.setOption({
         animation: false,
         backgroundColor: 'transparent',
-        title: { show: !sparkline, text: key === 'cpu' ? 'CPU %' : zh ? '内存 MB' : 'Memory MB', textStyle: { color: label, fontSize: 11, fontWeight: 'normal' }, left: 0 },
-        grid: sparkline ? { left: 3, right: 3, top: 3, bottom: 3 } : { left: 46, right: 12, top: 26, bottom: 24 },
+        title: { text: key === 'cpu' ? 'CPU %' : zh ? '内存 MB' : 'Memory MB', textStyle: { color: label, fontSize: 11, fontWeight: 'normal' }, left: 0 },
+        grid: { left: 46, right: 12, top: 26, bottom: 24 },
         tooltip: { trigger: 'axis', renderMode: 'html', appendTo: () => document.body, confine: false, position: tooltipPosition, transitionDuration: 0, axisPointer: { animation: false }, padding: 0, borderWidth: 0, backgroundColor: 'transparent', textStyle: { fontFamily: 'inherit' }, formatter: (params: TooltipComponentFormatterCallbackParams) => metricTooltip(params, name, color, key === 'cpu' ? '%' : ' MB', formatDateTime), extraCssText: 'box-shadow:none;border-radius:0' },
-        xAxis: { type: 'time', show: !sparkline, axisLabel: { color: label, fontSize: 10, formatter: (value: number) => formatTime(value) }, axisLine: { lineStyle: { color: border } } },
-        yAxis: { type: 'value', show: !sparkline, min: 0, max: sparkline && key === 'cpu' ? (extent: { max: number }) => Math.max(100, extent.max) : undefined, axisLabel: { color: label, fontSize: 10 }, splitLine: { lineStyle: { color: border } } },
-        series: [{ id: key, name, type: 'line', symbolSize: 4, connectNulls: false, lineStyle: { width, color }, itemStyle: { color }, areaStyle: area, emphasis: { scale: false, lineStyle: { width, color }, itemStyle: { color }, areaStyle: area }, markLine: { silent: true, symbol: 'none', animation: false, label: { show: false }, lineStyle: { type: 'solid', width, color }, emphasis: { disabled: true } } }],
+        xAxis: { type: 'time', axisLabel: { color: label, fontSize: 10, formatter: (value: number) => formatTime(value) }, axisLine: { lineStyle: { color: border } } },
+        yAxis: { type: 'value', min: 0, axisLabel: { color: label, fontSize: 10 }, splitLine: { lineStyle: { color: border } } },
+        series: [{ id: key, name, type: 'line', symbolSize: 4, connectNulls: false, lineStyle: { width, color }, itemStyle: { color }, emphasis: { scale: false, lineStyle: { width, color }, itemStyle: { color } }, markLine: { silent: true, symbol: 'none', animation: false, label: { show: false }, lineStyle: { type: 'solid', width, color }, emphasis: { disabled: true } } }],
       }, { lazyUpdate: true })
     }
-  }, [label, border, cpuColor, memoryColor, formatTime, formatDateTime, zh, sparkline])
+  }, [label, border, cpuColor, memoryColor, formatTime, formatDateTime, zh])
 
   useEffect(() => {
     for (const [index, key] of (['cpu', 'memory'] as const).entries()) {
@@ -133,7 +132,7 @@ export function MetricCharts({ points, minutes, compact = false, sparkline = fal
         series: [{ id: key, showSymbol: values.length > 1 && values.filter(point => point[key] != null).length < 2, data, markLine: { data: initial == null ? [] : [{ yAxis: initial }] } }],
       }, { lazyUpdate: true })
     }
-  }, [values, sparkline])
+  }, [values])
 
-  return <div className={sparkline ? 'grid min-w-0 grid-cols-2 gap-4' : 'space-y-2'}>{(['cpu', 'memory'] as const).map((key, index) => <div key={key} role="img" aria-label={key === 'cpu' ? 'CPU trend' : zh ? '内存趋势' : 'Memory trend'} ref={element => { elements.current[index] = element }} className={sparkline ? 'h-16 min-w-0' : compact ? 'h-28' : 'h-56'} />)}</div>
+  return <div className="space-y-2">{(['cpu', 'memory'] as const).map((key, index) => <div key={key} role="img" aria-label={key === 'cpu' ? 'CPU trend' : zh ? '内存趋势' : 'Memory trend'} ref={element => { elements.current[index] = element }} className={compact ? 'h-28' : 'h-56'} />)}</div>
 }

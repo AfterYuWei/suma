@@ -32,48 +32,62 @@ type Network struct {
 	IPv6Gateway string `json:"ipv6_gateway"`
 }
 
+type NetworkSummary struct {
+	Name        string `json:"name"`
+	IPAddress   string `json:"ip_address,omitempty"`
+	IPv6Address string `json:"ipv6_address,omitempty"`
+}
+
 type Summary struct {
-	CPUAvailable    bool              `json:"cpu_available"`
-	MemoryAvailable bool              `json:"memory_available"`
-	ID              string            `json:"id"`
-	Name            string            `json:"name"`
-	Image           string            `json:"image"`
-	Command         string            `json:"command"`
-	Created         time.Time         `json:"created"`
-	State           string            `json:"state"`
-	Status          string            `json:"status"`
-	Ports           []Port            `json:"ports"`
-	Labels          map[string]string `json:"labels"`
-	CPUPercent      float64           `json:"cpu_percent"`
-	MemoryBytes     uint64            `json:"memory_bytes"`
-	UptimeSeconds   int64             `json:"uptime_seconds"`
-	NetworkRXBytes  uint64            `json:"network_rx_bytes"`
-	NetworkTXBytes  uint64            `json:"network_tx_bytes"`
-	BlockReadBytes  uint64            `json:"block_read_bytes"`
-	BlockWriteBytes uint64            `json:"block_write_bytes"`
-	PIDs            uint64            `json:"pids"`
-	SampledAt       *time.Time        `json:"sampled_at,omitempty"`
-	StartedAt       *time.Time        `json:"started_at,omitempty"`
+	NetworkAvailable bool              `json:"-"`
+	BlockAvailable   bool              `json:"-"`
+	PIDsAvailable    bool              `json:"-"`
+	CPUAvailable     bool              `json:"cpu_available"`
+	MemoryAvailable  bool              `json:"memory_available"`
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	Image            string            `json:"image"`
+	Command          string            `json:"command"`
+	Created          time.Time         `json:"created"`
+	State            string            `json:"state"`
+	Status           string            `json:"status"`
+	Ports            []Port            `json:"ports"`
+	Networks         []NetworkSummary  `json:"networks"`
+	Labels           map[string]string `json:"labels"`
+	CPUPercent       float64           `json:"cpu_percent"`
+	MemoryBytes      uint64            `json:"memory_bytes"`
+	UptimeSeconds    int64             `json:"uptime_seconds"`
+	NetworkRXBytes   uint64            `json:"network_rx_bytes"`
+	NetworkTXBytes   uint64            `json:"network_tx_bytes"`
+	BlockReadBytes   uint64            `json:"block_read_bytes"`
+	BlockWriteBytes  uint64            `json:"block_write_bytes"`
+	PIDs             uint64            `json:"pids"`
+	SampledAt        *time.Time        `json:"sampled_at,omitempty"`
+	StartedAt        *time.Time        `json:"started_at,omitempty"`
 }
 
 type Metrics struct {
-	CPUAvailable    bool       `json:"cpu_available"`
-	MemoryAvailable bool       `json:"memory_available"`
-	ID              string     `json:"id"`
-	Name            string     `json:"name"`
-	Image           string     `json:"image"`
-	State           string     `json:"state"`
-	Available       bool       `json:"available"`
-	CPUPercent      float64    `json:"cpu_percent"`
-	MemoryBytes     uint64     `json:"memory_bytes"`
-	UptimeSeconds   int64      `json:"uptime_seconds"`
-	NetworkRXBytes  uint64     `json:"network_rx_bytes"`
-	NetworkTXBytes  uint64     `json:"network_tx_bytes"`
-	BlockReadBytes  uint64     `json:"block_read_bytes"`
-	BlockWriteBytes uint64     `json:"block_write_bytes"`
-	PIDs            uint64     `json:"pids"`
-	SampledAt       *time.Time `json:"sampled_at,omitempty"`
-	StartedAt       *time.Time `json:"started_at,omitempty"`
+	MemoryLimitBytes *int64     `json:"memory_limit_bytes,omitempty"`
+	NetworkAvailable bool       `json:"network_available"`
+	BlockAvailable   bool       `json:"block_available"`
+	PIDsAvailable    bool       `json:"pids_available"`
+	CPUAvailable     bool       `json:"cpu_available"`
+	MemoryAvailable  bool       `json:"memory_available"`
+	ID               string     `json:"id"`
+	Name             string     `json:"name"`
+	Image            string     `json:"image"`
+	State            string     `json:"state"`
+	Available        bool       `json:"available"`
+	CPUPercent       float64    `json:"cpu_percent"`
+	MemoryBytes      uint64     `json:"memory_bytes"`
+	UptimeSeconds    int64      `json:"uptime_seconds"`
+	NetworkRXBytes   uint64     `json:"network_rx_bytes"`
+	NetworkTXBytes   uint64     `json:"network_tx_bytes"`
+	BlockReadBytes   uint64     `json:"block_read_bytes"`
+	BlockWriteBytes  uint64     `json:"block_write_bytes"`
+	PIDs             uint64     `json:"pids"`
+	SampledAt        *time.Time `json:"sampled_at,omitempty"`
+	StartedAt        *time.Time `json:"started_at,omitempty"`
 }
 
 type Detail struct {

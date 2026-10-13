@@ -370,6 +370,11 @@ func TestAdapterListContainers(t *testing.T) {
 				{PrivatePort: 443, Type: "tcp"},
 			},
 			Labels: map[string]string{"app": "web"},
+			NetworkSettings: &dockercontainer.NetworkSettingsSummary{Networks: map[string]*dockernetwork.EndpointSettings{
+				"z-private":   {GlobalIPv6Address: "fd00::3"},
+				"pending":     nil,
+				"app_default": {IPAddress: "172.20.0.2", GlobalIPv6Address: "fd00::2"},
+			}},
 		},
 		{
 			ID:      strings.Repeat("cd", 32),
@@ -420,11 +425,52 @@ func TestAdapterListContainers(t *testing.T) {
 	if first.Ports[1] != (domain.Port{PrivatePort: 443, Type: "tcp"}) {
 		t.Fatalf("unexpected exposed port: %#v", first.Ports[1])
 	}
+	if !reflect.DeepEqual(first.Networks, []domain.NetworkSummary{
+		{Name: "app_default", IPAddress: "172.20.0.2", IPv6Address: "fd00::2"},
+		{Name: "pending"},
+		{Name: "z-private", IPv6Address: "fd00::3"},
+	}) {
+		t.Fatalf("list networks were not projected or sorted: %#v", first.Networks)
+	}
+	if second.Networks != nil {
+		t.Fatal("missing Engine network settings must remain unknown")
+	}
+	if len(stub.find(t, func(request stubRequest) bool {
+		return strings.HasPrefix(request.Path, "/containers/") && request.Path != "/containers/json"
+	})) != 0 {
+		t.Fatal("listing network summaries opened a per-container query")
+	}
 	if second.Name != second.ID[:12] || second.State != "exited" || second.Image != "redis:7" {
 		t.Fatalf("unnamed container must fall back to short id: %#v", second)
 	}
 	if second.Ports != nil && len(second.Ports) != 0 {
 		t.Fatalf("unexpected ports on unnamed container: %#v", second.Ports)
+	}
+}
+
+func TestAdapterListPreservesEmptyAndUnassignedNetworks(t *testing.T) {
+	rows := []map[string]any{
+		{"Id": "empty", "NetworkSettings": map[string]any{"Networks": map[string]any{}}},
+		{"Id": "host", "NetworkSettings": map[string]any{"Networks": map[string]any{"host": map[string]any{}}}},
+		{"Id": "none", "NetworkSettings": map[string]any{"Networks": map[string]any{"none": map[string]any{}}}},
+		{"Id": "stopped", "State": "exited", "NetworkSettings": map[string]any{"Networks": map[string]any{"app_default": map[string]any{}}}},
+		{"Id": "v6", "NetworkSettings": map[string]any{"Networks": map[string]any{"private": map[string]any{"GlobalIPv6Address": "fd00::5"}}}},
+	}
+	stub := newDockerStub(t, map[string]http.HandlerFunc{
+		"/containers/json": func(w http.ResponseWriter, r *http.Request) { writeJSON(w, http.StatusOK, rows) },
+	})
+	list, err := newAdapter(t, stub).List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := [][]domain.NetworkSummary{{}, {{Name: "host"}}, {{Name: "none"}}, {{Name: "app_default"}}, {{Name: "private", IPv6Address: "fd00::5"}}}
+	if len(list) != len(expected) {
+		t.Fatalf("missing list rows: %d", len(list))
+	}
+	for i, row := range list {
+		if !reflect.DeepEqual(row.Networks, expected[i]) {
+			t.Fatalf("network semantics for %s: %#v", row.ID, row.Networks)
+		}
 	}
 }
 

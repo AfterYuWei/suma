@@ -23,6 +23,7 @@ import (
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/auth"
 	containerdomain "github.com/suma/suma/server/internal/container"
+	containermonitor "github.com/suma/suma/server/internal/containermonitor"
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/node"
 	"github.com/suma/suma/server/internal/secret"
@@ -137,6 +138,8 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 		case "/info":
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{"ID": "agent-engine", "Name": "agent-test", "ServerVersion": "29.0", "OSType": "linux"})
+		case "/containers/json":
+			writeProjectDockerJSON(w, []map[string]any{{"Id": observationID, "NetworkSettings": map[string]any{"Networks": map[string]any{"app_default": map[string]any{"IPAddress": "172.20.0.2"}}}}})
 		case "/containers/" + observationID + "/json":
 			writeProjectDockerJSON(w, map[string]any{"Id": observationID, "RestartCount": 2, "Config": map[string]any{"Healthcheck": map[string]any{"Test": []string{"CMD", "check"}}}, "HostConfig": map[string]any{"Memory": 512}, "State": map[string]any{"Status": "running", "Running": true, "StartedAt": "2026-10-12T00:00:00Z", "OOMKilled": false, "Health": map[string]any{"Status": "healthy"}}})
 		case "/containers/" + observationID + "/stats":
@@ -369,9 +372,9 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 			if err != nil || diagnostic.Runtime.RestartCount == nil || *diagnostic.Runtime.RestartCount != 2 {
 				t.Fatalf("Agent diagnostic failed: %v", err)
 			}
-			overview, err := containerdomain.ReadOverview(context.Background(), client, observationID)
-			if err != nil || overview.ID != observationID || overview.Networks == nil || overview.Mounts == nil {
-				t.Fatalf("Agent overview failed: %v", err)
+			list, err := client.List(context.Background())
+			if err != nil || len(list) != 1 || len(list[0].Networks) != 1 || list[0].Networks[0].IPAddress != "172.20.0.2" {
+				t.Fatalf("Agent list networks failed: %v", err)
 			}
 			pointStream, err := containerdomain.OpenNormalizedStats(context.Background(), client, observationID)
 			if err != nil {
@@ -394,6 +397,26 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 			case <-eventCanceled:
 			case <-time.After(time.Second):
 				t.Fatal("Agent event stream was not canceled")
+			}
+			inventory, err := client.MonitoringInventory(context.Background())
+			if err != nil || len(inventory) != 1 || inventory[0].ID != observationID {
+				t.Fatalf("Agent monitoring inventory failed: %v", err)
+			}
+			monitorCtx, stopMonitor := context.WithTimeout(context.Background(), time.Second)
+			observed := false
+			_ = client.MonitoringEvents(monitorCtx, time.Now().Add(-time.Minute), func(e containerdomain.ContainerEvent, _ containermonitor.Inventory) error {
+				observed = e.ContainerID == observationID
+				stopMonitor()
+				return nil
+			})
+			stopMonitor()
+			if !observed {
+				t.Fatal("Agent monitoring event missing")
+			}
+			select {
+			case <-eventCanceled:
+			case <-time.After(time.Second):
+				t.Fatal("Agent monitoring event stream not canceled")
 			}
 			expiredAt := time.Now().Add(-time.Second)
 			if err := db.Model(&database.AgentEnrollment{}).Where("node_id = ?", issued.NodeID).Update("expires_at", expiredAt).Error; err != nil {
