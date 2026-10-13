@@ -84,7 +84,7 @@ export function VolumesPage() {
 
   return <ResourceFrame title={t('volumes')} detail={zh ? `${query.data?.length ?? 0} 个持久存储卷` : `${query.data?.length ?? 0} persistent volumes`} action={action}>
     <div className="flex w-full flex-col items-start gap-4">
-      {query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载存储卷' : 'Loading volumes'} /> : query.isError ? <ErrorState description={query.error.message} /> : (query.data ?? []).length === 0 ? <div className="flex w-full flex-col items-center gap-1 rounded-xl bg-card px-4 py-10 text-center ring-1 ring-foreground/10">
+      {query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载存储卷' : 'Loading volumes'} /> : query.isError ? <ErrorState description={query.error.message} /> : (query.data ?? []).length === 0 ? <div className="flex w-full flex-col items-center gap-1 rounded-xl bg-surface px-4 py-10 text-center">
         <Database className="size-5 text-muted-foreground" />
         <p className="text-sm font-medium">{zh ? '暂无存储卷' : 'No volumes'}</p>
         <p className="text-sm text-muted-foreground">{zh ? '创建持久存储卷后会显示在这里。' : 'Create a persistent volume to see it here.'}</p>

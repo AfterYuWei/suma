@@ -61,7 +61,7 @@ function PortMappingForm({ context: c, port, index, onClose }: { context: Contex
       else onClose?.()
     } catch (failure) { setError(portError(failure, c.zh)) }
   }
-  return <form className="space-y-2 border-b py-3" data-testid={index === undefined ? 'new-port-mapping' : `port-mapping-${index}`} onSubmit={event => { event.preventDefault(); apply() }}>
+  return <form className="space-y-2 py-3" data-testid={index === undefined ? 'new-port-mapping' : `port-mapping-${index}`} onSubmit={event => { event.preventDefault(); apply() }}>
     <div className="grid grid-cols-[minmax(0,1fr)_24px_minmax(0,1fr)] items-end gap-2 lg:grid-cols-[minmax(0,1fr)_24px_minmax(0,1fr)_124px_auto]">
       <div className="min-w-0 space-y-1.5"><Label htmlFor={`${id}-published`}>{c.zh ? '主机端口 published' : 'Host port published'}</Label><Input ref={first} id={`${id}-published`} className="font-medium" autoFocus={index === undefined} value={published} placeholder={c.zh ? '如 8080；留空自动分配' : '8080; blank for automatic'} autoComplete="off" onChange={event => { setPublished(event.target.value); setError('') }} onBlur={() => { if (index !== undefined) apply() }} /></div>
       <ArrowRight className="mb-2 size-4 text-muted-foreground" aria-hidden />
@@ -85,12 +85,12 @@ export function PortMappings({ context: c, sourceLink }: { context: Context; sou
     {rows.map((value, index) => {
       const port = parseServicePort(value)
       return !port || ['target', 'published', 'host_ip', 'protocol'].some(key => port[key] != null && (typeof port[key] === 'object' || String(port[key]).includes('$'))) || !/^\d+$/.test(String(port.target))
-        ? <div key={index} className="border-b py-3">{sourceLink(index)}</div>
+        ? <div key={index} className="py-3">{sourceLink(index)}</div>
         : <PortMappingForm key={index} context={c} port={port} index={index} />
     })}
     {adding && <PortMappingForm context={c} onClose={() => setAdding(false)} />}
     <div className="flex flex-wrap gap-2 py-2">{!adding && <Button variant="outline" size="sm" onClick={() => setAdding(true)}><Plus />{c.zh ? '添加端口映射' : 'Add port mapping'}</Button>}<Button variant="ghost" size="sm" onClick={() => setBulk(!bulk)}>{c.zh ? '批量填写' : 'Fill in bulk'}</Button></div>
-    {bulk && <form className="space-y-3 border-b pb-3" data-testid="bulk-port-mappings" onSubmit={event => {
+    {bulk && <form className="section-surface space-y-3" data-testid="bulk-port-mappings" onSubmit={event => {
       event.preventDefault()
       if (c.disabled) return
       try {

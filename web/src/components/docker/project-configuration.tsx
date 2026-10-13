@@ -382,7 +382,7 @@ export function ProjectConfiguration(props: EditorProps) {
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Tabs value={mode} onValueChange={value => void changeWorkspace(() => setMode(value))}>
-          <TabsList variant="line">
+          <TabsList>
             <TabsTrigger value="visual">{zh ? '可视化' : 'Visual'}</TabsTrigger>
             <TabsTrigger value="source">Compose</TabsTrigger>
           </TabsList>
@@ -514,7 +514,7 @@ export function ProjectConfiguration(props: EditorProps) {
           className={`grid min-w-0 gap-3 ${preview ? 'xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.65fr)]' : ''}`}
         >
           <div className="grid min-w-0 gap-5 md:grid-cols-[210px_minmax(0,1fr)]">
-            <div className="space-y-3 md:border-r md:pr-4" data-testid="project-service-navigation">
+            <div className="space-y-3 md:pr-4" data-testid="project-service-navigation">
               <div className="hidden items-center justify-between text-xs text-muted-foreground md:flex">
                 <span>{zh ? '服务' : 'Services'}</span><span>{services.length}</span>
               </div>
@@ -952,7 +952,7 @@ function ServiceForm({ context: c, tab, onTabChange }: { context: FormContext; t
       )}
       <fieldset disabled={!!locked} className="min-w-0">
         <Tabs value={tab} onValueChange={onTabChange} className="gap-0" data-testid="service-configuration-tabs">
-          <TabsList variant="line" aria-label={c.zh ? `${serviceLabel(c.service, c.zh)} 服务配置` : `${serviceLabel(c.service, c.zh)} service configuration`} className="group-data-horizontal/tabs:h-auto w-full flex-wrap justify-start border-b pb-1">
+          <TabsList aria-label={c.zh ? `${serviceLabel(c.service, c.zh)} 服务配置` : `${serviceLabel(c.service, c.zh)} service configuration`} className="group-data-horizontal/tabs:h-auto w-full flex-wrap justify-start">
             {[
               ['basics', '基础', 'Basics'],
               ['ports', '端口', 'Ports'],
@@ -1015,7 +1015,7 @@ function ServiceForm({ context: c, tab, onTabChange }: { context: FormContext; t
             <p className="text-xs text-muted-foreground">{c.zh ? `仅应用于服务 ${c.displayService}。.env 变量须显式引用后才会传入。` : `Applies only to ${c.displayService}. Reference .env variables explicitly to pass them in.`}</p>
           </div>
           <EnvironmentFields context={c} />
-          <details className="border-t pt-3 text-sm" data-testid="service-interpolation-variables">
+          <details className="pt-3 text-sm" data-testid="service-interpolation-variables">
             <summary className="cursor-pointer text-muted-foreground">{c.zh ? '插值变量 .env' : 'Interpolation variables .env'}</summary>
             <div className="pt-3"><InterpolationVariables context={c} /></div>
           </details>
@@ -1079,7 +1079,7 @@ function ServiceForm({ context: c, tab, onTabChange }: { context: FormContext; t
           ]}
         >
           <MapFields context={c} path={[...servicePath, 'labels']} />
-          <section className="space-y-3 border-t pt-4" data-testid="service-logging">
+          <section className="section-surface space-y-3" data-testid="service-logging">
             <h5 className="text-sm font-medium"><FieldCaption zh={c.zh} chinese="日志" english="Logging" field="logging" /></h5>
             <Field context={c} field="logging.driver" label={<FieldCaption zh={c.zh} chinese="日志驱动" english="Log driver" field="logging.driver" />} />
             <details open={configValue(c.compose, [...servicePath, 'logging', 'options']) !== undefined}>
@@ -1099,7 +1099,7 @@ function ServiceForm({ context: c, tab, onTabChange }: { context: FormContext; t
         </Tabs>
       </fieldset>
       {!!fields.filter((field) => !supported.has(field)).length && (
-        <div className="rounded-md border p-3 text-xs text-muted-foreground">
+        <div className="rounded-md bg-surface p-3 text-xs text-muted-foreground">
           {c.zh ? '保留的源码配置：' : 'Preserved source configuration: '}
           {fields
             .filter((field) => !supported.has(field))
@@ -1182,7 +1182,7 @@ function MapFields({ context: c, path }: { context: FormContext; path: ConfigPat
     <div className="flex items-center gap-2"><h5 className="text-sm font-medium"><FieldCaption zh={c.zh} chinese={labels ? '标签' : '日志选项'} english={labels ? 'Labels' : 'Log options'} field={labels ? 'labels' : 'logging.options'} /></h5><span className="text-xs text-muted-foreground">{Object.keys(map).length}</span></div>
     <p className="text-xs text-muted-foreground">{labels ? c.zh ? '容器元数据，以键和值填写，例如 com.example.role = api。' : 'Container metadata as key/value pairs, such as com.example.role = api.' : c.zh ? '传给所选日志驱动的选项，例如 max-size = 10m。' : 'Options passed to the selected log driver, such as max-size = 10m.'}</p>
     {complex || readonlyGroupReason(c.compose, path) ? <SourceLink context={c} path={path} /> : <>
-      {Object.entries(map).map(([key, item]) => <div key={key} className="flex items-end gap-2 border-b pb-3"><div className="min-w-0 flex-1"><ValueInput label={key} value={text(item)} secret={sensitiveKey(key)} disabled={!!readonlyReason(c.compose, [...path, key]) || (item !== null && typeof item === 'object')} onChange={next => update(key, next)} /></div><DeleteButton zh={c.zh} onClick={() => update(key, REMOVE)} /></div>)}
+      {Object.entries(map).map(([key, item]) => <div key={key} className="flex items-end gap-2 pb-3"><div className="min-w-0 flex-1"><ValueInput label={key} value={text(item)} secret={sensitiveKey(key)} disabled={!!readonlyReason(c.compose, [...path, key]) || (item !== null && typeof item === 'object')} onChange={next => update(key, next)} /></div><DeleteButton zh={c.zh} onClick={() => update(key, REMOVE)} /></div>)}
       {adding ? <form className="space-y-3" data-testid={labels ? 'new-label-form' : 'new-log-option-form'} onSubmit={event => {
         event.preventDefault()
         const name = key.trim()
@@ -1232,7 +1232,7 @@ function Mounts({ context: c }: { context: FormContext }) {
     <p className="text-xs text-muted-foreground">{c.zh ? `命名卷由 Docker 管理；主机路径使用节点 ${c.nodeID} 上的目录或文件。` : `Named volumes are managed by Docker; host paths use directories or files on node ${c.nodeID}.`}</p>
     {rows.map((row, index) => {
       const mount = parseMount(row)
-      if (!mount || !['volume', 'bind', 'tmpfs'].includes(text(mount.type)) || readonlyReason(c.compose, [...path, index]) || ['source', 'target', 'read_only'].some(key => mount[key] != null && typeof mount[key] === 'object')) return <div key={index} className="border-b py-3"><SourceLink context={c} path={[...path, index]} /></div>
+      if (!mount || !['volume', 'bind', 'tmpfs'].includes(text(mount.type)) || readonlyReason(c.compose, [...path, index]) || ['source', 'target', 'read_only'].some(key => mount[key] != null && typeof mount[key] === 'object')) return <div key={index} className="py-3"><SourceLink context={c} path={[...path, index]} /></div>
       return <MountForm key={index} context={c} mount={mount} index={index} />
     })}
     {adding && <MountForm context={c} onClose={() => setAdding(false)} />}
@@ -1347,7 +1347,7 @@ function EnvironmentFields({ context: c }: { context: FormContext }) {
           <div key={`${key}-${i}`} className="space-y-1">
             <fieldset
               disabled={duplicate || complex}
-              className="space-y-2 rounded-md border p-2"
+              className="space-y-2 rounded-md bg-surface p-3"
             >
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium">{key}</span>
@@ -1544,14 +1544,14 @@ function ServiceNetworks({ context: c }: { context: FormContext }) {
   }
   return <div className="space-y-3">
     <p className="text-xs text-muted-foreground">{c.zh ? `只有服务 ${c.displayService} 会连接下列网络。` : `Only ${c.displayService} is connected to the networks selected here.`}</p>
-    {!entries.length && <div className="border-b py-3"><p className="text-sm">{c.zh ? '默认网络' : 'Default network'}</p><p className="mt-1 text-xs text-muted-foreground">{c.zh ? '沿用 Compose 默认连接，部署时创建或复用。' : 'Use Compose’s default connection; created or reused on deployment.'}</p></div>}
+    {!entries.length && <div className="py-3"><p className="text-sm">{c.zh ? '默认网络' : 'Default network'}</p><p className="mt-1 text-xs text-muted-foreground">{c.zh ? '沿用 Compose 默认连接，部署时创建或复用。' : 'Use Compose’s default connection; created or reused on deployment.'}</p></div>}
     {entries.map(([name, value]) => {
       const resource = record(configValue(c.compose, ['networks', name]))
       const aliases = record(value).aliases
       const complex = (value != null && (typeof value !== 'object' || Array.isArray(value))) ||
         (aliases !== undefined && (!Array.isArray(aliases) || aliases.some(alias => typeof alias !== 'string')))
-      if (complex) return <div key={name} className="border-b py-3"><p className="mb-2 text-sm">{name}</p><SourceLink context={c} path={[...path, name]} /></div>
-      return <div key={name} className="space-y-3 border-b py-3">
+      if (complex) return <div key={name} className="py-3"><p className="mb-2 text-sm">{name}</p><SourceLink context={c} path={[...path, name]} /></div>
+      return <div key={name} className="space-y-3 py-3">
         <div className="flex items-center justify-between gap-2"><div className="min-w-0"><p className="break-all text-sm">{name === 'default' ? (c.zh ? '默认网络' : 'Default network') : text(resource.name) || name}</p><p className="mt-1 text-xs text-muted-foreground">{resource.external ? (c.zh ? '引用节点已有网络' : 'Existing node network') : (c.zh ? '部署时创建' : 'Created on deployment')}{resource.name ? ` · ${name}` : ''}</p></div>{!(name === 'default' && entries.length === 1) && <TooltipHint content={c.zh ? '解除当前服务连接' : 'Disconnect this service'}><Button variant="ghost" size="icon-sm" aria-label={c.zh ? `解除网络 ${name}` : `Disconnect network ${name}`} onClick={() => remove(name)}><X /></Button></TooltipHint>}</div>
         <ValueInput label={c.zh ? `服务别名 ${name} · 每行一个` : `Service aliases ${name} · one per line`} value={Array.isArray(record(value).aliases) ? (record(value).aliases as unknown[]).map(String).join('\n') : ''} multiline onChange={aliases => {
           if (!Array.isArray(raw)) c.set([...path, name, 'aliases'], aliases ? aliases.split('\n').filter(Boolean) : REMOVE)
@@ -1584,7 +1584,7 @@ function Dependencies({ context: c }: { context: FormContext }) {
     }
   }
   const choices = configKeys(c.compose, ['services']).filter(name => name !== c.service && !entries.some(([key]) => key === name))
-  return <div className="space-y-3 border-t pt-4"><h4 className="text-sm font-medium">{c.zh ? '启动依赖 depends_on' : 'Startup dependencies depends_on'}</h4>
+  return <div className="section-surface space-y-3"><h4 className="text-sm font-medium">{c.zh ? '启动依赖 depends_on' : 'Startup dependencies depends_on'}</h4>
     {entries.map(([name, value]) => <div key={name} className="space-y-2"><div className="flex items-center justify-between"><span className="text-sm">{serviceLabel(name, c.zh)}</span><DeleteButton zh={c.zh} onClick={() => update(name, REMOVE)} /></div><Choice label="condition" value={text(record(value).condition) || 'service_started'} options={['service_started', 'service_healthy', 'service_completed_successfully'].map(condition => [condition, condition])} onChange={condition => update(name, { ...record(value), condition })} /></div>)}
     <div className="flex items-end gap-2"><div className="min-w-0 flex-1"><Choice label={c.zh ? '依赖服务' : 'Dependency service'} value={select || '__select'} options={[[ '__select', c.zh ? '选择服务' : 'Select service'], ...choices.map((name): [string,string] => [name,serviceLabel(name, c.zh)])]} onChange={name => setSelect(name === '__select' ? '' : name)} /></div><Button variant="outline" size="sm" disabled={!choices.includes(select)} onClick={() => { update(select, { condition: 'service_started' }); setSelect('') }}><Plus />{c.zh ? '添加依赖' : 'Add dependency'}</Button></div>
   </div>
@@ -1623,7 +1623,7 @@ function InterpolationVariables({ context: c }: { context: FormContext }) {
       {rows.map((row, i) => {
         const uses = variableReferences(c.compose, row.key)
         return (
-          <div key={`${row.key}-${i}`} className="rounded-md border p-3">
+          <div key={`${row.key}-${i}`} className="rounded-md bg-surface p-3">
             <div className="flex items-end gap-2">
               <div className="min-w-0 flex-1">
                 <ValueInput
@@ -1768,7 +1768,7 @@ export function ConfigurationOverview({
       {summaries.map((item) => (
         <div
           key={item.service}
-          className="flex flex-wrap items-center gap-2 border-b py-2"
+          className="flex flex-wrap items-center gap-2 py-2"
         >
           <span className="font-medium">{serviceLabel(item.service, zh)}</span>
           <span className="truncate text-xs text-muted-foreground">

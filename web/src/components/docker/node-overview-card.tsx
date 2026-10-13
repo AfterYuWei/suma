@@ -119,7 +119,7 @@ function Metric({ icon: Icon, label, value, detail, bar }: { icon: typeof Cpu; l
 function ContainerMetricsList({ containers, detailed, zh, loading, unavailable }: { containers: FleetContainer[]; detailed?: boolean; zh: boolean; loading: boolean; unavailable: boolean }) {
   const rows = [...containers].sort((left, right) => right.memory_bytes - left.memory_bytes || left.name.localeCompare(right.name))
   return (
-    <section className="mt-4 flex min-h-0 flex-1 flex-col border-t pt-3" aria-label={zh ? '运行中容器性能' : 'Running container performance'}>
+    <section className="mt-4 flex min-h-0 flex-1 flex-col pt-3" aria-label={zh ? '运行中容器性能' : 'Running container performance'}>
       <div className="flex shrink-0 items-center justify-between gap-3">
         <div className="flex items-center gap-1.5 text-xs font-medium"><Container className="size-3.5 text-muted-foreground" />{zh ? '运行中容器' : 'Running containers'}</div>
       </div>
@@ -129,7 +129,7 @@ function ContainerMetricsList({ containers, detailed, zh, loading, unavailable }
         ? <div className="flex min-h-20 flex-1 items-center justify-center text-xs text-muted-foreground">{zh ? '容器数据暂不可用' : 'Container data unavailable'}</div>
         : rows.length === 0
         ? <div className="flex min-h-20 flex-1 items-center justify-center text-xs text-muted-foreground">{zh ? '暂无运行中容器' : 'No running containers'}</div>
-        : <div className="mt-2 min-h-0 flex-1 divide-y divide-border overflow-y-auto overscroll-contain pr-1">
+        : <div className="mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1">
             {rows.map((container) => (
               <div key={container.id} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-3 gap-y-1 py-2 first:pt-0 last:pb-0">
                 <div className="min-w-0">
@@ -280,7 +280,7 @@ export function NodeOverviewCard({ node: metadata, size, isDragging, onSizeChang
                 <div><div className="text-xs text-muted-foreground">CPU</div><div className="mt-1 text-xl font-semibold tabular-nums">{metricsValue(cpuLoad == null ? unavailable : `${cpuLoad.toFixed(1)}%`)}</div></div>
                 <div><div className="text-xs text-muted-foreground">{zh ? '内存' : 'Memory'}</div><div className="mt-1 text-xl font-semibold tabular-nums">{metricsValue(memoryLoad == null ? unavailable : `${memoryLoad.toFixed(1)}%`)}</div></div>
               </div>
-              <dl className="mt-4 grid grid-cols-2 gap-x-5 gap-y-2 border-t pt-3 text-xs">
+              <dl className="mt-4 grid grid-cols-2 gap-x-5 gap-y-2 pt-3 text-xs">
                 <div className="flex justify-between gap-2"><dt className="text-muted-foreground">{zh ? '容器总数' : 'Containers'}</dt><dd className="font-medium tabular-nums">{infoValue(available ? containerTotal : unavailable)}</dd></div>
                 <div className="flex justify-between gap-2"><dt className="text-muted-foreground">{zh ? '镜像' : 'Images'}</dt><dd className="font-medium tabular-nums">{infoValue(available ? node.images : unavailable)}</dd></div>
                 <div className="flex justify-between gap-2"><dt className="text-muted-foreground">{zh ? '网络' : 'Networks'}</dt><dd className="font-medium tabular-nums">{resourceValue(node.networks ?? unavailable)}</dd></div>
@@ -299,7 +299,7 @@ export function NodeOverviewCard({ node: metadata, size, isDragging, onSizeChang
                 <Metric icon={MemoryStick} label={zh ? '容器内存' : 'Container memory'} value={metricsValue(memoryLoad == null ? unavailable : `${memoryLoad.toFixed(1)}%`)} detail={metricsAvailable ? `${bytes(node.container_memory_bytes)} / ${bytes(node.memory_total_bytes)}` : undefined} bar={memoryLoad ?? undefined} />
                 <Metric icon={Boxes} label="Docker disk" value={diskValue} detail={zh ? '镜像、容器、卷与构建缓存' : 'Images, containers, volumes, and build cache'} />
               </div>
-              <dl className="mt-3 grid grid-cols-3 gap-3 border-t pt-3 text-xs sm:grid-cols-5">
+              <dl className="mt-3 grid grid-cols-3 gap-3 pt-3 text-xs sm:grid-cols-5">
                 <div><dt className="text-muted-foreground">{zh ? '镜像' : 'Images'}</dt><dd className="mt-1 font-medium tabular-nums">{infoValue(available ? node.images : unavailable)}</dd></div>
                 <div><dt className="text-muted-foreground">{zh ? '网络' : 'Networks'}</dt><dd className="mt-1 font-medium tabular-nums">{resourceValue(node.networks ?? unavailable)}</dd></div>
                 <div><dt className="text-muted-foreground">{zh ? '存储卷' : 'Volumes'}</dt><dd className="mt-1 font-medium tabular-nums">{resourceValue(node.volumes ?? unavailable)}</dd></div>
@@ -327,7 +327,7 @@ export function NodeOverviewCard({ node: metadata, size, isDragging, onSizeChang
                 <Metric icon={Server} label="Block read / write" value={metricsValue(metricsAvailable ? bytes(node.container_block_read_bytes) : unavailable)} detail={metricsAvailable ? `${bytes(node.container_block_write_bytes)} write` : undefined} />
                 <Metric icon={Container} label={zh ? '最长容器运行时间' : 'Longest container uptime'} value={metricsValue(metricsAvailable ? duration(node.longest_container_uptime_seconds, zh) : unavailable)} />
               </div>
-              <div className="mt-4 grid gap-4 border-t pt-4 md:grid-cols-3">
+              <div className="mt-4 grid gap-4 pt-4 md:grid-cols-3">
                 <div>
                   <div className="flex items-center gap-1.5 text-xs font-medium"><Server className="size-3.5 text-muted-foreground" />{zh ? '主机与 Engine' : 'Host and Engine'}</div>
                   <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-xs">
@@ -360,7 +360,7 @@ export function NodeOverviewCard({ node: metadata, size, isDragging, onSizeChang
                   </dl>
                 </div>
               </div>
-              {(node.security_options?.length ?? 0) > 0 && <div className="mt-4 flex flex-wrap items-center gap-1.5 border-t pt-3"><span className="mr-1 text-xs text-muted-foreground">Security</span>{node.security_options?.map((option) => <span key={option} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">{option}</span>)}</div>}
+              {(node.security_options?.length ?? 0) > 0 && <div className="mt-4 flex flex-wrap items-center gap-1.5 pt-3"><span className="mr-1 text-xs text-muted-foreground">Security</span>{node.security_options?.map((option) => <span key={option} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">{option}</span>)}</div>}
               <ContainerMetricsList containers={node.containers ?? []} detailed zh={zh} loading={loading.metrics} unavailable={!available || errors.metrics} />
             </>
           )}

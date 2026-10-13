@@ -122,7 +122,7 @@ export function ContinuousDeliveryDetailPage() {
       <div className="flex flex-col gap-4">
         {notice && <p className={cn('text-sm', sync.isError || releaseAction.isError ? 'text-destructive' : 'text-muted-foreground')}>{notice}</p>}
         <Tabs value={view} onValueChange={(value) => setView(value as View)}>
-          <TabsList variant="line">
+          <TabsList>
             {tabs.map((name) => (
               <TabsTrigger key={name} value={name}>{name === 'Overview' ? (zh ? '概览' : 'Overview') : name === 'Releases' ? (zh ? 'Release' : 'Releases') : (zh ? '设置' : 'Settings')}</TabsTrigger>
             ))}

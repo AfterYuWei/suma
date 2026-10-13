@@ -25,6 +25,7 @@ SUMA is a monolithic multi-node Docker management control plane. Nodes connect t
 
 - Dark mode first, with dark/light/system themes and semantic design tokens.
 - Prefer dense lists, inline/context actions, tabs, popovers, sheets, and progressive disclosure.
+- Group functional sections with subtle theme-aware background fills. Separate resource-list rows with spacing, alignment, and hover states; use filled active tabs. Avoid thin-line section dividers, row separators, and tab underlines.
 - Avoid dashboard card grids, crowded CRUD tables, blue-primary defaults, heavy shadows, gratuitous gradients, excessive rounding, and rows of action buttons.
 - TanStack Query owns server state. Zustand owns only UI state such as theme, navigation, filters, preferences, and command-palette state.
 - Shared primitives live in `web/src/components/ui`; Docker domain components live in `web/src/components/docker`.

@@ -126,7 +126,7 @@ export function OverviewPage() {
             : allNodes.isPending
             ? <LoadingState rows={5} label={zh ? '正在加载节点' : 'Loading nodes'} />
             : nodes.length === 0
-              ? <div className="rounded-xl border border-dashed py-12 text-center text-sm text-muted-foreground">{zh ? '暂无节点' : 'No nodes'}</div>
+              ? <div className="rounded-lg bg-surface py-12 text-center text-sm text-muted-foreground">{zh ? '暂无节点' : 'No nodes'}</div>
               : <div className="grid grid-cols-12 gap-4">
                   {orderedNodes.map((node) => (
                     <NodeOverviewCard
@@ -159,7 +159,7 @@ export function OverviewPage() {
               ? <LoadingState embedded rows={3} label={zh ? '正在加载交付项目' : 'Loading delivery projects'} />
               : (cd.data?.projects ?? []).length === 0
                 ? <p className="py-8 text-center text-sm text-muted-foreground">{zh ? '暂无交付项目' : 'No delivery projects'}</p>
-                : <div className="flex max-h-80 flex-col divide-y divide-border overflow-y-auto overscroll-contain">
+                : <div className="flex max-h-80 flex-col space-y-1 overflow-y-auto overscroll-contain">
                     {(cd.data?.projects ?? []).map((project) => {
                       const release = project.active_release ?? project.latest_release
                       return (

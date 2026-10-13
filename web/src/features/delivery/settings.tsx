@@ -263,7 +263,7 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
 }
 
 function SettingsSection({ title, description, children }: { title: string; description: string; children: ReactNode }) {
-  return <section className="grid w-full gap-4 border-b border-border/60 pb-7 lg:grid-cols-[220px_minmax(0,1fr)]">
+  return <section className="section-surface grid w-full gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
     <header className="flex flex-col gap-0.5">
       <h3 className="text-sm font-semibold">{title}</h3>
       <p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">{description}</p>

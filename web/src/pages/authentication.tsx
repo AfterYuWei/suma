@@ -60,7 +60,7 @@ export function AuthenticationPage() {
     <div className="flex w-full flex-col gap-5">
       <div className="flex w-full flex-wrap items-center gap-3">
         <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)}>
-          <TabsList variant="line">
+          <TabsList>
             <TabsTrigger value="git"><GitBranch className="size-4" />{zh ? 'Git 凭据' : 'Git credentials'}</TabsTrigger>
             <TabsTrigger value="registries"><Server className="size-4" />{zh ? '镜像仓库' : 'Registries'}</TabsTrigger>
             <TabsTrigger value="docker-tls"><ShieldCheck className="size-4" />Docker TLS</TabsTrigger>
@@ -84,9 +84,9 @@ export function AuthenticationPage() {
 
 function CredentialList({ empty, zh, children }: { empty: boolean; zh: boolean; children: ReactNode }) {
   const pagination = useListPagination(Children.toArray(children))
-  return empty ? <EmptyHint icon={<ShieldCheck className="size-6" />} title={zh ? '暂无匹配的凭据' : 'No matching credentials'} /> : <><ListShell><ul className="flex max-h-[calc(100dvh-16rem)] w-full flex-col divide-y overflow-y-auto overscroll-contain text-sm">{pagination.items}</ul></ListShell><ListPagination {...pagination} zh={zh} /></>
+  return empty ? <EmptyHint icon={<ShieldCheck className="size-6" />} title={zh ? '暂无匹配的凭据' : 'No matching credentials'} /> : <><ListShell><ul className="flex max-h-[calc(100dvh-16rem)] w-full flex-col space-y-1 overflow-y-auto overscroll-contain text-sm">{pagination.items}</ul></ListShell><ListPagination {...pagination} zh={zh} /></>
 }
-function EmptyHint({ icon, title }: { icon: ReactNode; title: string }) { return <div className="flex w-full flex-col items-center gap-1.5 rounded-xl border border-dashed py-10 text-center"><span className="text-muted-foreground">{icon}</span><p className="text-sm font-medium">{title}</p></div> }
+function EmptyHint({ icon, title }: { icon: ReactNode; title: string }) { return <div className="flex w-full flex-col items-center gap-1.5 rounded-lg bg-surface py-10 text-center"><span className="text-muted-foreground">{icon}</span><p className="text-sm font-medium">{title}</p></div> }
 function CredentialRow({ icon, title, detail, meta, onEdit, onRemove }: { icon: ReactNode; title: string; detail: string; meta: string; onEdit: () => void; onRemove: () => void }) {
   return <li className="flex items-center gap-3 px-3 py-2.5">
     <span className="shrink-0 text-muted-foreground">{icon}</span>
@@ -112,7 +112,7 @@ function EditorShell({ title, close, submit, error, pending, children }: { title
   const saveLabel = /[\u4e00-\u9fff]/.test(title) ? '保存' : 'Save'
   return <Sheet open onOpenChange={(open) => { if (!open) close() }}>
     <SheetContent side="right" className="sm:max-w-[520px]">
-      <SheetHeader className="border-b pr-12">
+      <SheetHeader className="pr-12">
         <SheetTitle>{title}</SheetTitle>
       </SheetHeader>
       <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
@@ -120,7 +120,7 @@ function EditorShell({ title, close, submit, error, pending, children }: { title
           {children}
           {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
         </div>
-        <SheetFooter className="border-t bg-transparent">
+        <SheetFooter className="bg-surface">
           <Button type="submit" disabled={pending} className="w-full">{pending && <Spinner />}{saveLabel}</Button>
         </SheetFooter>
       </form>

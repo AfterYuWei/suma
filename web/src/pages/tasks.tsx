@@ -111,7 +111,7 @@ function LinkedTask({ id, zh }: { id: string; zh: boolean }) {
     refetchInterval: (query) => ['pending', 'running'].includes(query.state.data?.status ?? '') ? 2000 : false,
   })
   const task = query.data
-  return <section aria-label={zh ? '关联任务' : 'Linked task'} className="mb-4 space-y-3 border-y py-4">
+  return <section aria-label={zh ? '关联任务' : 'Linked task'} className="section-surface mb-4 space-y-3">
     <div className="flex items-center justify-between gap-3"><p className="text-xs text-muted-foreground">{zh ? '关联任务' : 'Linked task'}</p><Button size="sm" variant="ghost" nativeButton={false} render={<Link to="/tasks" hash="" />}>{zh ? '关闭任务详情' : 'Close task details'}</Button></div>
     {query.isPending ? <LoadingState compact label={zh ? '正在加载任务' : 'Loading task'} /> : query.isError ? <p role="alert" className="text-sm text-destructive">{zh ? '无法加载关联任务' : 'Unable to load linked task'}</p> : task && <>
       <div className="flex flex-wrap items-center gap-3"><h2 className="min-w-0 break-words text-sm font-medium">{task.name}</h2><StatusBadge tone={taskTone(task.status)}>{task.status}</StatusBadge></div>

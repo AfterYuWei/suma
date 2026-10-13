@@ -128,12 +128,12 @@ export function ChannelEditor({ row, onDone, initialView = 'connection' }: { row
  const inherited = !!subscriptionTargetRow && !subscriptionTargetRow.subscription_override
  const effectiveSubscription = subscriptionTargetRow?.subscription_override || cfg.subscription
  const setSubscription = (value: Subscription) => subscriptionTargetRow ? update('targets',targets.map(target => target.chat_id === subscriptionTargetRow.chat_id ? { ...target,subscription_override:value } : target)) : update('subscription',value)
- if (creatingRule) return <div className="flex min-h-0 flex-1 flex-col"><h3 className="border-b px-5 py-3 text-sm font-medium">{t('新建通知规则', 'New notification rule')}</h3><RuleEditor onCancel={() => setCreatingRule(false)} onDone={(rule: Rule) => {
+ if (creatingRule) return <div className="flex min-h-0 flex-1 flex-col"><h3 className="bg-surface px-5 py-3 text-sm font-medium">{t('新建通知规则', 'New notification rule')}</h3><RuleEditor onCancel={() => setCreatingRule(false)} onDone={(rule: Rule) => {
   client.setQueryData<Rule[]>(['notification-rules'],previous => [...(previous || []).filter(value => value.id !== rule.id),rule])
   setSubscription({ ...effectiveSubscription,rule_ids:[...effectiveSubscription.rule_ids,rule.id] }); setCreatingRule(false)
  }} /></div>
  return <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-  <Tabs value={view} onValueChange={setView} className="shrink-0 border-b px-5"><TabsList variant="line"><TabsTrigger value="connection" disabled={action.isPending}>{t('连接配置', 'Connection')}</TabsTrigger><TabsTrigger value="subscriptions" disabled={action.isPending}>{t('通知订阅', 'Subscriptions')}</TabsTrigger></TabsList></Tabs>
+  <Tabs value={view} onValueChange={setView} className="shrink-0 px-5 py-3"><TabsList><TabsTrigger value="connection" disabled={action.isPending}>{t('连接配置', 'Connection')}</TabsTrigger><TabsTrigger value="subscriptions" disabled={action.isPending}>{t('通知订阅', 'Subscriptions')}</TabsTrigger></TabsList></Tabs>
   <fieldset disabled={action.isPending} className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto p-5">
    {view === 'connection' && <>
    {!saved && <Choice label={t('平台', 'Platform')} value={provider} options={channelPlatforms(language)} onChange={value => { setProvider(value); setCfg(newConfig(language, timeZone)); setName(value === 'feishu_app' ? t('飞书机器人', 'Feishu bot') : value === 'telegram' ? 'Telegram' : 'Webhook'); setSecret(''); setSigning(''); setAuthorization(''); setCredentialMessage(''); setTestResults({}); action.reset() }} />}
@@ -152,12 +152,12 @@ export function ChannelEditor({ row, onDone, initialView = 'connection' }: { row
     <FeishuSetup appID={cfg.app_id} />
     <section aria-label={t('接收目标', 'Recipients')} className="min-w-0 space-y-2">
      <div className="flex min-w-0 flex-wrap items-center justify-between gap-1"><h3 className="text-sm font-medium">{t('接收目标', 'Recipients')}<span className="ml-2 text-xs font-normal text-muted-foreground">{t(`已选 ${targets.length} 个`, `${targets.length} selected`)}</span></h3><Button variant="ghost" size="sm" className="-mr-2" disabled={!canSave || !targets.length} onClick={() => setView('subscriptions')}>{t('订阅设置', 'Subscription settings')}<ChevronRight className="size-3.5" /></Button></div>
-     <div className="min-w-0 rounded-md border">
-      <div role="list" aria-label={t('接收会话', 'Recipient conversations')} className="min-w-0 divide-y px-3">
+     <div className="min-w-0 overflow-hidden rounded-md bg-surface">
+      <div role="list" aria-label={t('接收会话', 'Recipient conversations')} className="min-w-0 space-y-1 px-3">
        {recipientRows.map(({ target, name, checked }) => <RecipientRow key={target.chat_id} target={target} name={name} checked={checked} subscriptionLabel={checked ? target.subscription_override ? t('独立配置', 'Custom configuration') : t('使用全部对话配置', 'Uses all conversations settings') : undefined} onToggle={() => toggleTarget(target)} onRename={checked ? value => update('targets', targets.map(item => item.chat_id === target.chat_id ? { ...item, name: value } : item)) : undefined} />)}
        {!targets.length && !discovered.length && <p className="py-3 text-xs leading-5 text-muted-foreground">{!saved ? t('保存应用凭证后，私聊机器人或在群内 @ 机器人，接收会话会显示在这里。', 'Save the app credentials, then message the bot privately or mention it in a group. Conversations will appear here.') : chats.isPending && !identityChanged ? t('正在读取接收会话…', 'Loading conversations…') : t('尚未识别会话。发布飞书应用的新版本后，再向机器人发送消息。', 'No chats detected. Publish the Feishu application version, then send the bot a new message.')}</p>}
       </div>
-      {targets.length > 0 && <div className="min-w-0 border-t p-3">{testControls}</div>}
+      {targets.length > 0 && <div className="min-w-0 bg-surface p-3">{testControls}</div>}
      </div>
      <p className="text-xs leading-5 text-muted-foreground">{t('勾选接收会话，点击名称修改备注。对话默认使用“全部对话”配置，切换页签保留草稿。', 'Select recipients; click names to rename. Conversations use All conversations settings by default. Switching tabs retains the draft.')}</p>
      <ErrorText error={chats.error} />
@@ -169,7 +169,7 @@ export function ChannelEditor({ row, onDone, initialView = 'connection' }: { row
     <Choice label={t('消息语言', 'Message language')} value={cfg.language} options={[[ 'zh-CN', '中文' ], [ 'en-US', 'English' ]]} onChange={value => update('language', value)} /><Field label={t('SUMA 公网地址（可选）', 'SUMA public URL (optional)')}><Input value={cfg.public_url} onChange={event => update('public_url', event.target.value)} placeholder="https://suma.example.com" /></Field>
    </div></details>
    <div className="space-y-1"><div className="flex items-center justify-between gap-3 py-1 text-sm"><label htmlFor={enabledID} className="cursor-pointer">{t('启用渠道', 'Enable channel')}</label><Switch id={enabledID} disabled={action.isPending} checked={enabled} onCheckedChange={value => { setEnabled(value); action.reset() }} /></div>{!enabled && <p className="text-xs text-muted-foreground">{t('停止通知投递，保留渠道配置。', 'Pauses notification delivery and keeps the configuration.')}</p>}</div>
-   {!isFeishu && <div className="space-y-3 border-t pt-3">{testControls}<Button variant="ghost" size="sm" disabled={!canSave} onClick={() => setView('subscriptions')}>{t('订阅设置', 'Subscription settings')}<ChevronRight className="size-3.5" /></Button></div>}
+   {!isFeishu && <div className="section-surface space-y-3">{testControls}<Button variant="ghost" size="sm" disabled={!canSave} onClick={() => setView('subscriptions')}>{t('订阅设置', 'Subscription settings')}<ChevronRight className="size-3.5" /></Button></div>}
    </>}
    {view === 'subscriptions' && <div className="min-w-0 space-y-4">
     <p className="text-xs leading-5 text-muted-foreground">{isFeishu ? t('已选对话默认使用“全部对话”的规则和发送策略，也可以为单个对话独立配置。', 'Selected conversations use All conversations settings by default. Individual conversations can have their own rules and delivery policy.') : t('选择此渠道订阅的规则和发送策略。', 'Choose this channel’s rules and delivery policy.')}</p>
@@ -181,7 +181,7 @@ export function ChannelEditor({ row, onDone, initialView = 'connection' }: { row
    </div>}
    <ErrorText error={action.error instanceof ChannelActionError && ['test', 'check'].includes(action.error.stage) ? undefined : action.error} />
   </fieldset>
-  <fieldset aria-label={t('渠道操作', 'Channel actions')} disabled={action.isPending} className="flex min-w-0 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-t bg-popover px-5 py-3">
+  <fieldset aria-label={t('渠道操作', 'Channel actions')} disabled={action.isPending} className="flex min-w-0 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 bg-surface px-5 py-3">
    {view === 'subscriptions' && <p className="basis-full text-xs leading-5 text-muted-foreground">{t('订阅和策略修改只影响新事件，已排队消息按原配置继续发送；暂停渠道或移除目标可取消待发送消息。', 'Subscription and policy changes affect new events only. Queued messages keep their original configuration; pause the channel or remove the recipient to cancel pending messages.')}</p>}
    <p role="status" aria-label={t('保存状态', 'Save status')} className="min-w-0 flex-1 basis-20 text-xs text-muted-foreground">{action.isPending ? t('处理中…', 'Working…') : !saved ? t('尚未保存', 'Not saved') : dirty ? t('有未保存的修改', 'Unsaved changes') : t('已保存', 'Saved')}</p>
    <div className="ml-auto flex shrink-0 items-center gap-2">{(!saved || dirty) && <Button variant={saved ? 'outline' : 'default'} disabled={!canSave} onClick={() => action.mutate({ kind: 'save' })}>{t('保存渠道', 'Save channel')}</Button>}{saved && <Button disabled={dirty && !canSave} onClick={() => dirty ? action.mutate({ kind: 'done' }) : onDone()}>{dirty ? t('保存并完成', 'Save and finish') : t('完成', 'Done')}</Button>}</div>
@@ -227,9 +227,9 @@ function CopyValue({ label, value }: { label: string; value: string }) {
 function FeishuSetup({ appID }: { appID: string }) {
  const t = useOpsText()
  const permissions = JSON.stringify({ scopes: { tenant: ['im:message:send_as_bot', 'im:message.p2p_msg:readonly', 'im:message.group_at_msg:readonly'], user: [] } }, null, 2)
- return <details className="group overflow-hidden rounded-md border text-xs leading-5">
+ return <details className="group overflow-hidden rounded-md bg-surface text-xs leading-5">
   <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-sm font-medium select-none outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [&::-webkit-details-marker]:hidden"><span>{t('飞书平台配置说明', 'Feishu platform setup')}</span><ChevronDown aria-hidden="true" className="size-4 shrink-0 text-muted-foreground group-open:rotate-180" /></summary>
-  <div className="space-y-3 border-t p-3">
+  <div className="space-y-3 p-3">
    <p>{t('创建企业自建应用，开启机器人能力。复制凭证到 SUMA 并保存，等待长连接显示“已连接”，再在飞书设置长连接接收。', 'Create an internal application and enable its bot. Save the credentials in SUMA and wait for Connected before configuring persistent connections in Feishu.')}</p>
    <a href={`https://open.feishu.cn/app${appID && /^cli_[\w-]+$/.test(appID) ? `/${encodeURIComponent(appID)}` : ''}`} target="_blank" rel="noreferrer" className="underline">{t('打开飞书应用后台', 'Open Feishu application console')}</a>
    <CopyValue label={t('权限管理 → 批量导入/导出权限（应用身份）', 'Permissions → Batch import/export (application identity)')} value={permissions} />

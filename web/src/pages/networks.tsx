@@ -109,7 +109,7 @@ export function NetworksPage() {
           </form>
         </CardContent>
       </Card>}
-      {query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载网络' : 'Loading networks'} /> : query.isError ? <ErrorState description={query.error.message} /> : (query.data ?? []).length === 0 ? <div className="flex w-full flex-col items-center gap-1 rounded-xl bg-card px-4 py-10 text-center ring-1 ring-foreground/10">
+      {query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载网络' : 'Loading networks'} /> : query.isError ? <ErrorState description={query.error.message} /> : (query.data ?? []).length === 0 ? <div className="flex w-full flex-col items-center gap-1 rounded-xl bg-surface px-4 py-10 text-center">
         <NetworkIcon className="size-5 text-muted-foreground" />
         <p className="text-sm font-medium">{zh ? '暂无网络' : 'No networks'}</p>
         <p className="text-sm text-muted-foreground">{zh ? '创建网络后会显示在这里。' : 'Create a network to see it here.'}</p>
@@ -152,9 +152,9 @@ function NetworkRow({ row, nodeID, open, selected, zh, deleteLabel, removePendin
       <TableCell><TooltipHint content={deleteLabel}><Button variant="ghost" size="icon-sm" className="text-red-600 hover:text-red-600 dark:text-red-400 dark:hover:text-red-400" disabled={removePending} onClick={remove} aria-label={deleteLabel}><Trash2 /></Button></TooltipHint></TableCell>
     </TableRow>
     {open && <TableRow><TableCell colSpan={7} className="bg-muted/30 p-4">
-      {detail.isPending ? <LoadingState compact embedded rows={2} label={zh ? '正在加载网络内的容器' : 'Loading attached containers'} /> : detail.isError ? <ErrorState description={detail.error.message} /> : containers.length === 0 ? <div className="flex items-center gap-2 text-sm text-muted-foreground"><Box className="size-4" />{zh ? '此网络内暂无容器' : 'No containers attached to this network'}</div> : <><div className="max-h-72 overflow-y-auto overscroll-contain rounded-lg border bg-background">
-        <div className="grid grid-cols-[minmax(180px,1fr)_minmax(150px,1fr)_minmax(150px,1fr)] gap-4 border-b bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground"><span>{zh ? '容器' : 'Container'}</span><span>IPv4</span><span>IPv6</span></div>
-        {pagination.items.map((container) => <div key={container.id} className="grid grid-cols-[minmax(180px,1fr)_minmax(150px,1fr)_minmax(150px,1fr)] gap-4 border-b px-3 py-2.5 text-sm last:border-b-0"><span className="min-w-0"><span className="block truncate font-medium">{container.name || container.id.slice(0, 12)}</span><span className="block font-mono text-xs text-muted-foreground">{container.id.slice(0, 12)}</span></span><span className="self-center font-mono text-xs">{container.ipv4_address || '—'}</span><span className="self-center font-mono text-xs">{container.ipv6_address || '—'}</span></div>)}
+      {detail.isPending ? <LoadingState compact embedded rows={2} label={zh ? '正在加载网络内的容器' : 'Loading attached containers'} /> : detail.isError ? <ErrorState description={detail.error.message} /> : containers.length === 0 ? <div className="flex items-center gap-2 text-sm text-muted-foreground"><Box className="size-4" />{zh ? '此网络内暂无容器' : 'No containers attached to this network'}</div> : <><div className="max-h-72 space-y-1 overflow-y-auto overscroll-contain rounded-md bg-background">
+        <div className="grid grid-cols-[minmax(180px,1fr)_minmax(150px,1fr)_minmax(150px,1fr)] gap-4 bg-surface px-3 py-2 text-xs font-medium text-muted-foreground"><span>{zh ? '容器' : 'Container'}</span><span>IPv4</span><span>IPv6</span></div>
+        {pagination.items.map((container) => <div key={container.id} className="grid grid-cols-[minmax(180px,1fr)_minmax(150px,1fr)_minmax(150px,1fr)] gap-4 rounded-md px-3 py-2.5 text-sm hover:bg-muted/40"><span className="min-w-0"><span className="block truncate font-medium">{container.name || container.id.slice(0, 12)}</span><span className="block font-mono text-xs text-muted-foreground">{container.id.slice(0, 12)}</span></span><span className="self-center font-mono text-xs">{container.ipv4_address || '—'}</span><span className="self-center font-mono text-xs">{container.ipv6_address || '—'}</span></div>)}
       </div><ListPagination {...pagination} zh={zh} /></>}
     </TableCell></TableRow>}
   </Fragment>

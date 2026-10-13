@@ -35,6 +35,6 @@ export function RuleEditor({ row, onDone, onCancel }: { row?: Rule; onDone: (rul
  </div></details>
  <p className="text-xs text-muted-foreground">{t('渠道或对话勾选并保存规则后即生效。频率、静默和模板在通知订阅中设置。修改规则或取消订阅只影响新事件，已排队消息继续按原配置发送。', 'Rules take effect when selected and saved in a channel or conversation subscription. Set frequency, quiet hours and templates there. Rule changes and unsubscribing affect new events; queued messages retain their original configuration.')}</p>
  <ErrorText error={save.error || catalog.error || nodes.error || groups.error} />
- </fieldset><div className="flex shrink-0 items-center justify-end gap-2 border-t px-5 py-3">{onCancel && <Button type="button" variant="outline" onClick={onCancel} disabled={save.isPending}>{t('返回订阅', 'Back to subscriptions')}</Button>}<Button type="submit" disabled={save.isPending || !name.trim() || !cfg.events.length}>{t('保存规则', 'Save rule')}</Button></div>
+ </fieldset><div className="flex shrink-0 items-center justify-end gap-2 bg-surface px-5 py-3">{onCancel && <Button type="button" variant="outline" onClick={onCancel} disabled={save.isPending}>{t('返回订阅', 'Back to subscriptions')}</Button>}<Button type="submit" disabled={save.isPending || !name.trim() || !cfg.events.length}>{t('保存规则', 'Save rule')}</Button></div>
  </form>
 }

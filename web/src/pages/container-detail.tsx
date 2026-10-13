@@ -83,17 +83,17 @@ export function ContainerDetailPage() {
     </div>
     <ResourceFrame title={row.name} detail={`${row.image} · ${row.status}`} action={actions}>
     <Tabs value={tab} onValueChange={(name) => { const next = String(name).toLowerCase(); if (next !== hash.toLowerCase()) void navigate({ to: '/containers/$containerId', params: { containerId }, hash: next, resetScroll: false, hashScrollIntoView: false }) }}>
-      <TabsList variant="line" className="max-w-full justify-start gap-4 overflow-x-auto border-b pb-2">
-        {tabs.map((name) => <TabsTrigger key={name} value={name} className="flex-none px-1">{label(name)}</TabsTrigger>)}
+      <TabsList className="max-w-full justify-start gap-1 overflow-x-auto">
+        {tabs.map((name) => <TabsTrigger key={name} value={name} className="flex-none px-3">{label(name)}</TabsTrigger>)}
       </TabsList>
     </Tabs>
     <div className="mt-6 w-full">
       {tab === 'Overview' && <div className="grid gap-6 lg:grid-cols-2">
-        <section className="lg:col-span-2 border-b pb-5"><h3 className="mb-3 font-medium">{zh ? '运行诊断与健康检查' : 'Runtime diagnostics and health'}</h3><DiagnosticsContent nodeID={nodeID} containerID={containerId} zh={zh} /></section>
-        <section className="lg:col-span-2 border-b pb-5"><ContainerTopologyContent data={row} zh={zh} /></section>
+        <section className="section-surface lg:col-span-2"><h3 className="mb-3 font-medium">{zh ? '运行诊断与健康检查' : 'Runtime diagnostics and health'}</h3><DiagnosticsContent nodeID={nodeID} containerID={containerId} zh={zh} /></section>
+        <section className="section-surface lg:col-span-2"><ContainerTopologyContent data={row} zh={zh} /></section>
         <Card>
           <CardHeader><CardTitle>{zh ? '运行信息' : 'Runtime'}</CardTitle></CardHeader>
-          <CardContent><div className="divide-y divide-border">
+          <CardContent><div className="space-y-1">
             {([[zh ? '容器 ID' : 'Container ID', row.id], [zh ? '状态' : 'Status', row.status], ['PID', String(row.pid)], [zh ? '工作目录' : 'Working directory', row.working_directory || '—'], [zh ? '重启策略' : 'Restart policy', row.restart_policy || '—']] as [string, string][]).map(([key, value]) => (
               <div key={key} className="flex items-start justify-between gap-6 py-2 first:pt-0 last:pb-0">
                 <span className="shrink-0 text-xs text-muted-foreground">{key}</span>
@@ -107,7 +107,7 @@ export function ContainerDetailPage() {
           <CardContent>{row.environment.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">{zh ? '无环境变量。' : 'No environment variables.'}</p>
           ) : (
-            <div className="overflow-hidden rounded-lg border border-border">
+            <div className="overflow-hidden rounded-md bg-background/40">
               <Table>
                 <TableHeader>
                   <TableRow>

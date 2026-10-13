@@ -126,7 +126,7 @@ export function NodesPage() {
   const pagination = useListPagination(filteredNodes)
 
   return <ResourceFrame title={zh ? 'Docker 节点' : 'Docker nodes'} detail={zh ? '通过 Group 组织节点；Docker 操作仍始终绑定明确的单个节点。' : 'Organize nodes with groups while every Docker operation remains bound to one explicit node.'} action={<Button onClick={createNode}><Plus />{zh ? '添加节点' : 'Add node'}</Button>}>
-    <section className="mb-4 flex flex-col gap-3 rounded-xl border p-3" aria-labelledby="node-groups-heading">
+    <section className="section-surface mb-4 flex flex-col gap-3" aria-labelledby="node-groups-heading">
       <div className="flex flex-wrap items-center gap-2">
         <div className="mr-auto flex min-w-0 items-center gap-2">
           <FolderTree className="size-4 text-muted-foreground" />
@@ -136,7 +136,7 @@ export function NodesPage() {
       </div>
       <div className="flex flex-wrap gap-1.5">
         <Button variant={currentGroupFilter === 'all' ? 'secondary' : 'ghost'} size="sm" onClick={() => setCurrentGroupFilter('all')}>{zh ? '全部' : 'All'} · {(query.data ?? []).length}</Button>
-        {(groups.data ?? []).map((group) => <div key={group.id} className="flex items-center rounded-lg border bg-muted/20">
+        {(groups.data ?? []).map((group) => <div key={group.id} className="flex items-center rounded-md bg-surface">
           <Button variant={currentGroupFilter === `group:${group.id}` ? 'secondary' : 'ghost'} size="sm" className="rounded-r-none" onClick={() => setCurrentGroupFilter(`group:${group.id}`)}>{group.name} · {group.node_count}</Button>
           <TooltipHint content={zh ? '编辑 Group' : 'Edit group'}><Button variant="ghost" size="icon-sm" className="rounded-none" aria-label={zh ? '编辑 Group' : 'Edit group'} onClick={() => editGroup(group)}><Pencil /></Button></TooltipHint>
           <TooltipHint content={zh ? '删除 Group' : 'Delete group'}><Button variant="ghost" size="icon-sm" className="rounded-l-none text-destructive" aria-label={zh ? '删除 Group' : 'Delete group'} onClick={() => void removeGroup(group)}><Trash2 /></Button></TooltipHint>
@@ -276,7 +276,7 @@ export function NodesPage() {
           </>}
           <div className="grid gap-2">
             <Label>{zh ? '所属 Group（可多选）' : 'Groups (multiple allowed)'}</Label>
-            <div className="flex max-h-40 flex-col gap-2 overflow-y-auto rounded-lg border p-3">
+            <div className="flex max-h-40 flex-col gap-2 overflow-y-auto rounded-md bg-surface p-3">
               {(groups.data ?? []).length === 0 ? <p className="text-xs text-muted-foreground">{zh ? '暂无 Group；节点将不属于任何 Group。' : 'No groups exist; the node will not belong to a Group.'}</p> : (groups.data ?? []).map((group) => <label key={group.id} className="flex cursor-pointer items-start gap-2">
                 <Checkbox checked={values.group_ids.includes(group.id)} onCheckedChange={(checked) => update({ group_ids: checked ? [...values.group_ids, group.id] : values.group_ids.filter((id) => id !== group.id) })} className="mt-0.5" />
                 <span className="min-w-0"><span className="block truncate text-sm">{group.name}</span>{group.description && <span className="block truncate text-xs text-muted-foreground">{group.description}</span>}</span>
@@ -303,7 +303,7 @@ export function NodesPage() {
           <div className="grid gap-1.5"><Label>{zh ? '节点 ID' : 'Node ID'}</Label><Input readOnly value={pairing.node_id} /></div>
           {pairingConnected ? <Alert><AlertDescription>{zh ? 'Agent 已连接成功。保存的凭据长期有效，重启后可自动重连；请保留 suma-agent-data 数据卷。现在可从 Compose 移除 SUMA_AGENT_TOKEN。' : 'Agent connected successfully. Its saved credential remains valid for automatic reconnection after restarts. Keep the suma-agent-data volume. You can now remove SUMA_AGENT_TOKEN from Compose.'}</AlertDescription></Alert> : pairingUsed ? <Alert><AlertDescription>{zh ? '配对令牌已使用，凭据长期有效。正在等待 Agent 连接，请检查网络和 HTTPS 证书；重新配对时才需要刷新令牌。' : 'The pairing token has been used; the credential remains valid. Waiting for the Agent to connect. Check the network and HTTPS certificate; refresh the token only to pair again.'}</AlertDescription></Alert> : pairingExpired ? <Alert variant="destructive"><AlertDescription>{zh ? '配对令牌已过期。请手动刷新令牌后再部署 Agent。' : 'The pairing token has expired. Refresh it manually before deploying the Agent.'}</AlertDescription></Alert> : <>
             <div className="grid gap-1.5"><Label>{zh ? '配对令牌' : 'Pairing token'}</Label><div className="flex gap-2"><Input readOnly value={pairing.token} className="font-mono" /><Button type="button" variant="outline" onClick={() => void navigator.clipboard.writeText(pairing.token)}><Copy />{zh ? '复制' : 'Copy'}</Button></div></div>
-            <div className="grid gap-1.5"><Label>docker-compose.yml</Label><pre className="overflow-x-auto rounded-lg border bg-muted/30 p-3 text-xs">{agentCompose(pairing.public_url, pairing.token)}</pre><Button type="button" variant="outline" onClick={() => void navigator.clipboard.writeText(agentCompose(pairing.public_url, pairing.token))}><Copy />{zh ? '复制 Compose' : 'Copy Compose'}</Button></div>
+            <div className="grid gap-1.5"><Label>docker-compose.yml</Label><pre className="overflow-x-auto rounded-md bg-surface p-3 text-xs">{agentCompose(pairing.public_url, pairing.token)}</pre><Button type="button" variant="outline" onClick={() => void navigator.clipboard.writeText(agentCompose(pairing.public_url, pairing.token))}><Copy />{zh ? '复制 Compose' : 'Copy Compose'}</Button></div>
           </>}
           {agentActionError && <Alert variant="destructive"><AlertDescription>{agentActionError}</AlertDescription></Alert>}
           {!pairingConnected && <Button type="button" variant="outline" disabled={reissuing} onClick={() => void reissue(pairing.node_id)}>{reissuing && <Spinner className="size-4" />}<RefreshCw />{zh ? '手动刷新令牌' : 'Refresh token manually'}</Button>}

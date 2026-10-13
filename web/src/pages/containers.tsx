@@ -65,7 +65,7 @@ export function ContainersPage() {
  const pathname=useLocation({select: location=>location.pathname})
  const history=hash==='monitoring-history'
  if(pathname!=='/containers')return null
- return <div className="space-y-4"><Tabs value={history?'history':'live'} onValueChange={v=>void navigate({to:'/containers',hash:v==='history'?'monitoring-history':''})}><TabsList variant="line"><TabsTrigger value="live">{zh?'容器':'Containers'}</TabsTrigger><TabsTrigger value="history">{zh?'监控历史':'Monitoring history'}</TabsTrigger></TabsList></Tabs>{history?<ResourceFrame title={zh?'监控历史':'Monitoring history'} detail={zh?'已记录的容器实例，包含已停止或删除的容器':'Recorded instances, including stopped or removed containers'}><MonitoringHistory /></ResourceFrame>:<LiveContainersPage />}</div>
+ return <div className="space-y-4"><Tabs value={history?'history':'live'} onValueChange={v=>void navigate({to:'/containers',hash:v==='history'?'monitoring-history':''})}><TabsList><TabsTrigger value="live">{zh?'容器':'Containers'}</TabsTrigger><TabsTrigger value="history">{zh?'监控历史':'Monitoring history'}</TabsTrigger></TabsList></Tabs>{history?<ResourceFrame title={zh?'监控历史':'Monitoring history'} detail={zh?'已记录的容器实例，包含已停止或删除的容器':'Recorded instances, including stopped or removed containers'}><MonitoringHistory /></ResourceFrame>:<LiveContainersPage />}</div>
 }
 function LiveContainersPage() {
   const navigate = useNavigate()

@@ -339,7 +339,7 @@ export function ProjectTakeoverPage() {
     <Button variant="ghost" size="sm" className="self-start text-muted-foreground" onClick={() => void leave()}><ChevronLeft />{zh ? '返回 Project' : 'Back to Project'}</Button>
     <ResourceFrame title={zh ? `接管 ${projectName}` : `Take over ${projectName}`} detail={zh ? '将整个 Compose Project 纳入 SUMA 管理' : 'The complete Compose Project will become one SUMA Project'} action={<Badge variant="outline">Compose</Badge>}>
       <div className="flex w-full flex-col gap-5">
-        <ol className={`grid gap-2 ${flow.length === 3 ? 'grid-cols-3' : 'grid-cols-4'}`}>{flow.map((name, index) => <li key={name} className={`flex items-center gap-2 border-b-2 px-1 pb-2 text-sm ${index === stepIndex ? 'border-primary font-medium' : index < stepIndex ? 'border-emerald-500 text-emerald-600 dark:text-emerald-400' : 'border-border text-muted-foreground'}`}><span className="grid size-5 shrink-0 place-items-center rounded-full bg-muted text-xs">{index < stepIndex ? <Check className="size-3" /> : index + 1}</span><span className="hidden sm:inline">{stepLabels[name]}</span></li>)}</ol>
+        <ol className={`grid gap-2 ${flow.length === 3 ? 'grid-cols-3' : 'grid-cols-4'}`}>{flow.map((name, index) => <li key={name} className={`flex items-center gap-2 rounded-md px-2 py-2 text-sm ${index === stepIndex ? 'bg-surface font-medium' : index < stepIndex ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'}`}><span className="grid size-5 shrink-0 place-items-center rounded-full bg-muted text-xs">{index < stepIndex ? <Check className="size-3" /> : index + 1}</span><span className="hidden sm:inline">{stepLabels[name]}</span></li>)}</ol>
 
         {step === 'analysis' && <AnalysisStep draft={draft} zh={zh} cleaning={cleanupExternal.isPending} cleanupError={cleanupExternal.error?.message} onCleanup={() => void confirmCleanup()} />}
         {step === 'analysis' && <DriftReport services={draft.observation.services} zh={zh} />}
@@ -376,7 +376,7 @@ function ShadowPreviewPanel({ zh, assessment, assessError, operationError, asses
   const { viewportRef: logViewportRef, onScroll: onLogScroll } = useLogAutoScroll<HTMLPreElement>(status?.logs || '', `${session?.session_id || ''}\n${logTail}`)
   const taskStatus = task?.status ?? session?.task.status ?? ''
   const taskMessage = task?.message ?? session?.task.message
-  return <div className="rounded-lg border border-border p-4">
+  return <div className="section-surface">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div>
         <h3 className="flex items-center gap-2 text-sm font-medium"><FlaskConical className="size-4" />{zh ? '可选：隔离预演' : 'Optional: isolated preview'}</h3>
@@ -499,13 +499,13 @@ function EnvironmentStep({ variables, choices, revealed, zh, onChoice, onReveal 
       </CardContent>
     </Card>}
 
-    {imageDefaults.length > 0 && <Collapsible open={showImageDefaults} onOpenChange={setShowImageDefaults} className="group/image-defaults overflow-hidden rounded-xl border bg-card">
+    {imageDefaults.length > 0 && <Collapsible open={showImageDefaults} onOpenChange={setShowImageDefaults} className="group/image-defaults overflow-hidden rounded-lg bg-surface">
       <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2 px-4 py-3 text-left hover:bg-muted/50">
         <ChevronDown className="size-4 text-muted-foreground transition-transform group-data-open/image-defaults:rotate-180" />
         <span className="font-medium">{zh ? `镜像默认 ENV（${imageDefaults.length}）` : `Image-default ENV (${imageDefaults.length})`}</span>
         <Badge variant="outline" className="ml-auto">{zh ? '已自动排除' : 'Automatically excluded'}</Badge>
       </CollapsibleTrigger>
-      <CollapsibleContent className="border-t">
+      <CollapsibleContent className="">
         <div className="px-4 py-3">
           <p className="mb-3 text-xs text-muted-foreground">{zh ? '这些变量与 Image Inspect 返回的默认 ENV 完全一致，不会写入 compose.yml 或 .env。' : 'These values exactly match Image Inspect defaults and will not be written to compose.yml or .env.'}</p>
           <EnvironmentVariableTable variables={imageDefaults} choices={choices} revealed={revealed} zh={zh} onChoice={onChoice} onReveal={onReveal} autoExcluded />

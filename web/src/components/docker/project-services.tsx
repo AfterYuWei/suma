@@ -106,13 +106,13 @@ export function ProjectServices({
           : !entries.length ? <p className="py-8 text-sm text-muted-foreground">
             {zh ? '项目尚未创建容器，请先启动项目。' : 'No containers have been created. Start the project first.'}
           </p> : <>
-            <div className={`${rowGrid} hidden text-xs text-muted-foreground lg:grid`} aria-hidden="true">
+            <div className={`${rowGrid} hidden rounded-md bg-surface px-3 py-2 text-xs text-muted-foreground lg:grid`} aria-hidden="true">
               <span>{zh ? '服务 / 镜像' : 'Service / image'}</span>
               <span>{zh ? '状态' : 'State'}</span>
               <span>{zh ? '资源' : 'Resources'}</span>
               <span>{zh ? '端口' : 'Ports'}</span>
             </div>
-            <div className="divide-y divide-border border-y border-border">
+            <div className="space-y-1">
               {pagination.items.map(entry => {
                 const row = entry.container
                 if (!row) return <div key={entry.key} className="flex flex-wrap items-center gap-x-6 gap-y-2 py-4">
@@ -125,7 +125,7 @@ export function ProjectServices({
                 const image = row.image.replace(/^docker\.io\/(library\/)?/, '')
                 return <Collapsible key={row.id} open={expanded === row.id} onOpenChange={open => setExpanded(open ? row.id : null)}>
                   <CollapsibleTrigger
-                    className={`${rowGrid} group w-full items-center rounded-sm py-4 text-left outline-none hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring`}
+                    className={`${rowGrid} group w-full items-center rounded-md px-3 py-4 text-left outline-none hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring`}
                     aria-label={zh ? `服务详情 ${entry.name}${number ? ` · #${number}` : ''} · ${row.name}` : `Service details ${entry.name}${number ? ` · #${number}` : ''} · ${row.name}`}
                   >
                     <span className="flex min-w-0 flex-col gap-1.5">

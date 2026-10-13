@@ -721,7 +721,7 @@ export function ComposeDetailPage() {
             </p>
           )}
           <Tabs value={view} onValueChange={(value) => setView(value as View)}>
-            <TabsList variant="line">
+            <TabsList>
               {(project.managed
                 ? ['Files', 'Services', 'Logs']
                 : ['Services', 'Logs']
@@ -1107,7 +1107,7 @@ function ComposeActionDialog({
                         : 'Waiting for Docker Compose output…')}
               </p>
             </div>
-            <div className="flex items-center justify-between gap-4 border-t pt-3">
+            <div className="flex items-center justify-between gap-4 pt-3">
               <span className="text-sm font-medium">
                 {zh ? '实时输出' : 'Live output'}
               </span>

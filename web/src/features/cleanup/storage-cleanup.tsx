@@ -506,7 +506,7 @@ export function CleanupNodeSheet({
       }}
     >
       <SheetContent className="gap-0 data-[side=right]:w-full data-[side=right]:sm:w-[780px] data-[side=right]:sm:max-w-[calc(100vw-2rem)]">
-        <SheetHeader className="border-b pr-12">
+        <SheetHeader className="pr-12">
           <SheetTitle>
             {node.name} · {zh ? '存储清理' : 'Storage cleanup'}
           </SheetTitle>
@@ -540,7 +540,7 @@ export function CleanupNodeSheet({
           ) : (
             <>
               {view.data.active_run && (
-                <div className="flex items-center justify-between gap-2 rounded-md border p-3">
+                <div className="flex items-center justify-between gap-2 rounded-md bg-surface p-3">
                   <span className="text-sm">
                     {zh
                       ? '清理正在执行；暂停策略不会取消当前任务。'
@@ -640,7 +640,7 @@ export function CleanupNodeSheet({
                     zh={zh}
                     disabled={busy}
                   />
-                  <div className="space-y-1 rounded-md border p-3">
+                  <div className="space-y-1 rounded-md bg-surface p-3">
                     <p className="text-xs text-muted-foreground">
                       {zh
                         ? '已保存策略接下来的三次计划（暂停时不执行）'
@@ -762,7 +762,7 @@ export function CleanupNodeSheet({
           )}
           {mutationError && <ErrorState description={mutationError} />}
           {view.data && saved && view.data.policy.version > saved.version && (
-            <div className="space-y-2 border-t pt-3">
+            <div className="section-surface space-y-2">
               <p className="text-sm text-muted-foreground">
                 {zh
                   ? '策略已在其他位置更新，请重新加载后编辑。'
@@ -825,7 +825,7 @@ function PolicyFields({
       ]
   return (
     <fieldset disabled={disabled} className="space-y-5">
-      <Label className="flex items-center justify-between border-b pb-3">
+      <Label className="section-surface flex items-center justify-between">
         {zh ? '开启定时清理' : 'Enable scheduled cleanup'}
         <Switch
           checked={draft.enabled}
@@ -919,7 +919,7 @@ function PolicyFields({
           />
         </div>
       </div>
-      <div className="divide-y rounded-md border px-3">
+      <div className="space-y-3">
         {(['images', 'cache', 'containers', 'networks'] as const).map((key) => {
           const kind: Kind =
             key === 'images'
@@ -930,7 +930,7 @@ function PolicyFields({
                   ? 'network'
                   : 'cache'
           return (
-            <div key={key} className="space-y-2 py-3">
+            <div key={key} className="section-surface space-y-2">
               <Label className="flex items-center justify-between">
                 <span>{kindLabel(kind, zh)}</span>
                 <Switch
@@ -1289,7 +1289,7 @@ function CleanupHistory({
             </p>
           )}
           {query.data.items.map((row) => (
-            <div key={row.id} className="rounded-md border">
+            <div key={row.id} className="overflow-hidden rounded-md">
               <button
                 type="button"
                 className="flex w-full flex-wrap items-center justify-between gap-2 p-3 text-left"
@@ -1379,7 +1379,7 @@ function RunDetails({
   })
   const outcomes = useListPagination(run.result.outcomes ?? [])
   return (
-    <div className="space-y-3 border-t p-3">
+    <div className="space-y-3 bg-surface p-3">
       <p className="text-xs text-muted-foreground">{run.message}</p>
       <p className="text-xs">{scopeLabel(run.policy, zh)}</p>
       <div className="space-y-1 text-xs">

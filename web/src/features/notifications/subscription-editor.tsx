@@ -37,13 +37,13 @@ export function SubscriptionEditor({ value, channels, channelID, language, publi
    <p className="text-xs text-muted-foreground">{t('任意一条规则命中即可通知；多条命中同一事件时，此目标只投递一次。不选规则则不自动发送。', 'Any selected rule can trigger a notification. Overlapping rules deliver each event once to this recipient. No selected rules means no automatic notifications.')}</p>
    <Input aria-label={t('搜索可订阅规则', 'Search available rules')} placeholder={t('搜索规则、事件或范围', 'Search rules, events or scope')} value={search} onChange={event => setSearch(event.target.value)} />
    <ErrorText error={rules.error || catalog.error} />
-   {rules.isPending ? <LoadingState compact rows={3} label={t('正在加载规则', 'Loading rules')} /> : <div className="max-h-64 divide-y overflow-y-auto rounded-md border px-3">
+   {rules.isPending ? <LoadingState compact rows={3} label={t('正在加载规则', 'Loading rules')} /> : <div className="max-h-64 space-y-1 overflow-y-auto rounded-md bg-surface px-3">
     {filtered.map(rule => { const summary = ruleSummary(rule.config,catalog.data,uiLanguage); return <div key={rule.id} className="space-y-1 py-2.5"><Check label={rule.name} checked={value.rule_ids.includes(rule.id)} onChange={() => onChange({ ...value,rule_ids:toggle(value.rule_ids,rule.id) })} /><p className="pl-5 text-xs break-words text-muted-foreground">{summary.events}</p><p className="pl-5 text-xs break-words text-muted-foreground">{summary.scope}</p></div> })}
     {!filtered.length && <p className="py-3 text-xs text-muted-foreground">{rules.data?.length ? t('没有匹配的规则。', 'No matching rules.') : t('还没有规则，可以先新建一条。', 'No rules yet. Create one to begin.')}</p>}
     {missing.map(id => <div key={id} className="py-2.5 text-destructive"><Check label={t(`规则已删除：${id}`, `Deleted rule: ${id}`)} checked onChange={() => onChange({ ...value,rule_ids:value.rule_ids.filter(value => value !== id) })} /></div>)}
    </div>}
   </section>
-  <section aria-label={t('发送策略', 'Delivery policy')} className="space-y-3 border-t pt-4">
+  <section aria-label={t('发送策略', 'Delivery policy')} className="section-surface space-y-3">
    <h3 className="text-sm font-medium">{t('发送策略', 'Delivery policy')}</h3>
    <Choice label={t('发送频率', 'Frequency')} value={policy.mode} options={[[ 'immediate',t('即时', 'Immediate') ],['merge',t('五分钟合并', 'Merge over 5 minutes') ],['daily',t('每日摘要', 'Daily digest') ]]} onChange={next => update('mode',next as DeliveryPolicy['mode'])} />
    <Field label={t('订阅时区', 'Subscription timezone')} hint={t('同时用于静默、每日摘要和消息中的时间。', 'Used for quiet hours, daily digests and timestamps in messages.')}><Input value={policy.timezone} onChange={event => update('timezone',event.target.value)} /></Field>

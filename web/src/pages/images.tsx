@@ -246,11 +246,11 @@ export function ImagesPage() {
 
     <Sheet open={!!detailImageID} onOpenChange={(open) => { if (!open) setDetailImageID('') }}>
       <SheetContent side="right" className="w-[448px] max-w-full gap-0 sm:max-w-[448px]">
-        <SheetHeader className="border-b"><SheetTitle className="truncate pr-6">{detail.data?.tags?.[0] || detailImageID.slice(0, 19)}</SheetTitle></SheetHeader>
+        <SheetHeader><SheetTitle className="truncate pr-6">{detail.data?.tags?.[0] || detailImageID.slice(0, 19)}</SheetTitle></SheetHeader>
         <div className="flex-1 overflow-y-auto p-4">
 
           <ImageUpdateDetails rows={updates.data?.results.filter(row => row.local_image_id === detailImageID) || []} zh={zh} onPull={row => { setDetailImageID(''); setPullTaskID(''); setReference(row.reference); setCredentialID(''); pull.reset(); setPullOpen(true) }} />
-          {detail.isPending ? <LoadingState compact embedded rows={5} label={zh ? '正在加载镜像详情' : 'Loading image details'} /> : <div className="divide-y divide-border">
+          {detail.isPending ? <LoadingState compact embedded rows={5} label={zh ? '正在加载镜像详情' : 'Loading image details'} /> : <div className="space-y-1">
             {([[ 'ID', detail.data?.id ?? '—' ], [zh ? '大小' : 'Size', detail.data ? size(detail.data.size) : '—'], [zh ? '平台' : 'Platform', `${detail.data?.os || '—'} / ${detail.data?.architecture || '—'}`], [zh ? '创建时间' : 'Created', detail.data?.created ? formatDateTime(detail.data.created) : '—'], [zh ? '层数' : 'Layers', String(detail.data?.layers?.length ?? 0)]] as [string, string][]).map(([key, value]) => (
               <div key={key} className="flex items-start justify-between gap-6 py-2.5 first:pt-0 last:pb-0">
                 <span className="shrink-0 text-xs text-muted-foreground">{key}</span>
@@ -285,12 +285,12 @@ function PullProgressView({ task, steps, loading, stepsLoading, queryError, canc
       </div>
       <Progress value={task?.progress ?? 0} />
       <p className="min-h-5 break-all text-sm text-muted-foreground">{task?.message || (zh ? '等待 Docker 返回进度…' : 'Waiting for Docker progress…')}</p>
-      <div className="flex items-center justify-between gap-4 border-t pt-3">
+      <div className="flex items-center justify-between gap-4 pt-3">
         <span className="text-sm font-medium">Layers</span>
         <span className="text-xs text-muted-foreground">{steps.length}</span>
       </div>
-      {stepsLoading && steps.length === 0 ? <LoadingState embedded compact rows={2} label={zh ? '正在读取 Layer 进度' : 'Loading layer progress'} /> : steps.length === 0 ? <p className="rounded-lg border border-dashed px-3 py-5 text-center text-xs text-muted-foreground">{zh ? '等待 Docker 返回 Layer 信息…' : 'Waiting for Docker layer information…'}</p> : <><div className="flex max-h-72 flex-col gap-3 overflow-y-auto overscroll-contain pr-1">
-        {pagination.items.map((step) => <div key={step.id} className="flex flex-col gap-1.5 rounded-lg border p-3">
+      {stepsLoading && steps.length === 0 ? <LoadingState embedded compact rows={2} label={zh ? '正在读取 Layer 进度' : 'Loading layer progress'} /> : steps.length === 0 ? <p className="rounded-md bg-surface px-3 py-5 text-center text-xs text-muted-foreground">{zh ? '等待 Docker 返回 Layer 信息…' : 'Waiting for Docker layer information…'}</p> : <><div className="flex max-h-72 flex-col gap-3 overflow-y-auto overscroll-contain pr-1">
+        {pagination.items.map((step) => <div key={step.id} className="flex flex-col gap-1.5 rounded-md bg-surface p-3">
           <div className="flex items-center justify-between gap-3">
             <span className="truncate font-mono text-xs font-medium">{step.id}</span>
             <span className="shrink-0 text-xs font-medium tabular-nums">{step.progress}%</span>
@@ -340,7 +340,7 @@ export function ResourceFrame({ title, detail, lead, action, children, compact =
 }
 
 export function EmptyState({ icon, title, detail }: { icon: ReactNode; title: string; detail: string }) {
-  return <div className="flex w-full flex-col items-center justify-center gap-1 rounded-xl border border-dashed py-12 text-center">
+  return <div className="flex w-full flex-col items-center justify-center gap-1 rounded-lg bg-surface py-12 text-center">
     <div className="mb-1.5 flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground [&_svg]:size-5">{icon}</div>
     <p className="text-sm font-medium">{title}</p>
     <p className="max-w-sm text-sm text-muted-foreground">{detail}</p>

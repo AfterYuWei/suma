@@ -42,7 +42,7 @@ function DetailList({ items }: { items: [string, string][] }) {
 }
 
 function EmptyHint({ icon, title, description }: { icon: ReactNode; title: string; description?: string }) {
-  return <div className="flex w-full flex-col items-center gap-1.5 rounded-xl border border-dashed py-12 text-center">
+  return <div className="flex w-full flex-col items-center gap-1.5 rounded-lg bg-surface py-12 text-center">
     <span className="text-muted-foreground">{icon}</span>
     <p className="text-sm font-medium">{title}</p>
     {description && <p className="max-w-md text-xs text-muted-foreground">{description}</p>}
@@ -125,7 +125,7 @@ export function ReleasePanel({ configuration, releases, pendingReleaseID, zh, on
     const pending = pendingReleaseID === release.id
     const retryCount = release.remediation?.retry_failed_node_ids?.length ?? 0
     const rollbackCount = release.remediation?.rollback_failed_node_ids?.length ?? 0
-    return <Collapsible key={release.id} className="group/collapsible w-full overflow-hidden rounded-xl border bg-card">
+    return <Collapsible key={release.id} className="group/collapsible w-full overflow-hidden rounded-lg bg-surface">
       <div className="flex items-start gap-2 pr-2">
         <CollapsibleTrigger className="flex min-w-0 flex-1 cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 py-2.5 pl-3 text-left hover:bg-muted/50 [&_svg]:shrink-0">
           <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-data-open/collapsible:rotate-180" />
@@ -144,7 +144,7 @@ export function ReleasePanel({ configuration, releases, pendingReleaseID, zh, on
           {canRollback && <Button size="sm" variant="outline" disabled={pending} onClick={() => onAction(release, 'rollback')}><RotateCcw />{zh ? '回滚' : 'Restore'}</Button>}
         </div>
       </div>
-      <CollapsibleContent className="border-t px-3 pb-3 pt-3">
+      <CollapsibleContent className="px-3 pb-3 pt-3">
         <ReleaseDetails release={release} zh={zh} />
       </CollapsibleContent>
     </Collapsible>
@@ -188,7 +188,7 @@ function ReleaseDetails({ release, zh }: { release: DeliveryRelease; zh: boolean
               <TableCell className="min-w-64 whitespace-normal break-all text-xs text-muted-foreground">
                 {deployment.failure_reason && <p className="text-destructive">{deployment.failure_reason}</p>}
                 {deployment.rollback_result && <p>{zh ? '回滚结果' : 'Rollback'}: {deployment.rollback_result}</p>}
-                {!!deployment.attempts?.length && <details className="mt-1"><summary className="cursor-pointer">{zh ? `${deployment.attempts.length} 次尝试` : `${deployment.attempts.length} attempts`}</summary><div className="mt-2 flex flex-col gap-2 border-l pl-3">{[...deployment.attempts].reverse().map((attempt) => <div key={attempt.id}><div className="flex flex-wrap items-center gap-2"><ReleaseStatus status={attempt.status} zh={zh} /><span>{attempt.operation.replaceAll('_', ' ')} → Release #{attempt.target_release_id}</span></div><p>{attempt.failure_reason || attempt.message || '—'}</p><p className="text-[11px]">{formatDateTime(attempt.started_at || attempt.created_at)}{attempt.finished_at ? ` → ${formatDateTime(attempt.finished_at)}` : ''}</p></div>)}</div></details>}
+                {!!deployment.attempts?.length && <details className="mt-1"><summary className="cursor-pointer">{zh ? `${deployment.attempts.length} 次尝试` : `${deployment.attempts.length} attempts`}</summary><div className="mt-2 flex flex-col gap-2 pl-3">{[...deployment.attempts].reverse().map((attempt) => <div key={attempt.id}><div className="flex flex-wrap items-center gap-2"><ReleaseStatus status={attempt.status} zh={zh} /><span>{attempt.operation.replaceAll('_', ' ')} → Release #{attempt.target_release_id}</span></div><p>{attempt.failure_reason || attempt.message || '—'}</p><p className="text-[11px]">{formatDateTime(attempt.started_at || attempt.created_at)}{attempt.finished_at ? ` → ${formatDateTime(attempt.finished_at)}` : ''}</p></div>)}</div></details>}
               </TableCell>
             </TableRow>
           ))}

@@ -100,7 +100,7 @@ export function AccountPage() {
   const user = session.data
 
   return <ResourceFrame title={zh ? '账户设置' : 'Account settings'} detail={zh ? '管理本地管理员资料、头像和登录安全。' : 'Manage the local administrator profile, avatar, and sign-in security.'}>
-    {!user ? <div className="flex min-h-48 items-center justify-center"><Spinner /></div> : <div className="mx-auto w-full max-w-5xl overflow-hidden rounded-xl border border-border/80 bg-card/40">
+    {!user ? <div className="flex min-h-48 items-center justify-center"><Spinner /></div> : <div className="mx-auto w-full max-w-5xl space-y-4">
       <section className="flex flex-col gap-5 px-5 py-6 sm:px-7 lg:flex-row lg:flex-wrap lg:items-center">
         <UserAvatar user={user} className="size-18 shrink-0 text-xl ring-1 ring-foreground/10" />
         <div className="min-w-0 flex-1">
@@ -118,7 +118,7 @@ export function AccountPage() {
         {(fileError || deleteAvatar.isError) && <div className="w-full space-y-2 lg:basis-full">{fileError && <InlineError message={fileError} />}{deleteAvatar.isError && <InlineError message={deleteAvatar.error.message} />}</div>}
       </section>
 
-      <section className="grid gap-6 border-t border-border/70 px-5 py-7 sm:px-7 lg:grid-cols-[220px_minmax(0,1fr)] lg:gap-10">
+      <section className="section-surface grid gap-6 px-5 py-7 sm:px-7 lg:grid-cols-[220px_minmax(0,1fr)] lg:gap-10">
         <SectionHeading icon={<UserRound />} title={zh ? '个人资料' : 'Profile'} description={zh ? '用于识别当前管理员，并作为登录凭据。' : 'Identify this administrator and manage sign-in details.'} />
         <form className="flex min-w-0 max-w-2xl flex-col gap-5" onSubmit={submitProfile}>
           <div className="grid gap-4 sm:grid-cols-2">
@@ -135,7 +135,7 @@ export function AccountPage() {
         </form>
       </section>
 
-      <section className="grid gap-6 border-t border-border/70 px-5 py-7 sm:px-7 lg:grid-cols-[220px_minmax(0,1fr)] lg:gap-10">
+      <section className="section-surface grid gap-6 px-5 py-7 sm:px-7 lg:grid-cols-[220px_minmax(0,1fr)] lg:gap-10">
         <SectionHeading icon={<ShieldCheck />} title={zh ? '登录安全' : 'Sign-in security'} description={zh ? '更新密码后，除当前设备外的其他会话将退出。' : 'Updating your password signs out every session except this device.'} />
         <form className="flex min-w-0 max-w-2xl flex-col gap-5" onSubmit={submitPassword}>
           <div className="grid gap-4 sm:grid-cols-2">
@@ -151,12 +151,12 @@ export function AccountPage() {
         </form>
       </section>
 
-      <section className="grid gap-6 border-t border-border/70 px-5 py-7 sm:px-7 lg:grid-cols-[220px_minmax(0,1fr)] lg:gap-10">
+      <section className="section-surface grid gap-6 px-5 py-7 sm:px-7 lg:grid-cols-[220px_minmax(0,1fr)] lg:gap-10">
         <SectionHeading icon={<KeyRound />} title={zh ? '两步验证' : 'Two-factor authentication'} description={zh ? '登录时除密码外，还需要认证器生成的一次性验证码。' : 'Require a one-time authenticator code in addition to your password.'} />
         <TwoFactorSettings zh={zh} />
       </section>
 
-      <section className="grid gap-6 border-t border-border/70 px-5 py-7 sm:px-7 lg:grid-cols-[220px_minmax(0,1fr)] lg:gap-10">
+      <section className="section-surface grid gap-6 px-5 py-7 sm:px-7 lg:grid-cols-[220px_minmax(0,1fr)] lg:gap-10">
         <SectionHeading icon={<Fingerprint />} title="Passkey" description={zh ? '使用设备解锁、指纹或面容直接登录，无需输入密码。' : 'Sign in directly with device unlock, fingerprint, or face recognition.'} />
         <PasskeySettings zh={zh} twoFactorEnabled={user.two_factor_enabled} />
       </section>
@@ -227,7 +227,7 @@ function TwoFactorSettings({ zh }: { zh: boolean }) {
 
   return <div className="flex min-w-0 max-w-2xl flex-col gap-4">
     {status.isPending ? <div className="flex min-h-16 items-center"><Spinner /></div> : status.isError ? <InlineError message={status.error.message} /> : <>
-      <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-border/70 bg-background/40 px-4 py-3.5">
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-md bg-background/40 px-4 py-3.5">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm font-medium">
             <span className={`size-2 rounded-full ${status.data.enabled ? 'bg-emerald-500' : 'bg-muted-foreground/40'}`} />
@@ -291,7 +291,7 @@ function TwoFactorSettings({ zh }: { zh: boolean }) {
     <Dialog open={recoveryCodes !== null} onOpenChange={(open) => { if (!open) { setRecoveryCodes(null); setCopied(false) } }}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader><DialogTitle>{zh ? '保存恢复码' : 'Save your recovery codes'}</DialogTitle><DialogDescription>{zh ? '每枚恢复码只能使用一次。请立即保存到密码管理器；关闭后将无法再次查看。' : 'Each code works once. Save them in a password manager now; they cannot be viewed again after closing.'}</DialogDescription></DialogHeader>
-        <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted/30 p-3">
+        <div className="grid grid-cols-2 gap-2 rounded-md bg-background/40 p-3">
           {(recoveryCodes ?? []).map((code) => <code key={code} className="select-all text-center font-mono text-xs sm:text-sm">{code}</code>)}
         </div>
         <DialogFooter><Button variant="outline" onClick={() => { void navigator.clipboard.writeText((recoveryCodes ?? []).join('\n')); setCopied(true) }}><Copy />{copied ? (zh ? '已复制' : 'Copied') : (zh ? '复制全部' : 'Copy all')}</Button><Button onClick={() => { setRecoveryCodes(null); setCopied(false) }}>{zh ? '我已保存' : 'I saved them'}</Button></DialogFooter>
@@ -335,8 +335,8 @@ function PasskeySettings({ zh, twoFactorEnabled }: { zh: boolean; twoFactorEnabl
 
   return <div className="flex min-w-0 max-w-2xl flex-col gap-4">
     {!available && <InlineError message={demoMode ? (zh ? '演示模式不会创建真实 Passkey。' : 'Demo mode does not create real passkeys.') : (zh ? '当前浏览器或连接不支持 Passkey。请使用 HTTPS，或在 localhost 上访问。' : 'This browser or connection does not support passkeys. Use HTTPS or access SUMA on localhost.')} />}
-    {passkeys.isPending ? <div className="flex min-h-16 items-center"><Spinner /></div> : passkeys.isError ? <InlineError message={passkeys.error.message} /> : <div className="overflow-hidden rounded-lg border border-border/70 bg-background/40">
-      {passkeys.data.length === 0 ? <div className="px-4 py-5 text-sm text-muted-foreground">{zh ? '尚未添加 Passkey。添加后即可在登录页直接使用设备验证。' : 'No passkeys yet. Add one to sign in with device verification.'}</div> : passkeys.data.map((passkey, index) => <div key={passkey.id} className={`flex flex-wrap items-center gap-3 px-4 py-3.5 ${index ? 'border-t border-border/70' : ''}`}>
+    {passkeys.isPending ? <div className="flex min-h-16 items-center"><Spinner /></div> : passkeys.isError ? <InlineError message={passkeys.error.message} /> : <div className="space-y-1 overflow-hidden rounded-md bg-background/40">
+      {passkeys.data.length === 0 ? <div className="px-4 py-5 text-sm text-muted-foreground">{zh ? '尚未添加 Passkey。添加后即可在登录页直接使用设备验证。' : 'No passkeys yet. Add one to sign in with device verification.'}</div> : passkeys.data.map((passkey) => <div key={passkey.id} className="flex flex-wrap items-center gap-3 px-4 py-3.5">
         <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground"><Fingerprint className="size-4" /></div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium">{passkey.name}</p>

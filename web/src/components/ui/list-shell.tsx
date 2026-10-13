@@ -2,12 +2,12 @@ import type { ReactNode } from "react"
 
 import { cn } from "@/lib/utils"
 
-/** Card shell shared by every resource list (tables and stacked lists alike). */
+/** Shared resource-list boundary; functional headers supply their own surface. */
 export function ListShell({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <div
       data-slot="list-shell"
-      className={cn("w-full overflow-hidden rounded-xl border border-border bg-card", className)}
+      className={cn("w-full overflow-hidden rounded-lg", className)}
     >
       {children}
     </div>

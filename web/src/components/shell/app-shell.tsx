@@ -292,7 +292,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </header>
 
         <main className="min-h-0 min-w-0 flex-1 px-4 pb-4 md:px-6 md:pb-6">
-          <div className="h-full overflow-y-auto rounded-xl border border-border/60 bg-card shadow-sm ring-1 ring-black/[0.03] px-4 py-5 md:px-6 xl:px-8 dark:shadow-none dark:ring-white/[0.04]">{children}</div>
+          <div className="h-full overflow-y-auto rounded-lg bg-card px-4 py-5 md:px-6 xl:px-8">{children}</div>
         </main>
       </div>
 
