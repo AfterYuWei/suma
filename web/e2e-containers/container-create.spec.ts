@@ -44,6 +44,80 @@ async function fillBasics(page: Page, zh = false) {
 }
 
 for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']) for (const width of [390, 1440]) {
+  test(`container creation dropdown layout ${language} ${theme} ${width}`, async ({ page }) => {
+    await setup(page, language, theme, width)
+    const zh = language === 'zh-CN'
+    const credential = 'production-registry-credential-with-a-very-long-name-' + 'a'.repeat(80)
+    const network = 'application-network-' + 'b'.repeat(100)
+    await page.route('**/api/v1/credentials/registries', route => route.fulfill({ json: { code: 0, data: [{ id: 1, name: credential, server_address: 'ghcr.io', authorized_node_ids: ['local'] }] } }))
+    await page.route('**/api/v1/nodes/local/networks', route => route.fulfill({ json: { code: 0, data: [{ name: network }] } }))
+    await page.goto('/containers/new')
+
+    async function checkMenu(label: string, selected?: string, screenshot?: string, minimumWidth = 0) {
+      const trigger = page.getByRole('combobox', { name: label, exact: true })
+      await trigger.click()
+      const menu = page.locator('[data-slot="select-content"]:visible')
+      await expect(menu).toBeVisible()
+      await expect(async () => {
+        const anchor = (await trigger.boundingBox())!, popup = (await menu.boundingBox())!
+        expect(Math.abs(popup.x - anchor.x)).toBeLessThanOrEqual(1)
+        expect(Math.abs(popup.width - Math.max(anchor.width, minimumWidth))).toBeLessThanOrEqual(1)
+        expect(popup.y >= anchor.y + anchor.height + 3 || popup.y + popup.height <= anchor.y - 3).toBe(true)
+        expect(popup.x).toBeGreaterThanOrEqual(0)
+        expect(popup.x + popup.width).toBeLessThanOrEqual(width)
+        const first = (await menu.getByRole('option').first().boundingBox())!
+        expect(first.x - popup.x).toBeGreaterThanOrEqual(4)
+        expect(first.y - popup.y).toBeGreaterThanOrEqual(4)
+      }).toPass({ timeout: 3000 })
+      if (selected) {
+        const option = menu.getByRole('option', { name: selected, exact: true })
+        await expect(option).toHaveAttribute('aria-selected', 'true')
+        expect(await option.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+      }
+      const last = menu.getByRole('option').last()
+      await last.hover()
+      await expect(last).toHaveAttribute('data-highlighted', '')
+      expect(await last.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)')
+      if (screenshot) await page.screenshot({ path: `/tmp/suma-container-dropdown-${screenshot}-${language}-${theme}-${width}.png`, fullPage: true })
+      await page.keyboard.press('Escape')
+      await expect(menu).toHaveCount(0)
+      await expect(trigger).toBeFocused()
+    }
+
+    await checkMenu(zh ? '镜像拉取策略' : 'Image pull policy')
+    const registry = page.getByRole('combobox', { name: zh ? '镜像仓库凭据' : 'Registry credential', exact: true })
+    await registry.click(); await page.getByRole('option', { name: credential + ' · ghcr.io', exact: true }).click()
+    await expect(registry).toContainText(credential)
+    const value = registry.locator('[data-slot="select-value"]')
+    expect(await value.evaluate(element => element.scrollWidth > element.clientWidth && getComputedStyle(element).textOverflow === 'ellipsis')).toBe(true)
+    await checkMenu(zh ? '镜像仓库凭据' : 'Registry credential', credential + ' · ghcr.io', 'registry')
+    await page.getByRole('tab', { name: zh ? '网络与存储' : 'Network & storage', exact: true }).click()
+    await page.getByRole('combobox', { name: zh ? '网络' : 'Network', exact: true }).click()
+    await page.getByRole('option', { name: network, exact: true }).click()
+    await checkMenu(zh ? '网络' : 'Network', network, 'network')
+    await page.getByRole('button', { name: zh ? '添加端口' : 'Add port', exact: true }).click()
+    await checkMenu(zh ? '协议' : 'Protocol', 'TCP')
+    await page.getByRole('button', { name: zh ? '添加挂载' : 'Add mount', exact: true }).click()
+    await checkMenu(zh ? '挂载类型' : 'Mount type', zh ? '具名存储卷' : 'Named volume', 'mount')
+    await page.getByRole('tab', { name: zh ? '运行配置' : 'Runtime', exact: true }).click()
+    await checkMenu(zh ? '重启策略' : 'Restart policy')
+    const restart = page.getByRole('combobox', { name: zh ? '重启策略' : 'Restart policy', exact: true })
+    await page.mouse.move(0, 0)
+    await restart.press('ArrowDown')
+    const failure = page.getByRole('option', { name: zh ? '失败时重启' : 'On failure', exact: true })
+    await expect(page.getByRole('option', { name: zh ? '除非手动停止' : 'Unless stopped', exact: true })).toBeFocused()
+    await page.keyboard.press('End')
+    await expect(failure).toHaveAttribute('data-highlighted', '')
+    await page.keyboard.press('Enter')
+    await expect(restart).toContainText(zh ? '失败时重启' : 'On failure')
+    await checkMenu(zh ? '重启策略' : 'Restart policy', zh ? '失败时重启' : 'On failure', 'restart')
+    await checkMenu(zh ? '当前 Docker 节点' : 'Current Docker node')
+    await checkMenu(zh ? '节点 Group 筛选' : 'Node group filter', zh ? '全部 Group' : 'All groups', 'group', 144)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+  })
+}
+
+for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']) for (const width of [390, 1440]) {
   test(`container creation form and completion ${language} ${theme} ${width}`, async ({ page }) => {
     const state = await setup(page, language, theme, width), zh = language === 'zh-CN'
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))

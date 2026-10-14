@@ -29,6 +29,7 @@ SUMA is a monolithic multi-node Docker management control plane. Nodes connect t
 - Avoid dashboard card grids, crowded CRUD tables, blue-primary defaults, heavy shadows, gratuitous gradients, excessive rounding, and rows of action buttons.
 - TanStack Query owns server state. Zustand owns only UI state such as theme, navigation, filters, preferences, and command-palette state.
 - Shared primitives live in `web/src/components/ui`; Docker domain components live in `web/src/components/docker`.
+- Use the shared Select defaults: menus open outside the trigger, align to its edge and width, and own their padding even without SelectGroup. Keep long selected values truncated and menu labels readable by wrapping. Icon-only triggers need an explicit readable menu width. Verify actual open-menu geometry when adding dropdowns.
 - Command palette (`Cmd/Ctrl+K`) is a primary navigation and action surface.
 
 ## Security

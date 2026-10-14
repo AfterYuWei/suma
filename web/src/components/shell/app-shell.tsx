@@ -210,7 +210,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   <span className="truncate">{currentGroupFilter === 'all' ? (zh ? '全部 Group' : 'All groups') : selectedGroup?.name ?? (zh ? '加载中' : 'Loading')}</span>
                 </SelectValue>
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="min-w-36">
                 <SelectItem value="all">{zh ? '全部 Group' : 'All groups'}</SelectItem>
                 {(groups.data ?? []).length > 0 && <SelectSeparator />}
                 {(groups.data ?? []).map((group) => <SelectItem key={group.id} value={`group:${group.id}`}>{`${group.name} · ${group.node_count}`}</SelectItem>)}
