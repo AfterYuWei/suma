@@ -22,6 +22,8 @@ export default defineConfig(({ mode }) => {
     // Prebuild lazy chart dependencies so opening a chart never reloads the app.
     optimizeDeps: { include: ['echarts/core', 'echarts/charts', 'echarts/components', 'echarts/renderers'] },
     server: {
+      host: true,
+      allowedHosts: true,
       proxy: {
         // Vite's string shorthand rewrites Host to the API target, breaking
         // SUMA's origin checks when the browser uses the frontend port.

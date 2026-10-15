@@ -28,7 +28,9 @@ test.afterEach(async({page})=>{expect(browserErrors.get(page)??[]).toEqual([])})
 async function setup(page: Page, language = 'en-US', theme = 'dark') {
   const state = { calls: [] as string[], gates: new Map<string, Promise<void>>(), failures: new Set<string>(), rows: structuredClone(containers), metadata: structuredClone(runtime), seconds: 0, start: started, rollback: false, cpu: 0.2, memory: 19 * 1024 ** 2 }
   const errors:string[]=[];browserErrors.set(page,errors);page.on('pageerror',error=>errors.push(error.message))
-  const monitoring = createMonitoringMock(() => nodes.flatMap((node, index) => state.rows.map(row => ({ id: String(index+1).padStart(4,'0')+row.id.slice(4), node_id: node.id, node_name: node.name, engine_id: node.engine_id, container_id: row.id, name: row.name, image: row.image, project: row.labels['com.docker.compose.project'] ?? '', service: row.labels['com.docker.compose.service'] ?? '', first_seen: new Date(Date.now()-3*86400_000).toISOString(), last_seen: new Date().toISOString() } satisfies Instance))))
+  // Match the controlled browser clock so fixed samples do not age out in Node.
+  const monitoringNow = () => Date.parse(started) + 10 * 60_000
+  const monitoring = createMonitoringMock(() => nodes.flatMap((node, index) => state.rows.map(row => ({ id: String(index+1).padStart(4,'0')+row.id.slice(4), node_id: node.id, node_name: node.name, engine_id: node.engine_id, container_id: row.id, name: row.name, image: row.image, project: row.labels['com.docker.compose.project'] ?? '', service: row.labels['com.docker.compose.service'] ?? '', first_seen: new Date(monitoringNow()-3*86400_000).toISOString(), last_seen: new Date(monitoringNow()).toISOString() } satisfies Instance))), monitoringNow)
   await page.addInitScript(({ language, theme }) => {
     localStorage.setItem('suma-language', language)
     localStorage.setItem('suma-theme', theme)

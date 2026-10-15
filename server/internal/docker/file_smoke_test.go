@@ -185,6 +185,33 @@ func TestContainerFileEditingRealDocker(t *testing.T) {
 		return response
 	}
 	base := "/api/v1/nodes/local/containers/" + created.ID + "/files"
+	_, err = adapter.RunFileCommand(ctx, created.ID, `set -e; mkdir -p /types/folder.tar.gz; printf 'plain\n' > /types/config.sh; printf '#!/bin/sh\n' > /types/program; chmod 644 /types/config.sh; chmod 755 /types/program; : > /types/archive.tar.gz; ln -s config.sh /types/current; ln -s missing /types/broken; ln -s loop-b /types/loop-a; ln -s loop-a /types/loop-b`, nil, nil, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileTypes := request(http.MethodGet, base+"?path=/types", nil)
+	if fileTypes.Code != http.StatusOK {
+		t.Fatalf("HTTP file attributes: %d %s", fileTypes.Code, fileTypes.Body.String())
+	}
+	var listingEnvelope struct {
+		Data containerfiles.Listing `json:"data"`
+	}
+	if err := json.Unmarshal(fileTypes.Body.Bytes(), &listingEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	expectedKinds := map[string]string{"folder.tar.gz": "directory", "config.sh": "file", "program": "file", "archive.tar.gz": "file", "current": "link", "broken": "link", "loop-a": "link", "loop-b": "link"}
+	if len(listingEnvelope.Data.Entries) != len(expectedKinds) {
+		t.Fatalf("unexpected file attributes listing: %+v", listingEnvelope.Data)
+	}
+	for _, entry := range listingEnvelope.Data.Entries {
+		wantError := entry.Name == "broken" || entry.Name == "loop-a" || entry.Name == "loop-b"
+		if entry.Type != expectedKinds[entry.Name] || entry.Executable != (entry.Name == "program") || entry.HasError != wantError {
+			t.Errorf("incorrect real file attributes: %+v", entry)
+		}
+	}
+	if response := request(http.MethodGet, base+"?path=/types/current", nil); response.Code == http.StatusOK {
+		t.Fatal("file attribute detection allowed symlink traversal")
+	}
 	response := request(http.MethodGet, base+"/content?path=/data/app.yaml", nil)
 	if response.Code != http.StatusOK {
 		t.Fatalf("HTTP read: %d %s", response.Code, response.Body.String())

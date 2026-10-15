@@ -1,6 +1,6 @@
 import { useDateTime } from '../../lib/time-zone'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, ArrowLeft, ChevronRight, Copy, File, FilePlus2, Folder, FolderPlus, History, MoreHorizontal, MoveRight, Pencil, RefreshCw, RotateCcw, Save, Trash2 } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ChevronRight, Copy, File, FileArchive, FilePlus2, FileSymlink, FileTerminal, FileWarning, Folder, FolderPlus, History, MoreHorizontal, MoveRight, Pencil, RefreshCw, RotateCcw, Save, Trash2 } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { Alert, AlertDescription } from '../../components/ui/alert'
 import { Badge } from '../../components/ui/badge'
@@ -8,6 +8,7 @@ import { Button } from '../../components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../../components/ui/dropdown-menu'
 import { Spinner } from '../../components/ui/spinner'
 import type { ContainerDetail } from './types'
+import { fileEntryKind, type FileEntry } from './file-entry'
 import { api, ApiError } from '../../lib/api'
 import { useI18n } from '../../lib/i18n'
 import { nodePath } from '../../lib/nodes'
@@ -18,7 +19,7 @@ const Monaco = lazy(() => import('../../lib/monaco-editor'))
 const MonacoDiff = lazy(() => import('../../lib/monaco-editor').then((module) => ({ default: module.MonacoDiffEditor })))
 
 interface Mount { type: string; name?: string; source?: string; destination: string; read_write: boolean; is_directory?: boolean }
-interface Entry { name: string; path: string; type: 'file' | 'directory' | 'link' | 'special'; size: number; modified_at: number; mount?: Mount }
+interface Entry extends FileEntry { path: string; size: number; modified_at: number; mount?: Mount }
 interface Listing { path: string; entries: Entry[]; next_cursor?: string; mounts: Mount[]; current_mount?: Mount }
 interface Content { path: string; content: string; etag: string; persistent: boolean; read_only: boolean; single_file_bind: boolean; warning?: string }
 interface Revision { id: number; hash: string; user_id?: number; created_at: string; baseline: boolean }
@@ -33,6 +34,15 @@ const languageFor = (name: string) => {
 }
 
 const join = (folder: string, name: string) => `${folder === '/' ? '' : folder}/${name}`
+
+const entryStyles = {
+  directory: { Icon: Folder, color: 'text-folder-foreground', zh: '文件夹', en: 'Folder' },
+  file: { Icon: File, color: 'text-file-foreground', zh: '普通文件', en: 'Regular file' },
+  executable: { Icon: FileTerminal, color: 'text-file-executable', zh: '可执行文件', en: 'Executable file' },
+  link: { Icon: FileSymlink, color: 'text-file-link', zh: '符号链接', en: 'Symbolic link' },
+  archive: { Icon: FileArchive, color: 'text-file-archive', zh: '压缩文件', en: 'Archive' },
+  error: { Icon: FileWarning, color: 'text-file-error', zh: '链接无法解析或文件信息读取失败', en: 'Unresolved link or file metadata error' },
+} as const
 
 export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nodeID: string; container: ContainerDetail; onDirtyChange?: (dirty: boolean) => void }) {
   const { formatDateTime } = useDateTime()
@@ -142,12 +152,17 @@ export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nod
   const mountShortcuts = mounts.filter((mount) => mount.type === 'bind' || mount.type === 'volume')
   const folderReadOnly = listing.data?.current_mount ? !listing.data.current_mount.read_write : container.read_only_rootfs
   const crumbs = folder === '/' ? [] : folder.split('/').filter(Boolean)
+  const noticeIsError = /失败|修改|failed|changed/.test(notice)
   if (container.state !== 'running' && !dirty) return <Alert><AlertTriangle /><AlertDescription>{tx('文件工具需要运行中的容器。启动容器后可浏览和编辑文件。', 'File tools require a running container. Start it to browse and edit files.')}</AlertDescription></Alert>
 
   return <div className="space-y-4">
     {mountShortcuts.length > 0 && <div className="flex flex-wrap items-center gap-2">
       <span className="text-xs text-muted-foreground">{tx('挂载快捷入口', 'Mount shortcuts')}</span>
-      {mountShortcuts.map((mount) => <Button key={mount.destination} size="sm" variant="outline" title={`${mount.type}: ${mount.source || mount.name || ''}`} onClick={() => mount.is_directory ? void enter(mount.destination) : void select(mount.destination)}>{mount.is_directory ? <Folder className="size-4 text-folder-foreground" /> : <File className="size-4" />}<span className={mount.is_directory ? 'text-folder-foreground' : undefined}>{mount.destination}</span><span className="max-w-36 truncate text-xs opacity-70">{mount.name || mount.source}</span><Badge variant="secondary">{mount.read_write ? tx('读写', 'Read/write') : tx('只读', 'Read only')}</Badge></Button>)}
+      {mountShortcuts.map((mount) => {
+        const entry = listing.data?.entries.find((item) => item.path === mount.destination)
+        const { Icon, color } = entryStyles[fileEntryKind(entry ?? { name: mount.destination, type: mount.is_directory ? 'directory' : 'file' })]
+        return <Button key={mount.destination} size="sm" variant="outline" title={`${mount.type}: ${mount.source || mount.name || ''}`} onClick={() => mount.is_directory ? void enter(mount.destination) : void select(mount.destination)}><Icon className={`size-4 ${color}`} /><span className={color}>{mount.destination}</span><span className="max-w-36 truncate text-xs opacity-70">{mount.name || mount.source}</span><Badge variant="secondary">{mount.read_write ? tx('读写', 'Read/write') : tx('只读', 'Read only')}</Badge></Button>
+      })}
     </div>}
     <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
       <section className={`min-w-0 overflow-hidden rounded-lg bg-surface ${selected ? 'hidden lg:block' : ''}`}>
@@ -156,22 +171,26 @@ export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nod
           <div className="flex items-center gap-1"><Button size="icon-sm" variant="ghost" aria-label={tx('刷新文件列表', 'Refresh files')} onClick={refresh}><RefreshCw /></Button><Button size="icon-sm" variant="ghost" aria-label={tx('新建文件', 'New file')} disabled={busy || folderReadOnly} onClick={() => void action('create_file')}><FilePlus2 /></Button><Button size="icon-sm" variant="ghost" aria-label={tx('新建文件夹', 'New folder')} disabled={busy || folderReadOnly} onClick={() => void action('create_directory')}><FolderPlus /></Button></div>
         </div>
         {listing.isPending && <p className="p-4 text-sm text-muted-foreground">{tx('正在读取目录…', 'Loading directory…')}</p>}
-        {listing.isError && <Alert variant="destructive" className="m-2 w-auto"><AlertDescription>{listing.error.message}</AlertDescription></Alert>}
+        {listing.isError && <Alert variant="destructive" className="m-2 w-auto text-file-error *:data-[slot=alert-description]:text-file-error"><AlertDescription>{listing.error.message}</AlertDescription></Alert>}
         <div className="max-h-[62vh] space-y-1 overflow-auto bg-card p-1">
-          {listing.data?.entries.map((item) => <div key={item.path} className="group flex min-w-0 items-center gap-2 px-3 py-1.5 hover:bg-muted/40">
-            <button type="button" className={`flex min-w-0 flex-1 items-center gap-2 text-left ${item.type === 'directory' ? 'text-folder-foreground' : ''}`} onClick={() => item.type === 'directory' ? void enter(item.path) : item.type === 'file' ? void select(item.path) : undefined}>
-              {item.type === 'directory' ? <Folder className="size-4 shrink-0" /> : <File className="size-4 shrink-0" />}
-              <span className="min-w-0 flex-1 truncate text-sm">{item.name}</span>
-              {item.mount && (item.path === item.mount.destination || item.path.startsWith(`${item.mount.destination}/`)) && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{item.mount.type}</span>}
-              {item.type === 'file' && <span className="shrink-0 text-xs text-muted-foreground">{item.size < 1024 ? `${item.size} B` : `${Math.round(item.size / 1024)} KB`}</span>}
-            </button>
-            {(item.type === 'file' || item.type === 'directory') && <DropdownMenu><DropdownMenuTrigger render={<Button size="icon-sm" variant="ghost" aria-label={tx(`${item.name} 操作`, `${item.name} actions`)}><MoreHorizontal /></Button>} /><DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => void action('rename', item)}><Pencil />{tx('重命名', 'Rename')}</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => void action('copy', item)}><Copy />{tx('复制', 'Copy')}</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => void action('move', item)}><MoveRight />{tx('移动', 'Move')}</DropdownMenuItem>
-              <DropdownMenuItem variant="destructive" onClick={() => void action('delete', item)}><Trash2 />{tx('删除', 'Delete')}</DropdownMenuItem>
-            </DropdownMenuContent></DropdownMenu>}
-          </div>)}
+          {listing.data?.entries.map((item) => {
+            const style = entryStyles[fileEntryKind(item)]
+            const Icon = style.Icon
+            return <div key={item.path} className="group flex min-w-0 items-center gap-2 px-3 py-1.5 hover:bg-muted/40">
+              <button type="button" title={tx(style.zh, style.en)} className={`flex min-w-0 flex-1 items-center gap-2 text-left ${style.color}`} onClick={() => item.type === 'directory' ? void enter(item.path) : item.type === 'file' ? void select(item.path) : undefined}>
+                <Icon className="size-4 shrink-0" />
+                <span className="min-w-0 flex-1 truncate text-sm">{item.name}</span>
+                {item.mount && (item.path === item.mount.destination || item.path.startsWith(`${item.mount.destination}/`)) && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{item.mount.type}</span>}
+                {item.type === 'file' && <span className="shrink-0 text-xs text-muted-foreground">{item.size < 1024 ? `${item.size} B` : `${Math.round(item.size / 1024)} KB`}</span>}
+              </button>
+              {(item.type === 'file' || item.type === 'directory') && <DropdownMenu><DropdownMenuTrigger render={<Button size="icon-sm" variant="ghost" aria-label={tx(`${item.name} 操作`, `${item.name} actions`)}><MoreHorizontal /></Button>} /><DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => void action('rename', item)}><Pencil />{tx('重命名', 'Rename')}</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => void action('copy', item)}><Copy />{tx('复制', 'Copy')}</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => void action('move', item)}><MoveRight />{tx('移动', 'Move')}</DropdownMenuItem>
+                <DropdownMenuItem variant="destructive" onClick={() => void action('delete', item)}><Trash2 />{tx('删除', 'Delete')}</DropdownMenuItem>
+              </DropdownMenuContent></DropdownMenu>}
+            </div>
+          })}
           {listing.data?.entries.length === 0 && <p className="p-4 text-center text-sm text-muted-foreground">{tx('此目录为空。', 'This folder is empty.')}</p>}
         </div>
         {(listing.data?.next_cursor || cursorStack.length > 0) && <div className="flex justify-between bg-surface p-3"><Button size="sm" variant="ghost" disabled={!cursorStack.length} onClick={() => { setCursor(cursorStack.at(-1) ?? ''); setCursorStack((stack) => stack.slice(0, -1)) }}>{tx('上一页', 'Previous')}</Button><Button size="sm" variant="ghost" disabled={!listing.data?.next_cursor} onClick={() => { setCursorStack((stack) => [...stack, cursor]); setCursor(listing.data?.next_cursor ?? '') }}>{tx('下一页', 'Next')}</Button></div>}
@@ -179,9 +198,9 @@ export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nod
       {selected && <section className="min-w-0 overflow-hidden rounded-lg bg-surface">
         <div className="flex flex-wrap items-center justify-between gap-2 bg-surface p-3"><div className="flex min-w-0 items-center gap-2"><Button size="icon-sm" variant="ghost" aria-label={tx('返回文件列表', 'Back to files')} className="lg:hidden" onClick={() => void enter(folder)}><ArrowLeft /></Button><span className="truncate font-mono text-sm" title={selected}>{selected}</span></div><div className="flex items-center gap-1"><Button size="sm" variant="ghost" onClick={() => { setHistoryOpen((open) => !open); setRevisionID(null) }}><History />{tx('历史', 'History')}</Button><Button size="sm" disabled={!canSave || busy} onClick={() => void save()}>{busy ? <Spinner /> : <Save />}{tx('保存', 'Save')}</Button></div></div>
         {content.isPending && <p className="p-4 text-sm text-muted-foreground">{tx('正在读取文件…', 'Loading file…')}</p>}
-        {content.isError && <Alert variant="destructive" className="m-2 w-auto"><AlertDescription>{content.error.message}</AlertDescription></Alert>}
+        {content.isError && <Alert variant="destructive" className="m-2 w-auto text-file-error *:data-[slot=alert-description]:text-file-error"><AlertDescription>{content.error.message}</AlertDescription></Alert>}
         {content.data && <>
-          {content.data.warning && <Alert variant="destructive" className="m-2 w-auto"><AlertTriangle /><AlertDescription>{tx('上次保存中断，当前内容与已验证版本不一致。请检查文件或从历史恢复。', content.data.warning)}</AlertDescription></Alert>}
+          {content.data.warning && <Alert variant="destructive" className="m-2 w-auto text-file-error *:data-[slot=alert-description]:text-file-error"><AlertTriangle /><AlertDescription>{tx('上次保存中断，当前内容与已验证版本不一致。请检查文件或从历史恢复。', content.data.warning)}</AlertDescription></Alert>}
           {content.data.single_file_bind && <Alert className="m-2 w-auto"><AlertTriangle /><AlertDescription>{tx('此文件是单文件 bind mount。保存会短暂原位写入；请避免应用同时读取或修改它。', 'This file is a single-file bind mount. Saving writes in place briefly; avoid concurrent reads or writes by the application.')}</AlertDescription></Alert>}
           {sensitive && !revealed ? <div className="grid h-[50vh] min-h-80 place-content-center gap-3 px-4 text-center"><p className="text-sm text-muted-foreground">{tx('检测到可能包含密码或密钥的内容，默认隐藏。', 'Potential passwords or keys were detected. Content is hidden by default.')}</p><Button variant="outline" onClick={() => setRevealed(true)}>{tx('显示敏感内容', 'Reveal sensitive content')}</Button></div> : showConflictDiff && conflictContent ? <div className="h-[50vh] min-h-80"><Suspense fallback={<Spinner />}><MonacoDiff original={conflictContent.content} modified={draft ?? content.data.content} language={languageFor(selected)} theme={dark ? 'vs-dark' : 'light'} /></Suspense></div> : revisionID !== null && revision.data ? <div className="h-[50vh] min-h-80"><Suspense fallback={<Spinner />}><MonacoDiff original={revision.data.content} modified={draft ?? content.data.content} language={languageFor(selected)} theme={dark ? 'vs-dark' : 'light'} /></Suspense></div> : <div className="h-[50vh] min-h-80"><Suspense fallback={<Spinner />}><Monaco key={selected} value={draft ?? content.data.content} onChange={(value) => setDraft(value ?? '')} language={languageFor(selected)} theme={dark ? 'vs-dark' : 'light'} options={{ readOnly: container.state !== 'running' || content.data.read_only, automaticLayout: true, minimap: { enabled: false }, wordWrap: 'on', fontFamily: '"JetBrains Mono", monospace', scrollBeyondLastLine: false, wordBasedSuggestions: 'allDocuments' }} /></Suspense></div>}
           {historyOpen && <div className="max-h-44 space-y-1 overflow-auto bg-surface p-3"><p className="mb-1 text-xs text-muted-foreground">{tx('最近版本', 'Recent versions')}</p>{history.data?.map((item) => <div key={item.id} className="flex items-center justify-between gap-2 py-1 text-xs"><button className="truncate text-left hover:underline" onClick={() => setRevisionID(item.id)}>{formatDateTime(item.created_at)} {item.baseline ? tx('原始版本', 'Original') : `#${item.id}`}</button><Button size="sm" variant="ghost" disabled={busy || content.data?.read_only} onClick={() => { setRevisionID(item.id); void restoreRevision(item.id) }}><RotateCcw />{tx('恢复', 'Restore')}</Button></div>)}{history.data?.length === 0 && <p className="text-sm text-muted-foreground">{tx('还没有保存历史。', 'No saved versions yet.')}</p>}</div>}
@@ -191,7 +210,7 @@ export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nod
       {!selected && <div className="hidden min-h-64 place-items-center rounded-lg bg-surface text-sm text-muted-foreground lg:grid">{tx('选择文本文件开始编辑', 'Select a text file to edit')}</div>}
     </div>
     {taskID && <p className="text-sm text-muted-foreground">{tx('操作进行中：', 'Operation in progress: ')}{task.data?.message ?? tx('等待任务', 'Waiting for task')} {task.data?.progress ?? 0}%</p>}
-    {notice && <Alert variant={notice.includes('失败') || notice.includes('修改') || notice.includes('failed') || notice.includes('changed') ? 'destructive' : 'default'}><AlertDescription>{notice} {conflictContent && <Button size="sm" variant="ghost" onClick={() => setShowConflictDiff(true)}>{tx('查看差异', 'View diff')}</Button>} {conflictContent && <Button size="sm" variant="ghost" onClick={() => { client.setQueryData(['container-file-content', nodeID, container.id, selected], conflictContent); setDraft(conflictContent.content); setConflictContent(null); setShowConflictDiff(false); setNotice(tx('已加载最新内容。', 'Latest content loaded.')) }}>{tx('重新加载', 'Reload')}</Button>}</AlertDescription></Alert>}
+    {notice && <Alert variant={noticeIsError ? 'destructive' : 'default'} className={noticeIsError ? 'text-file-error *:data-[slot=alert-description]:text-file-error' : undefined}><AlertDescription>{notice} {conflictContent && <Button size="sm" variant="ghost" onClick={() => setShowConflictDiff(true)}>{tx('查看差异', 'View diff')}</Button>} {conflictContent && <Button size="sm" variant="ghost" onClick={() => { client.setQueryData(['container-file-content', nodeID, container.id, selected], conflictContent); setDraft(conflictContent.content); setConflictContent(null); setShowConflictDiff(false); setNotice(tx('已加载最新内容。', 'Latest content loaded.')) }}>{tx('重新加载', 'Reload')}</Button>}</AlertDescription></Alert>}
   </div>
 
   async function restoreRevision(id: number) {

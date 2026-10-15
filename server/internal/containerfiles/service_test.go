@@ -325,9 +325,9 @@ func TestListSortsHiddenEntriesBeforeCursorPagination(t *testing.T) {
 	s, runtime := newHarness(t)
 	var output strings.Builder
 	for i := 0; i < 201; i++ {
-		fmt.Fprintf(&output, "file-%03d\x00file\x001\x001\x00", i)
+		fmt.Fprintf(&output, "file-%03d\x00file\x001\x001\x000\x000\x00", i)
 	}
-	output.WriteString(".env\x00file\x001\x001\x00")
+	output.WriteString(".env\x00file\x001\x001\x000\x000\x00")
 	runtime.listing = []byte(output.String())
 	first, err := s.List(context.Background(), runtime, "container", "/data", "")
 	if err != nil || len(first.Entries) != 200 || first.Entries[0].Name != ".env" || first.NextCursor == "" {
@@ -336,6 +336,37 @@ func TestListSortsHiddenEntriesBeforeCursorPagination(t *testing.T) {
 	second, err := s.List(context.Background(), runtime, "container", "/data", first.NextCursor)
 	if err != nil || len(second.Entries) != 2 {
 		t.Fatalf("second page: %+v, %v", second, err)
+	}
+}
+
+func TestListReportsExecutableFilesAndEntryErrors(t *testing.T) {
+	s, runtime := newHarness(t)
+	runtime.listing = []byte(strings.Join([]string{
+		"app", "file", "4", "1", "1", "0",
+		"broken", "link", "7", "1", "0", "1",
+		"config.sh", "file", "4", "1", "0", "0",
+		"data", "directory", "0", "1", "1", "0",
+		"link", "link", "7", "1", "0", "0",
+		"unreadable", "file", "0", "0", "0", "1", "",
+	}, "\x00"))
+	listing, err := s.List(context.Background(), runtime, "container", "/data", "")
+	if err != nil || len(listing.Entries) != 6 {
+		t.Fatalf("listing: %+v, %v", listing, err)
+	}
+	for _, entry := range listing.Entries {
+		if entry.Executable != (entry.Name == "app") || entry.HasError != (entry.Name == "broken" || entry.Name == "unreadable") {
+			t.Errorf("incorrect entry attributes: %+v", entry)
+		}
+	}
+	for _, output := range []string{
+		"file\x00file\x001\x001\x00",
+		"file\x00file\x001\x001\x002\x000\x00",
+		"file\x00file\x001\x001\x000\x00unknown\x00",
+	} {
+		runtime.listing = []byte(output)
+		if _, err := s.List(context.Background(), runtime, "container", "/data", ""); err == nil {
+			t.Error("accepted malformed directory listing")
+		}
 	}
 }
 

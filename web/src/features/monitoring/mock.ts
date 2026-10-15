@@ -1,9 +1,9 @@
 import { ApiError } from '../../lib/api-error'
 import { fields, type Aggregate, type Instance, type Policy, type QueryResult, type Target } from './types'
 
-export function createMonitoringMock(source: () => Instance[]) {
+export function createMonitoringMock(source: () => Instance[], now: () => number = Date.now) {
   let policy: Policy = { enabled: true, interval_seconds: 5, retention_days: 3, exclusions: [], revision: 1 }
-  const captured = Date.now()
+  const captured = now()
   const event = (i: Instance) => ({ id: i.id, instance_id: i.id, time: new Date(captured - 20 * 60_000).toISOString(), action: 'health_status', health_status: 'unhealthy', exit_code: null })
   return (path: string, method: string, body: unknown, url: URL): unknown => {
     if (!path.startsWith('/monitoring')) return undefined
@@ -33,7 +33,7 @@ export function createMonitoringMock(source: () => Instance[]) {
     if (path.startsWith('/monitoring/instances/')) return instances.find(i => i.id === path.split('/').at(-1))
     if (path === '/monitoring/query') {
       const input = body as { targets: Target[]; max_points: number }
-      const cutoff = Date.now() - policy.retention_days * 86400_000
+      const cutoff = now() - policy.retention_days * 86400_000
       const step = Math.max(policy.interval_seconds, Math.ceil(Math.max(...input.targets.map(t => (Date.parse(t.until) - Date.parse(t.since)) / 1000)) / input.max_points))
       return {
         retained_since: new Date(cutoff).toISOString(),

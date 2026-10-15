@@ -45,6 +45,8 @@ type Entry struct {
 	Type       string     `json:"type"`
 	Size       int64      `json:"size"`
 	ModifiedAt int64      `json:"modified_at"`
+	Executable bool       `json:"executable,omitempty"`
+	HasError   bool       `json:"has_error,omitempty"`
 	Mount      *MountInfo `json:"mount,omitempty"`
 }
 type Listing struct {
@@ -135,7 +137,7 @@ func guardPath(ctx context.Context, runtime Runtime, id, name string) error {
 	return err
 }
 
-const listScript = `LC_ALL=C; export LC_ALL; [ -d "$1" ] || exit 2; for f in "$1"/* "$1"/.[!.]* "$1"/..?*; do [ -e "$f" ] || [ -L "$f" ] || continue; if [ -L "$f" ]; then kind=link; elif [ -d "$f" ]; then kind=directory; elif [ -f "$f" ]; then kind=file; else kind=special; fi; size=$(stat -c %s "$f" 2>/dev/null) || size=0; modified=$(stat -c %Y "$f" 2>/dev/null) || modified=0; printf '%s\000%s\000%s\000%s\000' "${f##*/}" "$kind" "$size" "$modified"; done`
+const listScript = `LC_ALL=C; export LC_ALL; [ -d "$1" ] || exit 2; for f in "$1"/* "$1"/.[!.]* "$1"/..?*; do [ -e "$f" ] || [ -L "$f" ] || continue; executable=0; entry_error=0; if [ -L "$f" ]; then kind=link; [ -e "$f" ] || entry_error=1; elif [ -d "$f" ]; then kind=directory; elif [ -f "$f" ]; then kind=file; [ ! -x "$f" ] || executable=1; else kind=special; fi; size=$(stat -c %s "$f" 2>/dev/null) || { size=0; entry_error=1; }; modified=$(stat -c %Y "$f" 2>/dev/null) || { modified=0; entry_error=1; }; printf '%s\000%s\000%s\000%s\000%s\000%s\000' "${f##*/}" "$kind" "$size" "$modified" "$executable" "$entry_error"; done`
 
 func (s *Service) List(ctx context.Context, runtime Runtime, id, folder, cursor string) (Listing, error) {
 	name, err := CleanPath(folder)
@@ -154,7 +156,7 @@ func (s *Service) List(ctx context.Context, runtime Runtime, id, folder, cursor 
 		return Listing{}, err
 	}
 	parts := strings.Split(string(data), "\x00")
-	if len(parts) == 0 || parts[len(parts)-1] != "" || (len(parts)-1)%4 != 0 {
+	if len(parts) == 0 || parts[len(parts)-1] != "" || (len(parts)-1)%6 != 0 {
 		return Listing{}, errors.New("invalid directory listing from container")
 	}
 	all := mounts(row)
@@ -165,8 +167,11 @@ func (s *Service) List(ctx context.Context, runtime Runtime, id, folder, cursor 
 		}
 	}
 	result := Listing{Path: name, Entries: []Entry{}, Mounts: all, CurrentMount: effectiveMount(all, name)}
-	entries := make([]Entry, 0, (len(parts)-1)/4)
-	for i := 0; i+3 < len(parts)-1; i += 4 {
+	entries := make([]Entry, 0, (len(parts)-1)/6)
+	for i := 0; i+5 < len(parts)-1; i += 6 {
+		if (parts[i+4] != "0" && parts[i+4] != "1") || (parts[i+5] != "0" && parts[i+5] != "1") {
+			return Listing{}, errors.New("invalid directory entry flags from container")
+		}
 		entryName := parts[i]
 		if !utf8.ValidString(entryName) {
 			continue
@@ -174,7 +179,7 @@ func (s *Service) List(ctx context.Context, runtime Runtime, id, folder, cursor 
 		size, _ := strconv.ParseInt(parts[i+2], 10, 64)
 		modified, _ := strconv.ParseInt(parts[i+3], 10, 64)
 		itemPath := path.Join(name, entryName)
-		entries = append(entries, Entry{Name: entryName, Path: itemPath, Type: parts[i+1], Size: size, ModifiedAt: modified, Mount: effectiveMount(all, itemPath)})
+		entries = append(entries, Entry{Name: entryName, Path: itemPath, Type: parts[i+1], Size: size, ModifiedAt: modified, Executable: parts[i+1] == "file" && parts[i+4] == "1", HasError: parts[i+5] == "1", Mount: effectiveMount(all, itemPath)})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
 	for _, entry := range entries {
