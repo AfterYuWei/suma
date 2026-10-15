@@ -147,7 +147,7 @@ export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nod
   return <div className="space-y-4">
     {mountShortcuts.length > 0 && <div className="flex flex-wrap items-center gap-2">
       <span className="text-xs text-muted-foreground">{tx('挂载快捷入口', 'Mount shortcuts')}</span>
-      {mountShortcuts.map((mount) => <Button key={mount.destination} size="sm" variant="outline" title={`${mount.type}: ${mount.source || mount.name || ''}`} onClick={() => mount.is_directory ? void enter(mount.destination) : void select(mount.destination)}>{mount.is_directory ? <Folder className="size-4" /> : <File className="size-4" />}{mount.destination}<span className="max-w-36 truncate text-xs opacity-70">{mount.name || mount.source}</span><Badge variant="secondary">{mount.read_write ? tx('读写', 'Read/write') : tx('只读', 'Read only')}</Badge></Button>)}
+      {mountShortcuts.map((mount) => <Button key={mount.destination} size="sm" variant="outline" title={`${mount.type}: ${mount.source || mount.name || ''}`} onClick={() => mount.is_directory ? void enter(mount.destination) : void select(mount.destination)}>{mount.is_directory ? <Folder className="size-4 text-folder-foreground" /> : <File className="size-4" />}<span className={mount.is_directory ? 'text-folder-foreground' : undefined}>{mount.destination}</span><span className="max-w-36 truncate text-xs opacity-70">{mount.name || mount.source}</span><Badge variant="secondary">{mount.read_write ? tx('读写', 'Read/write') : tx('只读', 'Read only')}</Badge></Button>)}
     </div>}
     <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
       <section className={`min-w-0 overflow-hidden rounded-lg bg-surface ${selected ? 'hidden lg:block' : ''}`}>
@@ -159,7 +159,7 @@ export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nod
         {listing.isError && <Alert variant="destructive" className="m-2 w-auto"><AlertDescription>{listing.error.message}</AlertDescription></Alert>}
         <div className="max-h-[62vh] space-y-1 overflow-auto bg-card p-1">
           {listing.data?.entries.map((item) => <div key={item.path} className="group flex min-w-0 items-center gap-2 px-3 py-1.5 hover:bg-muted/40">
-            <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => item.type === 'directory' ? void enter(item.path) : item.type === 'file' ? void select(item.path) : undefined}>
+            <button type="button" className={`flex min-w-0 flex-1 items-center gap-2 text-left ${item.type === 'directory' ? 'text-folder-foreground' : ''}`} onClick={() => item.type === 'directory' ? void enter(item.path) : item.type === 'file' ? void select(item.path) : undefined}>
               {item.type === 'directory' ? <Folder className="size-4 shrink-0" /> : <File className="size-4 shrink-0" />}
               <span className="min-w-0 flex-1 truncate text-sm">{item.name}</span>
               {item.mount && (item.path === item.mount.destination || item.path.startsWith(`${item.mount.destination}/`)) && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{item.mount.type}</span>}
