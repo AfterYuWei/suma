@@ -457,7 +457,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     const creationSteps = suffix.match(/^\/tasks\/([^/]+)\/steps$/)
     if (creationSteps && createdContainerIDs.has(creationSteps[1])) return clone([{ id: 'container:' + createdContainerIDs.get(creationSteps[1]), status: 'Created', current: 1, total: 1, progress: 100 }]) as T
     if (['/overview/info', '/overview/metrics', '/overview/resources', '/overview/disk'].includes(suffix)) {
-      const fleet = await demoApi<{ nodes: import('../components/docker/node-overview-card').FleetNode[] }>('/fleet/overview')
+      const fleet = await demoApi<{ nodes: import('../features/overview/types').FleetNode[] }>('/fleet/overview')
       const node = fleet.nodes.find((item) => item.id === nodeID)
       if (!node || !node.enabled || node.status !== 'online') throw new Error('Docker node is unavailable')
       if (suffix === '/overview/info') return clone({ name: node.hostname, server_version: node.engine_version, operating_system: node.os, os_version: node.os_version, architecture: node.architecture, kernel_version: node.kernel_version, containers_running: node.containers_running, containers_paused: node.containers_paused, containers_stopped: node.containers_stopped, images: node.images, cpus: node.cpus, memory_bytes: node.memory_total_bytes, storage_driver: node.storage_driver, logging_driver: node.logging_driver, cgroup_driver: node.cgroup_driver, cgroup_version: node.cgroup_version, default_runtime: node.default_runtime, live_restore: node.live_restore, security_options: node.security_options }) as T

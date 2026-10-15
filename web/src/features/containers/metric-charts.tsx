@@ -8,25 +8,10 @@ import { popoverSurfaceClassName } from '../../components/ui/popover-styles'
 import { useUIStore } from '../../stores/ui'
 import { useDateTime } from '../../lib/time-zone'
 import type { MetricPoint } from './types'
+import { chartColors } from '../../lib/chart-colors'
 
 registerCharts([LineChart, GridComponent, MarkLineComponent, TitleComponent, TooltipComponent, CanvasRenderer])
 const emptyPoints: MetricPoint[] = []
-
-// Canvas accepts modern CSS colors; zrender's emphasis/gradient math requires
-// RGB. Resolve through the browser rather than approximating theme tokens.
-function chartColors(values: string[]) {
-  const canvas = document.createElement('canvas')
-  canvas.width = canvas.height = 1
-  const context = canvas.getContext('2d', { willReadFrequently: true })
-  if (!context) return values
-  return values.map(value => {
-    context.clearRect(0, 0, 1, 1)
-    context.fillStyle = value
-    context.fillRect(0, 0, 1, 1)
-    const [r, g, b, a] = context.getImageData(0, 0, 1, 1).data
-    return `rgba(${r},${g},${b},${a / 255})`
-  })
-}
 
 function metricTooltip(params: TooltipComponentFormatterCallbackParams, name: string, color: string, suffix: string, formatDateTime: (time: number) => string) {
   const sample = Array.isArray(params) ? params[0] : params

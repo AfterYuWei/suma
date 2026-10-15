@@ -1,12 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { LayoutGroup, motion, useReducedMotion } from 'motion/react'
-import { useRef, useState } from 'react'
 import {
   ArrowUpRight,
   GitPullRequest,
 } from 'lucide-react'
-import { NodeOverviewCard } from '../components/docker/node-overview-card'
+import { NodeResourceOverview } from '../components/docker/node-resource-overview'
 import { LoadingState } from '../components/ui/loading-state'
 import { ErrorState } from '../components/ui/error-state'
 import { Button } from '../components/ui/button'
@@ -35,15 +33,7 @@ export function OverviewPage() {
   const navigate = useNavigate()
   const { language } = useI18n()
   const zh = language === 'zh-CN'
-  const reduceMotion = useReducedMotion()
-  const nodeCardSizes = useUIStore((state) => state.overviewNodeCardSizes)
-  const nodeCardOrder = useUIStore((state) => state.overviewNodeCardOrder)
-  const setNodeCardSize = useUIStore((state) => state.setOverviewNodeCardSize)
-  const setNodeCardOrder = useUIStore((state) => state.setOverviewNodeCardOrder)
   const currentGroupFilter = useUIStore((state) => state.currentGroupFilter)
-  const [draggingNodeID, setDraggingNodeID] = useState<string | null>(null)
-  const [dragOrder, setDragOrder] = useState<string[] | null>(null)
-  const dragOrderRef = useRef<string[] | null>(null)
 
   const allNodes = useQuery({
     queryKey: ['nodes'],
@@ -55,53 +45,8 @@ export function OverviewPage() {
   const cd = useQuery({ queryKey: ['cd-overview'], queryFn: () => api<CDOverview>('/cd/overview'), refetchInterval: 10_000 })
 
   const nodes = filterNodesByGroup(allNodes.data ?? [], currentGroupFilter)
-  const nodeIDs = new Set(nodes.map((node) => node.id))
-  const savedNodeIDs = nodeCardOrder.filter((nodeID) => nodeIDs.has(nodeID))
-  const orderedNodeIDs = [...savedNodeIDs, ...nodes.map((node) => node.id).filter((nodeID) => !savedNodeIDs.includes(nodeID))]
-  const renderedNodeIDs = dragOrder ?? orderedNodeIDs
-  const nodeByID = new Map(nodes.map((node) => [node.id, node]))
-  const orderedNodes = renderedNodeIDs.map((nodeID) => nodeByID.get(nodeID)).filter((node): node is DockerNode => node != null)
   const cdTotals = cd.data?.totals
   const nodeNames = new Map((allNodes.data ?? []).map((node) => [node.id, node.name]))
-  const layoutTransition = reduceMotion ? { duration: 0 } : { layout: { duration: 0.3, ease: 'linear' as const } }
-
-  const startNodeOrderDrag = (nodeID: string) => {
-    const order = [...orderedNodeIDs]
-    dragOrderRef.current = order
-    setDragOrder(order)
-    setDraggingNodeID(nodeID)
-  }
-
-  const moveNodeOrderDrag = (clientX: number, clientY: number) => {
-    if (!draggingNodeID || !dragOrderRef.current) return
-    const target = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>('[data-node-card-id]')?.dataset.nodeCardId
-    if (!target || target === draggingNodeID) return
-    const next = [...dragOrderRef.current]
-    const sourceIndex = next.indexOf(draggingNodeID)
-    const targetIndex = next.indexOf(target)
-    if (sourceIndex < 0 || targetIndex < 0) return
-    next.splice(sourceIndex, 1)
-    next.splice(targetIndex, 0, draggingNodeID)
-    dragOrderRef.current = next
-    setDragOrder(next)
-  }
-
-  const finishNodeOrderDrag = () => {
-    if (dragOrderRef.current) setNodeCardOrder(dragOrderRef.current)
-    dragOrderRef.current = null
-    setDragOrder(null)
-    setDraggingNodeID(null)
-  }
-
-  const moveNodeOrderWithKeyboard = (nodeID: string, offset: -1 | 1) => {
-    const next = [...orderedNodeIDs]
-    const currentIndex = next.indexOf(nodeID)
-    const targetIndex = currentIndex + offset
-    if (currentIndex < 0 || targetIndex < 0 || targetIndex >= next.length) return
-    next.splice(currentIndex, 1)
-    next.splice(targetIndex, 0, nodeID)
-    setNodeCardOrder(next)
-  }
 
   const cdStatus = (project: CDProject) => {
     if (!project.configured) return <StatusBadge tone="neutral">{zh ? '未配置' : 'Not configured'}</StatusBadge>
@@ -111,13 +56,12 @@ export function OverviewPage() {
   }
 
   return (
-      <LayoutGroup>
         <div className="flex w-full flex-col gap-5">
-          <motion.section layout transition={layoutTransition} aria-labelledby="overview-nodes-heading" className="flex flex-col gap-3">
+          <section aria-labelledby="overview-nodes-heading" className="flex flex-col gap-3">
           <div className="flex flex-wrap items-end gap-3">
             <div>
               <h3 id="overview-nodes-heading" className="cn-font-heading text-base font-medium">{zh ? '节点资源' : 'Node resources'}</h3>
-              <p className="mt-0.5 text-sm text-muted-foreground">{zh ? '节点与容器每 10 秒刷新 · 磁盘每 60 秒刷新；拖动标题手柄调整顺序' : 'Nodes and containers refresh every 10 seconds · Disk every 60 seconds; drag title handles to reorder'}</p>
+              <p className="mt-0.5 text-sm text-muted-foreground">{zh ? '查看节点负载与运行容器' : 'Node load and running containers'}</p>
             </div>
             <Button variant="ghost" size="sm" className="ml-auto text-muted-foreground" onClick={() => void navigate({ to: '/nodes' })}><ArrowUpRight className="size-4" />{zh ? '管理节点' : 'Manage nodes'}</Button>
           </div>
@@ -127,24 +71,10 @@ export function OverviewPage() {
             ? <LoadingState rows={5} label={zh ? '正在加载节点' : 'Loading nodes'} />
             : nodes.length === 0
               ? <div className="rounded-lg bg-surface py-12 text-center text-sm text-muted-foreground">{zh ? '暂无节点' : 'No nodes'}</div>
-              : <div className="grid grid-cols-12 gap-4">
-                  {orderedNodes.map((node) => (
-                    <NodeOverviewCard
-                      key={node.id}
-                      node={node}
-                      size={nodeCardSizes[node.id] ?? 'medium'}
-                      isDragging={draggingNodeID === node.id}
-                      onSizeChange={(size) => setNodeCardSize(node.id, size)}
-                      onOrderDragStart={() => startNodeOrderDrag(node.id)}
-                      onOrderDragMove={moveNodeOrderDrag}
-                      onOrderDragEnd={finishNodeOrderDrag}
-                      onOrderMove={(offset) => moveNodeOrderWithKeyboard(node.id, offset)}
-                    />
-                  ))}
-                </div>}
-          </motion.section>
+              : <NodeResourceOverview nodes={nodes} />}
+          </section>
 
-          <motion.div layout transition={layoutTransition}>
+          <div>
             <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2"><GitPullRequest className="size-4 text-muted-foreground" />{zh ? '持续交付' : 'Continuous delivery'}</CardTitle>
@@ -173,8 +103,7 @@ export function OverviewPage() {
                   </div>}
           </CardContent>
             </Card>
-          </motion.div>
+          </div>
         </div>
-      </LayoutGroup>
   )
 }

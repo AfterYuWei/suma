@@ -121,10 +121,10 @@ function ComposeNodePage({ nodeID }: { nodeID: string }) {
       {query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载项目' : 'Loading projects'} /> : query.isError ? <ErrorState description={query.error.message} /> : <>
         <div className={`${grid} rounded-md bg-surface px-3 py-2 text-xs text-muted-foreground`}><Checkbox checked={allSelected} indeterminate={someSelected} onCheckedChange={value => toggleAll(value === true)} aria-label={zh ? '选择本页托管项目' : 'Select managed projects on this page'} /><span>{zh ? '项目' : 'Project'}</span><span className="hidden lg:block">{zh ? '运行' : 'Runtime'}</span><span className="hidden lg:block">{zh ? '资源' : 'Resources'}</span><span className="text-right">{zh ? '操作' : 'Actions'}</span></div>
         {!visible.length && <p className="rounded-lg bg-surface p-8 text-center text-sm text-muted-foreground">{rows.length ? zh ? '没有符合条件的项目。' : 'No matching projects.' : zh ? '未发现项目。' : 'No projects discovered.'}</p>}
-        <div className="space-y-2">{pagination.items.map(entry => {
+        <div className="space-y-0.5">{pagination.items.map(entry => {
           const row = entry.project, status = projectStatus(entry), open = expanded.has(row.name)
           const serviceCount = available ? groupServices(entry.containers, row.declared_service_names ?? []).length : row.service_count
-          return <Fragment key={row.name}><div className={`${grid} cursor-pointer rounded-lg px-3 py-3 hover:bg-muted/25`} data-testid="project-row" data-project={row.name} onClick={event => { if (event.currentTarget.contains(event.target as Node) && !(event.target as Element).closest('a, button, input, [data-slot="checkbox"]')) toggleExpanded(row.name) }}>
+          return <Fragment key={row.name}><div className={`${grid} cursor-pointer rounded-lg px-3 py-[7px] hover:bg-muted/25`} data-testid="project-row" data-project={row.name} onClick={event => { if (event.currentTarget.contains(event.target as Node) && !(event.target as Element).closest('a, button, input, [data-slot="checkbox"]')) toggleExpanded(row.name) }}>
             <div className="flex items-center gap-3">
               <Checkbox disabled={!row.managed} checked={selected.has(row.name)} onCheckedChange={value => toggleRow(row.name, value === true)} aria-label={row.name} />
               <Button variant="ghost" size="icon-xs" aria-expanded={open} aria-label={`${zh ? '展开服务' : 'Expand services'} · ${row.name}`} onClick={() => toggleExpanded(row.name)}><ChevronRight className={`transition-transform ${open ? 'rotate-90' : ''}`} /></Button>

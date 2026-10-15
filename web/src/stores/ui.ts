@@ -8,8 +8,6 @@ export const logTailOptions = [100, 200, 500, 1000, 2000, 5000] as const
 export type LogTail = (typeof logTailOptions)[number]
 export const listPageSizeOptions = [10, 20, 50, 100] as const
 export type ListPageSize = (typeof listPageSizeOptions)[number]
-export const nodeCardSizeOptions = ['small', 'medium', 'large'] as const
-export type NodeCardSize = (typeof nodeCardSizeOptions)[number]
 
 interface UIState {
   theme: Theme
@@ -21,18 +19,16 @@ interface UIState {
 	currentGroupFilter: NodeGroupFilter
   logTail: LogTail
   listPageSize: ListPageSize
-  overviewNodeCardSizes: Record<string, NodeCardSize>
-  overviewNodeCardOrder: string[]
+  overviewNodeOrder: string[]
   setTheme: (theme: Theme) => void
   setLanguage: (language: Language) => void
   setCommandOpen: (open: boolean) => void
   toggleSidebar: () => void
-  setCurrentNodeID: (nodeID: string) => void
+  setCurrentNodeID: (nodeID: string) => Promise<boolean>
 	setCurrentGroupFilter: (filter: NodeGroupFilter) => void
   setLogTail: (tail: LogTail) => void
   setListPageSize: (pageSize: ListPageSize) => void
-  setOverviewNodeCardSize: (nodeID: string, size: NodeCardSize) => void
-  setOverviewNodeCardOrder: (nodeIDs: string[]) => void
+  setOverviewNodeOrder: (nodeIDs: string[]) => void
 }
 
 function applyTheme(theme: Theme) {
@@ -51,17 +47,7 @@ const storedLogTailValue = Number(localStorage.getItem('suma-log-tail'))
 const storedLogTail: LogTail = logTailOptions.includes(storedLogTailValue as LogTail) ? storedLogTailValue as LogTail : 200
 const storedListPageSizeValue = Number(localStorage.getItem('suma-list-page-size'))
 const storedListPageSize: ListPageSize = listPageSizeOptions.includes(storedListPageSizeValue as ListPageSize) ? storedListPageSizeValue as ListPageSize : 20
-const nodeCardSizesStorageKey = 'suma-overview-node-card-sizes'
-const readNodeCardSizes = (): Record<string, NodeCardSize> => {
-  try {
-    const value: unknown = JSON.parse(localStorage.getItem(nodeCardSizesStorageKey) || '{}')
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
-    return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, NodeCardSize] => nodeCardSizeOptions.includes(entry[1] as NodeCardSize)))
-  } catch {
-    return {}
-  }
-}
-const storedNodeCardSizes = readNodeCardSizes()
+// Keep the existing preference key so the resource navigator retains node order.
 const nodeCardOrderStorageKey = 'suma-overview-node-card-order'
 const readNodeCardOrder = (): string[] => {
   try {
@@ -86,8 +72,7 @@ export const useUIStore = create<UIState>((set) => ({
 	currentGroupFilter: (localStorage.getItem('suma-node-group') as NodeGroupFilter | null) || 'default',
   logTail: storedLogTail,
   listPageSize: storedListPageSize,
-  overviewNodeCardSizes: storedNodeCardSizes,
-  overviewNodeCardOrder: storedNodeCardOrder,
+  overviewNodeOrder: storedNodeCardOrder,
   setTheme: (theme) => {
     localStorage.setItem('suma-theme', theme)
     const resolvedDark = applyTheme(theme)
@@ -100,18 +85,18 @@ export const useUIStore = create<UIState>((set) => ({
   },
   setCommandOpen: (commandOpen) => set({ commandOpen }),
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
-  setCurrentNodeID: (currentNodeID) => { void allowProjectNodeChange().then((allowed) => { if (allowed) { localStorage.setItem('suma-node', currentNodeID); set({ currentNodeID }) } }) },
+  setCurrentNodeID: async (currentNodeID) => {
+    if (!await allowProjectNodeChange()) return false
+    localStorage.setItem('suma-node', currentNodeID)
+    set({ currentNodeID })
+    return true
+  },
 	setCurrentGroupFilter: (currentGroupFilter) => { localStorage.setItem('suma-node-group', currentGroupFilter); set({ currentGroupFilter }) },
   setLogTail: (logTail) => { localStorage.setItem('suma-log-tail', String(logTail)); set({ logTail }) },
   setListPageSize: (listPageSize) => { localStorage.setItem('suma-list-page-size', String(listPageSize)); set({ listPageSize }) },
-  setOverviewNodeCardSize: (nodeID, size) => set((state) => {
-    const overviewNodeCardSizes = { ...state.overviewNodeCardSizes, [nodeID]: size }
-    localStorage.setItem(nodeCardSizesStorageKey, JSON.stringify(overviewNodeCardSizes))
-    return { overviewNodeCardSizes }
-  }),
-  setOverviewNodeCardOrder: (overviewNodeCardOrder) => {
-    localStorage.setItem(nodeCardOrderStorageKey, JSON.stringify(overviewNodeCardOrder))
-    set({ overviewNodeCardOrder })
+  setOverviewNodeOrder: (overviewNodeOrder) => {
+    localStorage.setItem(nodeCardOrderStorageKey, JSON.stringify(overviewNodeOrder))
+    set({ overviewNodeOrder })
   },
 }))
 
