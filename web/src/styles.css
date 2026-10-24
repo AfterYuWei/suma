@@ -197,6 +197,11 @@
   }
 }
 
+/* Monaco injects unlayered styles; scope this override to the file workspace. */
+[data-slot="container-file-editor"] [data-slot="container-file-content"] :is(.monaco-editor, .monaco-editor-background, .margin, .monaco-diff-editor) {
+  background-color: var(--card);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
