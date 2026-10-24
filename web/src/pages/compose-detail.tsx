@@ -1,5 +1,4 @@
 import { useContainerWorkspace } from '../features/containers/use-container-workspace'
-import { useDateTime } from '../lib/time-zone'
 import { useImageUpdates } from '../features/image-updates/hooks'
 import { useProjectObservation } from '../features/compose/use-project-observation'
 import { ContainerWorkspaceDialog } from '../components/docker/container-workspace-dialog'
@@ -11,15 +10,10 @@ import {
   useSearch
 } from '@tanstack/react-router'
 import {
-  CheckCircle2,
   ChevronDown,
   ChevronLeft,
-  CircleAlert,
-  CircleStop,
   Download,
   FileCheck2,
-  ListTodo,
-  PanelTopClose,
   Rocket,
   Save,
   Trash2
@@ -42,7 +36,6 @@ import {
 } from '../components/ui/dialog'
 import { ErrorState } from '../components/ui/error-state'
 import { LoadingState } from '../components/ui/loading-state'
-import { Progress } from '../components/ui/progress'
 import { Spinner } from '../components/ui/spinner'
 import { StatusBadge } from '../components/ui/status-badge'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
@@ -56,11 +49,11 @@ import { TakeoverWarningDialog } from '../features/compose/takeover-warning-dial
 import type { Project } from '../features/compose/types'
 import { ProjectLogs } from '../features/project-logs/project-logs'
 import { ProjectServices } from '../components/docker/project-services'
-import { useLogAutoScroll } from '../features/containers/use-log-auto-scroll'
 import type {
   ContainerSummary
 } from '../features/containers/types'
-import { compactTaskLogs } from '../features/tasks/compact-task-logs'
+import { ComposeActionDialog } from '../features/compose/compose-action-dialog'
+import { composeActionLabel, type ComposeTask, type ComposeTaskLog as TaskLog, type ComposeOperation } from '../features/compose/action-progress'
 import { api } from '../lib/api'
 import { nodePath } from '../lib/nodes'
 import { useI18n } from '../lib/i18n'
@@ -83,24 +76,6 @@ import { registerProjectNavigationGuard } from '../lib/project-navigation-guard'
 import { ApiError } from '../lib/api'
 import { configKeys, type ConfigPath } from '../features/compose/document'
 type View = 'Files' | 'Services' | 'Logs'
-interface ComposeTask {
-  id: string
-  type: string
-  name: string
-  status: string
-  progress: number
-  message: string
-}
-interface TaskLog {
-  id: number
-  level: string
-  message: string
-  created_at: string
-}
-interface ComposeOperation {
-  action: string
-  taskID: string
-}
 const statusTone = (status: string) =>
   status === 'running'
     ? 'success'
@@ -546,7 +521,8 @@ export function ComposeDetailPage() {
     )
 
   const project = query.data
-  const operationActive = action.isPending || taskRunning || reviewSubmitting
+  const taskActive = action.isPending || taskRunning
+  const operationActive = taskActive || reviewSubmitting
 
   const headerActions = (
     <div className="flex flex-wrap items-center gap-2">
@@ -573,11 +549,11 @@ export function ComposeDetailPage() {
             </>
           )}
           <Button
-            disabled={pendingConfiguration || operationActive || validate.isPending || !!review}
+            disabled={!taskActive && (pendingConfiguration || operationActive || validate.isPending || !!review)}
             onClick={() => void deploy()}
           >
-            <Rocket />
-            {zh ? '拉取并重建' : 'Pull & recreate'}
+            {taskActive ? <Spinner aria-hidden="true" className="motion-reduce:animate-none" /> : <Rocket />}
+            {taskActive ? zh ? '查看任务进度' : 'View task progress' : zh ? '拉取并重建' : 'Pull & recreate'}
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -971,216 +947,5 @@ export function ComposeDetailPage() {
         }}
       />
     </div>
-  )
-}
-
-function composeActionLabel(action: string, zh: boolean) {
-  const labels: Record<string, [string, string]> = {
-    up: ['启动', 'Start'],
-    down: ['Down', 'Down'],
-    stop: ['停止', 'Stop'],
-    restart: ['重启', 'Restart'],
-    pull: ['拉取', 'Pull'],
-    build: ['构建', 'Build'],
-    update: ['更新', 'Update']
-  }
-  return labels[action]?.[zh ? 0 : 1] ?? action
-}
-
-function ComposeActionDialog({
-  open,
-  operation,
-  task,
-  logs,
-  submitting,
-  loading,
-  error,
-  canceling,
-  zh,
-  projectName,
-  onOpenChange,
-  onCancel,
-  onViewTasks
-}: {
-  open: boolean
-  operation: ComposeOperation | null
-  task?: ComposeTask
-  logs: TaskLog[]
-  submitting: boolean
-  loading: boolean
-  error?: string
-  canceling: boolean
-  zh: boolean
-  projectName: string
-  onOpenChange: (open: boolean) => void
-  onCancel: () => void
-  onViewTasks: () => void
-}) {
-  const { formatTime } = useDateTime()
-
-  const visibleLogs = compactTaskLogs(logs)
-  const compactedCount = logs.length - visibleLogs.length
-  const { viewportRef, onScroll } = useLogAutoScroll<HTMLDivElement>(
-    visibleLogs.at(-1)?.id,
-    operation?.taskID
-  )
-  const status =
-    task?.status || (submitting ? 'submitting' : error ? 'failed' : 'pending')
-  const running = submitting || status === 'pending' || status === 'running'
-  const label = zh
-    ? ({
-        submitting: '正在提交',
-        pending: '等待中',
-        running: '执行中',
-        success: '已完成',
-        failed: '失败',
-        canceled: '已取消'
-      }[status] ?? status)
-    : ({
-        submitting: 'Submitting',
-        pending: 'Pending',
-        running: 'Running',
-        success: 'Completed',
-        failed: 'Failed',
-        canceled: 'Canceled'
-      }[status] ?? status)
-  const tone =
-    status === 'success'
-      ? 'success'
-      : status === 'failed' || status === 'canceled'
-        ? 'critical'
-        : status === 'running' || status === 'submitting'
-          ? 'warning'
-          : 'neutral'
-  const actionName = composeActionLabel(operation?.action || '', zh)
-  const progress = task?.progress ?? 0
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      {open && (
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <div className="flex items-center gap-2 pr-8">
-              <DialogTitle>
-                {zh
-                  ? `Compose ${actionName}进度`
-                  : `Compose ${actionName} progress`}
-              </DialogTitle>
-              <StatusBadge tone={tone}>{label}</StatusBadge>
-            </div>
-            <DialogDescription className="break-all">
-              {projectName}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center justify-between gap-4 text-sm">
-              <span className="text-muted-foreground">
-                {zh ? '任务进度' : 'Task progress'}
-              </span>
-              <span className="font-medium tabular-nums">{progress}%</span>
-            </div>
-            <Progress value={progress} />
-            <div className="flex min-h-6 items-start gap-2 text-sm">
-              {running ? (
-                <Spinner className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-              ) : status === 'success' ? (
-                <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-600" />
-              ) : (
-                <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
-              )}
-              <p className="break-all text-muted-foreground">
-                {task?.message ||
-                  (submitting
-                    ? zh
-                      ? '正在创建后台任务…'
-                      : 'Creating background task…'
-                    : loading
-                      ? zh
-                        ? '正在读取任务状态…'
-                        : 'Loading task status…'
-                      : zh
-                        ? '等待 Docker Compose 输出…'
-                        : 'Waiting for Docker Compose output…')}
-              </p>
-            </div>
-            <div className="flex items-center justify-between gap-4 pt-3">
-              <span className="text-sm font-medium">
-                {zh ? '实时输出' : 'Live output'}
-              </span>
-              <span className="text-right text-[11px] text-muted-foreground">
-                {compactedCount > 0
-                  ? zh
-                    ? `${visibleLogs.length} 条状态 · 已合并 ${compactedCount} 条重复进度`
-                    : `${visibleLogs.length} states · ${compactedCount} repeated updates merged`
-                  : operation?.taskID}
-              </span>
-            </div>
-            <div
-              ref={viewportRef}
-              onScroll={onScroll}
-              className="max-h-64 min-h-24 overflow-y-auto overscroll-contain rounded-lg bg-muted/50 p-3"
-            >
-              {logs.length === 0 ? (
-                <p className="text-center text-xs text-muted-foreground">
-                  {zh ? '等待任务输出…' : 'Waiting for task output…'}
-                </p>
-              ) : (
-                <div className="flex flex-col gap-1.5">
-                  {visibleLogs.map((log) => (
-                    <div key={log.id} className="flex items-baseline gap-3">
-                      <span className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">
-                        {formatTime(log.created_at)}
-                      </span>
-                      <span
-                        className={`font-mono text-xs break-all ${log.level === 'error' ? 'text-destructive' : ''}`}
-                      >
-                        {log.message}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            {error && <ErrorState description={error} />}
-            <p className="text-xs text-muted-foreground">
-              {running
-                ? zh
-                  ? '关闭窗口不会停止操作，任务会继续在后台执行。'
-                  : 'Closing this window does not stop the operation; it continues in the background.'
-                : zh
-                  ? '可在任务中心查看完整记录。'
-                  : 'You can review the complete record in the Task Center.'}
-            </p>
-          </div>
-          <DialogFooter className="mt-1">
-            {task && running && (
-              <Button
-                type="button"
-                variant="destructive"
-                disabled={canceling}
-                onClick={onCancel}
-              >
-                {canceling ? <Spinner /> : <CircleStop />}
-                {zh ? '取消任务' : 'Cancel task'}
-              </Button>
-            )}
-            {task && !running && (
-              <Button type="button" variant="outline" onClick={onViewTasks}>
-                <ListTodo />
-                {zh ? '查看任务' : 'View task'}
-              </Button>
-            )}
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-            >
-              <PanelTopClose />
-              {zh ? '关闭窗口' : 'Close window'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      )}
-    </Dialog>
   )
 }
