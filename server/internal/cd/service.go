@@ -59,6 +59,7 @@ const (
 )
 
 type ConfigureInput struct {
+	AutomationEnabled     *bool              `json:"automation_enabled,omitempty"`
 	Repository            gitrepo.Repository `json:"repository"`
 	ReconcileMode         string             `json:"reconcile_mode"`
 	SyncIntervalSeconds   int                `json:"sync_interval_seconds"`
@@ -71,6 +72,7 @@ type ConfigureInput struct {
 }
 
 type Configuration struct {
+	AutomationEnabled     bool               `json:"automation_enabled"`
 	Configured            bool               `json:"configured"`
 	Repository            gitrepo.Repository `json:"repository"`
 	ReconcileMode         string             `json:"reconcile_mode"`
@@ -88,19 +90,20 @@ type Configuration struct {
 }
 
 type Project struct {
-	ID              uint      `json:"id"`
-	Name            string    `json:"name"`
-	DeploymentName  string    `json:"deployment_name"`
-	Configured      bool      `json:"configured"`
-	RepositoryURL   string    `json:"repository_url,omitempty"`
-	GitRef          string    `json:"git_ref,omitempty"`
-	DesiredCommit   string    `json:"desired_commit,omitempty"`
-	ObservedCommit  string    `json:"observed_commit,omitempty"`
-	ActiveCommit    string    `json:"active_commit,omitempty"`
-	ActiveReleaseID *uint     `json:"active_release_id,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
-	NodeIDs         []string  `json:"node_ids"`
+	AutomationEnabled bool      `json:"automation_enabled"`
+	ID                uint      `json:"id"`
+	Name              string    `json:"name"`
+	DeploymentName    string    `json:"deployment_name"`
+	Configured        bool      `json:"configured"`
+	RepositoryURL     string    `json:"repository_url,omitempty"`
+	GitRef            string    `json:"git_ref,omitempty"`
+	DesiredCommit     string    `json:"desired_commit,omitempty"`
+	ObservedCommit    string    `json:"observed_commit,omitempty"`
+	ActiveCommit      string    `json:"active_commit,omitempty"`
+	ActiveReleaseID   *uint     `json:"active_release_id,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+	NodeIDs           []string  `json:"node_ids"`
 }
 
 type Drift struct {
@@ -264,7 +267,20 @@ func (s *Service) GetProject(ctx context.Context, name string) (Project, error) 
 }
 
 func projectSummary(row database.DeliveryProject) Project {
-	return Project{ID: row.ID, Name: row.Name, DeploymentName: runtimeName(row), Configured: row.GitCloneURL != "", RepositoryURL: row.GitCloneURL, GitRef: row.GitRef, DesiredCommit: row.DesiredCommit, ObservedCommit: row.ObservedCommit, ActiveCommit: row.ActiveCommit, ActiveReleaseID: row.ActiveReleaseID, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+	return Project{ID: row.ID, Name: row.Name, DeploymentName: runtimeName(row), Configured: row.GitCloneURL != "", AutomationEnabled: row.AutomationEnabled, RepositoryURL: row.GitCloneURL, GitRef: row.GitRef, DesiredCommit: row.DesiredCommit, ObservedCommit: row.ObservedCommit, ActiveCommit: row.ActiveCommit, ActiveReleaseID: row.ActiveReleaseID, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+}
+
+// SetAutomation changes only automatic triggers, preserving policy, credentials
+// and release history. Operations that already started may finish normally.
+func (s *Service) SetAutomation(ctx context.Context, name string, enabled bool) (Project, error) {
+	result := s.db.WithContext(ctx).Model(&database.DeliveryProject{}).Where("name = ?", name).Update("automation_enabled", enabled)
+	if result.Error != nil {
+		return Project{}, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return Project{}, gorm.ErrRecordNotFound
+	}
+	return s.GetProject(ctx, name)
 }
 
 func (s *Service) Configure(ctx context.Context, name string, input ConfigureInput) (Configuration, error) {
@@ -370,6 +386,9 @@ func (s *Service) Configure(ctx context.Context, name string, input ConfigureInp
 		"deployment_timeout": input.DeploymentTimeout,
 		"webhook_enabled":    input.WebhookEnabled, "webhook_id": webhookID,
 	}
+	if input.AutomationEnabled != nil {
+		updates["automation_enabled"] = *input.AutomationEnabled
+	}
 	if current.GitCloneURL != input.Repository.CloneURL || current.GitRefType != input.Repository.RefType || current.GitRef != input.Repository.Ref || current.ComposeFilesJSON != string(files) || current.EnvironmentFile != input.Repository.EnvironmentFile {
 		updates["desired_commit"] = ""
 		updates["observed_commit"] = ""
@@ -465,6 +484,7 @@ func (s *Service) GetConfiguration(ctx context.Context, name string) (Configurat
 	if project.GitCloneURL == "" {
 		nodeIDs, _ := s.projectNodeIDs(ctx, project.ID)
 		return Configuration{
+			AutomationEnabled:   project.AutomationEnabled,
 			Configured:          false,
 			Repository:          gitrepo.Repository{RefType: gitrepo.RefBranch, Ref: "main", Authentication: gitrepo.Authentication{Source: gitrepo.CredentialSourceNone}, ComposeFiles: []string{"compose.yml"}},
 			ReconcileMode:       ModeManual,
@@ -496,9 +516,10 @@ func (s *Service) GetConfiguration(ctx context.Context, name string) (Configurat
 		return Configuration{}, err
 	}
 	return Configuration{
-		Configured:    true,
-		Repository:    gitrepo.Repository{CloneURL: project.GitCloneURL, RefType: project.GitRefType, Ref: project.GitRef, CredentialID: project.GitCredentialID, Authentication: authentication, ComposeFiles: files, EnvironmentFile: project.EnvironmentFile},
-		ReconcileMode: project.ReconcileMode, SyncIntervalSeconds: project.SyncIntervalSeconds,
+		AutomationEnabled: project.AutomationEnabled,
+		Configured:        true,
+		Repository:        gitrepo.Repository{CloneURL: project.GitCloneURL, RefType: project.GitRefType, Ref: project.GitRef, CredentialID: project.GitCredentialID, Authentication: authentication, ComposeFiles: files, EnvironmentFile: project.EnvironmentFile},
+		ReconcileMode:     project.ReconcileMode, SyncIntervalSeconds: project.SyncIntervalSeconds,
 		DesiredCommit: project.DesiredCommit, ObservedCommit: project.ObservedCommit, ActiveReleaseID: project.ActiveReleaseID,
 		AutoRollback: project.AutoRollback, DeploymentTimeout: project.DeploymentTimeout,
 		WebhookEnabled: project.WebhookEnabled, WebhookID: project.WebhookID,
@@ -513,6 +534,9 @@ func (s *Service) Sync(ctx context.Context, name, trigger string, actor Actor) (
 	}
 	if project.GitCloneURL == "" {
 		return database.Task{}, errors.New("delivery project is not configured")
+	}
+	if automaticTrigger(trigger) && !project.AutomationEnabled {
+		return database.Task{}, ErrAutomationPaused
 	}
 	if !s.reserve(project.ID) {
 		return database.Task{}, errors.New("a reconciliation is already queued for this project")
@@ -537,6 +561,11 @@ func (s *Service) syncLocked(ctx context.Context, projectID uint, taskID, trigge
 	if err := s.db.WithContext(ctx).First(&project, projectID).Error; err != nil {
 		return err
 	}
+	// Recheck after acquiring the project lock: a queued trigger may have been paused.
+	if automaticTrigger(trigger) && !project.AutomationEnabled {
+		return ErrAutomationPaused
+	}
+	autoDeploy := project.ReconcileMode == ModeAuto && project.AutomationEnabled
 	repository, err := repositoryFromProject(project)
 	if err != nil {
 		return err
@@ -598,7 +627,7 @@ func (s *Service) syncLocked(ctx context.Context, projectID uint, taskID, trigge
 		if err := s.db.WithContext(ctx).Model(&project).Update("observed_commit", revision.CommitSHA).Error; err != nil {
 			return err
 		}
-		if project.ReconcileMode != ModeAuto || (project.ActiveReleaseID != nil && *project.ActiveReleaseID == existing.ID) {
+		if !autoDeploy || (project.ActiveReleaseID != nil && *project.ActiveReleaseID == existing.ID) {
 			report(100, "Commit already reconciled")
 			return nil
 		}
@@ -639,7 +668,7 @@ func (s *Service) syncLocked(ctx context.Context, projectID uint, taskID, trigge
 	if err := s.db.WithContext(ctx).Model(&project).Update("observed_commit", revision.CommitSHA).Error; err != nil {
 		return err
 	}
-	if project.ReconcileMode == ModeAuto {
+	if autoDeploy {
 		return s.deployLocked(ctx, project, release, taskID, false, actor, report)
 	}
 	if s.emit != nil {

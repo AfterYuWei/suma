@@ -38,6 +38,7 @@ import (
 	"github.com/suma/suma/server/internal/task"
 	volumeService "github.com/suma/suma/server/internal/volume"
 	"github.com/suma/suma/server/webui"
+	"gorm.io/gorm"
 )
 
 const sessionCookie = "suma_session"
@@ -499,6 +500,10 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			return
 		}
 		row, err := deps.CD.HandleGitWebhook(c.Request.Context(), c.Param("hookID"), c.Request.Header, body)
+		if errors.Is(err, cdService.ErrAutomationPaused) {
+			success(c, gin.H{"ignored": true, "reason": err.Error()})
+			return
+		}
 		if err != nil {
 			status := http.StatusBadRequest
 			if errors.Is(err, cdService.ErrWebhookNotFound) {
@@ -1316,6 +1321,30 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			}
 		}
 		success(c, configuration)
+	})
+	delivery.PUT("/:name/automation", func(c *gin.Context) {
+		var input struct {
+			Enabled *bool `json:"enabled" binding:"required"`
+		}
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, http.StatusBadRequest, 17716, "Automation enabled must be a boolean")
+			return
+		}
+		project, err := deps.CD.SetAutomation(c.Request.Context(), c.Param("name"), *input.Enabled)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				failure(c, http.StatusNotFound, 17701, "Delivery project not found")
+			} else {
+				failure(c, http.StatusInternalServerError, 17717, "Unable to update delivery automation")
+			}
+			return
+		}
+		action := "cd.automation.pause"
+		if *input.Enabled {
+			action = "cd.automation.resume"
+		}
+		recordAudit(c, deps.Audit, action, "delivery_project", c.Param("name"), "success")
+		success(c, project)
 	})
 	delivery.POST("/:name/sync", func(c *gin.Context) {
 		row, err := deps.CD.Sync(c.Request.Context(), c.Param("name"), "manual", requestActor(c))

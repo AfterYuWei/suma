@@ -17,7 +17,7 @@ import { filterNodesByGroup, type DockerNode } from '../lib/nodes'
 import { useUIStore } from '../stores/ui'
 
 interface ReleaseSummary { id: number; status: string; commit_sha: string; trigger_type: string; created_at: string }
-interface CDProject { name: string; configured: boolean; repository_url?: string; git_ref?: string; reconcile_mode: string; node_ids: string[]; drifted: boolean; runtime_healthy: boolean; drift_reason?: string; active_release?: ReleaseSummary; latest_release?: ReleaseSummary; awaiting_approval: boolean; releasing: boolean }
+interface CDProject { name: string; configured: boolean; automation_enabled: boolean; repository_url?: string; git_ref?: string; reconcile_mode: string; node_ids: string[]; drifted: boolean; runtime_healthy: boolean; drift_reason?: string; active_release?: ReleaseSummary; latest_release?: ReleaseSummary; awaiting_approval: boolean; releasing: boolean }
 interface CDOverview { projects: CDProject[]; totals: { projects: number; configured: number; releasing: number; awaiting_approval: number; drifted: number; healthy: number } }
 
 const fleetRefreshInterval = 10_000
@@ -51,8 +51,7 @@ export function OverviewPage() {
   const cdStatus = (project: CDProject) => {
     if (!project.configured) return <StatusBadge tone="neutral">{zh ? '未配置' : 'Not configured'}</StatusBadge>
     const release = project.active_release ?? project.latest_release
-    if (!release) return <StatusBadge tone="neutral">{zh ? '未同步' : 'Not synced'}</StatusBadge>
-    return <StatusBadge tone={releaseTone(release.status)}>{release.status.replaceAll('_', ' ')}</StatusBadge>
+    return <>{project.automation_enabled === false && <StatusBadge tone="neutral">{zh ? '自动触发已暂停' : 'Auto triggers paused'}</StatusBadge>}{release ? <StatusBadge tone={releaseTone(release.status)}>{release.status.replaceAll('_', ' ')}</StatusBadge> : <StatusBadge tone="neutral">{zh ? '未同步' : 'Not synced'}</StatusBadge>}</>
   }
 
   return (

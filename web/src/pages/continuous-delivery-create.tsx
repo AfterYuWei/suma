@@ -33,7 +33,7 @@ export function ContinuousDeliveryCreatePage() {
     const enabled = filterNodesByGroup(nodes.data, currentGroupFilter).filter(node => node.enabled)
     const nodeID = enabled.find(node => node.id === currentNodeID)?.id ?? enabled[0]?.id
     setConfiguration({
-      configured: false, repository: defaultRepository(), reconcile_mode: 'manual',
+      configured: false, automation_enabled: true, repository: defaultRepository(), reconcile_mode: 'manual',
       sync_interval_seconds: 300, deployment_timeout: 120, auto_rollback: false,
       webhook_enabled: false, desired_commit: '', observed_commit: '',
       node_ids: nodeID ? [nodeID] : [], registry_credential_ids: []

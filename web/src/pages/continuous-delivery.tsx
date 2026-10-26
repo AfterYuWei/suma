@@ -11,6 +11,7 @@ import { LoadingState } from '../components/ui/loading-state'
 import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import type { DeliveryProject } from '../features/delivery/types'
+import { DeliveryAutomationSwitch } from '../features/delivery/automation-switch'
 import { shortCommit } from '../features/delivery/types'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
@@ -36,6 +37,7 @@ export function ContinuousDeliveryPage() {
           <TableRow>
             <TableHead className="min-w-[240px]">{zh ? '项目' : 'Project'}</TableHead>
             <TableHead className="w-[110px]">{zh ? '状态' : 'Status'}</TableHead>
+            <TableHead className="w-[130px]">{zh ? '自动触发' : 'Auto triggers'}</TableHead>
             <TableHead className="w-[140px]">{zh ? '引用' : 'Reference'}</TableHead>
             <TableHead className="w-[100px]">{zh ? '期望版本' : 'Desired'}</TableHead>
             <TableHead className="w-[100px]">{zh ? '已观测' : 'Observed'}</TableHead>
@@ -51,6 +53,7 @@ export function ContinuousDeliveryPage() {
                 <p className="mt-0.5 max-w-xs truncate text-xs text-muted-foreground">{project.configured ? project.repository_url || (zh ? '已连接 Git 仓库' : 'Git repository connected') : (zh ? '尚未连接 Git 仓库' : 'Git repository not configured')}</p>
               </TableCell>
               <TableCell><StateBadge state={state} zh={zh} /></TableCell>
+              <TableCell><DeliveryAutomationSwitch projectName={project.name} enabled={project.automation_enabled !== false} zh={zh} /></TableCell>
               <TableCell className="text-muted-foreground">{project.git_ref || '—'}</TableCell>
               <TableCell className="font-mono text-xs">{shortCommit(project.desired_commit)}</TableCell>
               <TableCell className="font-mono text-xs">{shortCommit(project.observed_commit)}</TableCell>

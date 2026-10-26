@@ -293,6 +293,7 @@ type DeliveryProject struct {
 	ComposeFilesJSON    string
 	EnvironmentFile     string
 	ReconcileMode       string `gorm:"size:16;not null;default:manual"`
+	AutomationEnabled   bool   `gorm:"not null;default:true"`
 	SyncIntervalSeconds int    `gorm:"not null;default:300"`
 	DesiredCommit       string `gorm:"size:64"`
 	ObservedCommit      string `gorm:"size:64"`

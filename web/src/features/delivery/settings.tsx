@@ -11,6 +11,7 @@ import { ListPagination } from '../../components/ui/list-pagination'
 import { RadioGroup, RadioGroupItem } from '../../components/ui/radio-group'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select'
 import { Spinner } from '../../components/ui/spinner'
+import { Switch } from '../../components/ui/switch'
 import { Textarea } from '../../components/ui/textarea'
 import { useListPagination } from '../../components/ui/use-list-pagination'
 import { api } from '../../lib/api'
@@ -33,6 +34,7 @@ function toDraft(value: CDConfiguration): CDConfigureInput {
   const configuration = normalizedCDConfiguration(value)
   return {
     repository: { ...configuration.repository },
+    automation_enabled: configuration.automation_enabled,
     reconcile_mode: configuration.reconcile_mode,
     sync_interval_seconds: configuration.sync_interval_seconds,
     auto_rollback: configuration.auto_rollback,
@@ -62,6 +64,7 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
   onDirtyChange?: (dirty: boolean) => void
 }) {
   const initial = normalizedCDConfiguration(configuration)
+  const automationID = useId()
   const [draft, setDraft] = useState<CDConfigureInput>(() => toDraft(initial))
   const [composeFiles, setComposeFiles] = useState<string[]>(initial.repository.compose_files.length ? initial.repository.compose_files : ['compose.yml'])
   const [notice, setNotice] = useState('')
@@ -203,6 +206,10 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
     </SettingsSection>
 
     <SettingsSection title={zh ? '交付策略' : 'Delivery policy'} description={zh ? 'Observe 只生成待发布版本，Manual 需要人工发布，Auto 验证后自动发布。' : 'Observe records a candidate, Manual waits for an operator, and Auto deploys after validation.'}>
+      <div className="flex items-start justify-between gap-4 rounded-lg bg-muted/40 p-3">
+        <div className="min-w-0"><Label htmlFor={automationID}>{zh ? '启用自动交付触发' : 'Enable automatic delivery triggers'}</Label><p id={`${automationID}-description`} className="mt-1 text-xs text-muted-foreground">{zh ? '关闭后停止轮询和 Webhook 触发；手动同步仅生成候选版本，仍可手动发布和回滚。已开始的任务会继续完成。' : 'When off, polling and webhooks stop. Manual sync creates candidates; manual deploy and rollback remain available. Started tasks finish normally.'}</p></div>
+        <Switch id={automationID} checked={draft.automation_enabled} onCheckedChange={(automation_enabled) => setDraft((current) => ({ ...current, automation_enabled }))} aria-describedby={`${automationID}-description`} />
+      </div>
       <RadioGroup value={draft.reconcile_mode} onValueChange={(value) => setDraft((current) => ({ ...current, reconcile_mode: value as CDConfigureInput['reconcile_mode'] }))} className="grid gap-2 sm:grid-cols-3">
         {([
           ['observe', zh ? '观察' : 'Observe', zh ? '检测新提交但不自动应用' : 'Detect changes without applying'],

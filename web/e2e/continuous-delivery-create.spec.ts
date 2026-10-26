@@ -179,3 +179,17 @@ test('a project named new remains reachable independently of the creation page',
   await expect(page.getByRole('heading', { name: 'new', exact: true })).toBeVisible()
   await expect(page.getByRole('form', { name: 'New delivery project configuration', exact: true })).toHaveCount(0)
 })
+
+test('delivery creation can start with automatic triggers paused', async ({ page }) => {
+  await setup(page)
+  const form = await basics(page, 'created-paused')
+  const toggle = form.getByRole('switch', { name: 'Enable automatic delivery triggers', exact: true })
+  await expect(toggle).toBeChecked()
+  await toggle.click()
+  await form.getByRole('button', { name: 'Create delivery project', exact: true }).click()
+  await expect(page).toHaveURL('/continuous-delivery/created-paused')
+  await expect(page.getByRole('switch', { name: 'created-paused automatic delivery triggers' })).not.toBeChecked()
+  const saved = await configuration(page, 'created-paused')
+  expect(saved.automation_enabled).toBe(false)
+  expect(saved.reconcile_mode).toBe('manual')
+})

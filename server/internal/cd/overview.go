@@ -22,23 +22,24 @@ type ReleaseSummary struct {
 // global feature: it aggregates releases, drift, and target nodes instead of
 // belonging to a single node.
 type ProjectOverview struct {
-	Name             string          `json:"name"`
-	Configured       bool            `json:"configured"`
-	RepositoryURL    string          `json:"repository_url,omitempty"`
-	GitRef           string          `json:"git_ref,omitempty"`
-	ReconcileMode    string          `json:"reconcile_mode"`
-	NodeIDs          []string        `json:"node_ids"`
-	DesiredCommit    string          `json:"desired_commit,omitempty"`
-	ActiveCommit     string          `json:"active_commit,omitempty"`
-	ActiveReleaseID  *uint           `json:"active_release_id,omitempty"`
-	Drifted          bool            `json:"drifted"`
-	DriftStatus      string          `json:"drift_status"`
-	RuntimeHealthy   bool            `json:"runtime_healthy"`
-	DriftReason      string          `json:"drift_reason,omitempty"`
-	ActiveRelease    *ReleaseSummary `json:"active_release,omitempty"`
-	LatestRelease    *ReleaseSummary `json:"latest_release,omitempty"`
-	AwaitingApproval bool            `json:"awaiting_approval"`
-	Releasing        bool            `json:"releasing"`
+	AutomationEnabled bool            `json:"automation_enabled"`
+	Name              string          `json:"name"`
+	Configured        bool            `json:"configured"`
+	RepositoryURL     string          `json:"repository_url,omitempty"`
+	GitRef            string          `json:"git_ref,omitempty"`
+	ReconcileMode     string          `json:"reconcile_mode"`
+	NodeIDs           []string        `json:"node_ids"`
+	DesiredCommit     string          `json:"desired_commit,omitempty"`
+	ActiveCommit      string          `json:"active_commit,omitempty"`
+	ActiveReleaseID   *uint           `json:"active_release_id,omitempty"`
+	Drifted           bool            `json:"drifted"`
+	DriftStatus       string          `json:"drift_status"`
+	RuntimeHealthy    bool            `json:"runtime_healthy"`
+	DriftReason       string          `json:"drift_reason,omitempty"`
+	ActiveRelease     *ReleaseSummary `json:"active_release,omitempty"`
+	LatestRelease     *ReleaseSummary `json:"latest_release,omitempty"`
+	AwaitingApproval  bool            `json:"awaiting_approval"`
+	Releasing         bool            `json:"releasing"`
 }
 
 type OverviewTotals struct {
@@ -96,7 +97,8 @@ func (s *Service) Overview(ctx context.Context) (Overview, error) {
 
 func (s *Service) projectOverview(ctx context.Context, row database.DeliveryProject) ProjectOverview {
 	item := ProjectOverview{
-		Name: row.Name, Configured: row.GitCloneURL != "",
+		AutomationEnabled: row.AutomationEnabled,
+		Name:              row.Name, Configured: row.GitCloneURL != "",
 		RepositoryURL: row.GitCloneURL, GitRef: row.GitRef,
 		ReconcileMode: row.ReconcileMode, NodeIDs: []string{},
 		DesiredCommit: row.DesiredCommit, ActiveReleaseID: row.ActiveReleaseID,

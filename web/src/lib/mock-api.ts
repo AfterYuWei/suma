@@ -120,12 +120,12 @@ const audits = [
 ]
 
 const deliveryProjects: DeliveryProject[] = [
-  { id: 1, name: 'gateway-prod', configured: true, repository_url: 'https://github.com/example/gateway.git', git_ref: 'main', desired_commit: '7a31f0c87aa1', observed_commit: '7a31f0c87aa1', active_release_id: 184, created_at: earlier, updated_at: now, node_ids: ['local', 'edge-hk'] },
-  { id: 2, name: 'media-stack', configured: true, repository_url: 'https://github.com/example/media-stack.git', git_ref: 'stable', desired_commit: 'f4c9a82e10d2', observed_commit: 'f4c9a82e10d2', active_release_id: 181, created_at: earlier, updated_at: now, node_ids: ['local', 'nas-prod'] },
+  { id: 1, name: 'gateway-prod', configured: true, automation_enabled: true, repository_url: 'https://github.com/example/gateway.git', git_ref: 'main', desired_commit: '7a31f0c87aa1', observed_commit: '7a31f0c87aa1', active_release_id: 184, created_at: earlier, updated_at: now, node_ids: ['local', 'edge-hk'] },
+  { id: 2, name: 'media-stack', configured: true, automation_enabled: true, repository_url: 'https://github.com/example/media-stack.git', git_ref: 'stable', desired_commit: 'f4c9a82e10d2', observed_commit: 'f4c9a82e10d2', active_release_id: 181, created_at: earlier, updated_at: now, node_ids: ['local', 'nas-prod'] },
 ]
 
 const deliveryConfigurations = new Map<string, CDConfiguration>()
-const cdConfiguration = (name: string): CDConfiguration => ({ configured: true, repository: { clone_url: `https://github.com/example/${name}.git`, ref_type: 'branch', ref: name === 'gateway-prod' ? 'main' : 'stable', authentication: { source: 'center', credential_id: 1, summary: { name: 'GitHub Demo', auth_type: 'http_token', username: 'suma-demo' } }, compose_files: ['compose.yml'], environment_file: '.env' }, reconcile_mode: name === 'gateway-prod' ? 'auto' : 'manual', sync_interval_seconds: 300, desired_commit: name === 'gateway-prod' ? '7a31f0c87aa1' : 'f4c9a82e10d2', observed_commit: name === 'gateway-prod' ? '7a31f0c87aa1' : 'f4c9a82e10d2', active_release_id: name === 'gateway-prod' ? 184 : 181, auto_rollback: true, deployment_timeout: 180, webhook_enabled: true, webhook_id: `demo-${name}`, webhook_secret: '', node_ids: name === 'gateway-prod' ? ['local', 'edge-hk'] : ['local', 'nas-prod'], registry_credential_ids: [1] })
+const cdConfiguration = (name: string): CDConfiguration => ({ configured: true, automation_enabled: true, repository: { clone_url: `https://github.com/example/${name}.git`, ref_type: 'branch', ref: name === 'gateway-prod' ? 'main' : 'stable', authentication: { source: 'center', credential_id: 1, summary: { name: 'GitHub Demo', auth_type: 'http_token', username: 'suma-demo' } }, compose_files: ['compose.yml'], environment_file: '.env' }, reconcile_mode: name === 'gateway-prod' ? 'auto' : 'manual', sync_interval_seconds: 300, desired_commit: name === 'gateway-prod' ? '7a31f0c87aa1' : 'f4c9a82e10d2', observed_commit: name === 'gateway-prod' ? '7a31f0c87aa1' : 'f4c9a82e10d2', active_release_id: name === 'gateway-prod' ? 184 : 181, auto_rollback: true, deployment_timeout: 180, webhook_enabled: true, webhook_id: `demo-${name}`, webhook_secret: '', node_ids: name === 'gateway-prod' ? ['local', 'edge-hk'] : ['local', 'nas-prod'], registry_credential_ids: [1] })
 
 const releases: DeliveryRelease[] = [
   { id: 184, project_id: 1, repository_url: 'https://github.com/example/gateway.git', git_ref: 'main', commit_sha: '7a31f0c87aa1', commit_message: 'feat: expose fleet overview', commit_author: 'Demo Maintainer', config_hash: 'cfg-184', image_references: JSON.stringify(['ghcr.io/afteryuwei/gateway:1.8.2']), task_id: 'task-release-184', status: 'succeeded', trigger_type: 'webhook', trigger_actor: 'github', previous_release_id: 183, compose_files: JSON.stringify(['compose.yml']), approved_by: 1, approved_at: earlier, started_at: earlier, finished_at: now, health_summary: '2/2 targets healthy', created_at: earlier, updated_at: now, remediation: { retry_failed_node_ids: [], rollback_failed_node_ids: [] }, deployments: [{ id: 1, node_id: 'local', node_name: 'homelab-01', status: 'succeeded', health_summary: 'healthy', started_at: earlier, finished_at: now, attempts: [{ id: 1, deployment_id: 1, operation: 'deploy', target_release_id: 184, status: 'succeeded', health_summary: 'healthy', started_at: earlier, finished_at: now, created_at: earlier }] }, { id: 2, node_id: 'edge-hk', node_name: 'edge-hk', status: 'succeeded', health_summary: 'healthy', started_at: earlier, finished_at: now }] },
@@ -347,7 +347,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     })
     return clone({ nodes: fleetNodes }) as T
   }
-  if (pathname === '/cd/overview') return clone({ projects: deliveryProjects.map((project) => ({ name: project.name, configured: true, repository_url: project.repository_url, git_ref: project.git_ref, reconcile_mode: project.name === 'gateway-prod' ? 'auto' : 'manual', node_ids: project.node_ids, drifted: false, runtime_healthy: true, active_release: { id: project.active_release_id, status: 'succeeded', commit_sha: project.desired_commit, trigger_type: 'webhook', created_at: now }, latest_release: { id: project.active_release_id, status: 'succeeded', commit_sha: project.desired_commit, trigger_type: 'webhook', created_at: now }, awaiting_approval: false, releasing: false })), totals: { projects: 2, configured: 2, releasing: 0, awaiting_approval: 0, drifted: 0, healthy: 2 } }) as T
+  if (pathname === '/cd/overview') return clone({ projects: deliveryProjects.map((project) => ({ name: project.name, configured: project.configured, automation_enabled: project.automation_enabled, repository_url: project.repository_url, git_ref: project.git_ref, reconcile_mode: project.name === 'gateway-prod' ? 'auto' : 'manual', node_ids: project.node_ids, drifted: false, runtime_healthy: true, active_release: { id: project.active_release_id, status: 'succeeded', commit_sha: project.desired_commit, trigger_type: 'webhook', created_at: now }, latest_release: { id: project.active_release_id, status: 'succeeded', commit_sha: project.desired_commit, trigger_type: 'webhook', created_at: now }, awaiting_approval: false, releasing: false })), totals: { projects: 2, configured: 2, releasing: 0, awaiting_approval: 0, drifted: 0, healthy: 2 } }) as T
 
   if (pathname === '/tasks') {
     const scope = url.searchParams.get('scope') || 'control_plane'
@@ -402,10 +402,10 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
         sanitizedAuthentication = { source: 'center', credential_id: credential.id }
       }
       if (input.webhook_enabled && !input.webhook_secret) generatedSecret = crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', '')
-      configuration = { ...input, repository: { ...input.repository, authentication: sanitizedAuthentication }, configured: true, webhook_secret: '', webhook_id: input.webhook_enabled ? `demo-${name}` : undefined, desired_commit: '', observed_commit: '' }
+      configuration = { ...input, automation_enabled: input.automation_enabled !== false, repository: { ...input.repository, authentication: sanitizedAuthentication }, configured: true, webhook_secret: '', webhook_id: input.webhook_enabled ? `demo-${name}` : undefined, desired_commit: '', observed_commit: '' }
       deliveryConfigurations.set(name, configuration)
     }
-    const project: DeliveryProject = { id: Math.max(...deliveryProjects.map(row => row.id), 0) + 1, name, deployment_name: name, configured: !!input, repository_url: input?.repository.clone_url, git_ref: input?.repository.ref, node_ids: [...targetIDs], created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+    const project: DeliveryProject = { id: Math.max(...deliveryProjects.map(row => row.id), 0) + 1, name, deployment_name: name, configured: !!input, automation_enabled: input?.automation_enabled !== false, repository_url: input?.repository.clone_url, git_ref: input?.repository.ref, node_ids: [...targetIDs], created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
     deliveryProjects.push(project)
     return clone({ ...project, ...(configuration ? { configuration: { ...configuration, webhook_secret: generatedSecret } } : {}) }) as T
   }
@@ -422,12 +422,19 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     const suffix = deliveryMatch[2] || ''
     const project = deliveryProjects.find((item) => item.name === name) ?? deliveryProjects[0]
     if (!suffix && method === 'GET') return clone(project) as T
+    if (suffix === '/automation' && method === 'PUT') {
+      project.automation_enabled = body.enabled === true
+      const configuration = deliveryConfigurations.get(name) || cdConfiguration(name)
+      deliveryConfigurations.set(name, { ...configuration, automation_enabled: project.automation_enabled })
+      return clone(project) as T
+    }
     if (suffix === '/configuration') {
       if (method === 'PUT') {
         const input = body as unknown as CDConfigureInput
         const saved = { ...deliveryConfigurations.get(name) || cdConfiguration(name), ...input, configured: true, repository: { ...input.repository, authentication: input.repository.authentication.source === 'project' ? { source: 'project' as const, summary: { name: input.repository.authentication.credential?.name || 'Project credential', auth_type: input.repository.authentication.credential?.auth_type || 'http_token' as const } } : { source: input.repository.authentication.source, credential_id: input.repository.authentication.credential_id } }, webhook_secret: '' }
         deliveryConfigurations.set(name, saved)
         project.configured = true
+        project.automation_enabled = saved.automation_enabled
         project.repository_url = saved.repository.clone_url
         project.git_ref = saved.repository.ref
         project.node_ids = [...saved.node_ids]

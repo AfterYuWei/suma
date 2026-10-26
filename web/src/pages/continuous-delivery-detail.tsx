@@ -11,6 +11,7 @@ import { ErrorState } from '../components/ui/error-state'
 import { LoadingState } from '../components/ui/loading-state'
 import { CDOverview, ReleasePanel, type ReleaseOperation } from '../features/delivery/releases'
 import { CDSettings } from '../features/delivery/settings'
+import { DeliveryAutomationSwitch } from '../features/delivery/automation-switch'
 import type { CDConfiguration, CDDrift, DeliveryProject, DeliveryRelease } from '../features/delivery/types'
 import { hasActiveRelease, shortCommit } from '../features/delivery/types'
 import { api, ApiError } from '../lib/api'
@@ -120,6 +121,10 @@ export function ContinuousDeliveryDetailPage() {
     <Button variant="ghost" size="sm" className="-ml-2 w-fit gap-1 text-muted-foreground" onClick={() => void navigate({ to: '/continuous-delivery' })}><ChevronLeft className="size-4" />{zh ? '持续交付' : 'Continuous Delivery'}</Button>
     <ResourceFrame title={project.name} detail={isGit ? `${configuration.repository.ref_type}:${configuration.repository.ref} · ${shortCommit(configuration.desired_commit)}` : (zh ? '尚未配置 Git 持续交付' : 'Git continuous delivery is not configured')} action={headerActions}>
       <div className="flex flex-col gap-4">
+        {isGit && view !== 'Settings' && <div className="flex flex-col gap-3 rounded-lg bg-muted/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0 flex-1"><p className="text-sm font-medium">{zh ? '自动交付触发' : 'Automatic delivery triggers'}</p><p className="mt-1 text-xs text-muted-foreground">{configuration.automation_enabled === false ? (zh ? '轮询与 Webhook 已暂停。手动同步仅生成候选版本，仍可手动发布和回滚。已开始的任务会继续完成。' : 'Polling and webhooks are paused. Manual sync creates candidates; manual deploy and rollback remain available. Started tasks finish normally.') : (zh ? '轮询和 Webhook 按已保存的交付策略执行。' : 'Polling and webhooks follow the saved delivery policy.')}</p></div>
+          <DeliveryAutomationSwitch projectName={projectName} enabled={configuration.automation_enabled !== false} zh={zh} />
+        </div>}
         {notice && <p className={cn('text-sm', sync.isError || releaseAction.isError ? 'text-destructive' : 'text-muted-foreground')}>{notice}</p>}
         <Tabs value={view} onValueChange={(value) => setView(value as View)}>
           <TabsList>

@@ -19,6 +19,7 @@ import (
 )
 
 var (
+	ErrAutomationPaused = errors.New("automatic delivery is paused")
 	ErrWebhookNotFound  = errors.New("webhook not found")
 	ErrWebhookSignature = errors.New("invalid webhook signature")
 	ErrWebhookIgnored   = errors.New("webhook event does not match the configured repository and ref")
@@ -57,6 +58,9 @@ func (s *Service) handleWebhook(ctx context.Context, format, hookID string, head
 	if err := verifyWebhook(format, secretValue, headers, body); err != nil {
 		return database.Task{}, err
 	}
+	if !project.AutomationEnabled {
+		return database.Task{}, ErrAutomationPaused
+	}
 	event, err := parseWebhook(format, headers, body)
 	if err != nil {
 		return database.Task{}, err
@@ -89,6 +93,10 @@ func (s *Service) handleWebhook(ctx context.Context, format, hookID string, head
 	}
 	_ = s.db.WithContext(ctx).Model(&delivery).Updates(updates).Error
 	return row, err
+}
+
+func automaticTrigger(trigger string) bool {
+	return trigger == "poll" || trigger == "webhook"
 }
 
 const (

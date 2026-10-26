@@ -3,6 +3,7 @@ export type ReconcileMode = 'observe' | 'manual' | 'auto'
 export type GitAuthType = 'none' | 'http_token' | 'http_basic' | 'ssh_key'
 
 export interface DeliveryProject {
+	automation_enabled: boolean
   id: number
   name: string
   deployment_name?: string
@@ -46,6 +47,7 @@ export interface GitAuthentication {
 }
 
 export interface CDConfiguration {
+	automation_enabled: boolean
   configured: boolean
   repository: GitRepositoryConfiguration
   reconcile_mode: ReconcileMode
@@ -63,6 +65,7 @@ export interface CDConfiguration {
 }
 
 export interface CDConfigureInput {
+	automation_enabled: boolean
   repository: GitRepositoryConfiguration
   reconcile_mode: ReconcileMode
   sync_interval_seconds: number
@@ -190,6 +193,7 @@ export const defaultRepository = (): GitRepositoryConfiguration => ({
 export function normalizedCDConfiguration(configuration: CDConfiguration): CDConfiguration {
   return {
     ...configuration,
+    automation_enabled: configuration.automation_enabled !== false,
     repository: {
       ...defaultRepository(),
       ...configuration.repository,

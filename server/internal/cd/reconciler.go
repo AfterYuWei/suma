@@ -142,7 +142,7 @@ func (s *Service) Stop() {
 
 func (s *Service) reconcileDue(ctx context.Context) {
 	var projects []database.DeliveryProject
-	if err := s.db.WithContext(ctx).Where("git_clone_url <> ''").Find(&projects).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("git_clone_url <> '' AND automation_enabled = ?", true).Find(&projects).Error; err != nil {
 		return
 	}
 	now := time.Now()

@@ -198,6 +198,7 @@ Delivery Project responses include `deployment_name`, the saved Compose project 
 
 - `GET|DELETE /delivery-projects/:name` reads or deletes one project. Deletion requires `confirm=<project-name>`; optional `force=true` tears down its active runtime.
 - `GET|PUT /delivery-projects/:name/configuration` reads or updates repository and delivery configuration.
+- `PUT /delivery-projects/:name/automation` accepts `{ "enabled": false }` to pause polling and Webhook triggers, or `true` to resume. Returns the project with `automation_enabled` and records a control-plane audit. Requires a session; missing/non-boolean `enabled` returns 400, unknown projects return 404. It does not queue a task or change the saved delivery policy, credentials, target nodes, or release history. Queued automatic syncs recheck before fetching; started operations finish normally. Manual sync remains available while paused, creating candidates for explicit approval/deployment rather than deploying under Auto policy.
 - `POST /delivery-projects/test-connection` (new draft) or `POST /delivery-projects/:name/test-connection` (existing project) reads remote refs with `{ "repository": { "clone_url": "https://git.example.test/team/repo", "ref_type": "branch", "ref": "main", "authentication": { "source": "none" } }, "node_ids": ["local"] }`. Uses draft credentials or retained project secrets without saving configuration, cloning, creating tasks/releases, or deploying. Center credentials require grants for the requested targets (saved targets when omitted on an existing project). Returns `{ "ref_checked": true, "commit_sha": "..." }` for a resolved branch/tag; annotated tags resolve to their commit. Commit refs return `ref_checked: false`: arbitrary commits and Compose files are verified during sync. Requests cancel on disconnect and time out after 30 seconds; failures return `422` (code `17715`) with sanitized Git diagnostics. Responses use `Cache-Control: no-store`.
 - `POST /delivery-projects/:name/sync` queues a manual Git synchronization and returns `202 Accepted` with a task.
 - `GET /delivery-projects/:name/drift` compares the desired Git commit with the active release.
@@ -223,6 +224,7 @@ A representative `PUT /delivery-projects/:name/configuration` body is:
     "environment_file": "env/production.env"
   },
   "reconcile_mode": "manual",
+  "automation_enabled": true,
   "sync_interval_seconds": 300,
   "auto_rollback": false,
   "deployment_timeout": 120,
@@ -242,6 +244,7 @@ Repository constraints:
 - At least one ordered Compose file is required.
 - Compose files are passed to Docker Compose in list order. The first file establishes the project directory for relative Compose paths; later files override or extend earlier files according to Docker Compose merge rules.
 - `reconcile_mode` is `observe`, `manual`, or `auto`. Observe synchronizes and reports but blocks approval, deployment, and rollback. Manual prepares a release for review. Auto synchronizes and delivers a valid release.
+- `automation_enabled` defaults to true for new and upgraded projects. Configuration updates that omit it retain its current value. Projects, configuration and `/cd/overview` expose it. A paused project's authenticated Webhook returns 200 with `{ "ignored": true, "reason": "automatic delivery is paused" }` without consuming its delivery ID or queuing work; invalid signatures still return 401. Paused events are not replayed automatically.
 - `sync_interval_seconds` accepts 30 through 86400 seconds. The background reconciler scans for due Git projects at startup and every 15 seconds; manual and verified-webhook triggers are also available.
 - `deployment_timeout` accepts 10 through 3600 seconds and is passed to Compose health waiting.
 

@@ -71,7 +71,7 @@ export function CDOverview({ configuration, drift, releases, error, zh }: { conf
           [zh ? '仓库' : 'Repository', `${repositoryName(repository.clone_url)} · ${repository.clone_url}`],
           [zh ? '跟踪引用' : 'Tracked ref', `${repository.ref_type}:${repository.ref}`],
           [zh ? 'Compose 文件' : 'Compose files', repository.compose_files.join(' · ')],
-          [zh ? '交付模式' : 'Delivery mode', `${modeLabel(configuration.reconcile_mode, zh)} · ${zh ? `每 ${configuration.sync_interval_seconds} 秒轮询` : `poll every ${configuration.sync_interval_seconds}s`}`],
+          [zh ? '交付模式' : 'Delivery mode', `${modeLabel(configuration.reconcile_mode, zh)} · ${configuration.automation_enabled === false ? (zh ? '自动触发已暂停' : 'Automatic triggers paused') : (zh ? `每 ${configuration.sync_interval_seconds} 秒轮询` : `poll every ${configuration.sync_interval_seconds}s`)}`],
           [zh ? 'Git 期望' : 'Git desired', shortCommit(configuration.desired_commit)],
           [zh ? '已检查' : 'Observed', shortCommit(configuration.observed_commit)],
           [zh ? '当前运行' : 'Active', `${shortCommit(drift?.active_commit)}${drift?.active_release_id ? ` · Release #${drift.active_release_id}` : ''}`],

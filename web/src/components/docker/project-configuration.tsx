@@ -11,6 +11,7 @@ import {
 } from 'react'
 import {
   Box,
+  CircleAlert,
   Code2,
   Eye,
   EyeOff,
@@ -34,6 +35,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { Alert, AlertDescription } from '../ui/alert'
 import { TooltipHint } from '../ui/tooltip-hint'
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip'
 import {
   Dialog,
   DialogContent,
@@ -514,18 +516,47 @@ export function ProjectConfiguration(props: EditorProps) {
       )}
       {mode === 'source' ? (
         <div className="space-y-2">
-          <Tabs
-            value={file}
-            onValueChange={(value) => {
-              setFile(value as typeof file)
-              setLine(1)
-            }}
-          >
-            <TabsList>
-              <TabsTrigger value="compose">compose.yml</TabsTrigger>
-              <TabsTrigger value="environment">.env</TabsTrigger>
-            </TabsList>
-          </Tabs>
+          <div className="flex items-center gap-1">
+            <Tabs
+              value={file}
+              onValueChange={(value) => {
+                setFile(value as typeof file)
+                setLine(1)
+              }}
+            >
+              <TabsList>
+                <TabsTrigger value="compose">compose.yml</TabsTrigger>
+                <TabsTrigger value="environment">.env</TabsTrigger>
+              </TabsList>
+            </Tabs>
+            <Tooltip>
+              <TooltipTrigger render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  className="text-muted-foreground"
+                  aria-label={zh ? '.env 使用说明' : '.env usage help'}
+                />
+              }>
+                <CircleAlert className="size-3.5" aria-hidden="true" />
+              </TooltipTrigger>
+              <TooltipContent side="bottom" align="start" className="block space-y-2 py-2.5">
+                <p>{zh
+                  ? '.env 默认仅用于 Compose 变量替换，不会自动传入容器。'
+                  : '.env is used for Compose interpolation by default. Its variables are not automatically passed into containers.'}</p>
+                <p>{zh
+                  ? '例如 .env 中填写 APP_ENV=production，在 compose.yml 的目标服务中显式引用：'
+                  : 'For APP_ENV=production in .env, reference it explicitly in the target service in compose.yml:'}</p>
+                <pre className="rounded bg-muted p-2 font-mono text-[11px] leading-relaxed">{'services:\n  app:\n    environment:\n      APP_ENV: ${APP_ENV}'}</pre>
+                <p>{zh ? '或为该服务导入全部 .env 变量：' : 'Or import all .env variables into that service:'}</p>
+                <pre className="rounded bg-muted p-2 font-mono text-[11px] leading-relaxed">{'services:\n  app:\n    env_file:\n      - .env'}</pre>
+                <p className="text-muted-foreground">{zh
+                  ? '保存后执行“应用当前配置”使变更生效。'
+                  : 'Save, then run “Apply current configuration” to apply the changes.'}</p>
+              </TooltipContent>
+            </Tooltip>
+          </div>
           {hidden && (
             <p className="text-xs text-muted-foreground">
               {zh
