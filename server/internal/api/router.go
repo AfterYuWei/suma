@@ -955,6 +955,24 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	})
 
 	delivery := v1.Group("/delivery-projects", requireAuth(deps.Auth))
+	testGitConnection := func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		var input cdService.ConnectionInput
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, http.StatusBadRequest, 17714, "Invalid Git connection configuration")
+			return
+		}
+		result, err := deps.CD.TestConnection(c.Request.Context(), c.Param("name"), input)
+		if err != nil {
+			recordAudit(c, deps.Audit, "cd.test_connection", "delivery_project", c.Param("name"), "failure")
+			failure(c, http.StatusUnprocessableEntity, 17715, err.Error())
+			return
+		}
+		recordAudit(c, deps.Audit, "cd.test_connection", "delivery_project", c.Param("name"), "success")
+		success(c, result)
+	}
+	delivery.POST("/test-connection", testGitConnection)
+	delivery.POST("/:name/test-connection", testGitConnection)
 	delivery.GET("", func(c *gin.Context) {
 		rows, err := deps.CD.ListProjects(c.Request.Context())
 		if err != nil {

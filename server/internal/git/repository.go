@@ -54,7 +54,7 @@ type CredentialSummary struct {
 	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
-func ValidateRepository(repository Repository) error {
+func ValidateRemote(repository Repository) error {
 	if len(repository.CloneURL) > 2048 {
 		return errors.New("Git URL exceeds the 2048-byte limit")
 	}
@@ -70,6 +70,13 @@ func ValidateRepository(repository Repository) error {
 		}
 	} else if !validNamedRef(repository.Ref) {
 		return errors.New("invalid Git ref")
+	}
+	return nil
+}
+
+func ValidateRepository(repository Repository) error {
+	if err := ValidateRemote(repository); err != nil {
+		return err
 	}
 	if len(repository.ComposeFiles) == 0 || len(repository.ComposeFiles) > 16 {
 		return errors.New("between 1 and 16 Compose files are required")

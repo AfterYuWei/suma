@@ -490,6 +490,10 @@ type fakeGitClient struct {
 	calls      int
 }
 
+func (f *fakeGitClient) TestConnection(context.Context, gitrepo.SyncRequest) (gitrepo.ConnectionResult, error) {
+	return gitrepo.ConnectionResult{RefChecked: true, CommitSHA: f.revision.CommitSHA}, nil
+}
+
 func (f *fakeGitClient) Sync(ctx context.Context, _ gitrepo.SyncRequest, output io.Writer) (gitrepo.Revision, error) {
 	f.mu.Lock()
 	f.active++

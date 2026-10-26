@@ -180,6 +180,8 @@ Credential `auth_type` is one of:
 | `http_basic` | `name`, `username`, `secret` | Username/password or username/token over HTTPS |
 | `ssh_key` | `name`, `private_key`, `known_hosts`; optional `passphrase` | Pinned SSH transport |
 
+HTTPS token credentials use the supplied username exactly. An empty username defaults to `oauth2` for every host; there are no hosting-provider overrides. A hidden private repository may return 404 when permissions or credentials are wrong.
+
 `custom_ca` is optional for any HTTPS Git remote using a private CA. Do not disable TLS verification. Credential secrets, private keys, passphrases, `known_hosts`, and CA contents are encrypted at rest and are never returned by the API. A `PUT` request may omit an existing sensitive value to preserve it.
 
 Git, registry, and Docker TLS credential requests include `authorized_node_ids`; the default is empty. Registry credentials use `basic` (username and password) or `token` authentication and are passed through a temporary Docker config only when explicitly selected. Docker TLS credentials contain a CA, client certificate, and private key and are never returned after creation.
@@ -193,6 +195,7 @@ Authenticated routes:
 - `GET|POST /delivery-projects` lists or creates Delivery Projects. Full creation accepts `{ "name": "production", "configuration": <the configuration body below> }`; its transaction saves the project, explicit target nodes, repository, encrypted credentials and delivery policy together. Validation or persistence failure leaves no partial project or credential. The `201` response includes the project fields plus `configuration`; an automatically generated Webhook secret is returned once here and never by GET. Legacy name/`node_ids` creation remains supported.
 - `GET|DELETE /delivery-projects/:name` reads or deletes one project. Deletion requires `confirm=<project-name>`; optional `force=true` tears down its active runtime.
 - `GET|PUT /delivery-projects/:name/configuration` reads or updates repository and delivery configuration.
+- `POST /delivery-projects/test-connection` (new draft) or `POST /delivery-projects/:name/test-connection` (existing project) reads remote refs with `{ "repository": { "clone_url": "https://git.example.test/team/repo", "ref_type": "branch", "ref": "main", "authentication": { "source": "none" } }, "node_ids": ["local"] }`. Uses draft credentials or retained project secrets without saving configuration, cloning, creating tasks/releases, or deploying. Center credentials require grants for the requested targets (saved targets when omitted on an existing project). Returns `{ "ref_checked": true, "commit_sha": "..." }` for a resolved branch/tag; annotated tags resolve to their commit. Commit refs return `ref_checked: false`: arbitrary commits and Compose files are verified during sync. Requests cancel on disconnect and time out after 30 seconds; failures return `422` (code `17715`) with sanitized Git diagnostics. Responses use `Cache-Control: no-store`.
 - `POST /delivery-projects/:name/sync` queues a manual Git synchronization and returns `202 Accepted` with a task.
 - `GET /delivery-projects/:name/drift` compares the desired Git commit with the active release.
 - `GET /delivery-projects/:name/releases` lists up to 100 releases, newest first.

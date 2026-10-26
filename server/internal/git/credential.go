@@ -303,7 +303,31 @@ func (s *CredentialService) decrypt(authType, username string, ciphertexts ...[]
 	return material, nil
 }
 
-func (s *CredentialService) updateProject(ctx context.Context, db *gorm.DB, current database.DeliveryProjectGitCredential, input CredentialInput) (database.DeliveryProjectGitCredential, error) {
+// PreviewProjectMaterial resolves an unsaved credential without persisting it.
+func (s *CredentialService) PreviewProjectMaterial(ctx context.Context, projectID uint, input *CredentialInput) (CredentialMaterial, error) {
+	if projectID == 0 {
+		if input == nil {
+			return CredentialMaterial{}, errors.New("project credential is required")
+		}
+		_, material, err := s.resolveProjectMaterial(database.DeliveryProjectGitCredential{}, *input)
+		return material, err
+	}
+	var current database.DeliveryProjectGitCredential
+	err := s.db.WithContext(ctx).Where("project_id = ?", projectID).First(&current).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return CredentialMaterial{}, err
+	}
+	if input == nil {
+		if err != nil {
+			return CredentialMaterial{}, errors.New("project credential is required")
+		}
+		return s.ProjectMaterial(ctx, projectID)
+	}
+	_, material, err := s.resolveProjectMaterial(current, *input)
+	return material, err
+}
+
+func (s *CredentialService) resolveProjectMaterial(current database.DeliveryProjectGitCredential, input CredentialInput) (CredentialInput, CredentialMaterial, error) {
 	typeChanged := input.AuthType != "" && input.AuthType != current.AuthType
 	if input.Name == "" {
 		input.Name = current.Name
@@ -316,11 +340,11 @@ func (s *CredentialService) updateProject(ctx context.Context, db *gorm.DB, curr
 	}
 	shadow := database.GitCredential{AuthType: current.AuthType, SecretCiphertext: current.SecretCiphertext, PrivateKeyCiphertext: current.PrivateKeyCiphertext, KnownHostsCiphertext: current.KnownHostsCiphertext}
 	if err := validateCredentialUpdate(input, shadow, typeChanged); err != nil {
-		return current, err
+		return input, CredentialMaterial{}, err
 	}
 	material, err := s.decrypt(current.AuthType, current.Username, current.SecretCiphertext, current.PrivateKeyCiphertext, current.PassphraseCiphertext, current.KnownHostsCiphertext, current.CACiphertext)
 	if err != nil {
-		return current, err
+		return input, CredentialMaterial{}, err
 	}
 	if input.Secret != "" {
 		material.Secret = input.Secret
@@ -348,6 +372,14 @@ func (s *CredentialService) updateProject(ctx context.Context, db *gorm.DB, curr
 		material.PrivateKey, material.Passphrase, material.KnownHosts = "", "", ""
 	case AuthSSHKey:
 		material.Secret = ""
+	}
+	return input, material, nil
+}
+
+func (s *CredentialService) updateProject(ctx context.Context, db *gorm.DB, current database.DeliveryProjectGitCredential, input CredentialInput) (database.DeliveryProjectGitCredential, error) {
+	input, material, err := s.resolveProjectMaterial(current, input)
+	if err != nil {
+		return current, err
 	}
 	updates := map[string]any{"name": input.Name, "auth_type": material.AuthType, "username": material.Username, "fingerprint": secret.Fingerprint(material.AuthType, material.Username, material.Secret, material.PrivateKey, material.KnownHosts)}
 	for _, value := range []struct{ name, value string }{{"secret_ciphertext", material.Secret}, {"private_key_ciphertext", material.PrivateKey}, {"passphrase_ciphertext", material.Passphrase}, {"known_hosts_ciphertext", material.KnownHosts}, {"ca_ciphertext", material.CustomCA}} {

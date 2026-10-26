@@ -20,7 +20,7 @@ import (
 	"github.com/suma/suma/server/internal/task"
 )
 
-func newDeliveryCreationHarness(t *testing.T) projectHTTPHarness {
+func newDeliveryCreationHarness(t *testing.T, gitClients ...gitrepo.Client) projectHTTPHarness {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	root := t.TempDir()
@@ -33,7 +33,11 @@ func newDeliveryCreationHarness(t *testing.T) projectHTTPHarness {
 		t.Fatal(err)
 	}
 	credentials := gitrepo.NewCredentialService(db, store)
-	delivery := cd.NewService(db, nil, credentials, nil, task.NewService(db), nil, store)
+	var gitClient gitrepo.Client
+	if len(gitClients) > 0 {
+		gitClient = gitClients[0]
+	}
+	delivery := cd.NewService(db, gitClient, credentials, nil, task.NewService(db), nil, store)
 	users := auth.NewService(db, time.Hour)
 	if _, err := users.Initialize(context.Background(), "admin", "admin@example.test", "", "test-password-long"); err != nil {
 		t.Fatal(err)

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Revision struct {
@@ -27,6 +28,7 @@ type SyncRequest struct {
 }
 
 type Client interface {
+	TestConnection(context.Context, SyncRequest) (ConnectionResult, error)
 	Sync(context.Context, SyncRequest, io.Writer) (Revision, error)
 	Verify(context.Context, string, string) error
 	Cleanup(uint) error
@@ -49,6 +51,58 @@ func NewCLIClient(command, root string) (*CLIClient, error) {
 		return nil, fmt.Errorf("create Git data root: %w", err)
 	}
 	return &CLIClient{command: command, root: absolute}, nil
+}
+
+type ConnectionResult struct {
+	CommitSHA  string `json:"commit_sha,omitempty"`
+	RefChecked bool   `json:"ref_checked"`
+}
+
+// TestConnection reads remote refs only: no clone, worktree or deployment.
+// Arbitrary commits may be unadvertised, so they are verified during sync.
+func (c *CLIClient) TestConnection(ctx context.Context, request SyncRequest) (ConnectionResult, error) {
+	if err := ValidateRemote(request.Repository); err != nil {
+		return ConnectionResult{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	environment, cleanup, err := authenticationEnvironment(request.Credential)
+	if err != nil {
+		return ConnectionResult{}, err
+	}
+	defer cleanup()
+	reference := "HEAD"
+	switch request.Repository.RefType {
+	case RefBranch:
+		reference = "refs/heads/" + request.Repository.Ref
+	case RefTag:
+		reference = "refs/tags/" + request.Repository.Ref
+	}
+	args := []string{"ls-remote", "--", request.Repository.CloneURL, reference}
+	if request.Repository.RefType == RefTag {
+		args = append(args, reference+"^{}")
+	}
+	output, err := c.capture(ctx, "", environment, []string{request.Credential.Secret, request.Credential.Passphrase, request.Credential.PrivateKey}, args...)
+	if err != nil {
+		return ConnectionResult{}, err
+	}
+	if request.Repository.RefType == RefCommit {
+		return ConnectionResult{RefChecked: false}, nil
+	}
+	result := ConnectionResult{RefChecked: true}
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && commitSHA.MatchString(fields[0]) && (fields[1] == reference || fields[1] == reference+"^{}") {
+			// Prefer the commit behind an annotated tag over its tag object.
+			if result.CommitSHA == "" || fields[1] == reference+"^{}" {
+				result.CommitSHA = fields[0]
+			}
+		}
+	}
+	if result.CommitSHA == "" {
+		return ConnectionResult{}, fmt.Errorf("remote %s %q was not found; check the reference name and credential access", request.Repository.RefType, request.Repository.Ref)
+	}
+	return result, nil
 }
 
 func (c *CLIClient) Sync(ctx context.Context, request SyncRequest, output io.Writer) (Revision, error) {
@@ -162,6 +216,7 @@ func (c *CLIClient) Cleanup(projectID uint) error {
 func (c *CLIClient) run(ctx context.Context, directory string, environment []string, output io.Writer, redactions []string, args ...string) error {
 	var buffer bytes.Buffer
 	command := exec.CommandContext(ctx, c.command, args...)
+	command.WaitDelay = time.Second
 	command.Dir = directory
 	command.Env = append(safeGitEnvironment(), environment...)
 	command.Stdout = &buffer
@@ -172,6 +227,9 @@ func (c *CLIClient) run(ctx context.Context, directory string, environment []str
 		_, _ = io.WriteString(output, message)
 	}
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("git %s failed: %s", args[0], strings.TrimSpace(message))
 	}
 	return nil
@@ -180,11 +238,15 @@ func (c *CLIClient) run(ctx context.Context, directory string, environment []str
 func (c *CLIClient) capture(ctx context.Context, directory string, environment []string, redactions []string, args ...string) (string, error) {
 	var output bytes.Buffer
 	command := exec.CommandContext(ctx, c.command, args...)
+	command.WaitDelay = time.Second
 	command.Dir = directory
 	command.Env = append(safeGitEnvironment(), environment...)
 	command.Stdout = &output
 	command.Stderr = &output
 	if err := command.Run(); err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
 		return "", fmt.Errorf("git %s failed: %s", args[0], strings.TrimSpace(redact(output.String(), redactions)))
 	}
 	return output.String(), nil
@@ -265,7 +327,7 @@ func safeGitEnvironment() []string {
 func baseGitEnvironment() []string {
 	// file is needed for Git's own local repository/worktree plumbing. User
 	// supplied clone URLs are still restricted to HTTPS and SSH before Git runs.
-	return []string{"GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_ALLOW_PROTOCOL=https:ssh:file"}
+	return []string{"GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_ALLOW_PROTOCOL=https:ssh:file", "LC_ALL=C"}
 }
 
 func redact(value string, secrets []string) string {

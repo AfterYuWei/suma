@@ -18,6 +18,7 @@ import { cn } from '../../lib/utils'
 import { choiceDialog } from '../../stores/dialog'
 import { nodesForFilteredSelection, type DockerNode } from '../../lib/nodes'
 import { useUIStore } from '../../stores/ui'
+import { GitConnectionTest } from './connection-test'
 import {
   type CDConfiguration,
   type CDConfigureInput,
@@ -189,6 +190,7 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
 
     <SettingsSection title={zh ? 'Git 认证' : 'Git authentication'} description={zh ? '凭据独立加密保存，可用于任何兼容的 HTTPS 或 SSH 仓库；公开仓库可以不选择。' : 'Credentials are encrypted separately and work with any compatible HTTPS or SSH repository. Public repositories need none.'}>
       <CredentialSelector zh={zh} nodeIDs={draft.node_ids} value={draft.repository.authentication} onChange={(value) => updateRepository('authentication', value)} creating={!!creation} />
+      <GitConnectionTest repository={draft.repository} nodeIDs={draft.node_ids} projectName={projectName} creating={!!creation} zh={zh} />
     </SettingsSection>
 
     <SettingsSection title={zh ? '目标节点' : 'Target nodes'} description={zh ? '一次审批后并行发布到全部选中节点；修改只影响后续 Release。' : 'One approval deploys to every selected node in parallel. Changes affect only future releases.'}>

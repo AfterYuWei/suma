@@ -487,6 +487,10 @@ type agentSmokeGit struct {
 	revision gitrepo.Revision
 }
 
+func (g *agentSmokeGit) TestConnection(context.Context, gitrepo.SyncRequest) (gitrepo.ConnectionResult, error) {
+	return gitrepo.ConnectionResult{RefChecked: true}, nil
+}
+
 func (g *agentSmokeGit) Sync(context.Context, gitrepo.SyncRequest, io.Writer) (gitrepo.Revision, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()

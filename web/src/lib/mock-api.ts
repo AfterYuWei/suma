@@ -409,6 +409,13 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     deliveryProjects.push(project)
     return clone({ ...project, ...(configuration ? { configuration: { ...configuration, webhook_secret: generatedSecret } } : {}) }) as T
   }
+  if ((pathname === '/delivery-projects/test-connection' || /^\/delivery-projects\/[^/]+\/test-connection$/.test(pathname)) && method === 'POST') {
+    const repository = body.repository as { clone_url: string; ref: string; ref_type: string }
+    if (!repository?.clone_url || !repository.ref) throw new ApiError('Invalid Git connection configuration', 17714, 422)
+    if (repository.clone_url.includes('missing')) throw new ApiError('git ls-remote failed: repository not found (HTTP 404)', 17715, 422)
+    if (repository.ref === 'missing') throw new ApiError('remote branch "missing" was not found; check the reference name and credential access', 17715, 422)
+    return { ref_checked: repository.ref_type !== 'commit', ...(repository.ref_type !== 'commit' ? { commit_sha: '7a31f0c87aa1b239536f00223344556677889900' } : {}) } as T
+  }
   const deliveryMatch = pathname.match(/^\/delivery-projects\/([^/]+)(\/.*)?$/)
   if (deliveryMatch) {
     const name = deliveryMatch[1]

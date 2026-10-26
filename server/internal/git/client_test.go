@@ -3,14 +3,123 @@ package git
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
+	"encoding/pem"
+	"errors"
 	"fmt"
+	"net/http"
+	"net/http/cgi"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
+
+func TestConnectionAndSyncHonorExplicitHTTPUsernameWithRealHTTPSGit(t *testing.T) {
+	gitCommand, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	origin := filepath.Join(root, "repo")
+	runGit(t, gitCommand, "", "init", "--initial-branch=main", origin)
+	runGit(t, gitCommand, origin, "config", "user.name", "SUMA Test")
+	runGit(t, gitCommand, origin, "config", "user.email", "suma@example.test")
+	if err := os.WriteFile(filepath.Join(origin, "compose.yml"), []byte("services: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, gitCommand, origin, "add", "compose.yml")
+	runGit(t, gitCommand, origin, "commit", "-m", "HTTPS test")
+	runGit(t, gitCommand, origin, "tag", "-a", "v1", "-m", "annotated tag")
+	sha := strings.TrimSpace(runGit(t, gitCommand, origin, "rev-parse", "HEAD"))
+	token := "test-only-token-never-log"
+	var receivedUsername atomic.Value
+	backend := &cgi.Handler{Path: gitCommand, Args: []string{"http-backend"}, Env: []string{"GIT_PROJECT_ROOT=" + root, "GIT_HTTP_EXPORT_ALL=1"}}
+	remote := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Git"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		receivedUsername.Store(username)
+		if username != "repository-user" || password != token {
+			http.NotFound(w, r)
+			return
+		}
+		backend.ServeHTTP(w, r)
+	}))
+	defer remote.Close()
+	certificate, err := x509.ParseCertificate(remote.TLS.Certificates[0].Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw}))
+	// Direct real Git HTTPS to the fixture without changing credential handling.
+	wrapper := filepath.Join(t.TempDir(), "git.sh")
+	script := fmt.Sprintf(`#!/bin/sh
+for arg do
+ case "$arg" in https://cnb.cool/team/repo) arg=%s ;; esac
+ set -- "$@" "$arg"
+ shift
+done
+exec %s "$@"
+`, strconv.Quote(remote.URL+"/repo"), strconv.Quote(gitCommand))
+	if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewCLIClient(wrapper, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := SyncRequest{ProjectID: 1, Repository: Repository{CloneURL: "https://cnb.cool/team/repo", RefType: RefBranch, Ref: "main", ComposeFiles: []string{"compose.yml"}}, Credential: CredentialMaterial{AuthType: AuthHTTPToken, Secret: token, CustomCA: ca}}
+	// An empty username uses oauth2; a different required username is not guessed.
+	request.Credential.Username = ""
+	if _, err := client.TestConnection(context.Background(), request); err == nil || !strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), token) {
+		t.Fatalf("wrong-user error: %v", err)
+	}
+	if receivedUsername.Load() != "oauth2" {
+		t.Fatal("empty username did not default to oauth2")
+	}
+	request.Credential.Username = "repository-user"
+	result, err := client.TestConnection(context.Background(), request)
+	if err != nil || result.CommitSHA != sha || !result.RefChecked {
+		t.Fatalf("connection: %+v, %v", result, err)
+	}
+	entries, err := os.ReadDir(client.root)
+	if err != nil || len(entries) != 0 {
+		t.Fatal("connection test created local repository data")
+	}
+	request.Repository.RefType, request.Repository.Ref = RefTag, "v1"
+	result, err = client.TestConnection(context.Background(), request)
+	if err != nil || result.CommitSHA != sha {
+		t.Fatalf("annotated tag: %+v, %v", result, err)
+	}
+	request.Repository.Ref = "absent"
+	if _, err := client.TestConnection(context.Background(), request); err == nil || !strings.Contains(err.Error(), "was not found") {
+		t.Fatalf("missing tag: %v", err)
+	}
+	request.Repository.RefType, request.Repository.Ref = RefCommit, strings.Repeat("b", 40)
+	result, err = client.TestConnection(context.Background(), request)
+	if err != nil || result.RefChecked || result.CommitSHA != "" {
+		t.Fatalf("unadvertised commit was incorrectly verified: %+v, %v", result, err)
+	}
+	request.Repository.RefType, request.Repository.Ref = RefBranch, "main"
+	revision, err := client.Sync(context.Background(), request, &bytes.Buffer{})
+	if err != nil || revision.CommitSHA != sha {
+		t.Fatalf("sync: %+v, %v", revision, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	if _, err := client.TestConnection(ctx, request); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadline: %v", err)
+	}
+}
 
 func TestCLIClientSyncsLocalRepositoryIntoImmutableWorktrees(t *testing.T) {
 	gitCommand, err := exec.LookPath("git")
@@ -148,6 +257,10 @@ func TestCLIClientRedactsCredentialFromOutputAndErrors(t *testing.T) {
 		if !strings.Contains(value, "***") {
 			t.Fatalf("%s did not contain redaction marker: %q", label, value)
 		}
+	}
+	_, err = client.TestConnection(context.Background(), SyncRequest{Repository: repository, Credential: CredentialMaterial{AuthType: AuthHTTPToken, Secret: secretValue}})
+	if err == nil || strings.Contains(err.Error(), secretValue) || !strings.Contains(err.Error(), "***") {
+		t.Fatalf("connection failure did not redact credential: %v", err)
 	}
 }
 

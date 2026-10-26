@@ -25,6 +25,16 @@ export interface GitRepositoryConfiguration {
   environment_file: string
 }
 
+export interface GitConnectionInput {
+  repository: Pick<GitRepositoryConfiguration, 'clone_url' | 'ref_type' | 'ref' | 'authentication'>
+  node_ids: string[]
+}
+
+export interface GitConnectionResult {
+  commit_sha?: string
+  ref_checked: boolean
+}
+
 export type GitCredentialSource = 'none' | 'center' | 'project'
 export interface GitAuthentication {
   source: GitCredentialSource
