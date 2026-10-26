@@ -106,6 +106,7 @@ func New(logger *slog.Logger) (*App, error) {
 	}
 	gitCredentials := gitService.NewCredentialService(db, secretStore)
 	registryCredentials := credentialService.NewRegistryService(db, secretStore)
+	compose.SetRegistryCredentials(registryCredentials)
 	continuousDelivery := cdService.NewService(db, gitClient, gitCredentials, runner, taskService, auditService, secretStore)
 	continuousDelivery.SetTargetResolver(nodes)
 	continuousDelivery.SetRegistryCredentials(registryCredentials)

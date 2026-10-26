@@ -94,3 +94,60 @@ func mustMode(t *testing.T, path string) os.FileMode {
 	}
 	return info.Mode()
 }
+
+func TestRegistryOverridePreservesTargetAndUsesPrivateFiles(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "unix:///ambient.sock")
+	t.Setenv("DOCKER_CONFIG", "/unrelated-config")
+	for _, target := range []Target{{}, {Host: "unix:///explicit.sock"}, {Host: "tcp://docker.example:2376", TLSRequired: true, CA: "fixture-ca", Certificate: "fixture-cert", PrivateKey: "fixture-key"}, {Host: "unix:///agent-proxy.sock"}} {
+		t.Run(target.Host, func(t *testing.T) {
+			base, err := NewRunner("docker compose")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if target.Host != "" {
+				base = base.ForTarget(target)
+			}
+			runner := base.WithDockerConfig(`{"auths":{"docker.cnb.cool":{"auth":"fixture-auth"}}}`).(*CLIRunner)
+			env, cleanup, err := runner.commandEnvironment()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cleanup()
+			values := map[string]string{}
+			for _, line := range env {
+				key, value, _ := strings.Cut(line, "=")
+				values[key] = value
+			}
+			wantHost := target.Host
+			if wantHost == "" {
+				wantHost = "unix:///ambient.sock"
+			}
+			if values["DOCKER_HOST"] != wantHost || values["DOCKER_CONFIG"] == "/unrelated-config" {
+				t.Fatal("registry auth changed the runtime or reused ambient credentials")
+			}
+			path := values["DOCKER_CONFIG"]
+			if path == "" || mustMode(t, path).Perm() != 0o700 || mustMode(t, filepath.Join(path, "config.json")).Perm() != 0o600 {
+				t.Fatal("registry material is not private")
+			}
+			if target.TLSRequired {
+				if values["DOCKER_TLS_VERIFY"] != "1" || values["DOCKER_CERT_PATH"] == "" {
+					t.Fatal("registry configuration dropped mutual TLS")
+				}
+				for file, want := range map[string]string{"ca.pem": target.CA, "cert.pem": target.Certificate, "key.pem": target.PrivateKey} {
+					filePath := filepath.Join(values["DOCKER_CERT_PATH"], file)
+					data, err := os.ReadFile(filePath)
+					if err != nil || string(data) != want || mustMode(t, filePath).Perm() != 0o600 {
+						t.Fatal("registry configuration changed TLS material or permissions", err)
+					}
+				}
+			}
+			cleanup()
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatal("registry material not cleaned", err)
+			}
+			if base.registryConfig != "" {
+				t.Fatal("per-operation credentials mutated the shared runner")
+			}
+		})
+	}
+}

@@ -651,6 +651,10 @@ func (projectEmptyContainers) List(context.Context) ([]containerdomain.Summary, 
 }
 
 func newProjectHTTPHarness(t *testing.T) projectHTTPHarness {
+	return newProjectHTTPHarnessWithCommand(t, "/bin/true")
+}
+
+func newProjectHTTPHarnessWithCommand(t *testing.T, command string) projectHTTPHarness {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	containerID := strings.Repeat("ab", 32)
@@ -721,7 +725,7 @@ func newProjectHTTPHarness(t *testing.T) projectHTTPHarness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = nodes.Close() })
-	runner, err := composeService.NewRunner("/bin/true")
+	runner, err := composeService.NewRunner(command)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -730,6 +734,8 @@ func newProjectHTTPHarness(t *testing.T) projectHTTPHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	registries := credentialService.NewRegistryService(db, store)
+	projects.SetRegistryCredentials(registries)
 	authService := auth.NewService(db, time.Hour)
 	if _, err := authService.Initialize(context.Background(), "admin", "admin@example.test", "", "long-password"); err != nil {
 		t.Fatal(err)
@@ -738,7 +744,7 @@ func newProjectHTTPHarness(t *testing.T) projectHTTPHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router := NewRouter(Dependencies{Engine: &fakeEngine{}, Auth: authService, Audit: audit.NewService(db), Tasks: tasks, Compose: projects, ComposeRunner: runner, Nodes: nodes})
+	router := NewRouter(Dependencies{Engine: &fakeEngine{}, Auth: authService, Audit: audit.NewService(db), Tasks: tasks, Compose: projects, ComposeRunner: runner, Nodes: nodes, RegistryCredentials: registries})
 	return projectHTTPHarness{router: router, cookie: &http.Cookie{Name: sessionCookie, Value: token}, db: db, compose: projects, containerID: containerID}
 }
 

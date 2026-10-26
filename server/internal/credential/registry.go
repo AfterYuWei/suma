@@ -255,12 +255,5 @@ func validateRegistry(input RegistryInput, requireSecret bool) error {
 }
 
 func registryAddressesEqual(a, b string) bool {
-	normalize := func(s string) string {
-		s = strings.ToLower(s)
-		if s == "index.docker.io" || s == "registry-1.docker.io" {
-			return "docker.io"
-		}
-		return s
-	}
-	return normalize(a) == normalize(b)
+	return canonicalRegistry(a) == canonicalRegistry(b)
 }

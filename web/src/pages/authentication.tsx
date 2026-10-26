@@ -161,21 +161,22 @@ function GitEditor({ zh, nodes, editing, input, setInput, close, submit, error, 
 
 function RegistryEditor({ zh, nodes, editing, input, setInput, close, submit, error, pending }: { zh: boolean; nodes: DockerNode[]; editing: RegistryCredential | null; input: RegistryInput; setInput: React.Dispatch<React.SetStateAction<RegistryInput>>; close: () => void; submit: (event: FormEvent<HTMLFormElement>) => void; error?: string; pending: boolean }) {
   const set = <K extends keyof RegistryInput>(key: K, value: RegistryInput[K]) => setInput((current) => ({ ...current, [key]: value }))
+  const authTypes = [{value:'basic',label:zh ? '用户名 + 密码／访问令牌' : 'Username + password / access token'},{value:'token',label:zh ? 'Docker 身份令牌' : 'Docker identity token'}]
   return <EditorShell title={editing ? (zh ? '编辑镜像仓库凭据' : 'Edit registry credential') : (zh ? '新增镜像仓库凭据' : 'New registry credential')} close={close} submit={submit} error={error} pending={pending}>
-    <Field label={zh ? '名称' : 'Name'}><Input required value={input.name} onChange={(event) => set('name', event.target.value)} /></Field>
-    <Field label={zh ? '仓库地址' : 'Registry address'} hint="host[:port]"><Input required value={input.server_address} onChange={(event) => set('server_address', event.target.value)} placeholder="registry.example.com:5000" /></Field>
+    <Field label={zh ? '名称' : 'Name'}><Input aria-label={zh ? '名称' : 'Name'} required value={input.name} onChange={(event) => set('name', event.target.value)} /></Field>
+    <Field label={zh ? '仓库地址' : 'Registry address'} hint="host[:port]"><Input aria-label={zh ? '仓库地址' : 'Registry address'} required value={input.server_address} onChange={(event) => set('server_address', event.target.value)} placeholder="registry.example.com:5000" /></Field>
     <Field label={zh ? '认证类型' : 'Authentication type'}>
-      <Select value={input.auth_type} onValueChange={(value) => set('auth_type', value as RegistryAuthType)}>
-        <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+      <Select items={authTypes} value={input.auth_type} onValueChange={(value) => set('auth_type', value as RegistryAuthType)}>
+        <SelectTrigger aria-label={zh ? '认证类型' : 'Authentication type'} className="w-full"><SelectValue /></SelectTrigger>
         <SelectContent>
-          <SelectItem value="basic">{zh ? '账号密码' : 'Username/password'}</SelectItem>
-          <SelectItem value="token">Token</SelectItem>
+          {authTypes.map(item=><SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
         </SelectContent>
       </Select>
     </Field>
-    {input.auth_type === 'basic' && <Field label={zh ? '用户名' : 'Username'}><Input value={input.username} onChange={(event) => set('username', event.target.value)} /></Field>}
-    <Field label={input.auth_type === 'basic' ? (zh ? '密码' : 'Password') : 'Token'} hint={editing ? (zh ? '留空保留原值' : 'Leave empty to preserve') : undefined}>
-      <Input type="password" autoComplete="new-password" value={input.secret} onChange={(event) => set('secret', event.target.value)} />
+    {input.auth_type === 'basic' && <Field label={zh ? '用户名' : 'Username'}><Input aria-label={zh ? '用户名' : 'Username'} value={input.username} onChange={(event) => set('username', event.target.value)} /></Field>}
+    <p className="text-xs text-muted-foreground">{zh ? '访问令牌通常作为密码使用；Token 模式仅接受 Docker identity token。CNB：选择用户名 + 密码／访问令牌，用户名填 cnb。' : 'Access tokens usually go in the password field. Token mode accepts Docker identity tokens only. For CNB, choose username + password / access token and use cnb as the username.'}</p>
+    <Field label={input.auth_type === 'basic' ? (zh ? '密码或访问令牌' : 'Password or access token') : (zh ? 'Docker 身份令牌' : 'Docker identity token')} hint={editing ? (zh ? '认证方式不变时，留空保留原值' : 'Leave empty to preserve when authentication type is unchanged') : undefined}>
+      <Input aria-label={input.auth_type === 'basic' ? (zh ? '密码或访问令牌' : 'Password or access token') : (zh ? 'Docker 身份令牌' : 'Docker identity token')} type="password" autoComplete="new-password" value={input.secret} onChange={(event) => set('secret', event.target.value)} />
     </Field>
     <NodeGrantSelector zh={zh} nodes={nodes} value={input.authorized_node_ids} onChange={(value) => set('authorized_node_ids', value)} />
   </EditorShell>

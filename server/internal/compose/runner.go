@@ -55,9 +55,16 @@ type Target struct {
 }
 
 type CLIRunner struct {
-	command string
-	prefix  []string
-	target  *Target
+	command        string
+	prefix         []string
+	target         *Target
+	registryConfig string
+}
+
+func (r *CLIRunner) WithDockerConfig(config string) Runner {
+	copy := *r
+	copy.registryConfig = config
+	return &copy
 }
 
 func (r *CLIRunner) ForTarget(target Target) *CLIRunner {
@@ -273,18 +280,25 @@ func releaseEnvironment() []string {
 
 func (r *CLIRunner) commandEnvironment() ([]string, func(), error) {
 	values := releaseEnvironment()
-	if r.target == nil {
+	if r.target == nil && r.registryConfig == "" {
 		return values, func() {}, nil
 	}
 	filtered := make([]string, 0, len(values)+3)
 	for _, value := range values {
-		if strings.HasPrefix(value, "DOCKER_HOST=") || strings.HasPrefix(value, "DOCKER_CONTEXT=") || strings.HasPrefix(value, "DOCKER_TLS_VERIFY=") || strings.HasPrefix(value, "DOCKER_CERT_PATH=") || strings.HasPrefix(value, "DOCKER_CONFIG=") {
+		if strings.HasPrefix(value, "DOCKER_CONFIG=") || r.target != nil && (strings.HasPrefix(value, "DOCKER_HOST=") || strings.HasPrefix(value, "DOCKER_CONTEXT=") || strings.HasPrefix(value, "DOCKER_TLS_VERIFY=") || strings.HasPrefix(value, "DOCKER_CERT_PATH=")) {
 			continue
 		}
 		filtered = append(filtered, value)
 	}
-	filtered = append(filtered, "DOCKER_HOST="+r.target.Host)
-	if !r.target.TLSRequired && r.target.DockerConfig == "" {
+	config := r.registryConfig
+	tlsRequired := r.target != nil && r.target.TLSRequired
+	if r.target != nil {
+		filtered = append(filtered, "DOCKER_HOST="+r.target.Host)
+		if config == "" {
+			config = r.target.DockerConfig
+		}
+	}
+	if !tlsRequired && config == "" {
 		return filtered, func() {}, nil
 	}
 	directory, err := os.MkdirTemp("", "suma-compose-tls-")
@@ -296,7 +310,7 @@ func (r *CLIRunner) commandEnvironment() ([]string, func(), error) {
 		cleanup()
 		return nil, func() {}, err
 	}
-	if r.target.TLSRequired {
+	if tlsRequired {
 		for _, item := range []struct{ name, value string }{{"ca.pem", r.target.CA}, {"cert.pem", r.target.Certificate}, {"key.pem", r.target.PrivateKey}} {
 			if strings.TrimSpace(item.value) == "" {
 				cleanup()
@@ -309,13 +323,13 @@ func (r *CLIRunner) commandEnvironment() ([]string, func(), error) {
 		}
 		filtered = append(filtered, "DOCKER_TLS_VERIFY=1", "DOCKER_CERT_PATH="+directory)
 	}
-	if r.target.DockerConfig != "" {
+	if config != "" {
 		configDir := filepath.Join(directory, "config")
 		if err := os.Mkdir(configDir, 0o700); err != nil {
 			cleanup()
 			return nil, func() {}, err
 		}
-		if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(r.target.DockerConfig), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(config), 0o600); err != nil {
 			cleanup()
 			return nil, func() {}, err
 		}

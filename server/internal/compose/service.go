@@ -16,6 +16,7 @@ import (
 
 	"github.com/goccy/go-yaml"
 	containerdomain "github.com/suma/suma/server/internal/container"
+	"github.com/suma/suma/server/internal/credential"
 	"github.com/suma/suma/server/internal/database"
 	projectdomain "github.com/suma/suma/server/internal/project"
 	"github.com/suma/suma/server/internal/task"
@@ -51,6 +52,7 @@ type Service struct {
 	instanceID   string
 	projectLocks *sync.Map
 	operations   *sync.Map
+	registries   *credential.RegistryService
 }
 
 func NewService(_ *gorm.DB, root string, runner Runner, tasks *task.Service, containers containerdomain.Service) (*Service, error) {
@@ -64,7 +66,7 @@ func NewService(_ *gorm.DB, root string, runner Runner, tasks *task.Service, con
 	return &Service{root: absolute, runner: runner, tasks: tasks, containers: containers, nodeID: "local", nodeName: "Local", localSources: true, instanceID: fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano()), projectLocks: &sync.Map{}, operations: &sync.Map{}}, nil
 }
 func (s *Service) ForNode(nodeID, nodeName string, runner Runner, containers containerdomain.Service, localSources bool) *Service {
-	return &Service{root: s.root, runner: runner, tasks: s.tasks, containers: containers, nodeID: nodeID, nodeName: nodeName, localSources: localSources, instanceID: s.instanceID, projectLocks: s.projectLocks, operations: s.operations}
+	return &Service{root: s.root, runner: runner, tasks: s.tasks, containers: containers, nodeID: nodeID, nodeName: nodeName, localSources: localSources, instanceID: s.instanceID, projectLocks: s.projectLocks, operations: s.operations, registries: s.registries}
 }
 func (s *Service) List(ctx context.Context) ([]Project, error) {
 	containers, err := s.containers.List(ctx)
@@ -460,6 +462,18 @@ func (s *Service) ActionWithRevision(ctx context.Context, name, action, expected
 			}
 		}
 		var err error
+		runner := s.runner
+		if action == "pull" || action == "update" || action == "up" {
+			var config string
+			runner, config, err = s.registryRunner(ctx, project)
+			if err != nil {
+				return err
+			}
+			if config != "" {
+				redact = registryRedactor(config, redact)
+				report(1, "Registry authentication loaded from node grants")
+			}
+		}
 		report(1, "Starting docker compose "+action)
 		run := func(start, end int, operation func(io.Writer) error) error {
 			if err := s.checkRevision(project.Path, revision); err != nil {
@@ -476,7 +490,7 @@ func (s *Service) ActionWithRevision(ctx context.Context, name, action, expected
 		}
 		switch action {
 		case "up":
-			err = run(5, 95, func(output io.Writer) error { return s.runner.Up(ctx, project.Path, output) })
+			err = run(5, 95, func(output io.Writer) error { return runner.Up(ctx, project.Path, output) })
 		case "down":
 			err = run(5, 95, func(output io.Writer) error { return s.runner.Down(ctx, project.Path, output) })
 		case "start":
@@ -486,13 +500,13 @@ func (s *Service) ActionWithRevision(ctx context.Context, name, action, expected
 		case "restart":
 			err = run(5, 95, func(output io.Writer) error { return s.runner.Restart(ctx, project.Path, output) })
 		case "pull":
-			err = run(5, 95, func(output io.Writer) error { return s.runner.Pull(ctx, project.Path, output) })
+			err = run(5, 95, func(output io.Writer) error { return runner.Pull(ctx, project.Path, output) })
 		case "build":
 			err = run(5, 95, func(output io.Writer) error { return s.runner.Build(ctx, project.Path, output) })
 		case "update":
-			if err = run(5, 55, func(output io.Writer) error { return s.runner.Pull(ctx, project.Path, output) }); err == nil {
+			if err = run(5, 55, func(output io.Writer) error { return runner.Pull(ctx, project.Path, output) }); err == nil {
 				report(60, "Images ready; recreating Compose services")
-				err = run(60, 95, func(output io.Writer) error { return s.runner.Up(ctx, project.Path, output) })
+				err = run(60, 95, func(output io.Writer) error { return runner.Up(ctx, project.Path, output) })
 			}
 		default:
 			err = fmt.Errorf("unknown compose action")
