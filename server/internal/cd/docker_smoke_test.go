@@ -46,7 +46,17 @@ func TestRealDockerCDDeliveryRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	projectName := fmt.Sprintf("suma-cd-smoke-%d", time.Now().UnixNano())
-	firstTree := smokeWorktree(t, "one")
+	// The Engine must be able to mount a host configuration outside the Git
+	// worktree. The served content proves the mount is applied, not just accepted.
+	hostConfig := filepath.Join(t.TempDir(), "index.html")
+	if err := os.WriteFile(hostConfig, []byte("suma-host-bind-smoke\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hostConfig, err = filepath.EvalSymlinks(hostConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstTree := smokeHostBindWorktree(t, "one", hostConfig)
 	firstCommit := strings.Repeat("a", 40)
 	gitClient := &fakeGitClient{revision: gitrepo.Revision{CommitSHA: firstCommit, CommitAuthor: "Smoke Test", CommitMessage: "first", WorktreePath: firstTree}}
 	project := database.DeliveryProject{
@@ -78,7 +88,7 @@ func TestRealDockerCDDeliveryRollback(t *testing.T) {
 	assertSmokeRuntime(t, ctx, runner, cleanupSpec)
 
 	secondCommit := strings.Repeat("b", 40)
-	gitClient.SetRevision(gitrepo.Revision{CommitSHA: secondCommit, CommitAuthor: "Smoke Test", CommitMessage: "second", WorktreePath: smokeWorktree(t, "two")})
+	gitClient.SetRevision(gitrepo.Revision{CommitSHA: secondCommit, CommitAuthor: "Smoke Test", CommitMessage: "second", WorktreePath: smokeHostBindWorktree(t, "two", hostConfig)})
 	second := smokeSync(t, ctx, db, service, projectName)
 	if second.CommitSHA != secondCommit || second.Status != StatusSucceeded {
 		t.Fatalf("second release = %#v", second)
@@ -327,6 +337,23 @@ func smokeWorktree(t *testing.T, release string) string {
       retries: 20
 `
 	if err := os.WriteFile(filepath.Join(root, "compose.yml"), []byte(value), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func smokeHostBindWorktree(t *testing.T, release, hostConfig string) string {
+	t.Helper()
+	root := smokeWorktree(t, release)
+	file := filepath.Join(root, "compose.yml")
+	content, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	volumes := fmt.Sprintf("    volumes:\n      - type: bind\n        source: %q\n        target: /usr/share/nginx/html/index.html\n        read_only: true\n        bind:\n          create_host_path: false\n", hostConfig)
+	value := strings.Replace(string(content), "    healthcheck:\n", volumes+"    healthcheck:\n", 1)
+	value = strings.Replace(value, "wget -q -O - http://127.0.0.1/ >/dev/null", "wget -q -O - http://127.0.0.1/ | grep -Fxq suma-host-bind-smoke", 1)
+	if err := os.WriteFile(file, []byte(value), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return root

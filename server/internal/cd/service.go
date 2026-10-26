@@ -581,7 +581,7 @@ func (s *Service) syncLocked(ctx context.Context, projectID uint, taskID, trigge
 	if err != nil {
 		return err
 	}
-	if err := s.validateDeploymentTargets(ctx, project.ID, revision.WorktreePath, rendered); err != nil {
+	if err := s.validateDeploymentTargets(ctx, project.ID, spec, rendered); err != nil {
 		return fmt.Errorf("deployment policy rejected the release: %w", err)
 	}
 	hash := sha256.Sum256([]byte(rendered))
@@ -1674,31 +1674,33 @@ func (s *Service) composeTargetForProject(ctx context.Context, projectID uint, n
 	return target, nil
 }
 
-func (s *Service) validateDeploymentTargets(ctx context.Context, projectID uint, worktree, rendered string) error {
-	if s.targets == nil {
-		return validateDeploymentPolicy(worktree, rendered)
-	}
-	ids, err := s.projectNodeIDs(ctx, projectID)
-	if err != nil {
+func (s *Service) validateDeploymentTargets(ctx context.Context, projectID uint, spec compose.ExecutionSpec, rendered string) error {
+	if err := validateDeploymentPolicy(rendered); err != nil {
 		return err
 	}
-	validatedLocal := false
-	for _, id := range ids {
-		var row database.Node
-		if err := s.db.WithContext(ctx).Where("id = ?", id).First(&row).Error; err != nil {
+	remote := false
+	if s.targets != nil {
+		ids, err := s.projectNodeIDs(ctx, projectID)
+		if err != nil {
 			return err
 		}
-		if row.ConnectionType == "unix" {
-			if !validatedLocal {
-				if err := validateDeploymentPolicy(worktree, rendered); err != nil {
-					return err
-				}
-				validatedLocal = true
+		for _, id := range ids {
+			var row database.Node
+			if err := s.db.WithContext(ctx).Where("id = ?", id).First(&row).Error; err != nil {
+				return err
 			}
-			continue
+			remote = remote || row.ConnectionType != "unix"
 		}
-		if err := validateRemoteDeploymentPolicy(rendered); err != nil {
-			return fmt.Errorf("node %s: %w", row.Name, err)
+	}
+	// Rendering resolves relative paths and interpolation. Check original bind
+	// declarations as well, so TCP/Agent targets require explicit host paths.
+	for _, file := range spec.Files {
+		content, err := readDeploymentFile(file)
+		if err != nil {
+			return fmt.Errorf("read Compose file %q: %w", file, err)
+		}
+		if err := compose.ValidateComposeBindMounts(string(content), remote, false); err != nil {
+			return fmt.Errorf("Compose file %q: %w", file, err)
 		}
 	}
 	return nil

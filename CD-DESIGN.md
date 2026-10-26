@@ -104,7 +104,26 @@ The source policy runs before Compose rendering:
 - local paths referenced by service `env_file` or `label_file`, and by file-backed top-level `configs` or `secrets`, must resolve inside the worktree as regular files of at most 2 MiB;
 - source paths containing any `$` interpolation form are rejected rather than resolved against those values.
 
-After Compose produces JSON, the rendered policy requires at least one service and a nonempty image for every service. It rejects privileged mode, host network/PID/IPC/cgroup namespaces, host devices, inherited container volumes, high-risk `ALL`/`SYS_ADMIN` capabilities, disabled security confinement, Docker socket mounts, and all writable bind mounts. A bind source must already exist, resolve inside the worktree, and be read-only. Named volumes are allowed and are the supported persistent-data mechanism.
+After Compose produces JSON, the rendered policy requires at least one service and a nonempty image for every service. It rejects privileged mode, host network/PID/IPC/cgroup namespaces, host devices, inherited container volumes, high-risk `ALL`/`SYS_ADMIN` capabilities, disabled security confinement, Docker socket mounts, and all writable bind mounts. Rendered bind sources must be absolute paths without interpolation. The filesystem root and lexically normalized sources at or below `/etc`, `/proc`, `/sys`, `/dev`, `/var/run`, and `/run` are rejected. Named volumes are allowed and are the supported writable persistent-data mechanism.
+
+Bind sources belong to the selected Docker Engine's host for Unix Socket, TCP, and Agent nodes alike. SUMA does not read, stat, or resolve symlinks for those paths in the control-plane filesystem, and they need not be inside the Git worktree. The target Engine handles source existence, permissions, and mounting during deployment; its failures remain in the deployment task and Release evidence. TCP/Agent targets additionally require non-interpolated absolute bind sources in the original Compose files, before rendering can resolve them. A project targeting both Unix and remote nodes uses these stricter source rules. Unix-only projects retain Compose's relative-path resolution, but the resulting absolute path must exist on the Engine host; files are not uploaded by SUMA.
+
+For example, an existing host configuration can be mounted without exposing it to the SUMA container:
+
+```yaml
+services:
+  app:
+    image: example/app:1
+    volumes:
+      - type: bind
+        source: /Data/Docker/DockerData/eizhu/application.yml
+        target: /app/application.yml
+        read_only: true
+        bind:
+          create_host_path: false
+```
+
+`create_host_path: false` lets the Engine report a missing configuration instead of creating a directory at that path. This bind policy is separate from the worktree containment checks for Compose files, `.env`, `env_file`, `label_file`, and file-backed configs/secrets consumed by Compose on the control plane. [Docker's bind-mount documentation](https://docs.docker.com/engine/storage/bind-mounts/) describes the daemon-host path semantics.
 
 ### Reconcile modes
 
@@ -196,7 +215,7 @@ Rollback does not:
 - change or revert the remote Git repository;
 - guarantee compatibility between an old image and current persisted data.
 
-A Compose service cannot use a writable bind mount in Git delivery. Use named volumes for writable persistent data; any bind mount must resolve inside the worktree and be read-only. Release identity protects the recorded Git/config reference; it is not an application-data snapshot.
+A Compose service cannot use a writable bind mount in Git delivery. Use named volumes for writable persistent data; bind mounts must be read-only and use permitted paths on each target Docker host. Release identity protects the recorded Git/config reference; it is not an application-data snapshot and does not preserve the contents of external host configuration files.
 
 If automatic rollback is enabled and a node deployment fails, SUMA restores that node's own previous active Release. Successful nodes remain on the new Release. Multi-node delivery is not atomic and does not attempt a cross-node transaction. Operators should disable automatic rollback for deployments with irreversible migrations and should revert/fix Git after restoration so desired and active state converge.
 
@@ -211,7 +230,7 @@ If automatic rollback is enabled and a node deployment fails, SUMA restores that
 | `SUMA_COMPOSE_ROOT` | `<data-root>/compose` | Managed-mode Compose root |
 | `SUMA_DATA_ROOT` | `./data` (the production image bakes it to `/Data`) | Base path for default persistent locations |
 
-The production image includes Git, OpenSSH client tools, CA certificates, Docker CLI, and the Compose plugin. The Compose/Git data root is mounted at the same absolute host/container path because bind sources are interpreted by the host Docker daemon.
+The production image includes Git, OpenSSH client tools, CA certificates, Docker CLI, and the Compose plugin. The Compose/Git data root is mounted at the same absolute host/container path so repository-relative binds can work with the local Engine. Bind sources are always interpreted by the target Docker daemon; an external host configuration need not be mounted into SUMA, and a remote node must provide its own source file at the declared absolute path.
 
 ## Operational security checklist
 
@@ -221,7 +240,7 @@ The production image includes Git, OpenSSH client tools, CA certificates, Docker
 - Pin SSH hosts and use a private CA certificate instead of bypassing verification.
 - Generate a unique high-entropy webhook secret per project and rotate it after exposure.
 - Keep Git repositories free of plaintext deployment secrets; use named/external secret facilities appropriate to the deployment.
-- Use named volumes for writable data; Git delivery rejects writable or out-of-worktree bind mounts.
+- Use named volumes for writable data; Git delivery accepts read-only binds to permitted target-host paths, including paths outside the Git worktree.
 - Review Compose privileges, host mounts, devices, ports, and Docker socket mounts before automatic delivery.
 - Back up PostgreSQL, `secret.key`, and required release/worktree data as one controlled recovery set.
 - Treat access to SUMA and `/var/run/docker.sock` as root-equivalent host access.
