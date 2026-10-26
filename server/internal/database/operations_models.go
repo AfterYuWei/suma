@@ -27,13 +27,17 @@ type NotificationRule struct {
 
 // These rows are historical notification evidence, not current Docker state.
 type NotificationEvent struct {
-	ID        string    `gorm:"primaryKey;size:64" json:"id"`
-	Type      string    `gorm:"index" json:"type"`
-	Severity  string    `json:"severity"`
-	NodeID    string    `gorm:"index" json:"node_id,omitempty"`
-	DedupeKey string    `gorm:"index" json:"-"`
-	DataJSON  string    `json:"-"`
-	CreatedAt time.Time `gorm:"index" json:"created_at"`
+	ID             string     `gorm:"primaryKey;size:64" json:"id"`
+	Type           string     `gorm:"index" json:"type"`
+	Severity       string     `json:"severity"`
+	NodeID         string     `gorm:"index" json:"node_id,omitempty"`
+	DedupeKey      string     `gorm:"index" json:"-"`
+	DataJSON       string     `json:"-"`
+	CreatedAt      time.Time  `gorm:"index" json:"created_at"`
+	IncidentKey    string     `json:"-"`
+	Occurrences    int64      `json:"occurrences,omitempty"`
+	LastOccurredAt *time.Time `json:"last_occurred_at,omitempty"`
+	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
 }
 type NotificationRead struct {
 	UserID  uint   `gorm:"primaryKey"`

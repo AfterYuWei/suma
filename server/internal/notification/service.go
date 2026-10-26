@@ -302,7 +302,15 @@ func (s *Service) Test(ctx context.Context, id string, recipients ...string) err
 	if err != nil {
 		return err
 	}
-	_, err = s.deps.Sender.Send(ctx, row, m, Message{Text: "SUMA · 通知渠道测试 / Notification channel test"})
+	text := "SUMA 通知测试"
+	if row.Config.Language == "en-US" {
+		text = "SUMA notification test"
+	}
+	_, err = s.deps.Sender.Send(ctx, row, m, Message{Text: text, Language: row.Config.Language})
+	if err == nil {
+		s.db.WithContext(ctx).Model(&database.NotificationChannel{}).Where("id = ?", row.ID).Updates(map[string]any{"last_error": "", "last_sent_at": s.deps.Now()})
+		s.Emit(event.Event{Type: "notification.recovered", Severity: "info", ResourceType: "notification_channel", ResourceID: row.ID, Title: row.Name, Message: "Notification channel test delivery succeeded", DedupeKey: deliveryIncidentKey(row, row.Config.ChatID)})
+	}
 	return err
 }
 func (s *Service) Check(ctx context.Context, id string) (map[string]any, error) {
@@ -439,34 +447,52 @@ func (s *Service) Ingest(ctx context.Context, e event.Event) error {
 			e.Scope = "control_plane"
 		}
 	}
+	// Derive identity before display fields are bounded; long image references
+	// must not collapse into the same incident after title truncation.
+	family := incidentFamily(e)
 	e.Title = redact.Bounded(e.Title, 256)
 	e.Message = redact.Bounded(e.Message, 4000)
 	if e.DedupeKey == "" {
 		e.DedupeKey = e.Type + "|" + e.NodeID + "|" + e.ResourceID
-		if e.Type == "auth.login" {
+		if e.TaskID != "" {
+			e.DedupeKey += "|task:" + e.TaskID
+		} else if e.ReleaseID != nil {
+			e.DedupeKey += fmt.Sprintf("|release:%d", *e.ReleaseID)
+		} else if e.Type == "auth.login" {
 			e.DedupeKey += "|" + e.ID
 		}
 	}
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", "event|"+e.DedupeKey).Error; err != nil {
+		lock := "event|" + e.DedupeKey
+		if family != "" {
+			lock = "incident|" + family
+		}
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", lock).Error; err != nil {
 			return err
 		}
-		var count int64
-		q := tx.Model(&database.NotificationEvent{}).Where("dedupe_key = ?", e.DedupeKey)
-		if e.Type != "image.available" && e.Type != "image.recreate_required" && e.Type != "auth.new_ip" {
-			window := 10 * time.Minute
-			if e.Type == "tls.expiring" {
-				window = 24 * time.Hour
+		row := database.NotificationEvent{ID: e.ID, Severity: e.Severity, NodeID: e.NodeID, DedupeKey: e.DedupeKey, CreatedAt: e.Time}
+		skip, recovered, err := observeIncident(tx, &e, &row, family)
+		if err != nil || skip {
+			return err
+		}
+		if family == "" {
+			var count int64
+			q := tx.Model(&database.NotificationEvent{}).Where("dedupe_key = ?", e.DedupeKey)
+			if e.Type != "image.available" && e.Type != "image.recreate_required" && e.Type != "auth.new_ip" {
+				window := 10 * time.Minute
+				if e.Type == "tls.expiring" {
+					window = 24 * time.Hour
+				}
+				q = q.Where("created_at > ?", e.Time.Add(-window))
 			}
-			q = q.Where("created_at > ?", e.Time.Add(-window))
+			if err := q.Count(&count).Error; err != nil {
+				return err
+			}
+			if count > 0 {
+				return nil
+			}
 		}
-		if err := q.Count(&count).Error; err != nil {
-			return err
-		}
-		if count > 0 {
-			return nil
-		}
-		row := database.NotificationEvent{ID: e.ID, Type: e.Type, Severity: e.Severity, NodeID: e.NodeID, DedupeKey: e.DedupeKey, DataJSON: encode(e), CreatedAt: e.Time}
+		row.Type, row.DataJSON = e.Type, encode(e)
 		if err := tx.Create(&row).Error; err != nil {
 			return err
 		}
@@ -475,9 +501,18 @@ func (s *Service) Ingest(ctx context.Context, e event.Event) error {
 			return err
 		}
 		matched := map[string]MatchedRule{}
+		ruleEvidence := map[string]MatchedRule{}
+		recoveryMatches := map[string][]string{}
 		for _, r := range rules {
-			if matches(tx, decodeRule(r).Config, e) {
-				matched[r.ID] = MatchedRule{ID: r.ID, Name: r.Name, Version: r.Version}
+			ruleEvidence[r.ID] = MatchedRule{ID: r.ID, Name: r.Name, Version: r.Version}
+			config := decodeRule(r).Config
+			if matches(tx, config, e) {
+				matched[r.ID] = ruleEvidence[r.ID]
+			}
+			for _, original := range recovered {
+				if matches(tx, config, original) {
+					recoveryMatches[r.ID] = append(recoveryMatches[r.ID], original.ID)
+				}
 			}
 		}
 		var channels []database.NotificationChannel
@@ -498,6 +533,17 @@ func (s *Service) Ingest(ctx context.Context, e event.Event) error {
 				for _, id := range sub.RuleIDs {
 					if r, ok := matched[id]; ok {
 						evidence = append(evidence, r)
+						continue
+					}
+					for _, eventID := range recoveryMatches[id] {
+						received, err := receivedFault(tx, channel, target.ChatID, eventID)
+						if err != nil {
+							return err
+						}
+						if received {
+							evidence = append(evidence, ruleEvidence[id])
+							break
+						}
 					}
 				}
 				if len(evidence) == 0 {
@@ -552,7 +598,7 @@ func (s *Service) Inbox(ctx context.Context, userID uint) (Inbox, error) {
 	for _, r := range rows {
 		var e event.Event
 		_ = json.Unmarshal([]byte(r.DataJSON), &e)
-		out.Items = append(out.Items, InboxEvent{Event: e, Read: read[r.ID]})
+		out.Items = append(out.Items, InboxEvent{Event: e, Read: read[r.ID], Occurrences: r.Occurrences, LastOccurredAt: r.LastOccurredAt, ResolvedAt: r.ResolvedAt})
 	}
 	err = s.db.WithContext(ctx).Model(&database.NotificationEvent{}).Where("id NOT IN (?)", s.db.Model(&database.NotificationRead{}).Select("event_id").Where("user_id = ?", userID)).Count(&out.Unread).Error
 	return out, err
@@ -715,12 +761,13 @@ func (s *Service) deliver(ctx context.Context, row database.NotificationDelivery
 	}
 	if err == nil {
 		s.db.Model(&database.NotificationChannel{}).Where("id = ?", channel.ID).Updates(map[string]any{"last_error": "", "last_sent_at": now})
+		s.Emit(event.Event{Type: "notification.recovered", Severity: "info", ResourceType: "notification_channel", ResourceID: channel.ID, Title: channel.Name, Message: "Notification channel delivery recovered", DedupeKey: deliveryIncidentKey(channel, row.ChatID), Time: now})
 	} else {
 		s.db.Model(&database.NotificationChannel{}).Where("id = ?", channel.ID).Update("last_error", reason)
 	}
 	if status == "failed" {
-		if len(events) > 0 && events[0].Type != "notification.failed" {
-			s.Emit(event.Event{Type: "notification.failed", Severity: "error", ResourceType: "notification_channel", ResourceID: channel.ID, Title: "通知渠道发送失败 / Channel delivery failed", Message: channel.Name + ": " + reason, DedupeKey: "delivery-failed|" + channel.ID})
+		if len(events) > 0 && !strings.HasPrefix(events[0].Type, "notification.") {
+			s.Emit(event.Event{Type: "notification.failed", Severity: "error", ResourceType: "notification_channel", ResourceID: channel.ID, Title: channel.Name, Message: channel.Name + ": " + reason, DedupeKey: deliveryIncidentKey(channel, row.ChatID)})
 		}
 	}
 }
@@ -728,46 +775,9 @@ func (s *Service) finishDelivery(id, status, reason string, due time.Time, remot
 	s.error(s.db.Model(&database.NotificationDelivery{}).Where("id = ? AND status = ?", id, "sending").Updates(map[string]any{"status": status, "reason": reason, "due_at": due, "lease_until": nil, "provider_message_id": remote}).Error)
 }
 func (s *Service) render(snapshot DeliverySnapshot, rows []database.NotificationEvent) Message {
-	c := snapshot.Policy
-	var text strings.Builder
-	zone, _ := time.LoadLocation(c.Timezone)
-	if zone == nil {
-		zone = time.UTC
-	}
-	message := Message{}
-	for _, row := range rows {
-		var e event.Event
-		_ = json.Unmarshal([]byte(row.DataJSON), &e)
-		message.Events = append(message.Events, e)
-		path := "/notifications#" + e.ID
-		link := strings.TrimRight(snapshot.PublicURL, "/") + path
-		title := e.Title
-		if c.Template == "" {
-			for _, entry := range Catalog {
-				if entry.Type == e.Type {
-					if snapshot.Language == "en-US" {
-						title = entry.TitleEN
-					} else {
-						title = entry.Title
-					}
-				}
-			}
-		}
-		body := c.Template
-		if body == "" {
-			body = "[" + e.Severity + "] {{title}}\n{{time}} · {{node}} · {{resource}}\n{{message}}\n{{url}}"
-		}
-		for key, value := range map[string]string{"title": title, "message": e.Message, "node": e.NodeName, "resource": e.ResourceID, "time": e.Time.In(zone).Format("2006-01-02 15:04:05 MST"), "url": link} {
-			body = strings.ReplaceAll(body, "{{"+key+"}}", value)
-		}
-		text.WriteString(body + "\n\n")
-		if snapshot.PublicURL != "" {
-			message.URL = link
-		}
-	}
-	message.Text = redact.Bounded(text.String(), 12000)
-	return message
+	return renderMessage(snapshot, rows)
 }
+
 func hash(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])

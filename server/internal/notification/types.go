@@ -107,7 +107,10 @@ type Rule struct {
 }
 type InboxEvent struct {
 	event.Event
-	Read bool `json:"read"`
+	Read           bool       `json:"read"`
+	Occurrences    int64      `json:"occurrences,omitempty"`
+	LastOccurredAt *time.Time `json:"last_occurred_at,omitempty"`
+	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
 }
 type Inbox struct {
 	Items  []InboxEvent `json:"items"`
@@ -128,9 +131,12 @@ type Incoming struct {
 	Private   bool
 }
 type Message struct {
-	Text   string
-	URL    string
-	Events []event.Event
+	Text     string
+	URL      string
+	Events   []event.Event
+	Title    string
+	Language string
+	Default  bool
 }
 
 var Catalog = []CatalogEntry{
@@ -141,6 +147,10 @@ var Catalog = []CatalogEntry{
 	{"cd.awaiting_approval", "delivery", "Release 待审核", "Release awaiting approval"}, {"cd.completed", "delivery", "发布或回滚结果", "Deployment or rollback completed"}, {"cd.drift", "delivery", "发布状态漂移", "Deployment drift"},
 	{"cleanup.completed", "cleanup", "存储清理结果", "Storage cleanup result"}, {"cleanup.skipped", "cleanup", "清理被跳过", "Cleanup skipped"}, {"task.failed", "tasks", "任务失败", "Task failed"}, {"task.canceled", "tasks", "任务取消", "Task canceled"},
 	{"notification.failed", "notifications", "渠道发送失败", "Channel delivery failed"},
+	{"notification.recovered", "notifications", "渠道发送恢复", "Channel delivery recovered"},
+	{"image.check_recovered", "images", "镜像检查恢复", "Image check recovered"},
+	{"cd.recovered", "delivery", "发布状态恢复", "Deployment recovered"},
+	{"tls.recovered", "nodes", "TLS 证书恢复", "TLS certificate renewed"},
 }
 var Presets = map[string][]string{
 	"security":  {"auth.login", "auth.new_ip", "auth.login_failed", "account.changed", "credential.changed", "tls.expiring"},

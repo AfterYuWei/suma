@@ -94,7 +94,7 @@ func TestMonitoringUpgradeRetainsProductionEvidence(t *testing.T) {
 	defer again.Close()
 	var migrations int64
 	reopened.Model(&database.SchemaMigration{}).Count(&migrations)
-	if migrations != 2 {
+	if migrations != 3 {
 		t.Fatal("migration ledger replayed or lost entries")
 	}
 }

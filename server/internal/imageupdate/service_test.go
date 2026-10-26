@@ -7,6 +7,7 @@ import (
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/credential"
 	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/event"
 	"github.com/suma/suma/server/internal/task"
 	"github.com/suma/suma/server/internal/testutil"
 	"gorm.io/gorm"
@@ -16,6 +17,40 @@ import (
 	"testing"
 	"time"
 )
+
+func TestRegistryCheckEmitsRecoveryOnlyForSuccessfulObservations(t *testing.T) {
+	var failed atomic.Bool
+	failed.Store(true)
+	s, _, _ := testService(t, resolverFunc(func(context.Context, string, Platform, credential.RegistryMaterial) (Remote, error) {
+		if failed.Load() {
+			return Remote{}, &LookupError{Code: "registry_unavailable"}
+		}
+		return Remote{ConfigDigest: "old"}, nil
+	}))
+	var mu sync.Mutex
+	var events []event.Event
+	s.deps.Emit = func(e event.Event) { mu.Lock(); defer mu.Unlock(); events = append(events, e) }
+	for attempt := 0; attempt < 2; attempt++ {
+		row, err := s.Check(context.Background(), "local", CheckInput{}, Actor{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		awaitCheck(t, s, row)
+		failed.Store(false)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	counts := map[string]int{}
+	for _, e := range events {
+		counts[e.Type]++
+		if e.Title == "" || e.NodeID != "local" {
+			t.Fatal("recovery lost image reference or node", e)
+		}
+	}
+	if counts["image.check_failed"] != 2 || counts["image.check_recovered"] != 2 {
+		t.Fatal("failed lookup incorrectly signaled recovery", counts)
+	}
+}
 
 type fakeRuntime struct {
 	mu        sync.Mutex

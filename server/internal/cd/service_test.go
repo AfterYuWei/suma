@@ -16,6 +16,7 @@ import (
 
 	"github.com/suma/suma/server/internal/compose"
 	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/event"
 	gitrepo "github.com/suma/suma/server/internal/git"
 	"github.com/suma/suma/server/internal/secret"
 	"github.com/suma/suma/server/internal/task"
@@ -85,6 +86,9 @@ func TestUnconfiguredProjectReturnsUsableDefaults(t *testing.T) {
 
 func TestServiceManualSyncDeployDriftAndIdempotency(t *testing.T) {
 	harness := newCDHarness(t, ModeManual)
+	var eventMu sync.Mutex
+	var observed []event.Event
+	harness.service.SetEventSink(func(e event.Event) { eventMu.Lock(); defer eventMu.Unlock(); observed = append(observed, e) })
 	syncTask, err := harness.service.Sync(context.Background(), harness.project.Name, "manual", Actor{Name: "operator"})
 	if err != nil {
 		t.Fatal(err)
@@ -139,6 +143,16 @@ func TestServiceManualSyncDeployDriftAndIdempotency(t *testing.T) {
 	}
 	if drift.Drifted || drift.ActiveCommit != harness.git.revision.CommitSHA || drift.ActiveReleaseID == nil || *drift.ActiveReleaseID != release.ID {
 		t.Fatalf("drift after deployment = %#v", drift)
+	}
+	eventMu.Lock()
+	seenFault, seenRecovery := false, false
+	for _, e := range observed {
+		seenFault = seenFault || e.Type == "cd.drift"
+		seenRecovery = seenRecovery || e.Type == "cd.recovered"
+	}
+	eventMu.Unlock()
+	if !seenFault || !seenRecovery {
+		t.Fatal("drift and confirmed healthy recovery observations missing")
 	}
 	assertCallSubsequence(t, harness.runner.Calls(), []string{"validate", "render", "pull", "up", "ps"})
 

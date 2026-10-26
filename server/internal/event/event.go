@@ -19,6 +19,7 @@ type Event struct {
 	ReleaseID    *uint     `json:"release_id,omitempty"`
 	ActorID      *uint     `json:"actor_id,omitempty"`
 	DedupeKey    string    `json:"-"`
+	RecoveryOf   []string  `json:"recovery_of,omitempty"`
 	Time         time.Time `json:"time"`
 }
 type Sink func(Event)

@@ -9,11 +9,12 @@ import { useI18n } from '../../lib/i18n'
 import { Check, Choice, ErrorText, Field } from './common'
 import { ruleSummary, toggle, useOpsText } from './helpers'
 import type { Catalog, Channel, DeliveryPolicy, Rule, Subscription } from './types'
+import { defaultNotificationText, notificationTimestamp, templateExample } from './presentation'
 
 export function SubscriptionEditor({ value, channels, channelID, language, publicURL, onChange, onCreate }: {
  value: Subscription; channels: Channel[]; channelID?: string; language: string; publicURL: string; onChange: (value: Subscription) => void; onCreate: () => void
 }) {
- const t = useOpsText(), { language: uiLanguage } = useI18n(), [search, setSearch] = useState('')
+ const t = useOpsText(), { language: uiLanguage } = useI18n(), [search, setSearch] = useState(''), [previewType,setPreviewType] = useState('')
  const rules = useQuery({ queryKey: ['notification-rules'], queryFn: () => api<Rule[]>('/notifications/rules') })
  const catalog = useQuery({ queryKey: ['notification-catalog'], queryFn: () => api<Catalog>('/notifications/catalog') })
  const query = search.trim().toLowerCase(), policy = value.policy
@@ -21,16 +22,19 @@ export function SubscriptionEditor({ value, channels, channelID, language, publi
  const update = <K extends keyof DeliveryPolicy>(key: K, next: DeliveryPolicy[K]) => onChange({ ...value,policy:{ ...policy,[key]:next } })
  const fallback = channels.find(channel => channel.id === policy.fallback_id)
  const missing = value.rule_ids.filter(id => rules.data && !rules.data.some(rule => rule.id === id))
- const sampleType = rules.data?.find(rule => value.rule_ids.includes(rule.id))?.config.events[0] || 'container.oom'
- const entry = catalog.data?.events.find(event => event.type === sampleType)
- const title = entry ? language === 'zh-CN' ? entry.title : entry.title_en : 'Container OOM'
- let time = ''
- try { time = new Intl.DateTimeFormat(language,{ dateStyle:'short',timeStyle:'medium',timeZone:policy.timezone }).format(new Date('2026-10-11T04:00:00Z')) } catch { time = t('请输入有效的 IANA 时区', 'Enter a valid IANA timezone') }
- const variables: Record<string,string> = { title,message:language === 'zh-CN' ? '这是用于预览的事件描述。' : 'This is a sample event description.',node:'Production',resource:'container-example',time,url:`${publicURL.replace(/\/$/,'')}/notifications#example` }
- const template = policy.template || '[error] {{title}}\n{{time}} · {{node}} · {{resource}}\n{{message}}\n{{url}}'
+ const sampleType = previewType || rules.data?.find(rule => value.rule_ids.includes(rule.id))?.config.events[0] || 'container.oom'
+ const example = templateExample(sampleType,language)
+ let time = '', customTime = ''
+ try {
+  time = notificationTimestamp(example.time,policy.timezone)
+  const offset = new Intl.DateTimeFormat('en-US',{timeZone:policy.timezone,timeZoneName:'longOffset'}).formatToParts(new Date(example.time)).find(part=>part.type === 'timeZoneName')?.value.replace('GMT','') || '+00:00'
+  customTime = `${time}:00 ${offset}`
+ } catch { time = customTime = t('请输入有效的 IANA 时区', 'Enter a valid IANA timezone') }
+ const variables: Record<string,string> = { title:example.title,message:example.message,node:example.node_name,resource:example.resource_id,time:customTime,url:`${publicURL.replace(/\/$/,'')}/notifications#example` }
+ const template = policy.template
  const clean = template.replace(/{{(title|message|node|resource|time|url)}}/g,'')
  const unsupported = clean.includes('{{') || clean.includes('}}')
- const preview = template.replace(/{{(title|message|node|resource|time|url)}}/g,(_,field: string) => variables[field])
+ const preview = template ? template.replace(/{{(title|message|node|resource|time|url)}}/g,(_,field: string) => variables[field]) : defaultNotificationText(example,language,time)
  return <div className="min-w-0 space-y-5">
   <section aria-label={t('订阅规则', 'Subscribed rules')} className="space-y-2">
    <div className="flex items-center justify-between gap-2"><h3 className="text-sm font-medium">{t('订阅规则', 'Subscribed rules')} <span className="font-normal text-muted-foreground">{value.rule_ids.length}</span></h3><Button variant="ghost" size="sm" onClick={onCreate}><Plus className="size-3.5" />{t('新建规则', 'New rule')}</Button></div>
@@ -45,6 +49,7 @@ export function SubscriptionEditor({ value, channels, channelID, language, publi
   </section>
   <section aria-label={t('发送策略', 'Delivery policy')} className="section-surface space-y-3">
    <h3 className="text-sm font-medium">{t('发送策略', 'Delivery policy')}</h3>
+   <p className="text-xs text-muted-foreground">{t('同一故障只提醒一次，恢复后再通知。再次异常会重新提醒。', 'Each fault is sent once, then again on recovery. A new occurrence triggers a new alert.')}</p>
    <Choice label={t('发送频率', 'Frequency')} value={policy.mode} options={[[ 'immediate',t('即时', 'Immediate') ],['merge',t('五分钟合并', 'Merge over 5 minutes') ],['daily',t('每日摘要', 'Daily digest') ]]} onChange={next => update('mode',next as DeliveryPolicy['mode'])} />
    <Field label={t('订阅时区', 'Subscription timezone')} hint={t('同时用于静默、每日摘要和消息中的时间。', 'Used for quiet hours, daily digests and timestamps in messages.')}><Input value={policy.timezone} onChange={event => update('timezone',event.target.value)} /></Field>
    {policy.mode === 'daily' && <Field label={t('摘要小时（0–23）', 'Digest hour (0–23)')}><Input type="number" min={0} max={23} value={policy.digest_hour} onChange={event => update('digest_hour',Number(event.target.value))} /></Field>}
@@ -58,11 +63,14 @@ export function SubscriptionEditor({ value, channels, channelID, language, publi
    </div></details>
   </section>
   <details><summary className="cursor-pointer py-1 text-sm select-none">{t('消息模板与预览', 'Message template and preview')}</summary><div className="space-y-3 pt-3">
-   <p className="text-xs text-muted-foreground">{t('留空使用默认格式。可修改固定文字、换行和字段顺序；模板只改变正文，不改变触发条件。', 'Leave blank for the default format. Customize fixed text, line breaks and field order. Templates change message text, not triggers.')}</p>
-   <Field label={t('消息模板（可选）', 'Message template (optional)')}><textarea className="min-h-32 w-full rounded-md border bg-transparent p-2 font-mono text-xs" value={policy.template} maxLength={4000} onChange={event => update('template',event.target.value)} placeholder="[SUMA] {{title}}" /></Field>
-   <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">{[['title',t('事件标题', 'Event title')],['message',t('事件描述', 'Event description')],['node',t('节点名称，可能为空', 'Node name; may be empty')],['resource',t('资源 ID，可能为空', 'Resource ID; may be empty')],['time',t('事件时间，使用订阅时区', 'Event time in the subscription timezone')],['url',t('事件详情链接', 'Event detail link')]].map(([field,label]) => <div key={field} className="contents"><dt className="font-mono text-muted-foreground">{`{{${field}}}`}</dt><dd className="min-w-0 break-words">{label}</dd></div>)}</dl>
+   <p className="text-xs text-muted-foreground">{t('默认显示事件、资源和时间，必要时附简短原因。自定义模板仅改变正文。', 'The default shows the event, resource and time, with a short reason when available. Custom templates change message text only.')}</p>
+   <div className="flex flex-wrap gap-1 rounded-md bg-surface p-1" role="group" aria-label={t('预览场景', 'Preview scenario')}>{[['container.oom',t('异常', 'Fault')],['container.recovered',t('恢复', 'Recovery')],['cd.completed',t('结果', 'Result')],['auth.new_ip',t('安全', 'Security')]].map(([type,label])=><Button key={type} size="sm" variant={sampleType===type?'secondary':'ghost'} aria-pressed={sampleType===type} onClick={()=>setPreviewType(type)}>{label}</Button>)}</div>
+   <Field label={t('消息模板（可选）', 'Message template (optional)')}><textarea className="min-h-24 w-full rounded-md border bg-transparent p-2 font-mono text-xs" value={policy.template} maxLength={4000} onChange={event => update('template',event.target.value)} placeholder={t('留空使用精简默认模板', 'Leave blank for the concise default')} /></Field>
+   {!!policy.template && <Button size="sm" variant="ghost" onClick={()=>update('template','')}>{t('恢复默认', 'Restore default')}</Button>}
+   <details className="text-xs text-muted-foreground"><summary className="w-fit cursor-pointer select-none">{t('可用字段', 'Available fields')}</summary><dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 pt-2">{[['title',t('事件标题', 'Event title')],['message',t('事件描述', 'Event description')],['node',t('节点名称，可能为空', 'Node name; may be empty')],['resource',t('资源 ID，可能为空', 'Resource ID; may be empty')],['time',t('事件时间，使用订阅时区', 'Event time in the subscription timezone')],['url',t('事件详情链接', 'Event detail link')]].map(([field,label]) => <div key={field} className="contents"><dt className="font-mono text-muted-foreground">{`{{${field}}}`}</dt><dd className="min-w-0 break-words">{label}</dd></div>)}</dl></details>
    {unsupported && <ErrorText error={t('模板包含不支持的占位符，仅支持上面六个字段。', 'The template contains unsupported placeholders. Only the six fields above are supported.')} />}
    <p className="text-xs text-muted-foreground">{t('示例预览，不会发送通知', 'Sample preview; no notification is sent')}</p><pre aria-label={t('消息预览', 'Message preview')} className="overflow-x-auto rounded-md bg-muted p-3 text-xs whitespace-pre-wrap break-words">{preview}</pre>
+   {!policy.template && publicURL && <Button variant="outline" size="sm" disabled>{language === 'en-US' ? 'View details' : '查看详情'}</Button>}
   </div></details>
  </div>
 }

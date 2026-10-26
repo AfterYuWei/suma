@@ -1,0 +1,524 @@
+[
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "container-example",
+      "title": "redis",
+      "message": "",
+      "severity": "error",
+      "type": "container.oom"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "容器内存不足\nProduction · redis · 2026-10-11 12:00",
+    "en": "Container out of memory\nProduction · redis · 2026-10-11 12:00"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "redis-main",
+      "title": "Container OOM",
+      "message": "",
+      "severity": "error",
+      "type": "container.oom"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "容器内存不足\nProduction · redis-main · 2026-10-11 12:00",
+    "en": "Container out of memory\nProduction · redis-main · 2026-10-11 12:00"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "container-example",
+      "title": "redis",
+      "message": "die exit=137",
+      "severity": "warning",
+      "type": "container.exited"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "容器异常退出\nProduction · redis · 2026-10-11 12:00\n退出码 137",
+    "en": "Container exited unexpectedly\nProduction · redis · 2026-10-11 12:00\nExit code 137"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "container-example",
+      "title": "redis",
+      "message": "health_status: unhealthy exit=",
+      "severity": "warning",
+      "type": "container.unhealthy"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "容器健康检查失败\nProduction · redis · 2026-10-11 12:00",
+    "en": "Container health check failed\nProduction · redis · 2026-10-11 12:00"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "container-example",
+      "title": "redis",
+      "message": "health_status: healthy exit=",
+      "severity": "info",
+      "type": "container.recovered"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "健康检查已恢复\nProduction · redis · 2026-10-11 12:00",
+    "en": "Health check recovered\nProduction · redis · 2026-10-11 12:00"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "container-example",
+      "title": "redis",
+      "message": "Container has been running stably for at least two minutes",
+      "severity": "info",
+      "type": "container.recovered"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "容器运行已稳定\nProduction · redis · 2026-10-11 12:00",
+    "en": "Container running stably\nProduction · redis · 2026-10-11 12:00"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "container-example",
+      "title": "redis",
+      "message": "",
+      "severity": "warning",
+      "type": "container.restart_loop"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "容器频繁重启\nProduction · redis · 2026-10-11 12:00",
+    "en": "Container restarting repeatedly\nProduction · redis · 2026-10-11 12:00"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "",
+      "title": "Production",
+      "message": "",
+      "severity": "error",
+      "type": "node.offline"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "节点离线\nProduction · 2026-10-11 12:00",
+    "en": "Node offline\nProduction · 2026-10-11 12:00"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "container-example",
+      "title": "Production",
+      "message": "",
+      "severity": "info",
+      "type": "node.recovered"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "节点已恢复\nProduction · 2026-10-11 12:00",
+    "en": "Node recovered\nProduction · 2026-10-11 12:00"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "container-example",
+      "title": "Agent protocol incompatible",
+      "message": "",
+      "severity": "error",
+      "type": "agent.error"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "Agent 版本不兼容\nProduction · 2026-10-11 12:00",
+    "en": "Agent version incompatible\nProduction · 2026-10-11 12:00"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "container-example",
+      "title": "Docker TLS certificate expires soon",
+      "message": "2026-11-01T00:00:00Z",
+      "severity": "warning",
+      "type": "tls.expiring"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "TLS 证书即将到期\nProduction · 2026-10-11 12:00\n到期：2026-11-01",
+    "en": "TLS certificate expiring\nProduction · 2026-10-11 12:00\nExpires: 2026-11-01"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "container-example",
+      "title": "nginx:stable",
+      "message": "unavailable authentication_required",
+      "severity": "warning",
+      "type": "image.check_failed"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "镜像检查失败\nProduction · nginx:stable · 2026-10-11 12:00\n认证失败",
+    "en": "Image check failed\nProduction · nginx:stable · 2026-10-11 12:00\nAuthentication failed"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "container-example",
+      "title": "nginx:stable",
+      "message": "unavailable registry_unreachable",
+      "severity": "warning",
+      "type": "image.check_failed"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "镜像检查失败\nProduction · nginx:stable · 2026-10-11 12:00\n镜像仓库不可达",
+    "en": "Image check failed\nProduction · nginx:stable · 2026-10-11 12:00\nRegistry unreachable"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "container-example",
+      "title": "nginx:stable",
+      "message": "",
+      "severity": "info",
+      "type": "image.available"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "镜像有更新\nProduction · nginx:stable · 2026-10-11 12:00",
+    "en": "Image update available\nProduction · nginx:stable · 2026-10-11 12:00"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "container-example",
+      "title": "nginx:stable",
+      "message": "",
+      "severity": "info",
+      "type": "image.recreate_required"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "容器待重建\nProduction · nginx:stable · 2026-10-11 12:00",
+    "en": "Container recreation needed\nProduction · nginx:stable · 2026-10-11 12:00"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "container-example",
+      "title": "gateway",
+      "message": "Release aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa is ready for approval",
+      "severity": "warning",
+      "type": "cd.awaiting_approval",
+      "project": "gateway"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "发布待审核\nProduction · gateway · 2026-10-11 12:00\n版本 aaaaaaa",
+    "en": "Release awaiting approval\nProduction · gateway · 2026-10-11 12:00\nCommit aaaaaaa"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "gateway",
+      "title": "cd.deploy",
+      "message": "connection timeout",
+      "severity": "error",
+      "type": "cd.completed",
+      "resource_type": "project"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "发布失败\nProduction · gateway · 2026-10-11 12:00\n连接超时",
+    "en": "Deployment failed\nProduction · gateway · 2026-10-11 12:00\nConnection timed out"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "container-example",
+      "title": "cd.rollback",
+      "message": "",
+      "severity": "info",
+      "type": "cd.completed",
+      "project": "gateway"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "回滚完成\nProduction · gateway · 2026-10-11 12:00",
+    "en": "Rollback completed\nProduction · gateway · 2026-10-11 12:00"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "container-example",
+      "title": "gateway",
+      "message": "desired_commit_mismatch",
+      "severity": "warning",
+      "type": "cd.drift",
+      "project": "gateway"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "发布状态不一致\nProduction · gateway · 2026-10-11 12:00\n运行版本与期望不一致",
+    "en": "Deployment drift detected\nProduction · gateway · 2026-10-11 12:00\nRunning revision differs from desired"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "container-example",
+      "title": "cleanup.finish",
+      "message": "partial_failed: result {\"internal\":\"evidence\"}",
+      "severity": "error",
+      "type": "cleanup.completed"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "清理部分失败\nProduction · 2026-10-11 12:00",
+    "en": "Cleanup partially failed\nProduction · 2026-10-11 12:00"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "container-example",
+      "title": "Pull image",
+      "message": "forbidden: private technical details",
+      "severity": "error",
+      "type": "task.failed"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "任务失败\nProduction · Pull image · 2026-10-11 12:00\n权限不足",
+    "en": "Task failed\nProduction · Pull image · 2026-10-11 12:00\nPermission denied"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "container-example",
+      "title": "Pull image",
+      "message": "",
+      "severity": "warning",
+      "type": "task.canceled"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "任务已取消\nProduction · Pull image · 2026-10-11 12:00",
+    "en": "Task canceled\nProduction · Pull image · 2026-10-11 12:00"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "container-example",
+      "title": "Operations",
+      "message": "provider connection failed",
+      "severity": "error",
+      "type": "notification.failed"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "通知发送失败\nProduction · Operations · 2026-10-11 12:00\n连接失败",
+    "en": "Notification delivery failed\nProduction · Operations · 2026-10-11 12:00\nConnection failed"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "container-example",
+      "title": "Operations",
+      "message": "",
+      "severity": "info",
+      "type": "notification.recovered"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "通知发送已恢复\nProduction · Operations · 2026-10-11 12:00",
+    "en": "Notification delivery recovered\nProduction · Operations · 2026-10-11 12:00"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "",
+      "node_name": "",
+      "resource_id": "container-example",
+      "title": "New login IP",
+      "message": "Login completed from 203.0.113.10",
+      "severity": "warning",
+      "type": "auth.new_ip",
+      "actor_id": 41
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "新的登录 IP\n用户 #41 · 2026-10-11 12:00\nIP 203.0.113.10",
+    "en": "New login IP\nUser #41 · 2026-10-11 12:00\nIP 203.0.113.10"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "",
+      "node_name": "",
+      "resource_id": "container-example",
+      "title": "Repeated login failures",
+      "message": "Repeated authentication failures from 2001:db8::1",
+      "severity": "critical",
+      "type": "auth.login_failed"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "紧急 · 连续登录失败\n2026-10-11 12:00\nIP 2001:db8::1",
+    "en": "Urgent · Repeated login failures\n2026-10-11 12:00\nIP 2001:db8::1"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "type": "cd.completed",
+      "severity": "info",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "gateway",
+      "resource_type": "delivery_project",
+      "title": "cd.sync",
+      "message": "cd.sync: success"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "代码同步完成\nProduction · gateway · 2026-10-11 12:00",
+    "en": "Git sync completed\nProduction · gateway · 2026-10-11 12:00"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "type": "cd.completed",
+      "severity": "info",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "gateway",
+      "resource_type": "delivery_project",
+      "title": "cd.approve",
+      "message": "cd.approve: success"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "发布已批准\nProduction · gateway · 2026-10-11 12:00",
+    "en": "Release approved\nProduction · gateway · 2026-10-11 12:00"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "type": "cd.completed",
+      "severity": "info",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "gateway",
+      "resource_type": "delivery_project",
+      "title": "cd.reject",
+      "message": "cd.reject: success"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "发布已拒绝\nProduction · gateway · 2026-10-11 12:00",
+    "en": "Release rejected\nProduction · gateway · 2026-10-11 12:00"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "gateway",
+      "resource_type": "delivery_project",
+      "type": "project.completed",
+      "severity": "warning",
+      "title": "Update gateway",
+      "message": "context canceled"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "项目操作已取消\nProduction · Update gateway · 2026-10-11 12:00",
+    "en": "Project operation canceled\nProduction · Update gateway · 2026-10-11 12:00"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "gateway",
+      "resource_type": "delivery_project",
+      "type": "cd.completed",
+      "severity": "error",
+      "title": "cd.approve",
+      "message": "cd.approve: failed"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "发布审核失败\nProduction · gateway · 2026-10-11 12:00",
+    "en": "Release review failed\nProduction · gateway · 2026-10-11 12:00"
+  },
+  {
+    "event": {
+      "id": "sample",
+      "time": "2026-10-11T04:00:00Z",
+      "node_id": "local",
+      "node_name": "Production",
+      "resource_id": "redis-main",
+      "title": "Container out of memory",
+      "message": "",
+      "severity": "error",
+      "type": "container.oom"
+    },
+    "timezone": "Asia/Shanghai",
+    "zh": "容器内存不足\nProduction · redis-main · 2026-10-11 12:00",
+    "en": "Container out of memory\nProduction · redis-main · 2026-10-11 12:00"
+  }
+]

@@ -195,12 +195,12 @@ for (const width of [390, 1440]) for (const language of ['en-US', 'zh-CN']) for 
    else if (path === '/audit-logs') await expect(page.getByRole('tab', { name: zh ? '全部' : 'All', exact: true })).toHaveAttribute('aria-selected', 'true')
    else if (path === '/tasks#task-pull-183') await expect(page.getByRole('region', { name: zh ? '关联任务' : 'Linked task', exact: true }).getByRole('heading', { name: 'Pull ghcr.io/afteryuwei/gateway:1.8.2', exact: true })).toBeVisible()
    else if (path === '/notifications') {
-    await expect(page.getByText('Container OOM', { exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: zh ? '容器内存不足' : 'Container out of memory', exact: true })).toBeVisible()
     await page.getByRole('button', { name: zh ? '标为已读' : 'Mark read', exact: true }).click()
     await expect(page.getByRole('button', { name: zh ? '标为已读' : 'Mark read', exact: true })).toHaveCount(0)
     await page.reload()
     await expect(page.getByRole('heading', { name: zh ? '站内消息' : 'Inbox', exact: true })).toBeVisible()
-    await expect(page.getByText('Container OOM', { exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: zh ? '容器内存不足' : 'Container out of memory', exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: zh ? '标为已读' : 'Mark read', exact: true })).toHaveCount(0)
     await page.screenshot({ path: `/tmp/suma-notifications-${language}-${theme}-${width}.png`, fullPage: true })
    }

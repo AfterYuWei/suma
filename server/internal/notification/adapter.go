@@ -182,15 +182,20 @@ func (a *Adapter) Check(ctx context.Context, c Channel, m Secrets) (map[string]a
 func telegramButtons(message Message) any {
 	rows := []any{}
 	if message.URL != "" {
-		rows = append(rows, []any{map[string]string{"text": "在 SUMA 中查看 / Open SUMA", "url": message.URL}})
+		rows = append(rows, []any{map[string]string{"text": messageAction(message), "url": message.URL}})
 	}
 	return map[string]any{"inline_keyboard": rows}
 }
 func feishuCard(message Message) map[string]any {
-	elements := []any{map[string]any{"tag": "markdown", "content": escapeFeishu(message.Text)}}
+	body, title := message.Text, "SUMA"
+	if message.Default && message.Title != "" {
+		title = message.Title
+		body = strings.TrimSpace(strings.TrimPrefix(body, title+"\n"))
+	}
+	elements := []any{map[string]any{"tag": "markdown", "content": escapeFeishu(body)}}
 	buttons := []any{}
 	if message.URL != "" {
-		buttons = append(buttons, map[string]any{"tag": "button", "text": map[string]string{"tag": "plain_text", "content": "在 SUMA 中查看 / Open SUMA"}, "behaviors": []any{map[string]string{"type": "open_url", "default_url": message.URL}}})
+		buttons = append(buttons, map[string]any{"tag": "button", "text": map[string]string{"tag": "plain_text", "content": messageAction(message)}, "behaviors": []any{map[string]string{"type": "open_url", "default_url": message.URL}}})
 	}
 	if len(buttons) > 0 {
 		columns := []any{}
@@ -199,7 +204,13 @@ func feishuCard(message Message) map[string]any {
 		}
 		elements = append(elements, map[string]any{"tag": "column_set", "flex_mode": "flow", "columns": columns})
 	}
-	return map[string]any{"schema": "2.0", "config": map[string]any{"wide_screen_mode": true}, "header": map[string]any{"title": map[string]string{"tag": "plain_text", "content": "SUMA"}}, "body": map[string]any{"elements": elements}}
+	return map[string]any{"schema": "2.0", "config": map[string]any{"wide_screen_mode": true}, "header": map[string]any{"title": map[string]string{"tag": "plain_text", "content": title}}, "body": map[string]any{"elements": elements}}
+}
+func messageAction(message Message) string {
+	if message.Language == "en-US" {
+		return "View details"
+	}
+	return "查看详情"
 }
 func escapeFeishu(s string) string {
 	r := strings.NewReplacer("\\", "\\\\", "<", "\\<", ">", "\\>", "*", "\\*", "[", "\\[", "]", "\\]", "`", "\\`")
@@ -259,7 +270,11 @@ func (a *Adapter) Send(ctx context.Context, c Channel, m Secrets, message Messag
 		}
 		return data.ID, nil
 	case "webhook":
-		_, err := a.request(ctx, "POST", m.Endpoint, map[string]any{"schema_version": 1, "message": message.Text, "events": message.Events, "url": message.URL}, m.Authorization, c.Config.AllowPrivate, m)
+		text := message.Text
+		if message.Default && message.URL != "" {
+			text += "\n" + message.URL
+		}
+		_, err := a.request(ctx, "POST", m.Endpoint, map[string]any{"schema_version": 1, "message": text, "events": message.Events, "url": message.URL}, m.Authorization, c.Config.AllowPrivate, m)
 		return "", err
 	default:
 		return "", ErrInvalid

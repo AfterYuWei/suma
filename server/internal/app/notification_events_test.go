@@ -8,10 +8,53 @@ import (
 	"time"
 
 	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/docker"
 	"github.com/suma/suma/server/internal/event"
 	"github.com/suma/suma/server/internal/notification"
 	"github.com/suma/suma/server/internal/secret"
 )
+
+func TestContainerRecoveryRequiresContinuousStableRunning(t *testing.T) {
+	now := time.Now()
+	state := docker.NotificationState{ID: "container", Running: true, RestartCount: 5}
+	previous := map[string]docker.NotificationState{}
+	var stable map[string]containerStability
+	var events []event.Event
+	emit := func(e event.Event) { events = append(events, e) }
+	observe := func(elapsed time.Duration) {
+		stable = observeContainerRecovery("node", "Node", []docker.NotificationState{state}, previous, stable, now.Add(elapsed), emit)
+		previous[state.ID] = state
+	}
+	observe(0)
+	observe(time.Minute)
+	if len(events) != 0 {
+		t.Fatal("a start was treated as recovery")
+	}
+	state.RestartCount++
+	observe(90 * time.Second)
+	observe(2 * time.Minute)
+	if len(events) != 0 {
+		t.Fatal("new restart did not reset stability")
+	}
+	state.Health = "unhealthy"
+	observe(3 * time.Minute)
+	state.Health = "healthy"
+	observe(4 * time.Minute)
+	observe(5 * time.Minute)
+	observe(6 * time.Minute)
+	if len(events) != 1 || events[0].Type != "container.running" || events[0].NodeID != "node" {
+		t.Fatal("stable recovery missing", events)
+	}
+	stable = observeContainerRecovery("node", "Node", nil, previous, stable, now.Add(7*time.Minute), emit)
+	if len(stable) != 0 {
+		t.Fatal("removed container retained a stability checkpoint")
+	}
+	observe(8 * time.Minute)
+	observe(10 * time.Minute)
+	if len(events) != 1 {
+		t.Fatal("a gap in observations was treated as continuous stability")
+	}
+}
 
 func TestExpectedRebuildDoesNotHideUnrelatedContainerFailure(t *testing.T) {
 	db, err := testutil.Open(t)

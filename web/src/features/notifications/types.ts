@@ -9,5 +9,5 @@ export interface Rule { id: string; name: string; version: number; config: RuleC
 export interface Catalog { events: { type: string; category: string; title: string; title_en: string }[]; presets: Record<string, string[]> }
 export interface MatchedRule { id: string; name: string; version: number }
 export interface Delivery { id: string; channel_id: string; chat_id?: string; matched_rules: MatchedRule[]; event_count: number; source: 'event' | 'fallback' | 'manual' | 'test'; origin_delivery_id?: string; status: string; reason?: string; attempts: number; due_at: string; created_at: string }
-export interface NotificationEvent { id: string; type: string; severity: string; time: string; node_id: string; node_name: string; resource_id: string; title: string; message: string; task_id: string; read: boolean }
+export interface NotificationEvent { id: string; type: string; severity: string; time: string; node_id: string; node_name: string; resource_id: string; title: string; message: string; task_id: string; read: boolean; project?: string; resource_type?: string; actor_id?: number; occurrences?: number; last_occurred_at?: string; resolved_at?: string; recovery_of?: string[] }
 export interface Inbox { items: NotificationEvent[]; unread: number }

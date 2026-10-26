@@ -393,6 +393,9 @@ func (s *Service) check(ctx context.Context, node Node, in CheckInput, mappings 
 					s.cache[node.ID][key(r)] = cached{RuntimeKey: node.RuntimeKey, Result: r}
 					s.mu.Unlock()
 					if s.deps.Emit != nil {
+						if r.Status == "current" || r.Status == "update_available" || r.Status == "recreate_required" {
+							s.deps.Emit(event.Event{Type: "image.check_recovered", Severity: "info", NodeID: node.ID, NodeName: node.Name, ResourceType: "image", ResourceID: r.LocalImageID, Title: r.Reference, Message: "Image registry check succeeded", Time: now})
+						}
 						kind := ""
 						severity := "info"
 						switch r.Status {

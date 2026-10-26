@@ -62,6 +62,8 @@ type NotificationState struct {
 	Project      string
 	RestartCount int
 	Fingerprint  string
+	Running      bool
+	Health       string
 	Events       []event.Event
 }
 
@@ -90,6 +92,7 @@ func (a *Adapter) NotificationStates(ctx context.Context) ([]NotificationState, 
 			health = row.State.Health.Status
 		}
 		s.Fingerprint = fmt.Sprintf("%s|%s|%s|%d|%d|%t", row.State.Status, health, row.State.FinishedAt, row.State.ExitCode, row.RestartCount, row.State.OOMKilled)
+		s.Running, s.Health = row.State.Running, health
 		add := func(kind, severity, message string) {
 			s.Events = append(s.Events, event.Event{Type: kind, Severity: severity, ResourceType: "container", ResourceID: row.ID, Project: s.Project, Title: s.Name, Message: message, Time: time.Now().UTC()})
 		}

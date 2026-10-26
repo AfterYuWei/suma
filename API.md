@@ -395,7 +395,7 @@ Connection state is held in memory. Feishu returns `message_count`, `last_messag
 | GET | `/notifications/channels/:id/connection` | Feishu connection state and discovery observations |
 | GET / POST | `/notifications/rules` | List or create a reusable event filter |
 | PUT / DELETE | `/notifications/rules/:id` | Edit or remove a rule |
-| GET | `/notifications/inbox` | Latest 200 historical messages and per-user unread count |
+| GET | `/notifications/inbox` | Latest 200 historical messages and per-user unread count; ongoing fault evidence includes `occurrences`, `last_occurred_at`, optional `resolved_at`; recovery events include original IDs in `recovery_of` |
 | POST | `/notifications/inbox/:id/read` | Persist per-user read state |
 | GET | `/notifications/deliveries` | Latest 200 deliveries and suppression reasons |
 | POST | `/notifications/deliveries/:id/resend` | Queue a separate manual delivery using the original snapshot |

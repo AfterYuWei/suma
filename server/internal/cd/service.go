@@ -1359,10 +1359,12 @@ func (s *Service) Drift(ctx context.Context, name string) (Drift, error) {
 	delete(s.driftFlight, project.ID)
 	close(flight)
 	s.driftMu.Unlock()
-	if err == nil && value.Drifted && s.emit != nil {
+	if err == nil && s.emit != nil {
 		for _, n := range value.Nodes {
 			if n.Drifted {
 				s.emit(event.Event{Type: "cd.drift", Severity: "warning", NodeID: n.NodeID, NodeName: n.NodeName, Project: project.Name, ResourceType: "project", ResourceID: project.Name, Title: project.Name, Message: n.ReasonCode})
+			} else if n.Status == DriftHealthy && project.DesiredCommit != "" {
+				s.emit(event.Event{Type: "cd.recovered", Severity: "info", NodeID: n.NodeID, NodeName: n.NodeName, Project: project.Name, ResourceType: "project", ResourceID: project.Name, Title: project.Name, Message: "Deployment is healthy and matches the desired state", Time: n.CheckedAt})
 			}
 		}
 	}
