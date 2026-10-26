@@ -382,7 +382,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
   if (pathname === '/delivery-projects' && method === 'GET') return clone(deliveryProjects) as T
   if (pathname === '/delivery-projects' && method === 'POST') {
     const name = String(body.name || '')
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name)) throw new ApiError('Invalid delivery project name', 17713, 409)
+    if (!/^[a-z0-9][a-z0-9_-]{0,127}$/.test(name)) throw new ApiError('Invalid delivery project name', 17713, 409)
     if (deliveryProjects.some(project => project.name === name)) throw new ApiError('Delivery project already exists', 17713, 409)
     const input = body.configuration as CDConfigureInput | undefined
     const targetIDs = input?.node_ids || body.node_ids as string[] || ['local']
@@ -405,7 +405,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
       configuration = { ...input, repository: { ...input.repository, authentication: sanitizedAuthentication }, configured: true, webhook_secret: '', webhook_id: input.webhook_enabled ? `demo-${name}` : undefined, desired_commit: '', observed_commit: '' }
       deliveryConfigurations.set(name, configuration)
     }
-    const project: DeliveryProject = { id: Math.max(...deliveryProjects.map(row => row.id), 0) + 1, name, configured: !!input, repository_url: input?.repository.clone_url, git_ref: input?.repository.ref, node_ids: [...targetIDs], created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+    const project: DeliveryProject = { id: Math.max(...deliveryProjects.map(row => row.id), 0) + 1, name, deployment_name: name, configured: !!input, repository_url: input?.repository.clone_url, git_ref: input?.repository.ref, node_ids: [...targetIDs], created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
     deliveryProjects.push(project)
     return clone({ ...project, ...(configuration ? { configuration: { ...configuration, webhook_secret: generatedSecret } } : {}) }) as T
   }

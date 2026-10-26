@@ -8,6 +8,7 @@ export interface ProjectSummary {
   node_id: string
   name: string
   native_name: string
+  delivery_project_name?: string
   managed: boolean
   source: 'managed' | 'external'
   capabilities: ProjectCapability[]
@@ -18,6 +19,8 @@ export interface ProjectSummary {
   created_at: string
   updated_at: string
 }
+
+export const projectDisplayName = (project: ProjectSummary) => project.delivery_project_name || project.name
 
 export interface Project extends ProjectSummary {
   revision?: string

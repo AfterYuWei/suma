@@ -104,8 +104,8 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (save.isPending || creation?.created) return
-    if (creation && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(creation.name.trim())) {
-      setNotice(zh ? '项目名称须为 1–128 个字母、数字、点、短横线或下划线，以字母或数字开头。' : 'Use 1–128 letters, numbers, dots, hyphens or underscores, starting with a letter or number.')
+    if (creation && !/^[a-z0-9][a-z0-9_-]{0,127}$/.test(creation.name.trim())) {
+      setNotice(zh ? '项目名称须为 1–128 个小写字母、数字、短横线或下划线，以字母或数字开头。' : 'Use 1–128 lowercase letters, numbers, hyphens or underscores, starting with a letter or number.')
       return
     }
     if (draft.node_ids.length === 0) {
@@ -147,8 +147,8 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
 
     <fieldset disabled={save.isPending || creation?.created} className="flex min-w-0 flex-col gap-7">
     {creation && <SettingsSection title={zh ? '基本信息' : 'Basics'} description={zh ? '为这份交付配置命名，后续发布记录按此项目归档。' : 'Name this delivery configuration. Its releases are recorded under this project.'}>
-      <Field label={zh ? '项目名称' : 'Project name'} hint={zh ? '字母、数字、点、短横线或下划线，最多 128 字符' : 'Letters, numbers, dots, hyphens or underscores; up to 128 characters'}>
-        <Input required maxLength={128} pattern="[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,127}" value={creation.name} onChange={event => creation.onNameChange(event.target.value)} placeholder="gateway-prod" autoComplete="off" />
+      <Field label={zh ? '项目名称' : 'Project name'} hint={zh ? '同时用作节点上的 Compose 项目名；小写字母、数字、短横线或下划线，最多 128 字符' : 'Also used as the Compose project name on each node; lowercase letters, numbers, hyphens or underscores, up to 128 characters'}>
+        <Input required maxLength={128} pattern="[a-z0-9][a-z0-9_\-]{0,127}" value={creation.name} onChange={event => creation.onNameChange(event.target.value)} placeholder="gateway-prod" autoComplete="off" />
       </Field>
     </SettingsSection>}
 

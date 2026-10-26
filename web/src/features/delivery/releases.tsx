@@ -13,6 +13,7 @@ import { CheckCircle2, ChevronDownIcon, GitCommitHorizontal, History, Loader2, R
 import type { ReactNode } from 'react'
 import type { CDConfiguration, CDDrift, DeliveryRelease } from './types'
 import { parseStringList, repositoryName, shortCommit } from './types'
+import { deliveryOverviewNotice, driftReason } from './overview-notice'
 
 const statusBadgeClass = (status: string) => ['succeeded', 'approved'].includes(status)
   ? 'border-transparent bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
@@ -25,8 +26,8 @@ const statusBadgeClass = (status: string) => ['succeeded', 'approved'].includes(
 function Notice({ tone, title, children }: { tone: 'checking' | 'success' | 'warning'; title: string; children: ReactNode }) {
   return <Alert className={tone === 'success' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-300' : tone === 'warning' ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300' : ''}>
     {tone === 'checking' ? <Loader2 className="animate-spin" /> : tone === 'success' ? <CheckCircle2 /> : <TriangleAlert />}
-    <AlertTitle>{title}</AlertTitle>
-    <AlertDescription>{children}</AlertDescription>
+    <AlertTitle className="min-w-0 [overflow-wrap:anywhere]">{title}</AlertTitle>
+    <AlertDescription className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{children}</AlertDescription>
   </Alert>
 }
 
@@ -49,21 +50,19 @@ function EmptyHint({ icon, title, description }: { icon: ReactNode; title: strin
   </div>
 }
 
-export function CDOverview({ configuration, drift, releases, zh }: { configuration: CDConfiguration; drift?: CDDrift; releases?: DeliveryRelease[]; zh: boolean }) {
+export function CDOverview({ configuration, drift, releases, error, zh }: { configuration: CDConfiguration; drift?: CDDrift; releases?: DeliveryRelease[]; error?: string; zh: boolean }) {
   const { formatDateTime } = useDateTime()
 
   const latest = releases?.[0]
   const repository = configuration.repository
-  const checking = !drift
-  const aligned = drift?.status === 'healthy'
-  const unknown = drift?.status === 'unknown'
+  const notice = deliveryOverviewNotice({ drift, latest, desiredCommit: configuration.desired_commit, error, zh })
   const nodePagination = useListPagination(drift?.nodes ?? [])
   return <div className="flex w-full flex-col gap-4">
     <Notice
-      tone={checking ? 'checking' : aligned ? 'success' : 'warning'}
-      title={checking ? (zh ? '正在检查交付漂移' : 'Checking delivery drift') : aligned ? (zh ? '运行状态与 Git 已对齐' : 'Runtime is aligned with Git') : unknown ? (zh ? '部分节点状态暂时未知' : 'Some node states are unknown') : (zh ? '运行状态与 Git 期望不一致' : 'Runtime differs from the Git desired state')}
+      tone={notice.tone}
+      title={notice.title}
     >
-      {checking ? (zh ? '正在读取期望 Commit 与当前活动 Release。' : 'Reading the desired commit and active release.') : driftReason(drift.reason, zh) || (zh ? '当前活动 Release 使用期望 Commit。' : 'The active release uses the desired commit.')}
+      {notice.description}
     </Notice>
     <Card>
       <CardHeader><CardTitle>{zh ? '交付状态' : 'Delivery state'}</CardTitle></CardHeader>
@@ -89,7 +88,7 @@ export function CDOverview({ configuration, drift, releases, zh }: { configurati
             <TableCell><div className="font-medium">{node.node_name}</div><div className="text-xs text-muted-foreground">{node.node_id}</div></TableCell>
             <TableCell className="font-mono text-xs">{node.active_release_id ? `#${node.active_release_id} · ${shortCommit(node.active_commit)}` : '—'}</TableCell>
             <TableCell><Badge className={node.status === 'healthy' ? statusBadgeClass('succeeded') : node.status === 'degraded' ? statusBadgeClass('failed') : statusBadgeClass('rolled_back')}>{node.status}</Badge></TableCell>
-            <TableCell className="max-w-80 whitespace-normal text-xs text-muted-foreground">{node.reason || '—'}{node.health_summary && <details className="mt-1"><summary className="cursor-pointer">{zh ? '健康摘要' : 'Health summary'}</summary><pre className="mt-1 max-h-32 overflow-auto overscroll-contain whitespace-pre-wrap rounded bg-muted p-2">{node.health_summary}</pre></details>}</TableCell>
+            <TableCell className="max-w-80 whitespace-normal text-xs text-muted-foreground">{driftReason(node.reason, zh) || '—'}{node.health_summary && <details className="mt-1"><summary className="cursor-pointer">{zh ? '健康摘要' : 'Health summary'}</summary><pre className="mt-1 max-h-32 overflow-auto overscroll-contain whitespace-pre-wrap rounded bg-muted p-2">{node.health_summary}</pre></details>}</TableCell>
             <TableCell className="text-xs text-muted-foreground">{formatDateTime(node.checked_at)}</TableCell>
           </TableRow>)}</TableBody>
         </Table>
@@ -207,4 +206,3 @@ function ReleaseStatus({ status, zh }: { status: string; zh: boolean }) { return
 function modeLabel(value: string, zh: boolean) { if (value === 'auto') return zh ? '自动发布' : 'Automatic'; if (value === 'observe') return zh ? '仅观察' : 'Observe only'; return zh ? '手动发布' : 'Manual' }
 function statusLabel(value: string, zh: boolean) { if (!zh) return value.replaceAll('_', ' '); const labels: Record<string, string> = { validating: '校验中', awaiting_approval: '等待批准', approved: '已批准', rejected: '已拒绝', pulling: '拉取镜像', deploying: '部署中', verifying: '健康检查', succeeded: '成功', partial_failed: '部分失败', failed: '失败', rolling_back: '回滚中', rolled_back: '已回滚', rollback_failed: '回滚失败' }; return labels[value] || value }
 function triggerLabel(value: string, zh: boolean) { if (!zh) return value.replaceAll('_', ' '); const labels: Record<string, string> = { webhook: 'Webhook', poll: '定时轮询', manual: '手动同步', rollback: '回滚', startup_reconcile: '启动对账' }; return labels[value] || value }
-function driftReason(value: string | undefined, zh: boolean) { if (!value || !zh) return value || ''; const reasons: Record<string, string> = { 'repository has not been synchronized': '仓库尚未同步。', 'no release is active': '当前没有活动 Release。', 'active release differs from desired Git commit': '当前活动 Release 与 Git 期望 Commit 不一致。', 'unable to read active release runtime state': '无法读取活动 Release 的运行状态。', 'active release has missing or unhealthy containers': '活动 Release 存在缺失、停止或不健康的容器。' }; return reasons[value] || value }

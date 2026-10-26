@@ -7,6 +7,13 @@ const row = (id: string, patch: Partial<ContainerSummary> = {}): ContainerSummar
 const meta = (id: string, patch: Partial<ContainerRuntime> = {}): ContainerRuntime => ({ id, state: 'running', health_status: 'healthy', restart_count: 0, memory_limit_bytes: 0, ...patch })
 const sample = (id: string, patch: Partial<ContainerMetrics> = {}): ContainerMetrics => ({ id, available: true, cpu_percent: 120, memory_bytes: 100, uptime_seconds: 1, network_rx_bytes: 0, network_tx_bytes: 0, sampled_at: new Date(now).toISOString(), ...patch })
 describe('project observations', () => {
+ it('searches and sorts by the CD display name while retaining native identities', () => {
+  const entry = (name: string, deliveryName?: string): ProjectEntry => ({ project: { name, delivery_project_name: deliveryName, source: 'external', status: 'stopped' } as ProjectSummary, containers: [], available: true, summary: aggregate([], { runtime: new Map(), metrics: new Map() }) })
+  const entries = [entry('suma-cd-1', 'eizhu_admin'), entry('another-project')]
+  expect(selectProjects(entries, { ...defaultProjectView, search: 'eizhu' }).map(e => e.project.name)).toEqual(['suma-cd-1'])
+  expect(selectProjects(entries, { ...defaultProjectView, search: 'suma-cd-1' }).map(e => e.project.name)).toEqual(['suma-cd-1'])
+  expect(selectProjects(entries, { ...defaultProjectView, sort: 'name' }).map(e => e.project.name)).toEqual(['another-project', 'suma-cd-1'])
+ })
  it('groups normal replicas and undeployed declarations without merging one-off containers or image variants', () => {
   const groups = groupServices([row('a'), row('b', { image: 'app:v2' }), row('once', { labels: { 'com.docker.compose.service': 'worker', 'com.docker.compose.oneoff': 'True' } })], ['app', 'worker'])
   expect(groups.map(g => [g.name, g.containers.length, g.images])).toEqual([['app', 2, ['app:v1', 'app:v2']], ['worker', 0, []]])

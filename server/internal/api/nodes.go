@@ -16,6 +16,7 @@ import (
 	"github.com/suma/suma/server/internal/image"
 	"github.com/suma/suma/server/internal/network"
 	"github.com/suma/suma/server/internal/node"
+	projectdomain "github.com/suma/suma/server/internal/project"
 	"github.com/suma/suma/server/internal/volume"
 )
 
@@ -790,13 +791,21 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 		return composeService.ValidateComposeBindMounts(content, view.ConnectionType != node.ConnectionUnix, confirmed)
 	}
 	projects.GET("", func(c *gin.Context) {
-		current, _, ok := service(c)
+		current, view, ok := service(c)
 		if !ok {
 			return
 		}
 		rows, err := current.ListSummaries(c.Request.Context())
 		if err != nil {
 			failure(c, 500, 20402, "Unable to list Projects")
+			return
+		}
+		refs := make([]*projectdomain.Summary, len(rows))
+		for i := range rows {
+			refs[i] = &rows[i]
+		}
+		if err := annotateDeliveryProjectNames(c.Request.Context(), deps, view.ID, refs...); err != nil {
+			failure(c, 500, 20402, "Unable to resolve delivery project names")
 			return
 		}
 		success(c, rows)
@@ -883,13 +892,17 @@ func registerNodeProjectRoutes(group *gin.RouterGroup, deps Dependencies) {
 	})
 	compose := projects.Group("/compose")
 	compose.GET("/:name", func(c *gin.Context) {
-		current, _, ok := service(c)
+		current, view, ok := service(c)
 		if !ok {
 			return
 		}
 		row, err := current.Get(c.Request.Context(), c.Param("name"))
 		if err != nil {
 			failure(c, 404, 20408, "Project not found")
+			return
+		}
+		if err := annotateDeliveryProjectNames(c.Request.Context(), deps, view.ID, &row.Summary); err != nil {
+			failure(c, 500, 20408, "Unable to resolve delivery project name")
 			return
 		}
 		success(c, row)

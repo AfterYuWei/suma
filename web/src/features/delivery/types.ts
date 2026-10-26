@@ -5,6 +5,7 @@ export type GitAuthType = 'none' | 'http_token' | 'http_basic' | 'ssh_key'
 export interface DeliveryProject {
   id: number
   name: string
+  deployment_name?: string
   configured: boolean
   repository_url?: string
   git_ref?: string

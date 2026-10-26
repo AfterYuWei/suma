@@ -47,6 +47,7 @@ import {
 import { confirmManagedProjectRemoval } from '../features/compose/managed-project-removal'
 import { TakeoverWarningDialog } from '../features/compose/takeover-warning-dialog'
 import type { Project } from '../features/compose/types'
+import { projectDisplayName } from '../features/compose/types'
 import { ProjectLogs } from '../features/project-logs/project-logs'
 import { ProjectServices } from '../components/docker/project-services'
 import type {
@@ -624,10 +625,12 @@ export function ComposeDetailPage() {
         {zh ? '项目' : 'Projects'}
       </Button>
       <ResourceFrame
-        title={projectName}
+        title={projectDisplayName(project)}
         lead={<StatusBadge tone={statusTone(project.status)}>{zh ? ({ running: '运行中', stopped: '已停止', degraded: '部分异常' }[project.status] ?? project.status) : project.status}</StatusBadge>}
         detail={
-          project.managed
+          project.delivery_project_name
+            ? `CD · ${project.native_name}`
+            : project.managed
             ? dirty
               ? zh
                 ? 'SUMA 托管 · 有未保存更改'

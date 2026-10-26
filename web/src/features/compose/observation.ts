@@ -1,6 +1,7 @@
 import type { ContainerMetrics, ContainerRuntime, ContainerSummary } from '../containers/types'
 import { effectiveHealth, isAbnormal } from '../containers/observation'
 import type { ProjectSummary } from './types'
+import { projectDisplayName } from './types'
 
 export const serviceName = (row: ContainerSummary) => row.labels['com.docker.compose.service'] || row.name
 export const isOneOff = (row: ContainerSummary) => row.labels['com.docker.compose.oneoff']?.toLowerCase() === 'true'
@@ -72,14 +73,14 @@ export function projectStatus(entry: ProjectEntry) {
 export function selectProjects(entries: ProjectEntry[], view: ProjectView) {
   const search = view.search.trim().toLowerCase()
   return entries.filter(entry => {
-    const text = [entry.project.name, ...(entry.project.declared_service_names ?? []), ...entry.containers.flatMap(row => [serviceName(row), row.image])].join(' ').toLowerCase()
+    const text = [projectDisplayName(entry.project), entry.project.name, ...(entry.project.declared_service_names ?? []), ...entry.containers.flatMap(row => [serviceName(row), row.image])].join(' ').toLowerCase()
     return text.includes(search) && (!view.status || projectStatus(entry) === view.status) && (!view.source || entry.project.source === view.source) && (!view.abnormal || entry.summary.abnormal > 0)
   }).sort((a, b) => {
-    if (view.sort === 'abnormal') return Number(b.summary.abnormal > 0) - Number(a.summary.abnormal > 0) || a.project.name.localeCompare(b.project.name)
-    if (view.sort === 'name') return (view.descending ? -1 : 1) * a.project.name.localeCompare(b.project.name)
+    if (view.sort === 'abnormal') return Number(b.summary.abnormal > 0) - Number(a.summary.abnormal > 0) || projectDisplayName(a.project).localeCompare(projectDisplayName(b.project))
+    if (view.sort === 'name') return (view.descending ? -1 : 1) * projectDisplayName(a.project).localeCompare(projectDisplayName(b.project))
     const av = a.available ? a.summary[view.sort] : null, bv = b.available ? b.summary[view.sort] : null
     if (av === null || bv === null) { if (av !== bv) return av === null ? 1 : -1 }
     else if (av !== bv) return (view.descending ? -1 : 1) * (av - bv)
-    return a.project.name.localeCompare(b.project.name)
+    return projectDisplayName(a.project).localeCompare(projectDisplayName(b.project))
   })
 }

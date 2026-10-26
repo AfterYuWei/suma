@@ -42,7 +42,7 @@ func TestCreateConfiguredProjectSavesCompleteConfiguration(t *testing.T) {
 		t.Fatal("stored webhook secret was returned by GET")
 	}
 	var row database.DeliveryProject
-	if err := h.db.First(&row, project.ID).Error; err != nil || row.DeploymentName != deliveryRuntimeName(project.ID) {
+	if err := h.db.First(&row, project.ID).Error; err != nil || row.DeploymentName != project.Name || project.DeploymentName != project.Name {
 		t.Fatal("missing stable Docker deployment identity")
 	}
 	var tasks, releases int64

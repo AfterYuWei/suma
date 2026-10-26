@@ -41,7 +41,7 @@ for (const language of ['en-US', 'zh-CN']) for (const theme of ['dark', 'light']
     await page.setViewportSize({ width, height: 900 })
     const errors: string[] = []
     page.on('pageerror', error => errors.push(error.message))
-    const name = `delivery-${language}-${theme}-${width}`
+    const name = `delivery-${language.toLowerCase()}-${theme}-${width}`
     const form = await basics(page, name, zh)
     await expect(form.getByRole('heading', { name: zh ? 'Git 认证' : 'Git authentication', exact: true })).toBeVisible()
     await expect(form.getByRole('heading', { name: zh ? '目标节点' : 'Target nodes', exact: true })).toBeVisible()
@@ -62,6 +62,12 @@ for (const language of ['en-US', 'zh-CN']) for (const theme of ['dark', 'light']
     await page.screenshot({ path: `/tmp/suma-delivery-create-${language}-${theme}-${width}.png`, fullPage: true })
     await form.getByRole('button', { name: zh ? '创建交付项目' : 'Create delivery project', exact: true }).click()
     await expect(page).toHaveURL(`/continuous-delivery/${name}`)
+    const deploymentName = await page.evaluate(async name => {
+      // @ts-expect-error Vite serves source imports in the browser.
+      const { api } = await import('/src/lib/api.ts')
+      return (await api(`/delivery-projects/${name}`)).deployment_name
+    }, name)
+    expect(deploymentName).toBe(name)
     const saved = await configuration(page, name)
     expect(saved.configured).toBe(true)
     expect(saved.repository.clone_url).toBe('https://git.example.com/team/deploy.git')

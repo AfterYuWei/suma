@@ -60,7 +60,7 @@ func TestRealDockerCDDeliveryRollback(t *testing.T) {
 	firstCommit := strings.Repeat("a", 40)
 	gitClient := &fakeGitClient{revision: gitrepo.Revision{CommitSHA: firstCommit, CommitAuthor: "Smoke Test", CommitMessage: "first", WorktreePath: firstTree}}
 	project := database.DeliveryProject{
-		Name:        projectName,
+		Name: projectName, DeploymentName: projectName,
 		GitCloneURL: "https://git.example.test/team/deploy.git",
 		GitRefType:  gitrepo.RefBranch, GitRef: "main", ComposeFilesJSON: `["compose.yml"]`,
 		ReconcileMode: ModeAuto, SyncIntervalSeconds: 300, DeploymentTimeout: 60,
@@ -160,7 +160,7 @@ func TestRealDockerMultiNodeConsistency(t *testing.T) {
 	projectName := fmt.Sprintf("suma-cd-multi-smoke-%d", time.Now().UnixNano())
 	firstTree := smokeWorktree(t, "multi-one")
 	gitClient := &fakeGitClient{revision: gitrepo.Revision{CommitSHA: strings.Repeat("a", 40), CommitAuthor: "Smoke Test", CommitMessage: "first", WorktreePath: firstTree}}
-	project := database.DeliveryProject{Name: projectName, GitCloneURL: "https://git.example.test/team/deploy.git", GitRefType: gitrepo.RefBranch, GitRef: "main", ComposeFilesJSON: `["compose.yml"]`, ReconcileMode: ModeAuto, SyncIntervalSeconds: 300, DeploymentTimeout: 60}
+	project := database.DeliveryProject{Name: projectName, DeploymentName: projectName, GitCloneURL: "https://git.example.test/team/deploy.git", GitRefType: gitrepo.RefBranch, GitRef: "main", ComposeFilesJSON: `["compose.yml"]`, ReconcileMode: ModeAuto, SyncIntervalSeconds: 300, DeploymentTimeout: 60}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}

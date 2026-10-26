@@ -41,7 +41,7 @@ Compose and continuous delivery are separate aggregates with independent lifecyc
 - Compose is one deployment adapter invoked by a delivery release; it is not the CD aggregate root.
 - Docker Swarm's official object is a Swarm Stack. Future SUMA support would map it to `Project backend=swarm`; no Swarm adapter, runner, API, scheduler, task model, or menu is implemented now.
 
-Delivery uses a stable, project-owned Compose runtime namespace that is independent from both the repository worktree and local Compose project records. Git delivery is hosting-provider neutral. Repository identity is a validated HTTPS or SSH Clone URL, and authentication depends only on its transport. Webhook payload adapters are selected from signed request headers and are not persisted as repository configuration.
+Delivery uses a saved, project-owned Compose runtime namespace that is independent from both the repository worktree and local Compose project records. New projects use their validated lowercase CD name on target nodes and check live Engine namespace conflicts before deployment. Existing namespaces are retained to preserve resource and volume identity; node Project display metadata associates them with the CD name without changing native identifiers or routes. Git delivery is hosting-provider neutral. Repository identity is a validated HTTPS or SSH Clone URL, and authentication depends only on its transport. Webhook payload adapters are selected from signed request headers and are not persisted as repository configuration.
 
 The CD path is intentionally one-way:
 

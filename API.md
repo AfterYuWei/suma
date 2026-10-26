@@ -193,6 +193,9 @@ The CD API manages independent Delivery Projects. A project may deploy Compose d
 Authenticated routes:
 
 - `GET|POST /delivery-projects` lists or creates Delivery Projects. Full creation accepts `{ "name": "production", "configuration": <the configuration body below> }`; its transaction saves the project, explicit target nodes, repository, encrypted credentials and delivery policy together. Validation or persistence failure leaves no partial project or credential. The `201` response includes the project fields plus `configuration`; an automatically generated Webhook secret is returned once here and never by GET. Legacy name/`node_ids` creation remains supported.
+
+Delivery Project responses include `deployment_name`, the saved Compose project name used on target nodes. New projects use the CD name exactly and accept 1–128 lowercase letters, digits, hyphens or underscores, starting with a letter or digit. Existing saved names and the legacy ID-based fallback remain stable. Target-node Project list/detail responses may include `delivery_project_name` as display metadata; their `name`, `native_name`, `ref`, routes and action targets retain the actual Docker Compose identity. First deployment checks for existing target-Engine containers, networks and volumes under the selected name and fails before pull/up on a conflict.
+
 - `GET|DELETE /delivery-projects/:name` reads or deletes one project. Deletion requires `confirm=<project-name>`; optional `force=true` tears down its active runtime.
 - `GET|PUT /delivery-projects/:name/configuration` reads or updates repository and delivery configuration.
 - `POST /delivery-projects/test-connection` (new draft) or `POST /delivery-projects/:name/test-connection` (existing project) reads remote refs with `{ "repository": { "clone_url": "https://git.example.test/team/repo", "ref_type": "branch", "ref": "main", "authentication": { "source": "none" } }, "node_ids": ["local"] }`. Uses draft credentials or retained project secrets without saving configuration, cloning, creating tasks/releases, or deploying. Center credentials require grants for the requested targets (saved targets when omitted on an existing project). Returns `{ "ref_checked": true, "commit_sha": "..." }` for a resolved branch/tag; annotated tags resolve to their commit. Commit refs return `ref_checked: false`: arbitrary commits and Compose files are verified during sync. Requests cancel on disconnect and time out after 30 seconds; failures return `422` (code `17715`) with sanitized Git diagnostics. Responses use `Cache-Control: no-store`.
@@ -246,7 +249,7 @@ Before creating a release, SUMA enforces the deployment-source policy described 
 
 ### Git deployment-source policy
 
-For Git delivery, every configured Compose/environment file, implicit project `.env`, and referenced local source must resolve inside the Git worktree, be a regular file, and be no larger than 2 MiB. The policy also applies to Compose `env_file`, `label_file`, and file-backed top-level `configs` and `secrets`.
+For Git delivery, every configured Compose/environment file, implicit project `.env`, and local file consumed by Compose must resolve inside the Git worktree, be a regular file, and be no larger than 2 MiB. This includes Compose `env_file`, `label_file`, and file-backed top-level `configs` and `secrets`; target-host bind sources follow the separate rules below.
 
 SUMA rejects:
 
@@ -255,9 +258,9 @@ SUMA rejects:
 - source-file paths containing any `$` interpolation form;
 - `privileged`, host network/PID/IPC/cgroup namespaces, host devices, inherited container volumes, high-risk capabilities, and disabled security confinement;
 - a Docker socket mount;
-- any bind mount that is writable or resolves outside the Git worktree.
+- writable bind mounts, non-absolute rendered bind sources, or protected host paths.
 
-Named volumes remain supported. Repository bind sources must already exist and be read-only. This is a deliberately strict single-host delivery policy, not a general-purpose Compose compatibility promise.
+Named volumes remain supported. Read-only bind sources are target Docker-host paths for Unix Socket, TCP and Agent nodes; they need not exist in SUMA's filesystem or remain inside the Git worktree. TCP/Agent targets also require non-interpolated absolute sources in the original Compose files. The target Engine handles source existence and mounting. Compose source/environment/config/secret file checks remain separate; see [CD-DESIGN.md](CD-DESIGN.md#deployment-source-policy).
 
 When SUMA generates a webhook ID or secret, `GET` never reveals the stored secret. Treat a secret returned by the configuration update as one-time material.
 

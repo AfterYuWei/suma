@@ -90,6 +90,7 @@ type Configuration struct {
 type Project struct {
 	ID              uint      `json:"id"`
 	Name            string    `json:"name"`
+	DeploymentName  string    `json:"deployment_name"`
 	Configured      bool      `json:"configured"`
 	RepositoryURL   string    `json:"repository_url,omitempty"`
 	GitRef          string    `json:"git_ref,omitempty"`
@@ -177,7 +178,7 @@ func (s *Service) SetRegistryCredentials(service *credentialrepo.RegistryService
 	s.registries = service
 }
 
-var validProjectName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
+var validProjectName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,127}$`)
 
 func (s *Service) CreateProject(ctx context.Context, name string) (Project, error) {
 	return s.CreateProjectOnNodes(ctx, name, []string{"local"})
@@ -213,17 +214,21 @@ func (s *Service) CreateConfiguredProject(ctx context.Context, name string, inpu
 
 func (s *Service) CreateProjectOnNodes(ctx context.Context, name string, nodeIDs []string) (Project, error) {
 	if !validProjectName.MatchString(name) {
-		return Project{}, errors.New("invalid project name")
+		return Project{}, errors.New("project name must use 1-128 lowercase letters, numbers, hyphens or underscores, starting with a letter or number")
 	}
-	row := database.DeliveryProject{NodeID: "local", Name: name, ReconcileMode: ModeManual, SyncIntervalSeconds: 300, DeploymentTimeout: 120}
+	row := database.DeliveryProject{NodeID: "local", Name: name, DeploymentName: name, ReconcileMode: ModeManual, SyncIntervalSeconds: 300, DeploymentTimeout: 120}
 	if err := s.validateNodeIDs(ctx, nodeIDs); err != nil {
 		return Project{}, err
 	}
-	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
+	var reserved int64
+	if err := s.db.WithContext(ctx).Model(&database.DeliveryProject{}).
+		Where("COALESCE(NULLIF(deployment_name, ''), 'suma-cd-' || id::text) = ? AND name <> ?", name, name).Count(&reserved).Error; err != nil {
 		return Project{}, err
 	}
-	row.DeploymentName = deliveryRuntimeName(row.ID)
-	if err := s.db.WithContext(ctx).Model(&row).Update("deployment_name", row.DeploymentName).Error; err != nil {
+	if reserved > 0 {
+		return Project{}, fmt.Errorf("Compose project name %q is already reserved by an existing delivery project", name)
+	}
+	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
 		return Project{}, err
 	}
 	if err := s.replaceTargets(ctx, s.db, row.ID, nodeIDs); err != nil {
@@ -259,7 +264,7 @@ func (s *Service) GetProject(ctx context.Context, name string) (Project, error) 
 }
 
 func projectSummary(row database.DeliveryProject) Project {
-	return Project{ID: row.ID, Name: row.Name, Configured: row.GitCloneURL != "", RepositoryURL: row.GitCloneURL, GitRef: row.GitRef, DesiredCommit: row.DesiredCommit, ObservedCommit: row.ObservedCommit, ActiveCommit: row.ActiveCommit, ActiveReleaseID: row.ActiveReleaseID, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+	return Project{ID: row.ID, Name: row.Name, DeploymentName: runtimeName(row), Configured: row.GitCloneURL != "", RepositoryURL: row.GitCloneURL, GitRef: row.GitRef, DesiredCommit: row.DesiredCommit, ObservedCommit: row.ObservedCommit, ActiveCommit: row.ActiveCommit, ActiveReleaseID: row.ActiveReleaseID, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 }
 
 func (s *Service) Configure(ctx context.Context, name string, input ConfigureInput) (Configuration, error) {
@@ -991,6 +996,10 @@ func (s *Service) deployTargetsLocked(ctx context.Context, project database.Deli
 func (s *Service) deployOneTarget(ctx context.Context, project database.DeliveryProject, release database.DeliveryRelease, deployment database.DeliveryReleaseDeployment, runner compose.Runner, attemptID uint, taskID string, rollback bool, report task.Reporter) error {
 	spec, err := releaseExecutionSpec(runtimeName(project), release)
 	if err != nil {
+		return s.failDeployment(ctx, deployment.ID, err)
+	}
+	if err := s.claimDeploymentNamespace(ctx, project, deployment.NodeID, spec); err != nil {
+		_ = s.finishAttempt(ctx, attemptID, StatusFailed, err.Error(), "")
 		return s.failDeployment(ctx, deployment.ID, err)
 	}
 	now := time.Now()

@@ -56,6 +56,7 @@ type Summary struct {
 	NodeID               string       `json:"node_id,omitempty"`
 	Name                 string       `json:"name"`
 	NativeName           string       `json:"native_name"`
+	DeliveryProjectName  string       `json:"delivery_project_name,omitempty"`
 	Managed              bool         `json:"managed"`
 	Source               string       `json:"source"`
 	Status               string       `json:"status"`

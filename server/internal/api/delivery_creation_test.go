@@ -76,6 +76,9 @@ func TestDeliveryFullConfigurationCreationHTTP(t *testing.T) {
 	if err := json.Unmarshal(result.Body.Bytes(), &response); err != nil || !response.Data.Configured || !response.Data.Configuration.Configured {
 		t.Fatal("creation did not return a configured project")
 	}
+	if response.Data.DeploymentName != "complete-new" {
+		t.Fatalf("creation did not retain the CD project name for deployment: %q", response.Data.DeploymentName)
+	}
 	if strings.Contains(result.Body.String(), "test-only-private-token") || response.Data.Configuration.Repository.Authentication.Credential != nil {
 		t.Fatal("credential secret was exposed by creation")
 	}
