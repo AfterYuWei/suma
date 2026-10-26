@@ -757,7 +757,9 @@ func (h projectHTTPHarness) requestWithHeaders(method, path string, body []byte,
 	for name, value := range headers {
 		request.Header.Set(name, value)
 	}
-	request.AddCookie(h.cookie)
+	if h.cookie != nil {
+		request.AddCookie(h.cookie)
+	}
 	request.Header.Set("Origin", "http://"+request.Host)
 	response := httptest.NewRecorder()
 	h.router.ServeHTTP(response, request)

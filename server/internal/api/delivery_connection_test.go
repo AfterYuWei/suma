@@ -133,11 +133,21 @@ func TestDeliveryConnectionHTTPRequiresSessionAndCenterGrants(t *testing.T) {
 	if response := h.request(http.MethodPost, "/api/v1/delivery-projects/shared/test-connection", body); response.Code != http.StatusOK {
 		t.Fatalf("authorized credential: %d", response.Code)
 	}
-	h.cookie = nil
-	if response := h.request(http.MethodPost, "/api/v1/delivery-projects/test-connection", body); response.Code != http.StatusUnauthorized {
-		t.Fatalf("unauthenticated status %d", response.Code)
-	}
-	if len(git.requests) != 1 {
-		t.Fatal("unauthenticated request reached Git")
+	for name, cookie := range map[string]*http.Cookie{
+		"missing": nil,
+		"invalid": {Name: sessionCookie, Value: "invalid-session"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			unauthenticated := h
+			unauthenticated.cookie = cookie
+			for _, path := range []string{"/api/v1/delivery-projects/test-connection", "/api/v1/delivery-projects/shared/test-connection"} {
+				if response := unauthenticated.request(http.MethodPost, path, body); response.Code != http.StatusUnauthorized {
+					t.Fatalf("%s unauthenticated status %d", path, response.Code)
+				}
+			}
+			if len(git.requests) != 1 {
+				t.Fatal("unauthenticated request reached Git")
+			}
+		})
 	}
 }
