@@ -53,7 +53,14 @@ func DSN(t *testing.T) string {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if _, err := admin.ExecContext(ctx, `DROP SCHEMA "`+schema+`" CASCADE`); err != nil {
-			t.Error("clean up PostgreSQL test schema failed")
+			var databaseError *pgconn.PgError
+			if errors.As(err, &databaseError) {
+				t.Errorf("clean up PostgreSQL test schema failed (SQLSTATE %s)", databaseError.Code)
+			} else if errors.Is(err, context.DeadlineExceeded) {
+				t.Error("clean up PostgreSQL test schema failed (deadline exceeded)")
+			} else {
+				t.Error("clean up PostgreSQL test schema failed")
+			}
 		}
 		_ = admin.Close()
 	})

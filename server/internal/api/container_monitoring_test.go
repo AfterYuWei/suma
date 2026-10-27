@@ -80,6 +80,33 @@ func TestMonitoringHTTPAuthHistoryValidationAndAudit(t *testing.T) {
 	if result.Code != 200 {
 		t.Fatal("settings save failed", result.Code, result.Body.String())
 	}
+	var saved struct {
+		Data struct {
+			TaskID string `json:"task_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(result.Body.Bytes(), &saved); err != nil || saved.Data.TaskID == "" {
+		t.Fatalf("retention reduction did not return a cleanup task: %v", err)
+	}
+	// Retention cleanup runs outside the HTTP request. Join its final result
+	// transaction before testutil closes the pool and drops the isolated schema,
+	// even when one of the assertions below fails.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := tasks.Wait(ctx, saved.Data.TaskID); err != nil {
+			t.Errorf("wait for monitoring retention cleanup: %v", err)
+			return
+		}
+		completed, err := tasks.Get(ctx, saved.Data.TaskID)
+		if err != nil {
+			t.Errorf("read monitoring retention cleanup result: %v", err)
+			return
+		}
+		if completed.Type != "monitoring.retention" || completed.Status != task.StatusSuccess || completed.FinishedAt == nil {
+			t.Errorf("monitoring retention cleanup did not finish successfully: type=%s status=%s message=%s", completed.Type, completed.Status, completed.Message)
+		}
+	})
 	var audits int64
 	db.Model(&database.AuditLog{}).Where("action = 'monitoring.settings.update'").Count(&audits)
 	if audits != 1 {

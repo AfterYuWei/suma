@@ -361,6 +361,12 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 		view, err := nodes.Get(context.Background(), issued.NodeID)
 		if err == nil && view.Status == "online" {
 			client, err := nodes.Runtime(context.Background(), issued.NodeID)
+			// Activation publishes the online row before invalidating the old
+			// runtime cache. A cold connection in that window must be retried.
+			if errors.Is(err, node.ErrRuntimeChanged) {
+				time.Sleep(20 * time.Millisecond)
+				continue
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -596,5 +602,5 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	view, _ := nodes.Get(context.Background(), issued.NodeID)
-	t.Fatalf("Agent never became online: %+v", view)
+	t.Fatalf("Agent Docker runtime never became ready: %+v", view)
 }

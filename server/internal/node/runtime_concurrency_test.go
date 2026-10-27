@@ -92,10 +92,27 @@ func TestRuntimeColdConnectionsAreIndependentAndCancelable(t *testing.T) {
 	release <- struct{}{}
 	select {
 	case err := <-slowDone:
-		if err == nil || !strings.Contains(err.Error(), "connection changed") {
+		if !errors.Is(err, ErrRuntimeChanged) {
 			t.Fatalf("invalidated cold connection = %v", err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("invalidated connection did not finish")
+	}
+	// Invalidation must release the per-node gate so activation waiters can
+	// establish a fresh runtime rather than retaining the superseded client.
+	go func() { _, err := service.Runtime(ctx, "local"); slowDone <- err }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("fresh connection did not start after invalidation")
+	}
+	release <- struct{}{}
+	select {
+	case err := <-slowDone:
+		if err != nil {
+			t.Fatalf("fresh connection failed after invalidation: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("fresh connection did not finish after invalidation")
 	}
 }

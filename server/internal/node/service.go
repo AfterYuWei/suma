@@ -35,6 +35,10 @@ const (
 
 var validID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
+// ErrRuntimeChanged means a connection was invalidated before it could be cached.
+// Callers waiting for activation may retry after the connection settings settle.
+var ErrRuntimeChanged = errors.New("Docker node connection changed; retry request")
+
 var tailscaleIPv4 = &net.IPNet{
 	IP:   net.IPv4(100, 64, 0, 0),
 	Mask: net.CIDRMask(10, 32),
@@ -492,7 +496,7 @@ func (s *Service) Runtime(ctx context.Context, id string) (*docker.Adapter, erro
 	defer s.mu.Unlock()
 	if s.closed || s.clientRevisions[id] != revision {
 		_ = client.Close()
-		return nil, errors.New("Docker node connection changed; retry request")
+		return nil, ErrRuntimeChanged
 	}
 	if old, ok := s.clients[id]; ok {
 		// Existing operations may have captured this client. Retire it until

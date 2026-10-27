@@ -4,6 +4,8 @@ This file records the completed MVP implementation. Every checked phase was veri
 
 ## Current work
 
+- [ ] CI Agent 激活与监控测试退出时序修复（2026-10-27）：将连接失效错误定义为可识别的 ErrRuntimeChanged，Agent HTTP 测试在在线状态发布与运行时缓存刷新之间只重试该明确过渡错误，其他错误继续失败；节点回归补充失效后可重新建立运行时的断言。监控 HTTP 测试读取保留期清理 Task ID，通过 t.Cleanup 在关闭连接池和删除隔离 schema 前等待任务及其最终事务完成，并核验成功状态；schema 清理失败补充不含凭据的 SQLSTATE／超时诊断。Vite 大 chunk 为警告，前端构建已成功。已通过：Linux amd64 全量构建、Linux API 测试编译、API／Node／Testutil 的 go vet、gofmt 与 diff 检查。macOS vet／API 定向检查仅用既有临时 overlay 为未调用的 Linux 指标实现提供触发即 panic 的编译替身，实际 Agent／监控／数据库代码保持本次实现。修复前后两项 API 测试与节点失效恢复测试均因既有 PostgreSQL 无法创建隔离 schema 失败，未验证数据库回归及 CI 完整门禁，保持未勾选；未安装或启动数据库、Docker 等基础服务。
+
 - [x] CD 按钮主次层级修正（2026-10-27）：主操作保留黑底白字，Release 与项目「更多」改为浅底描边次级按钮，保留图标与文字；用主次视觉区分直接操作与菜单入口，避免所有入口均为黑底。本项替代下方此前全部使用黑底的样式。验证：修改文件 lint、diff 检查及 4 项中文深浅主题 × 390／1440px 受控 API 浏览器场景通过（12.0 秒），菜单几何、焦点恢复及无溢出通过，桌面／手机截图已核对；使用说明已同步，按局部样式调整定向验证。
 
 - [x] CD 操作按钮可点击性修正（2026-10-27）：按用户明确要求，Release 主操作、行内与项目「更多」及同步 Git 统一使用黑底白字，深色主题也保持黑色背景；「更多」保留图标和文字，操作层级与范围说明保留。验证：修改文件 lint、Web typecheck 与 diff 检查通过；前一轮 8 项中英文深浅主题 × 390／1440px 受控 API 浏览器场景通过（22.0 秒），最终黑底样式使用现有 Edge 复验 4 项中文深浅主题 × 390／1440px 场景通过（12.1 秒），菜单实际几何、键盘焦点恢复与无页面溢出通过，桌面与手机截图已核对。按局部样式调整定向验证，使用说明同步至 `doc/continuous-delivery.md`。
