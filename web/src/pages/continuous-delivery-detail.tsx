@@ -1,12 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from '@tanstack/react-router'
-import { ChevronLeft, RefreshCw, Trash2 } from 'lucide-react'
+import { ChevronLeft, MoreHorizontal, RefreshCw, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../components/ui/dropdown-menu'
 import { Spinner } from '../components/ui/spinner'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
-import { TooltipHint } from '../components/ui/tooltip-hint'
 import { ErrorState } from '../components/ui/error-state'
 import { LoadingState } from '../components/ui/loading-state'
 import { CDOverview, ReleasePanel, type ReleaseOperation } from '../features/delivery/releases'
@@ -67,7 +67,7 @@ export function ContinuousDeliveryDetailPage() {
     let confirmed = false
     if (operation === 'approve') confirmed = await confirmDialog({ title: zh ? `批准 Release #${release.id}？` : `Approve release #${release.id}?`, description: zh ? `批准 Commit ${shortCommit(release.commit_sha)} 进入可发布状态。此操作本身不会部署。` : `Mark commit ${shortCommit(release.commit_sha)} as ready to deploy. Approval does not deploy it.`, confirmLabel: zh ? '批准' : 'Approve' })
     if (operation === 'reject') confirmed = await confirmDialog({ title: zh ? `拒绝 Release #${release.id}？` : `Reject release #${release.id}?`, description: zh ? '该候选 Release 将不能再发布。' : 'This candidate release can no longer be deployed.', confirmLabel: zh ? '拒绝' : 'Reject', danger: true })
-    if (operation === 'deploy') confirmed = await confirmDialog({ title: zh ? `${release.status === 'failed' ? '重新发布' : '发布'} Release #${release.id}？` : `${release.status === 'failed' ? 'Redeploy' : 'Deploy'} release #${release.id}?`, description: zh ? `将 Commit ${shortCommit(release.commit_sha)} 并行应用到 Release 快照中的全部目标节点；失败节点独立回滚。` : `Apply commit ${shortCommit(release.commit_sha)} to every node in the release target snapshot in parallel; failed nodes roll back independently.`, confirmLabel: release.status === 'failed' ? (zh ? '重新发布' : 'Redeploy') : (zh ? '发布' : 'Deploy') })
+    if (operation === 'deploy') confirmed = await confirmDialog({ title: zh ? `${release.status === 'failed' ? '重新发布全部节点' : '发布'} Release #${release.id}？` : `${release.status === 'failed' ? 'Redeploy all nodes for' : 'Deploy'} release #${release.id}?`, description: zh ? `将 Commit ${shortCommit(release.commit_sha)} 并行应用到 Release 快照中的全部目标节点，包括已成功的节点；失败时按保存的自动回滚策略处理。` : `Apply commit ${shortCommit(release.commit_sha)} to every node in the release target snapshot, including successful nodes. Failures follow the saved automatic rollback policy.`, confirmLabel: release.status === 'failed' ? (zh ? '重新发布全部节点' : 'Redeploy all nodes') : (zh ? '发布' : 'Deploy') })
     if (operation === 'rollback') confirmed = await confirmDialog({ title: zh ? `回滚到 Release #${release.id}？` : `Restore release #${release.id}?`, description: zh ? '这会重新应用该版本，但不会回滚存储卷中的数据；自动交付会切换为手动。' : 'This reapplies the release without rolling back volume data; automatic delivery switches to manual.', confirmLabel: zh ? '回滚' : 'Restore', danger: true })
     if (operation === 'retry-failed') {
       const ids = release.remediation?.retry_failed_node_ids ?? []
@@ -116,7 +116,23 @@ export function ContinuousDeliveryDetailPage() {
   const configuration = cdQuery.data
   const activeDelivery = hasActiveRelease(releasesQuery.data)
   const tabs: View[] = isGit ? ['Overview', 'Releases', 'Settings'] : ['Settings']
-  const headerActions = <div className="flex flex-wrap items-center gap-2"><Badge variant="outline" className={cn(isGit ? 'border-transparent bg-primary/10 text-primary' : 'text-muted-foreground')}>{isGit ? modeLabel(configuration.reconcile_mode, zh) : (zh ? '待配置' : 'Setup')}</Badge><TooltipHint content={activeDelivery ? (zh ? '交付任务进行中，暂时无法删除' : 'Cannot delete while a delivery is active') : undefined}><Button disabled={activeDelivery} onClick={() => void removeProject(false)}><Trash2 />{zh ? '删除项目' : 'Delete project'}</Button></TooltipHint><TooltipHint content={activeDelivery ? (zh ? '交付任务进行中，暂时无法强制删除' : 'Cannot force delete while a delivery is active') : undefined}><Button disabled={activeDelivery} onClick={() => void removeProject(true)} className="bg-destructive text-white hover:bg-destructive/90"><Trash2 />{zh ? '强制删除' : 'Force delete'}</Button></TooltipHint>{isGit && <Button disabled={activeDelivery || sync.isPending} onClick={() => sync.mutate()}>{sync.isPending ? <Spinner /> : null}{activeDelivery ? (zh ? '交付中' : 'Delivering') : sync.isPending ? (zh ? '启动中' : 'Starting') : (zh ? '同步 Git' : 'Sync Git')}{!sync.isPending && !activeDelivery && <RefreshCw />}</Button>}</div>
+  const actionPending = activeDelivery || sync.isPending || releaseAction.isPending
+  const headerActions = <div className="flex flex-wrap items-center gap-2">
+    <Badge variant="outline" className={cn(isGit ? 'border-transparent bg-primary/10 text-primary' : 'text-muted-foreground')}>{isGit ? modeLabel(configuration.reconcile_mode, zh) : (zh ? '待配置' : 'Setup')}</Badge>
+    {isGit && <Button className="bg-black text-white hover:bg-neutral-800 dark:border-white/15" disabled={actionPending} onClick={() => sync.mutate()}>{sync.isPending ? <Spinner /> : <RefreshCw />}{activeDelivery ? (zh ? '交付中' : 'Delivering') : sync.isPending ? (zh ? '启动中' : 'Starting') : (zh ? '同步 Git' : 'Sync Git')}</Button>}
+    <DropdownMenu>
+      <DropdownMenuTrigger render={<Button variant="outline" aria-label={zh ? '项目更多操作' : 'More project actions'}><MoreHorizontal />{zh ? '更多' : 'More'}</Button>} />
+      <DropdownMenuContent align="end" className="w-72 max-w-[calc(100vw-2rem)]">
+        {actionPending && <p className="px-2 py-1.5 text-xs text-muted-foreground">{zh ? '交付操作进行中，暂时无法删除项目' : 'Project deletion is unavailable during a delivery operation'}</p>}
+        <DropdownMenuItem disabled={actionPending} variant="destructive" className="items-start py-2" onClick={() => void removeProject(false)}>
+          <Trash2 className="mt-0.5" /><span className="min-w-0"><span className="block">{zh ? '删除项目' : 'Delete project'}</span><span className="mt-0.5 block text-xs text-muted-foreground">{zh ? '移除项目记录与文件，保留运行中的容器' : 'Remove project records and files; keep running containers'}</span></span>
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled={actionPending} variant="destructive" className="items-start py-2" onClick={() => void removeProject(true)}>
+          <Trash2 className="mt-0.5" /><span className="min-w-0"><span className="block">{zh ? '强制删除' : 'Force delete'}</span><span className="mt-0.5 block text-xs text-muted-foreground">{zh ? '同时清理容器与网络，默认删除命名卷和数据' : 'Also remove containers and networks; named volumes and data are deleted by default'}</span></span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  </div>
   return <div className="flex w-full flex-col gap-4">
     <Button variant="ghost" size="sm" className="-ml-2 w-fit gap-1 text-muted-foreground" onClick={() => void navigate({ to: '/continuous-delivery' })}><ChevronLeft className="size-4" />{zh ? '持续交付' : 'Continuous Delivery'}</Button>
     <ResourceFrame title={project.name} detail={isGit ? `${configuration.repository.ref_type}:${configuration.repository.ref} · ${shortCommit(configuration.desired_commit)}` : (zh ? '尚未配置 Git 持续交付' : 'Git continuous delivery is not configured')} action={headerActions}>
@@ -134,7 +150,7 @@ export function ContinuousDeliveryDetailPage() {
           </TabsList>
         </Tabs>
         {view === 'Overview' && isGit && <CDOverview configuration={configuration} drift={driftQuery.data} releases={releasesQuery.data} error={(driftQuery.error || releasesQuery.error)?.message} zh={zh} />}
-        {view === 'Releases' && isGit && (releasesQuery.isPending ? <LoadingState label={zh ? '正在加载 Release' : 'Loading releases'} /> : <ReleasePanel configuration={configuration} releases={releasesQuery.data} pendingReleaseID={releaseAction.isPending ? releaseAction.variables?.release.id : undefined} zh={zh} onAction={(release, operation) => void runReleaseAction(release, operation)} />)}
+        {view === 'Releases' && isGit && (releasesQuery.isPending ? <LoadingState label={zh ? '正在加载 Release' : 'Loading releases'} /> : <ReleasePanel configuration={configuration} releases={releasesQuery.data} pendingReleaseID={releaseAction.isPending ? releaseAction.variables?.release.id : undefined} pendingOperation={releaseAction.isPending ? releaseAction.variables?.operation : undefined} zh={zh} onAction={(release, operation) => void runReleaseAction(release, operation)} />)}
         {view === 'Settings' && <CDSettings projectName={projectName} configuration={configuration} zh={zh} onSaved={(value) => { client.setQueryData(['delivery-configuration', projectName], value); void client.invalidateQueries({ queryKey: ['delivery-projects'] }); setNotice(zh ? '持续交付配置已保存。' : 'Continuous delivery configuration saved.'); if (value.configured && !value.webhook_secret) setView('Overview') }} />}
       </div>
     </ResourceFrame>

@@ -4,15 +4,16 @@ import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../../components/ui/collapsible'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../../components/ui/dropdown-menu'
 import { ListPagination } from '../../components/ui/list-pagination'
 import { useListPagination } from '../../components/ui/use-list-pagination'
 import { Progress } from '../../components/ui/progress'
 import { Spinner } from '../../components/ui/spinner'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui/table'
-import { Check, CheckCircle2, ChevronDownIcon, GitCommitHorizontal, History, Loader2, RotateCcw, Rocket, TriangleAlert, X, XCircle } from 'lucide-react'
+import { Check, CheckCircle2, ChevronDownIcon, GitCommitHorizontal, History, Loader2, MoreHorizontal, RotateCcw, Rocket, TriangleAlert, X, XCircle } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { CDConfiguration, CDDrift, DeliveryRelease } from './types'
-import { parseStringList, repositoryName, shortCommit } from './types'
+import { hasActiveRelease, parseStringList, repositoryName, shortCommit } from './types'
 import { deliveryOverviewNotice, driftReason } from './overview-notice'
 
 const statusBadgeClass = (status: string) => ['succeeded', 'approved'].includes(status)
@@ -112,43 +113,63 @@ export function CDOverview({ configuration, drift, releases, error, zh }: { conf
 
 export type ReleaseOperation = 'approve' | 'reject' | 'deploy' | 'rollback' | 'retry-failed' | 'rollback-failed'
 
-export function ReleasePanel({ configuration, releases, pendingReleaseID, zh, onAction }: { configuration: CDConfiguration; releases?: DeliveryRelease[]; pendingReleaseID?: number; zh: boolean; onAction: (release: DeliveryRelease, action: ReleaseOperation) => void }) {
+export function ReleasePanel({ configuration, releases, pendingReleaseID, pendingOperation, zh, onAction }: { configuration: CDConfiguration; releases?: DeliveryRelease[]; pendingReleaseID?: number; pendingOperation?: ReleaseOperation; zh: boolean; onAction: (release: DeliveryRelease, action: ReleaseOperation) => void }) {
   const pagination = useListPagination(releases ?? [])
+  const busy = pendingReleaseID !== undefined || hasActiveRelease(releases)
   if (!releases?.length) return <EmptyHint icon={<History className="size-6" />} title={zh ? '还没有 Release' : 'No releases yet'} description={zh ? '点击同步以读取 Git 并验证 Compose 配置。' : 'Synchronize to read Git and validate the Compose configuration.'} />
   return <><div className="flex max-h-[calc(100dvh-16rem)] w-full flex-col gap-2 overflow-y-auto overscroll-contain">{pagination.items.map((release) => {
     const active = configuration.active_release_id === release.id
-    const canApprove = configuration.reconcile_mode !== 'observe' && release.status === 'awaiting_approval'
-    const canReject = release.status === 'awaiting_approval' || release.status === 'approved'
-    const canDeploy = configuration.reconcile_mode !== 'observe' && (release.status === 'approved' || release.status === 'failed')
-    const canRollback = configuration.reconcile_mode !== 'observe' && (release.status === 'succeeded' || release.status === 'rolled_back') && !active
-    const pending = pendingReleaseID === release.id
-    const retryCount = release.remediation?.retry_failed_node_ids?.length ?? 0
-    const rollbackCount = release.remediation?.rollback_failed_node_ids?.length ?? 0
     return <Collapsible key={release.id} className="group/collapsible w-full shrink-0 overflow-hidden rounded-lg bg-surface">
-      <div className="flex flex-wrap items-start gap-x-2 pr-2">
-        <CollapsibleTrigger className="flex min-w-0 flex-[1_1_14rem] cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 py-2.5 pl-3 text-left hover:bg-muted/50 [&_svg]:shrink-0">
+      <div className="flex flex-wrap items-start gap-x-3 px-2">
+        <CollapsibleTrigger className="flex min-w-0 flex-[1_1_20rem] cursor-pointer items-start gap-2 py-2.5 pl-1 text-left hover:bg-muted/50 [&_svg]:shrink-0">
           <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-data-open/collapsible:rotate-180" />
           <GitCommitHorizontal className="size-[18px] text-muted-foreground" />
-          <span className="font-medium">{release.commit_message || (zh ? '无提交说明' : 'No commit message')}</span>
-          <ReleaseStatus status={release.status} zh={zh} />
-          {active && <Badge className="border-transparent bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">{zh ? '当前运行' : 'Active'}</Badge>}
-          <span className="text-xs text-muted-foreground">#{release.id} · {shortCommit(release.commit_sha)}</span>
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="min-w-0 font-medium [overflow-wrap:anywhere]">{release.commit_message || (zh ? '无提交说明' : 'No commit message')}</span>
+            <ReleaseStatus status={release.status} zh={zh} />
+            {active && <Badge className="border-transparent bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">{zh ? '当前运行' : 'Active'}</Badge>}
+            <span className="text-xs text-muted-foreground">#{release.id} · {shortCommit(release.commit_sha)}</span>
+            <ReleaseApproval release={release} zh={zh} />
+          </span>
         </CollapsibleTrigger>
-        <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5 py-1.5 pl-3">
-          <ReleaseApproval release={release} zh={zh} />
-          {canApprove && <Button size="sm" variant="secondary" disabled={pending} onClick={() => onAction(release, 'approve')}><CheckCircle2 />{zh ? '批准' : 'Approve'}</Button>}
-          {canReject && <Button size="sm" variant="destructive" disabled={pending} onClick={() => onAction(release, 'reject')}><XCircle />{zh ? '拒绝' : 'Reject'}</Button>}
-          {canDeploy && <Button size="sm" disabled={pending} onClick={() => onAction(release, 'deploy')}>{pending ? <Spinner /> : <Rocket />}{release.status === 'failed' ? (zh ? '重新发布' : 'Redeploy') : (zh ? '发布' : 'Deploy')}</Button>}
-          {retryCount > 0 && <Button size="sm" variant="secondary" disabled={pending} onClick={() => onAction(release, 'retry-failed')}><Rocket />{zh ? `重试失败节点（${retryCount}）` : `Retry failed (${retryCount})`}</Button>}
-          {rollbackCount > 0 && <Button size="sm" variant="outline" disabled={pending} onClick={() => onAction(release, 'rollback-failed')}><RotateCcw />{zh ? `回滚失败节点（${rollbackCount}）` : `Rollback failed (${rollbackCount})`}</Button>}
-          {canRollback && <Button size="sm" variant="outline" disabled={pending} onClick={() => onAction(release, 'rollback')}><RotateCcw />{zh ? '回滚' : 'Restore'}</Button>}
-        </div>
+        <ReleaseActions configuration={configuration} release={release} busy={busy} pendingOperation={pendingReleaseID === release.id ? pendingOperation : undefined} zh={zh} onAction={onAction} />
       </div>
       <CollapsibleContent className="px-3 pb-3 pt-3">
         <ReleaseDetails release={release} zh={zh} />
       </CollapsibleContent>
     </Collapsible>
   })}</div><ListPagination {...pagination} zh={zh} /></>
+}
+
+function ReleaseActions({ configuration, release, busy, pendingOperation, zh, onAction }: { configuration: CDConfiguration; release: DeliveryRelease; busy: boolean; pendingOperation?: ReleaseOperation; zh: boolean; onAction: (release: DeliveryRelease, action: ReleaseOperation) => void }) {
+  const canDeliver = configuration.reconcile_mode !== 'observe'
+  const retryCount = release.remediation?.retry_failed_node_ids?.length ?? 0
+  const rollbackCount = release.remediation?.rollback_failed_node_ids?.length ?? 0
+  type Action = { operation: ReleaseOperation; label: string; description: string; icon: ReactNode; danger?: boolean }
+  const deploy: Action = { operation: 'deploy', label: release.status === 'failed' ? (zh ? '重新发布全部节点' : 'Redeploy all nodes') : (zh ? '发布' : 'Deploy'), description: zh ? '将此版本应用到快照中的全部目标节点' : 'Apply this release to every node in its target snapshot', icon: <Rocket /> }
+  const primary: Action | undefined = canDeliver && release.status === 'awaiting_approval'
+    ? { operation: 'approve', label: zh ? '批准' : 'Approve', description: zh ? '批准后仍需手动发布' : 'Approval still requires a separate deployment', icon: <CheckCircle2 /> }
+    : retryCount > 0
+      ? { operation: 'retry-failed', label: zh ? `重试失败节点（${retryCount}）` : `Retry failed (${retryCount})`, description: zh ? '仅重新尝试服务端确认可重试的失败节点' : 'Retry only the failed nodes eligible for remediation', icon: <RotateCcw /> }
+      : canDeliver && ['approved', 'failed'].includes(release.status) ? deploy : undefined
+  const secondary: Action[] = []
+  if (primary?.operation === 'retry-failed' && canDeliver && ['approved', 'failed'].includes(release.status)) secondary.push(deploy)
+  if (rollbackCount > 0) secondary.push({ operation: 'rollback-failed', label: zh ? `回滚失败节点（${rollbackCount}）` : `Roll back failed (${rollbackCount})`, description: zh ? '仅将失败节点恢复到各自部署前的版本' : 'Restore failed nodes to their own previous releases', icon: <RotateCcw />, danger: true })
+  if (canDeliver && ['succeeded', 'rolled_back'].includes(release.status) && configuration.active_release_id !== release.id) secondary.push({ operation: 'rollback', label: zh ? '回滚到此版本' : 'Restore this release', description: zh ? '重新应用此版本，自动交付将切换为手动' : 'Reapply this release and switch automatic delivery to manual', icon: <RotateCcw />, danger: true })
+  if (['awaiting_approval', 'approved'].includes(release.status)) secondary.push({ operation: 'reject', label: zh ? '拒绝此版本' : 'Reject this release', description: zh ? '拒绝后此候选版本不能再发布' : 'This candidate can no longer be deployed once rejected', icon: <XCircle />, danger: true })
+  if (!primary && !secondary.length) return null
+  return <div className="ml-auto flex shrink-0 items-center gap-1 py-1.5" role="group" aria-label={zh ? `Release #${release.id} 操作` : `Release #${release.id} actions`}>
+    {primary && <Button size="sm" className="bg-black text-white hover:bg-neutral-800 dark:border-white/15" disabled={busy} title={busy ? (zh ? '交付操作进行中，请稍候' : 'A delivery operation is in progress') : primary.description} onClick={() => onAction(release, primary.operation)}>{pendingOperation === primary.operation ? <Spinner /> : primary.icon}{primary.label}</Button>}
+    {!!secondary.length && <DropdownMenu>
+      <DropdownMenuTrigger render={<Button variant="outline" size="sm" disabled={busy} aria-label={zh ? `Release #${release.id} 更多操作` : `More actions for release #${release.id}`}>{pendingOperation && pendingOperation !== primary?.operation ? <Spinner /> : <MoreHorizontal />}{zh ? '更多' : 'More'}</Button>} />
+      <DropdownMenuContent align="end" className="w-72 max-w-[calc(100vw-2rem)]">
+        {secondary.map(action => <DropdownMenuItem key={action.operation} disabled={busy} variant={action.danger ? 'destructive' : 'default'} className="items-start py-2" onClick={() => onAction(release, action.operation)}>
+          <span className="mt-0.5">{action.icon}</span>
+          <span className="min-w-0"><span className="block">{action.label}</span><span className="mt-0.5 block text-xs text-muted-foreground">{action.description}</span></span>
+        </DropdownMenuItem>)}
+      </DropdownMenuContent>
+    </DropdownMenu>}
+  </div>
 }
 
 function rejectionActor(release: DeliveryRelease) {
@@ -162,8 +183,8 @@ function ReleaseApproval({ release, zh }: { release: DeliveryRelease; zh: boolea
   if (!rejected && !release.approved_by) return null
   const actor = rejected ? rejectionActor(release) : release.approved_by_name
   const label = rejected ? (zh ? '已拒绝' : 'Rejected') : (zh ? '已批准' : 'Approved')
-  return <span role="status" className={`inline-flex min-w-0 max-w-full items-center gap-1.5 px-2 py-1.5 text-xs font-medium ${rejected ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
-    {rejected ? <X className="size-4 shrink-0" aria-hidden="true" /> : <Check className="size-4 shrink-0" aria-hidden="true" />}
+  return <span role="status" className={`inline-flex min-w-0 max-w-full items-center gap-1 text-xs ${rejected ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+    {rejected ? <X className="size-3.5 shrink-0" aria-hidden="true" /> : <Check className="size-3.5 shrink-0" aria-hidden="true" />}
     <span className="min-w-0 [overflow-wrap:anywhere]"><span className="sr-only">{label}: </span>{actor || (zh ? '未知用户' : 'Unknown user')}</span>
   </span>
 }
