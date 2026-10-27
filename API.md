@@ -223,6 +223,10 @@ A representative `PUT /delivery-projects/:name/configuration` body is:
     "compose_files": ["compose/base.yml", "environments/production.yml"],
     "environment_file": "env/production.env"
   },
+  "environment": [
+    { "name": "APP_VERSION", "value": "1.2.3" },
+    { "name": "DATABASE_PASSWORD" }
+  ],
   "reconcile_mode": "manual",
   "automation_enabled": true,
   "sync_interval_seconds": 300,
@@ -232,6 +236,8 @@ A representative `PUT /delivery-projects/:name/configuration` body is:
   "webhook_secret": "replace-with-a-long-random-secret"
 }
 ```
+
+Manual interpolation variables use the top-level `environment` list. Values are encrypted and write-only; configuration responses return `[{"name":"APP_VERSION","has_value":true}]`, never plaintext. Omitting/null `environment` preserves the saved list for older clients; `[]` clears it. Supplying a list replaces the names: an omitted/null `value` keeps an existing name's value (invalid for a new name), `"value":""` sets empty, and omitted names are removed. Manual literal values override the repository env file or implicit `.env`; Compose must explicitly reference values for container injection. Limits: 100 unique names matching `[A-Za-z_][A-Za-z0-9_]{0,255}`, 64 KiB per value, 256 KiB total, no NUL. Docker/Compose control prefixes plus HOME/PATH/TMPDIR are reserved (case-insensitive). Create/update failures return the existing 409/422 errors without values. Releases retain encrypted snapshots, including on environment-only changes, for deployment/retry/rollback; the snapshot is never serialized in release APIs.
 
 Repository authentication is explicit: `none` uses no credential, `center` references a reusable Git credential, and `project` uses an encrypted credential owned only by the current Delivery Project. A new project credential may include `save_to_center: true`; the configuration transaction creates the reusable credential, links it to the project, and removes the project-only copy. Project credential secrets are never returned by GET.
 

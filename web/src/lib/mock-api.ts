@@ -402,7 +402,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
         sanitizedAuthentication = { source: 'center', credential_id: credential.id }
       }
       if (input.webhook_enabled && !input.webhook_secret) generatedSecret = crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', '')
-      configuration = { ...input, automation_enabled: input.automation_enabled !== false, repository: { ...input.repository, authentication: sanitizedAuthentication }, configured: true, webhook_secret: '', webhook_id: input.webhook_enabled ? `demo-${name}` : undefined, desired_commit: '', observed_commit: '' }
+      configuration = { ...input, environment: (input.environment ?? []).map(variable => ({ name: variable.name, has_value: true })), automation_enabled: input.automation_enabled !== false, repository: { ...input.repository, authentication: sanitizedAuthentication }, configured: true, webhook_secret: '', webhook_id: input.webhook_enabled ? `demo-${name}` : undefined, desired_commit: '', observed_commit: '' }
       deliveryConfigurations.set(name, configuration)
     }
     const project: DeliveryProject = { id: Math.max(...deliveryProjects.map(row => row.id), 0) + 1, name, deployment_name: name, configured: !!input, automation_enabled: input?.automation_enabled !== false, repository_url: input?.repository.clone_url, git_ref: input?.repository.ref, node_ids: [...targetIDs], created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
@@ -431,7 +431,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     if (suffix === '/configuration') {
       if (method === 'PUT') {
         const input = body as unknown as CDConfigureInput
-        const saved = { ...deliveryConfigurations.get(name) || cdConfiguration(name), ...input, configured: true, repository: { ...input.repository, authentication: input.repository.authentication.source === 'project' ? { source: 'project' as const, summary: { name: input.repository.authentication.credential?.name || 'Project credential', auth_type: input.repository.authentication.credential?.auth_type || 'http_token' as const } } : { source: input.repository.authentication.source, credential_id: input.repository.authentication.credential_id } }, webhook_secret: '' }
+        const saved = { ...deliveryConfigurations.get(name) || cdConfiguration(name), ...input, environment: input.environment?.map(variable => ({ name: variable.name, has_value: true })) ?? deliveryConfigurations.get(name)?.environment ?? [], configured: true, repository: { ...input.repository, authentication: input.repository.authentication.source === 'project' ? { source: 'project' as const, summary: { name: input.repository.authentication.credential?.name || 'Project credential', auth_type: input.repository.authentication.credential?.auth_type || 'http_token' as const } } : { source: input.repository.authentication.source, credential_id: input.repository.authentication.credential_id } }, webhook_secret: '' }
         deliveryConfigurations.set(name, saved)
         project.configured = true
         project.automation_enabled = saved.automation_enabled

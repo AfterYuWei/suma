@@ -51,9 +51,9 @@ func TestDeliveryAutomationUpgradeRetainsProductionEvidence(t *testing.T) {
 		t.Helper()
 		var value string
 		// Exclude only the new field and migration ledger entry being introduced.
-		query := "SELECT COALESCE(jsonb_agg(value ORDER BY value::text), '[]'::jsonb)::text FROM (SELECT to_jsonb(t) - 'automation_enabled' AS value FROM " + table + " t"
+		query := "SELECT COALESCE(jsonb_agg(value ORDER BY value::text), '[]'::jsonb)::text FROM (SELECT to_jsonb(t) - 'automation_enabled' - 'environment_ciphertext' AS value FROM " + table + " t"
 		if table == "schema_migrations" {
-			query += " WHERE key <> '0004_delivery_automation.sql'"
+			query += " WHERE key NOT IN ('0004_delivery_automation.sql','0005_delivery_environment.sql')"
 		}
 		query += ") rows"
 		if err := connection.QueryRow(query).Scan(&value); err != nil {
@@ -94,7 +94,7 @@ func TestDeliveryAutomationUpgradeRetainsProductionEvidence(t *testing.T) {
 	}
 	var count int64
 	again.Model(&database.SchemaMigration{}).Count(&count)
-	if count != 4 {
+	if count != 5 {
 		t.Fatal("migration was not recorded exactly once", count)
 	}
 }

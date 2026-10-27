@@ -24,7 +24,10 @@ import (
 )
 
 func TestExecutionSpecConfinesComposeFilesToGitWorktree(t *testing.T) {
-	worktree := t.TempDir()
+	worktree, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	production := filepath.Join(worktree, "deploy", "production")
 	if err := os.MkdirAll(production, 0o750); err != nil {
 		t.Fatal(err)

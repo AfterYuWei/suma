@@ -65,7 +65,7 @@ func (s *Service) remediateFailedNodes(ctx context.Context, name string, release
 				s.releaseReservation(project.ID)
 				return RemediationResult{}, fmt.Errorf("node %s is blocked: previous release is unavailable", deployment.NodeName)
 			}
-			if _, err := releaseExecutionSpec(runtimeName(project), previous); err != nil {
+			if _, err := s.releaseSpec(runtimeName(project), previous); err != nil {
 				s.releaseReservation(project.ID)
 				return RemediationResult{}, fmt.Errorf("node %s is blocked: %w", deployment.NodeName, err)
 			}

@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Copy, Plus, Save, Trash2 } from 'lucide-react'
+import { Copy, Eye, EyeOff, Plus, Save, Trash2 } from 'lucide-react'
 import { Children, cloneElement, isValidElement, type FormEvent, type ReactElement, type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '../../components/ui/alert'
 import { Button } from '../../components/ui/button'
@@ -20,6 +20,7 @@ import { choiceDialog } from '../../stores/dialog'
 import { nodesForFilteredSelection, type DockerNode } from '../../lib/nodes'
 import { useUIStore } from '../../stores/ui'
 import { GitConnectionTest } from './connection-test'
+import { EnvironmentQuickAdd } from './environment-quick-add'
 import {
   type CDConfiguration,
   type CDConfigureInput,
@@ -34,6 +35,7 @@ function toDraft(value: CDConfiguration): CDConfigureInput {
   const configuration = normalizedCDConfiguration(value)
   return {
     repository: { ...configuration.repository },
+    environment: configuration.environment?.map(variable => ({ ...variable })),
     automation_enabled: configuration.automation_enabled,
     reconcile_mode: configuration.reconcile_mode,
     sync_interval_seconds: configuration.sync_interval_seconds,
@@ -68,6 +70,8 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
   const [draft, setDraft] = useState<CDConfigureInput>(() => toDraft(initial))
   const [composeFiles, setComposeFiles] = useState<string[]>(initial.repository.compose_files.length ? initial.repository.compose_files : ['compose.yml'])
   const [notice, setNotice] = useState('')
+  const [showEnvironment, setShowEnvironment] = useState(false)
+  const [quickEnvironment, setQuickEnvironment] = useState(false)
   const [revealedWebhookSecret, setRevealedWebhookSecret] = useState('')
   const [secretCopied, setSecretCopied] = useState(false)
   const configurationSignature = useRef(JSON.stringify(toDraft(initial)))
@@ -120,6 +124,11 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
       setNotice(zh ? '请填写所有 Compose 文件路径。' : 'Complete every Compose file path.')
       return
     }
+    const variables = draft.environment ?? []
+    if (variables.length > 100 || variables.some(variable => !/^[A-Za-z_][A-Za-z0-9_]{0,255}$/.test(variable.name)) || new Set(variables.map(variable => variable.name)).size !== variables.length) {
+      setNotice(zh ? '环境变量名称须为字母、数字或下划线，不能以数字开头或重复，最多 100 项。' : 'Use unique variable names with letters, numbers and underscores, starting with a letter or underscore; at most 100 variables.')
+      return
+    }
     let authentication = draft.repository.authentication
     if (authentication.source === 'project' && authentication.credential) {
       const material = authentication.credential
@@ -135,7 +144,7 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
     } else if (authentication.source === 'project') {
       authentication = { source: 'project' }
     }
-    save.mutate({ ...draft, repository: { ...draft.repository, authentication, compose_files: files } })
+    save.mutate({ ...draft, environment: variables.map(variable => variable.has_value || variable.value !== undefined ? variable : { ...variable, value: '' }), repository: { ...draft.repository, authentication, compose_files: files } })
   }
 
   const webhookURL = configuration.webhook_id
@@ -189,6 +198,29 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
         <Button variant="outline" size="sm" className="self-start" onClick={() => setComposeFiles((current) => [...current, ''])}><Plus data-icon="inline-start" />{zh ? '添加 Compose 文件' : 'Add Compose file'}</Button>
       </Field>
       <Field label={zh ? '环境变量文件（仓库根目录相对路径）' : 'Environment file (relative to repository root)'} hint={zh ? '可选，用于 Compose 中的 ${VARIABLE} 插值。' : 'Optional. Used for ${VARIABLE} interpolation in Compose files.'}><Input value={draft.repository.environment_file} onChange={(event) => updateRepository('environment_file', event.target.value)} placeholder="env/production.env" /></Field>
+    </SettingsSection>
+
+    <SettingsSection title={zh ? '手动环境变量' : 'Manual environment variables'} description={zh ? '用于 Compose 的 ${VARIABLE} 插值，覆盖环境变量文件中的同名值。容器需要的变量请在 Compose 的 environment 中引用。' : 'Used for ${VARIABLE} interpolation, overriding matching values in the environment file. Reference them in Compose environment to pass them to containers.'}>
+      <p className="text-xs text-muted-foreground">{zh ? '值会加密保存。已保存值不回显，未修改时保留；删除行后保存即可移除。修改后请重新同步并发布。' : 'Values are encrypted and never returned. Unchanged saved values are kept; remove a row and save to delete it. Sync and deploy again after changes.'}</p>
+      <div className="flex min-w-0 flex-col gap-2">
+        {(draft.environment ?? []).map((variable, index) => {
+          const update = (patch: Partial<typeof variable>) => setDraft(current => ({ ...current, environment: current.environment?.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row) }))
+          return <div key={index} className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg bg-muted/35 p-2 sm:flex-nowrap" data-testid="cd-environment-row">
+            <Input aria-label={`${zh ? '变量名称' : 'Variable name'} ${index + 1}`} className="min-w-0 flex-1 font-mono sm:max-w-64" value={variable.name} maxLength={256} readOnly={variable.has_value} onChange={event => update({ name: event.target.value })} placeholder="APP_ENV" autoComplete="off" />
+            <div className="order-3 flex w-full min-w-0 gap-2 sm:order-none sm:w-auto sm:flex-1">
+              <Input aria-label={`${zh ? '变量值' : 'Variable value'} ${index + 1}`} type={showEnvironment ? 'text' : 'password'} className="font-mono" value={variable.value ?? ''} onChange={event => update({ value: event.target.value || undefined })} placeholder={variable.has_value && variable.value === undefined ? (zh ? '已保存 · 输入以替换' : 'Saved · enter to replace') : (zh ? '空值' : 'Empty value')} autoComplete="new-password" spellCheck={false} disabled={variable.value === ''} />
+              <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"><Checkbox aria-label={`${zh ? '使用空值' : 'Use empty value'} ${index + 1}`} checked={variable.value === ''} onCheckedChange={checked => update({ value: checked ? '' : undefined })} /><span aria-hidden="true">{zh ? '空值' : 'Empty'}</span></label>
+            </div>
+            <Button type="button" variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={`${zh ? '删除变量' : 'Remove variable'} ${index + 1}`} onClick={() => setDraft(current => ({ ...current, environment: current.environment?.filter((_, rowIndex) => rowIndex !== index) }))}><Trash2 /></Button>
+          </div>
+        })}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" variant="outline" size="sm" disabled={(draft.environment?.length ?? 0) >= 100} onClick={() => setDraft(current => ({ ...current, environment: [...current.environment ?? [], { name: '', value: undefined }] }))}><Plus />{zh ? '添加环境变量' : 'Add variable'}</Button>
+        <Button type="button" variant="ghost" size="sm" onClick={() => setQuickEnvironment(true)}>{zh ? '快速添加' : 'Quick add'}</Button>
+        {!!draft.environment?.length && <Button type="button" variant="ghost" size="sm" onClick={() => setShowEnvironment(value => !value)}>{showEnvironment ? <EyeOff /> : <Eye />}{showEnvironment ? (zh ? '隐藏输入值' : 'Hide entered values') : (zh ? '显示输入值' : 'Show entered values')}</Button>}
+      </div>
+      {quickEnvironment && <EnvironmentQuickAdd variables={draft.environment ?? []} zh={zh} onAdd={environment => setDraft(current => ({ ...current, environment }))} onClose={() => setQuickEnvironment(false)} />}
     </SettingsSection>
 
     <SettingsSection title={zh ? 'Git 认证' : 'Git authentication'} description={zh ? '凭据独立加密保存，可用于任何兼容的 HTTPS 或 SSH 仓库；公开仓库可以不选择。' : 'Credentials are encrypted separately and work with any compatible HTTPS or SSH repository. Public repositories need none.'}>

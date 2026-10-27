@@ -34,6 +34,7 @@ type Runner interface {
 }
 
 type ExecutionSpec struct {
+	Environment map[string]string `json:"-"`
 	ProjectName string
 	ProjectDir  string
 	Files       []string
@@ -111,6 +112,14 @@ func (r *CLIRunner) managedArguments(project string) ([]string, error) {
 	return r.arguments(ExecutionSpec{ProjectName: name, ProjectDir: project})
 }
 func (r *CLIRunner) runSpec(ctx context.Context, spec ExecutionSpec, output io.Writer, args ...string) error {
+	spec, cleanEnvironment, err := prepareEnvironment(spec)
+	if err != nil {
+		return err
+	}
+	defer cleanEnvironment()
+	if len(spec.Environment) > 0 {
+		output = io.Discard
+	}
 	values, err := r.arguments(spec)
 	if err != nil {
 		return err
@@ -126,7 +135,7 @@ func (r *CLIRunner) runSpec(ctx context.Context, spec ExecutionSpec, output io.W
 		return err
 	}
 	defer cleanup()
-	command.Env = environment
+	command.Env = interpolationProcessEnvironment(environment, spec.Environment)
 	command.Stdout = output
 	command.Stderr = output
 	if err := command.Run(); err != nil {
@@ -136,6 +145,14 @@ func (r *CLIRunner) runSpec(ctx context.Context, spec ExecutionSpec, output io.W
 }
 
 func (r *CLIRunner) captureSpec(ctx context.Context, spec ExecutionSpec, output io.Writer, args ...string) (string, error) {
+	spec, cleanEnvironment, err := prepareEnvironment(spec)
+	if err != nil {
+		return "", err
+	}
+	defer cleanEnvironment()
+	if len(spec.Environment) > 0 {
+		output = io.Discard
+	}
 	values, err := r.arguments(spec)
 	if err != nil {
 		return "", err
@@ -151,7 +168,7 @@ func (r *CLIRunner) captureSpec(ctx context.Context, spec ExecutionSpec, output 
 		return "", err
 	}
 	defer cleanup()
-	command.Env = environment
+	command.Env = interpolationProcessEnvironment(environment, spec.Environment)
 	var stdout strings.Builder
 	var stderr strings.Builder
 	if output == nil {
@@ -161,10 +178,16 @@ func (r *CLIRunner) captureSpec(ctx context.Context, spec ExecutionSpec, output 
 	command.Stderr = io.MultiWriter(&stderr, output)
 	if err := command.Run(); err != nil {
 		message := strings.TrimSpace(stderr.String())
+		if len(spec.Environment) > 0 {
+			return "", fmt.Errorf("docker compose %s: %w (diagnostic hidden for private environment)", strings.Join(args, " "), err)
+		}
 		if message != "" {
 			return stdout.String(), fmt.Errorf("docker compose %s: %w: %s", strings.Join(args, " "), err, message)
 		}
 		return stdout.String(), fmt.Errorf("docker compose %s: %w", strings.Join(args, " "), err)
+	}
+	if len(args) > 0 && args[0] != "config" {
+		return redactRuntimeEnvironment(stdout.String(), spec.Environment), nil
 	}
 	return stdout.String(), nil
 }

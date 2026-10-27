@@ -46,7 +46,14 @@ export interface GitAuthentication {
   save_to_center?: boolean
 }
 
+export interface CDEnvironmentVariable {
+  name: string
+  value?: string
+  has_value?: boolean
+}
+
 export interface CDConfiguration {
+  environment?: CDEnvironmentVariable[]
 	automation_enabled: boolean
   configured: boolean
   repository: GitRepositoryConfiguration
@@ -65,6 +72,7 @@ export interface CDConfiguration {
 }
 
 export interface CDConfigureInput {
+  environment?: CDEnvironmentVariable[]
 	automation_enabled: boolean
   repository: GitRepositoryConfiguration
   reconcile_mode: ReconcileMode
@@ -193,6 +201,7 @@ export const defaultRepository = (): GitRepositoryConfiguration => ({
 export function normalizedCDConfiguration(configuration: CDConfiguration): CDConfiguration {
   return {
     ...configuration,
+    environment: configuration.environment ?? [],
     automation_enabled: configuration.automation_enabled !== false,
     repository: {
       ...defaultRepository(),

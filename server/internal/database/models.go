@@ -282,31 +282,32 @@ type DeliveryTargetState struct {
 // intentionally independent from the Docker-label Compose inventory: Compose
 // is a deployment adapter used by a release, not the identity or lifecycle owner of CD.
 type DeliveryProject struct {
-	ID                  uint   `gorm:"primaryKey"`
-	NodeID              string `gorm:"size:64;not null;default:local;index"`
-	Name                string `gorm:"uniqueIndex;size:128;not null"`
-	DeploymentName      string `gorm:"size:128;not null"`
-	GitCloneURL         string
-	GitCredentialID     *uint  `gorm:"index"`
-	GitRefType          string `gorm:"size:16"`
-	GitRef              string
-	ComposeFilesJSON    string
-	EnvironmentFile     string
-	ReconcileMode       string `gorm:"size:16;not null;default:manual"`
-	AutomationEnabled   bool   `gorm:"not null;default:true"`
-	SyncIntervalSeconds int    `gorm:"not null;default:300"`
-	DesiredCommit       string `gorm:"size:64"`
-	ObservedCommit      string `gorm:"size:64"`
-	ActiveCommit        string `gorm:"size:64"`
-	ActiveReleaseID     *uint  `gorm:"index"`
-	AutoRollback        bool
-	DeploymentTimeout   int    `gorm:"not null;default:120"`
-	WebhookID           string `gorm:"size:64;uniqueIndex:idx_delivery_webhook_id,where:webhook_id <> ''"`
-	WebhookSecret       []byte `json:"-"`
-	WebhookEnabled      bool
-	LastSyncAt          *time.Time `gorm:"index"`
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID                    uint   `gorm:"primaryKey"`
+	NodeID                string `gorm:"size:64;not null;default:local;index"`
+	Name                  string `gorm:"uniqueIndex;size:128;not null"`
+	DeploymentName        string `gorm:"size:128;not null"`
+	GitCloneURL           string
+	GitCredentialID       *uint  `gorm:"index"`
+	GitRefType            string `gorm:"size:16"`
+	GitRef                string
+	ComposeFilesJSON      string
+	EnvironmentFile       string
+	EnvironmentCiphertext []byte `json:"-"`
+	ReconcileMode         string `gorm:"size:16;not null;default:manual"`
+	AutomationEnabled     bool   `gorm:"not null;default:true"`
+	SyncIntervalSeconds   int    `gorm:"not null;default:300"`
+	DesiredCommit         string `gorm:"size:64"`
+	ObservedCommit        string `gorm:"size:64"`
+	ActiveCommit          string `gorm:"size:64"`
+	ActiveReleaseID       *uint  `gorm:"index"`
+	AutoRollback          bool
+	DeploymentTimeout     int    `gorm:"not null;default:120"`
+	WebhookID             string `gorm:"size:64;uniqueIndex:idx_delivery_webhook_id,where:webhook_id <> ''"`
+	WebhookSecret         []byte `json:"-"`
+	WebhookEnabled        bool
+	LastSyncAt            *time.Time `gorm:"index"`
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 type GitCredential struct {
@@ -358,33 +359,34 @@ type RegistryCredential struct {
 }
 
 type DeliveryRelease struct {
-	ID                uint                        `gorm:"primaryKey" json:"id"`
-	ProjectID         uint                        `gorm:"index;not null" json:"project_id"`
-	RepositoryURL     string                      `json:"repository_url"`
-	GitRef            string                      `json:"git_ref"`
-	CommitSHA         string                      `gorm:"size:64;index;not null" json:"commit_sha"`
-	CommitMessage     string                      `json:"commit_message"`
-	CommitAuthor      string                      `json:"commit_author"`
-	ConfigHash        string                      `gorm:"size:64;index" json:"config_hash"`
-	ImageReferences   string                      `json:"image_references"`
-	TaskID            string                      `gorm:"size:36;index" json:"task_id,omitempty"`
-	Status            string                      `gorm:"size:32;index;not null" json:"status"`
-	TriggerType       string                      `gorm:"size:32;not null" json:"trigger_type"`
-	TriggerActor      string                      `json:"trigger_actor"`
-	PreviousReleaseID *uint                       `gorm:"index" json:"previous_release_id,omitempty"`
-	WorktreePath      string                      `json:"-"`
-	ComposeFilesJSON  string                      `json:"compose_files"`
-	EnvironmentFile   string                      `json:"environment_file,omitempty"`
-	ApprovedBy        *uint                       `gorm:"index" json:"approved_by,omitempty"`
-	ApprovedAt        *time.Time                  `json:"approved_at,omitempty"`
-	StartedAt         *time.Time                  `json:"started_at,omitempty"`
-	FinishedAt        *time.Time                  `json:"finished_at,omitempty"`
-	FailureReason     string                      `json:"failure_reason,omitempty"`
-	HealthSummary     string                      `json:"health_summary,omitempty"`
-	CreatedAt         time.Time                   `json:"created_at"`
-	UpdatedAt         time.Time                   `json:"updated_at"`
-	Deployments       []DeliveryReleaseDeployment `gorm:"-" json:"deployments,omitempty"`
-	Remediation       RemediationCapabilities     `gorm:"-" json:"remediation"`
+	ID                    uint                        `gorm:"primaryKey" json:"id"`
+	ProjectID             uint                        `gorm:"index;not null" json:"project_id"`
+	RepositoryURL         string                      `json:"repository_url"`
+	GitRef                string                      `json:"git_ref"`
+	CommitSHA             string                      `gorm:"size:64;index;not null" json:"commit_sha"`
+	CommitMessage         string                      `json:"commit_message"`
+	CommitAuthor          string                      `json:"commit_author"`
+	ConfigHash            string                      `gorm:"size:64;index" json:"config_hash"`
+	ImageReferences       string                      `json:"image_references"`
+	TaskID                string                      `gorm:"size:36;index" json:"task_id,omitempty"`
+	Status                string                      `gorm:"size:32;index;not null" json:"status"`
+	TriggerType           string                      `gorm:"size:32;not null" json:"trigger_type"`
+	TriggerActor          string                      `json:"trigger_actor"`
+	PreviousReleaseID     *uint                       `gorm:"index" json:"previous_release_id,omitempty"`
+	WorktreePath          string                      `json:"-"`
+	ComposeFilesJSON      string                      `json:"compose_files"`
+	EnvironmentFile       string                      `json:"environment_file,omitempty"`
+	EnvironmentCiphertext []byte                      `json:"-"`
+	ApprovedBy            *uint                       `gorm:"index" json:"approved_by,omitempty"`
+	ApprovedAt            *time.Time                  `json:"approved_at,omitempty"`
+	StartedAt             *time.Time                  `json:"started_at,omitempty"`
+	FinishedAt            *time.Time                  `json:"finished_at,omitempty"`
+	FailureReason         string                      `json:"failure_reason,omitempty"`
+	HealthSummary         string                      `json:"health_summary,omitempty"`
+	CreatedAt             time.Time                   `json:"created_at"`
+	UpdatedAt             time.Time                   `json:"updated_at"`
+	Deployments           []DeliveryReleaseDeployment `gorm:"-" json:"deployments,omitempty"`
+	Remediation           RemediationCapabilities     `gorm:"-" json:"remediation"`
 }
 
 type GitWebhookDelivery struct {

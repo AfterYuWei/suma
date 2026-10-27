@@ -1,9 +1,9 @@
 package cd
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -59,34 +59,36 @@ const (
 )
 
 type ConfigureInput struct {
-	AutomationEnabled     *bool              `json:"automation_enabled,omitempty"`
-	Repository            gitrepo.Repository `json:"repository"`
-	ReconcileMode         string             `json:"reconcile_mode"`
-	SyncIntervalSeconds   int                `json:"sync_interval_seconds"`
-	AutoRollback          bool               `json:"auto_rollback"`
-	DeploymentTimeout     int                `json:"deployment_timeout"`
-	WebhookEnabled        bool               `json:"webhook_enabled"`
-	WebhookSecret         string             `json:"webhook_secret"`
-	NodeIDs               []string           `json:"node_ids,omitempty"`
-	RegistryCredentialIDs []uint             `json:"registry_credential_ids,omitempty"`
+	Environment           []EnvironmentVariable `json:"environment"`
+	AutomationEnabled     *bool                 `json:"automation_enabled,omitempty"`
+	Repository            gitrepo.Repository    `json:"repository"`
+	ReconcileMode         string                `json:"reconcile_mode"`
+	SyncIntervalSeconds   int                   `json:"sync_interval_seconds"`
+	AutoRollback          bool                  `json:"auto_rollback"`
+	DeploymentTimeout     int                   `json:"deployment_timeout"`
+	WebhookEnabled        bool                  `json:"webhook_enabled"`
+	WebhookSecret         string                `json:"webhook_secret"`
+	NodeIDs               []string              `json:"node_ids,omitempty"`
+	RegistryCredentialIDs []uint                `json:"registry_credential_ids,omitempty"`
 }
 
 type Configuration struct {
-	AutomationEnabled     bool               `json:"automation_enabled"`
-	Configured            bool               `json:"configured"`
-	Repository            gitrepo.Repository `json:"repository"`
-	ReconcileMode         string             `json:"reconcile_mode"`
-	SyncIntervalSeconds   int                `json:"sync_interval_seconds"`
-	DesiredCommit         string             `json:"desired_commit"`
-	ObservedCommit        string             `json:"observed_commit"`
-	ActiveReleaseID       *uint              `json:"active_release_id,omitempty"`
-	AutoRollback          bool               `json:"auto_rollback"`
-	DeploymentTimeout     int                `json:"deployment_timeout"`
-	WebhookEnabled        bool               `json:"webhook_enabled"`
-	WebhookID             string             `json:"webhook_id,omitempty"`
-	WebhookSecret         string             `json:"webhook_secret,omitempty"`
-	NodeIDs               []string           `json:"node_ids"`
-	RegistryCredentialIDs []uint             `json:"registry_credential_ids"`
+	Environment           []EnvironmentVariable `json:"environment"`
+	AutomationEnabled     bool                  `json:"automation_enabled"`
+	Configured            bool                  `json:"configured"`
+	Repository            gitrepo.Repository    `json:"repository"`
+	ReconcileMode         string                `json:"reconcile_mode"`
+	SyncIntervalSeconds   int                   `json:"sync_interval_seconds"`
+	DesiredCommit         string                `json:"desired_commit"`
+	ObservedCommit        string                `json:"observed_commit"`
+	ActiveReleaseID       *uint                 `json:"active_release_id,omitempty"`
+	AutoRollback          bool                  `json:"auto_rollback"`
+	DeploymentTimeout     int                   `json:"deployment_timeout"`
+	WebhookEnabled        bool                  `json:"webhook_enabled"`
+	WebhookID             string                `json:"webhook_id,omitempty"`
+	WebhookSecret         string                `json:"webhook_secret,omitempty"`
+	NodeIDs               []string              `json:"node_ids"`
+	RegistryCredentialIDs []uint                `json:"registry_credential_ids"`
 }
 
 type Project struct {
@@ -304,6 +306,10 @@ func (s *Service) Configure(ctx context.Context, name string, input ConfigureInp
 	if err := s.db.WithContext(ctx).Where("name = ?", name).First(&current).Error; err != nil {
 		return Configuration{}, err
 	}
+	environment, err := s.configureEnvironment(current.EnvironmentCiphertext, input.Environment)
+	if err != nil {
+		return Configuration{}, err
+	}
 	nodeIDs := input.NodeIDs
 	if nodeIDs == nil {
 		nodeIDs, _ = s.projectNodeIDs(ctx, current.ID)
@@ -378,8 +384,9 @@ func (s *Service) Configure(ctx context.Context, name string, input ConfigureInp
 		webhookID = generatedID
 	}
 	updates := map[string]any{
-		"git_clone_url": input.Repository.CloneURL,
-		"git_ref_type":  input.Repository.RefType, "git_ref": input.Repository.Ref,
+		"environment_ciphertext": environment,
+		"git_clone_url":          input.Repository.CloneURL,
+		"git_ref_type":           input.Repository.RefType, "git_ref": input.Repository.Ref,
 		"compose_files_json": string(files),
 		"environment_file":   input.Repository.EnvironmentFile, "reconcile_mode": input.ReconcileMode,
 		"sync_interval_seconds": input.SyncIntervalSeconds, "auto_rollback": input.AutoRollback,
@@ -389,7 +396,7 @@ func (s *Service) Configure(ctx context.Context, name string, input ConfigureInp
 	if input.AutomationEnabled != nil {
 		updates["automation_enabled"] = *input.AutomationEnabled
 	}
-	if current.GitCloneURL != input.Repository.CloneURL || current.GitRefType != input.Repository.RefType || current.GitRef != input.Repository.Ref || current.ComposeFilesJSON != string(files) || current.EnvironmentFile != input.Repository.EnvironmentFile {
+	if !bytes.Equal(current.EnvironmentCiphertext, environment) || current.GitCloneURL != input.Repository.CloneURL || current.GitRefType != input.Repository.RefType || current.GitRef != input.Repository.Ref || current.ComposeFilesJSON != string(files) || current.EnvironmentFile != input.Repository.EnvironmentFile {
 		updates["desired_commit"] = ""
 		updates["observed_commit"] = ""
 		updates["last_sync_at"] = nil
@@ -515,7 +522,12 @@ func (s *Service) GetConfiguration(ctx context.Context, name string) (Configurat
 	if err != nil {
 		return Configuration{}, err
 	}
+	environment, err := s.environmentSummary(project.EnvironmentCiphertext)
+	if err != nil {
+		return Configuration{}, err
+	}
 	return Configuration{
+		Environment:       environment,
 		AutomationEnabled: project.AutomationEnabled,
 		Configured:        true,
 		Repository:        gitrepo.Repository{CloneURL: project.GitCloneURL, RefType: project.GitRefType, Ref: project.GitRef, CredentialID: project.GitCredentialID, Authentication: authentication, ComposeFiles: files, EnvironmentFile: project.EnvironmentFile},
@@ -600,6 +612,10 @@ func (s *Service) syncLocked(ctx context.Context, projectID uint, taskID, trigge
 	if err != nil {
 		return err
 	}
+	spec.Environment, err = s.decryptEnvironment(project.EnvironmentCiphertext)
+	if err != nil {
+		return err
+	}
 	if err := validateComposeSources(spec, revision.WorktreePath); err != nil {
 		return fmt.Errorf("deployment source policy rejected the release: %w", err)
 	}
@@ -616,11 +632,16 @@ func (s *Service) syncLocked(ctx context.Context, projectID uint, taskID, trigge
 		return err
 	}
 	if err := s.validateDeploymentTargets(ctx, project.ID, spec, rendered); err != nil {
+		if len(spec.Environment) > 0 {
+			return errors.New("deployment policy rejected the release (details hidden for private environment)")
+		}
 		return fmt.Errorf("deployment policy rejected the release: %w", err)
 	}
-	hash := sha256.Sum256([]byte(rendered))
-	configHash := hex.EncodeToString(hash[:])
+	configHash := releaseConfigurationHash(rendered, spec.Environment)
 	images := imageReferences(rendered)
+	for i := range images {
+		images[i] = compose.RedactEnvironment(images[i], spec.Environment)
+	}
 	var existing database.DeliveryRelease
 	err = s.db.WithContext(ctx).Where("project_id = ? AND commit_sha = ? AND config_hash = ? AND status IN ?", project.ID, revision.CommitSHA, configHash, []string{StatusAwaitingApproval, StatusApproved, StatusSucceeded, StatusRolledBack}).Order("id DESC").First(&existing).Error
 	if err == nil {
@@ -634,7 +655,7 @@ func (s *Service) syncLocked(ctx context.Context, projectID uint, taskID, trigge
 		if existing.Status == StatusAwaitingApproval || existing.Status == StatusApproved {
 			return s.deployLocked(ctx, project, existing, taskID, false, actor, report)
 		}
-		reconcileRelease := database.DeliveryRelease{ProjectID: existing.ProjectID, RepositoryURL: existing.RepositoryURL, GitRef: existing.GitRef, CommitSHA: existing.CommitSHA, CommitMessage: existing.CommitMessage, CommitAuthor: existing.CommitAuthor, ConfigHash: existing.ConfigHash, ImageReferences: existing.ImageReferences, TaskID: taskID, Status: StatusAwaitingApproval, TriggerType: "reconcile", TriggerActor: actor.Name, PreviousReleaseID: project.ActiveReleaseID, WorktreePath: existing.WorktreePath, ComposeFilesJSON: existing.ComposeFilesJSON, EnvironmentFile: existing.EnvironmentFile}
+		reconcileRelease := database.DeliveryRelease{ProjectID: existing.ProjectID, RepositoryURL: existing.RepositoryURL, GitRef: existing.GitRef, CommitSHA: existing.CommitSHA, CommitMessage: existing.CommitMessage, CommitAuthor: existing.CommitAuthor, ConfigHash: existing.ConfigHash, ImageReferences: existing.ImageReferences, TaskID: taskID, Status: StatusAwaitingApproval, TriggerType: "reconcile", TriggerActor: actor.Name, PreviousReleaseID: project.ActiveReleaseID, WorktreePath: existing.WorktreePath, ComposeFilesJSON: existing.ComposeFilesJSON, EnvironmentFile: existing.EnvironmentFile, EnvironmentCiphertext: existing.EnvironmentCiphertext}
 		if err := s.db.WithContext(ctx).Create(&reconcileRelease).Error; err != nil {
 			return err
 		}
@@ -657,7 +678,7 @@ func (s *Service) syncLocked(ctx context.Context, projectID uint, taskID, trigge
 		GitRef: project.GitRef, CommitSHA: revision.CommitSHA, CommitMessage: revision.CommitMessage,
 		CommitAuthor: revision.CommitAuthor, ConfigHash: configHash, ImageReferences: string(imagesJSON),
 		TaskID: taskID, Status: status, TriggerType: trigger, TriggerActor: actor.Name,
-		PreviousReleaseID: project.ActiveReleaseID, WorktreePath: revision.WorktreePath, ComposeFilesJSON: string(filesJSON), EnvironmentFile: repository.EnvironmentFile,
+		PreviousReleaseID: project.ActiveReleaseID, WorktreePath: revision.WorktreePath, ComposeFilesJSON: string(filesJSON), EnvironmentFile: repository.EnvironmentFile, EnvironmentCiphertext: project.EnvironmentCiphertext,
 	}
 	if err := s.db.WithContext(ctx).Create(&release).Error; err != nil {
 		return err
@@ -797,7 +818,7 @@ func (s *Service) Rollback(ctx context.Context, name string, releaseID uint, act
 		GitRef: release.GitRef, CommitSHA: release.CommitSHA, CommitMessage: release.CommitMessage,
 		CommitAuthor: release.CommitAuthor, ConfigHash: release.ConfigHash, ImageReferences: release.ImageReferences,
 		Status: StatusAwaitingApproval, TriggerType: "rollback", TriggerActor: actor.Name,
-		PreviousReleaseID: project.ActiveReleaseID, WorktreePath: release.WorktreePath, ComposeFilesJSON: release.ComposeFilesJSON, EnvironmentFile: release.EnvironmentFile,
+		PreviousReleaseID: project.ActiveReleaseID, WorktreePath: release.WorktreePath, ComposeFilesJSON: release.ComposeFilesJSON, EnvironmentFile: release.EnvironmentFile, EnvironmentCiphertext: release.EnvironmentCiphertext,
 	}
 	if err := s.db.WithContext(ctx).Create(&rollbackRelease).Error; err != nil {
 		s.releaseReservation(project.ID)
@@ -836,7 +857,7 @@ func (s *Service) deployLocked(ctx context.Context, project database.DeliveryPro
 	if err := s.git.Verify(ctx, release.WorktreePath, release.CommitSHA); err != nil {
 		return s.failRelease(ctx, release.ID, err)
 	}
-	spec, err := releaseExecutionSpec(runtimeName(project), release)
+	spec, err := s.releaseSpec(runtimeName(project), release)
 	if err != nil {
 		return err
 	}
@@ -864,7 +885,7 @@ func (s *Service) deployLocked(ctx context.Context, project database.DeliveryPro
 			var previous database.DeliveryRelease
 			if loadErr := s.db.WithContext(ctx).First(&previous, *release.PreviousReleaseID).Error; loadErr == nil {
 				report(80, "Deployment failed; restoring previous release")
-				restore := database.DeliveryRelease{ProjectID: previous.ProjectID, RepositoryURL: previous.RepositoryURL, GitRef: previous.GitRef, CommitSHA: previous.CommitSHA, CommitMessage: previous.CommitMessage, CommitAuthor: previous.CommitAuthor, ConfigHash: previous.ConfigHash, ImageReferences: previous.ImageReferences, TaskID: taskID, Status: StatusAwaitingApproval, TriggerType: "automatic_rollback", TriggerActor: "SUMA", PreviousReleaseID: &release.ID, WorktreePath: previous.WorktreePath, ComposeFilesJSON: previous.ComposeFilesJSON, EnvironmentFile: previous.EnvironmentFile}
+				restore := database.DeliveryRelease{ProjectID: previous.ProjectID, RepositoryURL: previous.RepositoryURL, GitRef: previous.GitRef, CommitSHA: previous.CommitSHA, CommitMessage: previous.CommitMessage, CommitAuthor: previous.CommitAuthor, ConfigHash: previous.ConfigHash, ImageReferences: previous.ImageReferences, TaskID: taskID, Status: StatusAwaitingApproval, TriggerType: "automatic_rollback", TriggerActor: "SUMA", PreviousReleaseID: &release.ID, WorktreePath: previous.WorktreePath, ComposeFilesJSON: previous.ComposeFilesJSON, EnvironmentFile: previous.EnvironmentFile, EnvironmentCiphertext: previous.EnvironmentCiphertext}
 				if createErr := s.db.WithContext(ctx).Create(&restore).Error; createErr == nil {
 					_ = s.deployLocked(ctx, project, restore, taskID, true, Actor{Name: "SUMA"}, report)
 				}
@@ -1023,7 +1044,7 @@ func (s *Service) deployTargetsLocked(ctx context.Context, project database.Deli
 }
 
 func (s *Service) deployOneTarget(ctx context.Context, project database.DeliveryProject, release database.DeliveryRelease, deployment database.DeliveryReleaseDeployment, runner compose.Runner, attemptID uint, taskID string, rollback bool, report task.Reporter) error {
-	spec, err := releaseExecutionSpec(runtimeName(project), release)
+	spec, err := s.releaseSpec(runtimeName(project), release)
 	if err != nil {
 		return s.failDeployment(ctx, deployment.ID, err)
 	}
@@ -1083,7 +1104,7 @@ func (s *Service) failAndMaybeRollbackTarget(ctx context.Context, project databa
 	if err := s.db.WithContext(ctx).First(&previous, *deployment.PreviousReleaseID).Error; err != nil {
 		return deployErr
 	}
-	spec, err := releaseExecutionSpec(runtimeName(project), previous)
+	spec, err := s.releaseSpec(runtimeName(project), previous)
 	if err != nil {
 		return deployErr
 	}
@@ -1292,7 +1313,7 @@ func (s *Service) RemoveProject(ctx context.Context, name string, force, preserv
 		if err := s.db.WithContext(ctx).First(&release, *project.ActiveReleaseID).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		} else if err == nil {
-			spec, specErr := releaseExecutionSpec(runtimeName(project), release)
+			spec, specErr := s.releaseSpec(runtimeName(project), release)
 			if specErr != nil {
 				return specErr
 			}
@@ -1501,7 +1522,7 @@ func (s *Service) probeNodeDrift(ctx context.Context, project database.DeliveryP
 	if project.DesiredCommit != "" && release.CommitSHA != project.DesiredCommit {
 		result.Status, result.Drifted, result.ReasonCode, result.Reason = DriftDegraded, true, "desired_commit_mismatch", "active release differs from desired Git commit"
 	}
-	spec, err := releaseExecutionSpec(runtimeName(project), release)
+	spec, err := s.releaseSpec(runtimeName(project), release)
 	if err != nil {
 		result.Status, result.ReasonCode, result.Reason = DriftUnknown, "release_spec_unavailable", err.Error()
 		return result

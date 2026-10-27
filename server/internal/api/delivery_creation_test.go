@@ -50,12 +50,15 @@ func newDeliveryCreationHarness(t *testing.T, gitClients ...gitrepo.Client) proj
 	return projectHTTPHarness{router: router, cookie: &http.Cookie{Name: sessionCookie, Value: token}, db: db}
 }
 
+func testDeliveryEnvironmentValue(value string) *string { return &value }
+
 func deliveryCreationBody(name string) []byte {
 	body, _ := json.Marshal(map[string]any{
 		"name": name,
 		"configuration": cd.ConfigureInput{
-			Repository: gitrepo.Repository{CloneURL: "https://git.example.test/team/deploy.git", RefType: gitrepo.RefBranch, Ref: "main", ComposeFiles: []string{"compose.yml"}, Authentication: gitrepo.Authentication{Source: gitrepo.CredentialSourceProject, Credential: &gitrepo.CredentialInput{Name: "private-git", AuthType: gitrepo.AuthHTTPToken, Secret: "test-only-private-token"}}},
-			NodeIDs:    []string{"local"}, ReconcileMode: cd.ModeManual, SyncIntervalSeconds: 300, DeploymentTimeout: 120, WebhookEnabled: true,
+			Repository:  gitrepo.Repository{CloneURL: "https://git.example.test/team/deploy.git", RefType: gitrepo.RefBranch, Ref: "main", ComposeFiles: []string{"compose.yml"}, Authentication: gitrepo.Authentication{Source: gitrepo.CredentialSourceProject, Credential: &gitrepo.CredentialInput{Name: "private-git", AuthType: gitrepo.AuthHTTPToken, Secret: "test-only-private-token"}}},
+			Environment: []cd.EnvironmentVariable{{Name: "PASSWORD", Value: testDeliveryEnvironmentValue("test-only-manual-environment")}},
+			NodeIDs:     []string{"local"}, ReconcileMode: cd.ModeManual, SyncIntervalSeconds: 300, DeploymentTimeout: 120, WebhookEnabled: true,
 		},
 	})
 	return body
@@ -76,6 +79,9 @@ func TestDeliveryFullConfigurationCreationHTTP(t *testing.T) {
 	if err := json.Unmarshal(result.Body.Bytes(), &response); err != nil || !response.Data.Configured || !response.Data.Configuration.Configured {
 		t.Fatal("creation did not return a configured project")
 	}
+	if len(response.Data.Configuration.Environment) != 1 || response.Data.Configuration.Environment[0].Value != nil || strings.Contains(result.Body.String(), "test-only-manual-environment") {
+		t.Fatal("creation lost environment metadata or exposed values")
+	}
 	if response.Data.DeploymentName != "complete-new" {
 		t.Fatalf("creation did not retain the CD project name for deployment: %q", response.Data.DeploymentName)
 	}
@@ -87,7 +93,7 @@ func TestDeliveryFullConfigurationCreationHTTP(t *testing.T) {
 	}
 	for _, path := range []string{"/api/v1/delivery-projects", "/api/v1/delivery-projects/complete-new/configuration"} {
 		loaded := h.request(http.MethodGet, path, nil)
-		if loaded.Code != http.StatusOK || strings.Contains(loaded.Body.String(), response.Data.Configuration.WebhookSecret) || strings.Contains(loaded.Body.String(), "test-only-private-token") {
+		if loaded.Code != http.StatusOK || strings.Contains(loaded.Body.String(), response.Data.Configuration.WebhookSecret) || strings.Contains(loaded.Body.String(), "test-only-private-token") || strings.Contains(loaded.Body.String(), "test-only-manual-environment") {
 			t.Fatal("GET exposed a one-time or credential secret")
 		}
 	}
