@@ -378,6 +378,7 @@ type DeliveryRelease struct {
 	EnvironmentFile       string                      `json:"environment_file,omitempty"`
 	EnvironmentCiphertext []byte                      `json:"-"`
 	ApprovedBy            *uint                       `gorm:"index" json:"approved_by,omitempty"`
+	ApprovedByName        string                      `gorm:"-" json:"approved_by_name,omitempty"`
 	ApprovedAt            *time.Time                  `json:"approved_at,omitempty"`
 	StartedAt             *time.Time                  `json:"started_at,omitempty"`
 	FinishedAt            *time.Time                  `json:"finished_at,omitempty"`

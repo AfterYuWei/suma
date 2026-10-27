@@ -1557,6 +1557,11 @@ func (s *Service) probeNodeDrift(ctx context.Context, project database.DeliveryP
 }
 
 func (s *Service) loadReleaseDetails(ctx context.Context, release *database.DeliveryRelease) error {
+	if release.ApprovedBy != nil {
+		if err := s.db.WithContext(ctx).Model(&database.User{}).Where("id = ?", *release.ApprovedBy).Pluck("username", &release.ApprovedByName).Error; err != nil {
+			return err
+		}
+	}
 	if err := s.db.WithContext(ctx).Where("release_id = ?", release.ID).Order("node_id ASC").Find(&release.Deployments).Error; err != nil {
 		return err
 	}

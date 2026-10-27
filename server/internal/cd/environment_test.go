@@ -35,6 +35,10 @@ func TestDeliveryEnvironmentEncryptedConfigurationAndCompatibility(t *testing.T)
 	if len(stored.EnvironmentCiphertext) == 0 || strings.Contains(string(stored.EnvironmentCiphertext), "manual-test-private-value") {
 		t.Fatal("values were not encrypted")
 	}
+	values, err := h.service.GetEnvironmentValues(ctx, h.project.Name)
+	if err != nil || len(values) != 2 || values["PASSWORD"] != "manual-test-private-value" || values["EMPTY"] != "" {
+		t.Fatal("explicit read lost saved or empty values")
+	}
 	before := string(stored.EnvironmentCiphertext)
 	for _, variables := range [][]EnvironmentVariable{nil, {{Name: "PASSWORD"}, {Name: "EMPTY"}}} {
 		input.Environment = variables
@@ -51,7 +55,7 @@ func TestDeliveryEnvironmentEncryptedConfigurationAndCompatibility(t *testing.T)
 		t.Fatal(err)
 	}
 	h.db.First(&stored, h.project.ID)
-	values, err := h.service.decryptEnvironment(stored.EnvironmentCiphertext)
+	values, err = h.service.GetEnvironmentValues(ctx, h.project.Name)
 	if err != nil || len(values) != 1 || values["PASSWORD"] != "" {
 		t.Fatal("explicit empty or removal was not saved")
 	}

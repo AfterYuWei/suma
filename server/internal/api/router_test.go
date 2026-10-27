@@ -115,6 +115,7 @@ func TestGitDeliveryAPIsRequireAuthentication(t *testing.T) {
 		{http.MethodGet, "/api/v1/delivery-projects"},
 		{http.MethodPost, "/api/v1/delivery-projects"},
 		{http.MethodGet, "/api/v1/delivery-projects/production/configuration"},
+		{http.MethodGet, "/api/v1/delivery-projects/production/environment"},
 		{http.MethodPut, "/api/v1/delivery-projects/production/configuration"},
 		{http.MethodPut, "/api/v1/delivery-projects/production/automation"},
 		{http.MethodPost, "/api/v1/delivery-projects/production/sync"},

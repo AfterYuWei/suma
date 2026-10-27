@@ -9,7 +9,7 @@ import { useListPagination } from '../../components/ui/use-list-pagination'
 import { Progress } from '../../components/ui/progress'
 import { Spinner } from '../../components/ui/spinner'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui/table'
-import { CheckCircle2, ChevronDownIcon, GitCommitHorizontal, History, Loader2, RotateCcw, Rocket, TriangleAlert, XCircle } from 'lucide-react'
+import { Check, CheckCircle2, ChevronDownIcon, GitCommitHorizontal, History, Loader2, RotateCcw, Rocket, TriangleAlert, X, XCircle } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { CDConfiguration, CDDrift, DeliveryRelease } from './types'
 import { parseStringList, repositoryName, shortCommit } from './types'
@@ -124,9 +124,9 @@ export function ReleasePanel({ configuration, releases, pendingReleaseID, zh, on
     const pending = pendingReleaseID === release.id
     const retryCount = release.remediation?.retry_failed_node_ids?.length ?? 0
     const rollbackCount = release.remediation?.rollback_failed_node_ids?.length ?? 0
-    return <Collapsible key={release.id} className="group/collapsible w-full overflow-hidden rounded-lg bg-surface">
-      <div className="flex items-start gap-2 pr-2">
-        <CollapsibleTrigger className="flex min-w-0 flex-1 cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 py-2.5 pl-3 text-left hover:bg-muted/50 [&_svg]:shrink-0">
+    return <Collapsible key={release.id} className="group/collapsible w-full shrink-0 overflow-hidden rounded-lg bg-surface">
+      <div className="flex flex-wrap items-start gap-x-2 pr-2">
+        <CollapsibleTrigger className="flex min-w-0 flex-[1_1_14rem] cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 py-2.5 pl-3 text-left hover:bg-muted/50 [&_svg]:shrink-0">
           <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-data-open/collapsible:rotate-180" />
           <GitCommitHorizontal className="size-[18px] text-muted-foreground" />
           <span className="font-medium">{release.commit_message || (zh ? '无提交说明' : 'No commit message')}</span>
@@ -134,7 +134,8 @@ export function ReleasePanel({ configuration, releases, pendingReleaseID, zh, on
           {active && <Badge className="border-transparent bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">{zh ? '当前运行' : 'Active'}</Badge>}
           <span className="text-xs text-muted-foreground">#{release.id} · {shortCommit(release.commit_sha)}</span>
         </CollapsibleTrigger>
-        <div className="flex flex-wrap items-center justify-end gap-1.5 py-1.5">
+        <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5 py-1.5 pl-3">
+          <ReleaseApproval release={release} zh={zh} />
           {canApprove && <Button size="sm" variant="secondary" disabled={pending} onClick={() => onAction(release, 'approve')}><CheckCircle2 />{zh ? '批准' : 'Approve'}</Button>}
           {canReject && <Button size="sm" variant="destructive" disabled={pending} onClick={() => onAction(release, 'reject')}><XCircle />{zh ? '拒绝' : 'Reject'}</Button>}
           {canDeploy && <Button size="sm" disabled={pending} onClick={() => onAction(release, 'deploy')}>{pending ? <Spinner /> : <Rocket />}{release.status === 'failed' ? (zh ? '重新发布' : 'Redeploy') : (zh ? '发布' : 'Deploy')}</Button>}
@@ -150,6 +151,23 @@ export function ReleasePanel({ configuration, releases, pendingReleaseID, zh, on
   })}</div><ListPagination {...pagination} zh={zh} /></>
 }
 
+function rejectionActor(release: DeliveryRelease) {
+  return release.status === 'rejected' && release.failure_reason?.startsWith('Rejected by ')
+    ? release.failure_reason.slice('Rejected by '.length).trim()
+    : ''
+}
+
+function ReleaseApproval({ release, zh }: { release: DeliveryRelease; zh: boolean }) {
+  const rejected = release.status === 'rejected'
+  if (!rejected && !release.approved_by) return null
+  const actor = rejected ? rejectionActor(release) : release.approved_by_name
+  const label = rejected ? (zh ? '已拒绝' : 'Rejected') : (zh ? '已批准' : 'Approved')
+  return <span role="status" className={`inline-flex min-w-0 max-w-full items-center gap-1.5 px-2 py-1.5 text-xs font-medium ${rejected ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+    {rejected ? <X className="size-4 shrink-0" aria-hidden="true" /> : <Check className="size-4 shrink-0" aria-hidden="true" />}
+    <span className="min-w-0 [overflow-wrap:anywhere]"><span className="sr-only">{label}: </span>{actor || (zh ? '未知用户' : 'Unknown user')}</span>
+  </span>
+}
+
 function ReleaseDetails({ release, zh }: { release: DeliveryRelease; zh: boolean }) {
   const { formatDateTime } = useDateTime()
 
@@ -159,7 +177,7 @@ function ReleaseDetails({ release, zh }: { release: DeliveryRelease; zh: boolean
   type Deployment = (typeof deployments)[number]
   const pagination = useListPagination(deployments)
   return <div className="flex w-full flex-col gap-4">
-    {release.failure_reason && <Alert variant="destructive"><TriangleAlert /><AlertDescription>{release.failure_reason}</AlertDescription></Alert>}
+    {release.failure_reason && !rejectionActor(release) && <Alert variant="destructive"><TriangleAlert /><AlertDescription>{release.failure_reason}</AlertDescription></Alert>}
     <DetailList items={[
       ['Commit SHA', release.commit_sha],
       [zh ? '配置 Hash' : 'Config hash', release.config_hash],

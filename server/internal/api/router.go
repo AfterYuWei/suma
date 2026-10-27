@@ -1302,6 +1302,20 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		success(c, configuration)
 	})
+	delivery.GET("/:name/environment", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		values, err := deps.CD.GetEnvironmentValues(c.Request.Context(), c.Param("name"))
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				failure(c, http.StatusNotFound, 17701, "Delivery project not found")
+			} else {
+				failure(c, http.StatusInternalServerError, 17718, "Unable to read delivery environment")
+			}
+			return
+		}
+		recordAudit(c, deps.Audit, "cd.environment.read", "delivery_project", c.Param("name"), "success")
+		success(c, values)
+	})
 	delivery.PUT("/:name/configuration", func(c *gin.Context) {
 		var input cdService.ConfigureInput
 		if c.ShouldBindJSON(&input) != nil {

@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Copy, Eye, EyeOff, Plus, Save, Trash2 } from 'lucide-react'
-import { Children, cloneElement, isValidElement, type FormEvent, type ReactElement, type ReactNode, useEffect, useId, useRef, useState } from 'react'
+import { Children, cloneElement, isValidElement, type FormEvent, type ReactElement, type ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '../../components/ui/alert'
 import { Button } from '../../components/ui/button'
 import { Card, CardContent } from '../../components/ui/card'
@@ -71,6 +71,11 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
   const [composeFiles, setComposeFiles] = useState<string[]>(initial.repository.compose_files.length ? initial.repository.compose_files : ['compose.yml'])
   const [notice, setNotice] = useState('')
   const [showEnvironment, setShowEnvironment] = useState(false)
+  // Revealed values are a temporary input buffer; only edits enter the draft.
+  const [environmentValues, setEnvironmentValues] = useState<Record<string, string> | null>(null)
+  const [environmentLoading, setEnvironmentLoading] = useState(false)
+  const [environmentError, setEnvironmentError] = useState('')
+  const environmentRequest = useRef<AbortController | null>(null)
   const [quickEnvironment, setQuickEnvironment] = useState(false)
   const [revealedWebhookSecret, setRevealedWebhookSecret] = useState('')
   const [secretCopied, setSecretCopied] = useState(false)
@@ -79,18 +84,65 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
   const nodes = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes') })
   const registries = useQuery({ queryKey: ['registry-credentials'], queryFn: () => api<{ id: number; name: string; server_address: string; authorized_node_ids: string[] }[]>('/credentials/registries') })
 
+  const resetDraft = useCallback((configuration: CDConfiguration) => {
+    const value = normalizedCDConfiguration(configuration)
+    const files = value.repository.compose_files.length ? value.repository.compose_files : ['compose.yml']
+    configurationSignature.current = JSON.stringify(toDraft(value))
+    initialFiles.current = JSON.stringify(files)
+    setDraft(toDraft(value))
+    setComposeFiles(files)
+    environmentRequest.current?.abort()
+    setEnvironmentValues(null)
+    setShowEnvironment(false)
+    setEnvironmentLoading(false)
+    setEnvironmentError('')
+  }, [])
+
   useEffect(() => {
     const value = normalizedCDConfiguration(configuration)
     const signature = JSON.stringify(toDraft(value))
     if (signature === configurationSignature.current) return
-    configurationSignature.current = signature
-    setDraft(toDraft(value))
-    setComposeFiles(value.repository.compose_files.length ? value.repository.compose_files : ['compose.yml'])
-  }, [configuration])
+    resetDraft(value)
+  }, [configuration, resetDraft])
+
+  useEffect(() => {
+    setEnvironmentValues(null)
+    setShowEnvironment(false)
+    setEnvironmentError('')
+    setEnvironmentLoading(false)
+    return () => environmentRequest.current?.abort()
+  }, [projectName])
+
+  const toggleEnvironment = async () => {
+    if (showEnvironment) {
+      setShowEnvironment(false)
+      setEnvironmentValues(null)
+      return
+    }
+    setEnvironmentError('')
+    if (!creation && draft.environment?.some(variable => variable.has_value && variable.value === undefined)) {
+      const controller = new AbortController()
+      environmentRequest.current?.abort()
+      environmentRequest.current = controller
+      setEnvironmentLoading(true)
+      try {
+        const values = await api<Record<string, string>>(`/delivery-projects/${encodeURIComponent(projectName)}/environment`, { cache: 'no-store', signal: controller.signal })
+        if (controller.signal.aborted) return
+        setEnvironmentValues(values)
+      } catch {
+        if (!controller.signal.aborted) setEnvironmentError(zh ? '无法读取已保存的变量值，请重试。' : 'Unable to read saved values. Try again.')
+        return
+      } finally {
+        if (!controller.signal.aborted) setEnvironmentLoading(false)
+      }
+    }
+    setShowEnvironment(true)
+  }
 
   const save = useMutation({
     mutationFn: (input: CDConfigureInput) => creation ? creation.submit(input) : api<CDConfiguration>(`/delivery-projects/${encodeURIComponent(projectName)}/configuration`, { method: 'PUT', body: JSON.stringify(input) }),
     onSuccess: (value) => {
+      resetDraft(value)
       if (value.webhook_secret) setRevealedWebhookSecret(value.webhook_secret)
       setNotice(creation ? (zh ? '交付项目已创建，配置已保存。' : 'Delivery project created and configured.') : (zh ? '持续交付配置已保存。' : 'Continuous delivery configuration saved.'))
       onSaved(value)
@@ -201,14 +253,15 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
     </SettingsSection>
 
     <SettingsSection title={zh ? '手动环境变量' : 'Manual environment variables'} description={zh ? '用于 Compose 的 ${VARIABLE} 插值，覆盖环境变量文件中的同名值。容器需要的变量请在 Compose 的 environment 中引用。' : 'Used for ${VARIABLE} interpolation, overriding matching values in the environment file. Reference them in Compose environment to pass them to containers.'}>
-      <p className="text-xs text-muted-foreground">{zh ? '值会加密保存。已保存值不回显，未修改时保留；删除行后保存即可移除。修改后请重新同步并发布。' : 'Values are encrypted and never returned. Unchanged saved values are kept; remove a row and save to delete it. Sync and deploy again after changes.'}</p>
+      <p className="text-xs text-muted-foreground">{zh ? '值会加密保存，默认隐藏。点击“显示变量值”可查看并编辑已保存的值；未修改时保留，清空输入框保存为空值，删除行后保存即可移除。修改后请重新同步并发布。' : 'Values are encrypted and hidden by default. Show variable values to view and edit saved values. Unchanged values are kept; clear an input to save an empty value, or remove a row to delete it. Sync and deploy again after changes.'}</p>
       <div className="flex min-w-0 flex-col gap-2">
         {(draft.environment ?? []).map((variable, index) => {
           const update = (patch: Partial<typeof variable>) => setDraft(current => ({ ...current, environment: current.environment?.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row) }))
+          const savedValue = variable.has_value ? environmentValues?.[variable.name] : undefined
           return <div key={index} className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg bg-muted/35 p-2 sm:flex-nowrap" data-testid="cd-environment-row">
             <Input aria-label={`${zh ? '变量名称' : 'Variable name'} ${index + 1}`} className="min-w-0 flex-1 font-mono sm:max-w-64" value={variable.name} maxLength={256} readOnly={variable.has_value} onChange={event => update({ name: event.target.value })} placeholder="APP_ENV" autoComplete="off" />
             <div className="order-3 flex w-full min-w-0 gap-2 sm:order-none sm:w-auto sm:flex-1">
-              <Input aria-label={`${zh ? '变量值' : 'Variable value'} ${index + 1}`} type={showEnvironment ? 'text' : 'password'} className="font-mono" value={variable.value ?? ''} onChange={event => update({ value: event.target.value || undefined })} placeholder={variable.has_value && variable.value === undefined ? (zh ? '已保存 · 输入以替换' : 'Saved · enter to replace') : (zh ? '空值' : 'Empty value')} autoComplete="new-password" spellCheck={false} disabled={variable.value === ''} />
+              <Input aria-label={`${zh ? '变量值' : 'Variable value'} ${index + 1}`} type={showEnvironment ? 'text' : 'password'} className="font-mono" value={variable.value ?? savedValue ?? ''} onChange={event => update({ value: event.target.value })} placeholder={variable.has_value && variable.value === undefined && savedValue === undefined ? (zh ? '已保存 · 显示后可查看' : 'Saved · show to view') : (zh ? '空值' : 'Empty value')} autoComplete="new-password" spellCheck={false} />
               <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"><Checkbox aria-label={`${zh ? '使用空值' : 'Use empty value'} ${index + 1}`} checked={variable.value === ''} onCheckedChange={checked => update({ value: checked ? '' : undefined })} /><span aria-hidden="true">{zh ? '空值' : 'Empty'}</span></label>
             </div>
             <Button type="button" variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={`${zh ? '删除变量' : 'Remove variable'} ${index + 1}`} onClick={() => setDraft(current => ({ ...current, environment: current.environment?.filter((_, rowIndex) => rowIndex !== index) }))}><Trash2 /></Button>
@@ -218,8 +271,9 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" variant="outline" size="sm" disabled={(draft.environment?.length ?? 0) >= 100} onClick={() => setDraft(current => ({ ...current, environment: [...current.environment ?? [], { name: '', value: undefined }] }))}><Plus />{zh ? '添加环境变量' : 'Add variable'}</Button>
         <Button type="button" variant="ghost" size="sm" onClick={() => setQuickEnvironment(true)}>{zh ? '快速添加' : 'Quick add'}</Button>
-        {!!draft.environment?.length && <Button type="button" variant="ghost" size="sm" onClick={() => setShowEnvironment(value => !value)}>{showEnvironment ? <EyeOff /> : <Eye />}{showEnvironment ? (zh ? '隐藏输入值' : 'Hide entered values') : (zh ? '显示输入值' : 'Show entered values')}</Button>}
+        {!!draft.environment?.length && <Button type="button" variant="ghost" size="sm" disabled={environmentLoading} aria-busy={environmentLoading} aria-pressed={showEnvironment} onClick={() => void toggleEnvironment()}>{environmentLoading ? <Spinner aria-hidden="true" /> : showEnvironment ? <EyeOff /> : <Eye />}{environmentLoading ? (zh ? '读取中…' : 'Loading…') : showEnvironment ? (zh ? '隐藏变量值' : 'Hide variable values') : (zh ? '显示变量值' : 'Show variable values')}</Button>}
       </div>
+      {environmentError && <p role="alert" className="text-sm text-destructive">{environmentError}</p>}
       {quickEnvironment && <EnvironmentQuickAdd variables={draft.environment ?? []} zh={zh} onAdd={environment => setDraft(current => ({ ...current, environment }))} onClose={() => setQuickEnvironment(false)} />}
     </SettingsSection>
 

@@ -1,6 +1,7 @@
 package cd
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,12 +12,20 @@ import (
 	"github.com/suma/suma/server/internal/database"
 )
 
-// Value is write-only. A missing value preserves the stored value for Name;
+// Configuration reads omit Value. A missing value preserves the stored value for Name;
 // a pointer to an empty string explicitly sets an empty interpolation value.
 type EnvironmentVariable struct {
 	Name     string  `json:"name"`
 	Value    *string `json:"value,omitempty"`
 	HasValue bool    `json:"has_value,omitempty"`
+}
+
+func (s *Service) GetEnvironmentValues(ctx context.Context, name string) (map[string]string, error) {
+	project, err := s.project(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return s.decryptEnvironment(project.EnvironmentCiphertext)
 }
 
 func (s *Service) decryptEnvironment(ciphertext []byte) (map[string]string, error) {
