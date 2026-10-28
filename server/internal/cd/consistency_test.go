@@ -206,6 +206,9 @@ func TestRetryIncludesAutoRolledBackNode(t *testing.T) {
 	if state.ActiveReleaseID == nil || *state.ActiveReleaseID != current.ID {
 		t.Fatalf("target state = %#v", state)
 	}
+	if specs := healthy.UpSpecs(); len(specs) != 1 || !specs[0].ForceRecreate {
+		t.Fatalf("retry after rollback must replace existing containers: %#v", specs)
+	}
 }
 
 func TestRollbackFailedNodesRestoresEachNodesPreviousRelease(t *testing.T) {
@@ -264,5 +267,10 @@ func TestRollbackFailedNodesRestoresEachNodesPreviousRelease(t *testing.T) {
 	_ = harness.db.First(&aggregate, current.ID).Error
 	if aggregate.Status != StatusRolledBack {
 		t.Fatalf("release status = %s", aggregate.Status)
+	}
+	for _, runner := range []*fakeComposeRunner{healthyA, healthyB} {
+		if specs := runner.UpSpecs(); len(specs) != 1 || !specs[0].ForceRecreate {
+			t.Fatalf("failed-node rollback must recreate containers: %#v", specs)
+		}
 	}
 }

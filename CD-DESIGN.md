@@ -215,6 +215,8 @@ After a process restart, SUMA performs database-only recovery in one transaction
 
 Rollback means creating a new release record that redeploys an older release's recorded worktree and Compose file set. It is allowed only for a release that previously succeeded or was successfully restored. Observe mode blocks rollback. If the project is in auto mode, a manual rollback first persists `manual` mode so the reconciler cannot immediately replay the newer desired commit.
 
+Restoration retains the always-pull image policy: a mutable tag such as `latest` resolves to its current registry content, while an explicitly pinned digest retains that exact image identity. Manual and automatic rollbacks force container recreation after pulling, including when the rendered configuration and image are unchanged. Failed-release redeployment and failed-node retry also force recreation on their selected nodes. These operations use `up --force-recreate --remove-orphans --wait`, preserve volumes, and stop before `up` when pulling fails.
+
 Rollback does not:
 
 - delete or restore named volumes;

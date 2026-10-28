@@ -34,12 +34,13 @@ type Runner interface {
 }
 
 type ExecutionSpec struct {
-	Environment map[string]string `json:"-"`
-	ProjectName string
-	ProjectDir  string
-	Files       []string
-	EnvFiles    []string
-	Profiles    []string
+	Environment   map[string]string `json:"-"`
+	ForceRecreate bool              `json:"-"`
+	ProjectName   string
+	ProjectDir    string
+	Files         []string
+	EnvFiles      []string
+	Profiles      []string
 }
 
 type Target struct {
@@ -268,6 +269,9 @@ func (r *CLIRunner) PullRelease(ctx context.Context, spec ExecutionSpec, output 
 }
 func (r *CLIRunner) UpRelease(ctx context.Context, spec ExecutionSpec, timeout int, output io.Writer) error {
 	args := []string{"up", "-d", "--remove-orphans", "--wait"}
+	if spec.ForceRecreate {
+		args = append(args, "--force-recreate")
+	}
 	if timeout > 0 {
 		args = append(args, "--wait-timeout", fmt.Sprintf("%d", timeout))
 	}

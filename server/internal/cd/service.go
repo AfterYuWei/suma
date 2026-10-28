@@ -861,6 +861,7 @@ func (s *Service) deployLocked(ctx context.Context, project database.DeliveryPro
 	if err != nil {
 		return err
 	}
+	spec.ForceRecreate = rollback || release.Status == StatusFailed
 	now := time.Now()
 	status := StatusPulling
 	if rollback {
@@ -1048,6 +1049,7 @@ func (s *Service) deployOneTarget(ctx context.Context, project database.Delivery
 	if err != nil {
 		return s.failDeployment(ctx, deployment.ID, err)
 	}
+	spec.ForceRecreate = rollback || deployment.Status == StatusFailed || deployment.Status == StatusRolledBack
 	if err := s.claimDeploymentNamespace(ctx, project, deployment.NodeID, spec); err != nil {
 		_ = s.finishAttempt(ctx, attemptID, StatusFailed, err.Error(), "")
 		return s.failDeployment(ctx, deployment.ID, err)
@@ -1108,6 +1110,7 @@ func (s *Service) failAndMaybeRollbackTarget(ctx context.Context, project databa
 	if err != nil {
 		return deployErr
 	}
+	spec.ForceRecreate = true
 	report(80, "Deployment failed; restoring this node's previous release")
 	rollbackAttempt, createErr := s.createAttempt(ctx, deployment.ID, AttemptAutoRollback, previous.ID, taskID)
 	if createErr != nil {

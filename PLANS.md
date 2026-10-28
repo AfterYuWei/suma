@@ -4,6 +4,8 @@ This file records the completed MVP implementation. Every checked phase was veri
 
 ## Current work
 
+- [ ] CD 回滚容器未替换修复（2026-10-28）：保留所选 Release 的 Compose／环境快照与 `pull --policy always`，`latest` 跟随仓库当前镜像；手动／自动回滚、失败重发及失败节点重试增加 `--force-recreate`，拉取失败不执行 up，保留卷与健康检查。验证范围：同配置／同 latest 的单节点及多节点回滚、拉取失败保持当前活动版本、自动回滚和节点重试的服务回归，Compose CLI 参数／执行顺序／目标节点回归，以及真实 Docker 同版本重复回滚的容器 ID 更换断言。已通过：Compose CLI 定向回归及 race（含普通发布不增加强制重建、always-pull 顺序、原 Compose／环境文件、项目名与目标节点、超时与卷保留），CD／Compose go vet、Linux amd64 全量构建、CD 普通与 dockersmoke 测试编译及 diff 检查。5 项 CD 服务回归入口（含新增 6 组子场景）均在创建隔离 PostgreSQL schema 时失败，未进入行为验收；本机缺少 docker 命令，真实容器 ID／启动时间更换冒烟待有 Docker 环境执行，完成前保持未勾选。按局部后端回滚／重试逻辑修复定向验证，无 Web 或 schema 修改；使用与设计说明已同步。
+
 - [x] CD 节点交付行布局稳定性（2026-10-28）：固定节点／状态／任务／历史列宽并顶部对齐，为实时进度和单行阶段消息预留空间，避免轮询切换状态、显示／隐藏进度条或长消息时挤动内容。长阶段消息支持悬浮／键盘聚焦查看全文；窄屏在表格内横向滚动，错误及尝试历史保持完整。验证：修改文件 lint、Web typecheck、diff 检查与 8 组受控 API Edge 浏览器场景通过，覆盖中英文深浅主题 × 390／1440px；每组连续验证拉取短／长消息、部署无消息、健康检查、回滚、成功、失败 7 次状态刷新，表头与两行节点的单元格位置／宽高保持稳定（变化小于 1px），另验长消息键盘全文提示及提示框宽度、长错误与历史展开不改变列宽、窄屏内部滚动、无页面横向溢出及无写请求／页面错误。桌面／手机截图已核对，使用说明同步至 `doc/continuous-delivery.md`。按局部前端布局调整定向验证。
 
 - [ ] CI Agent 激活与监控测试退出时序修复（2026-10-27）：将连接失效错误定义为可识别的 ErrRuntimeChanged，Agent HTTP 测试在在线状态发布与运行时缓存刷新之间只重试该明确过渡错误，其他错误继续失败；节点回归补充失效后可重新建立运行时的断言。监控 HTTP 测试读取保留期清理 Task ID，通过 t.Cleanup 在关闭连接池和删除隔离 schema 前等待任务及其最终事务完成，并核验成功状态；schema 清理失败补充不含凭据的 SQLSTATE／超时诊断。Vite 大 chunk 为警告，前端构建已成功。已通过：Linux amd64 全量构建、Linux API 测试编译、API／Node／Testutil 的 go vet、gofmt 与 diff 检查。macOS vet／API 定向检查仅用既有临时 overlay 为未调用的 Linux 指标实现提供触发即 panic 的编译替身，实际 Agent／监控／数据库代码保持本次实现。修复前后两项 API 测试与节点失效恢复测试均因既有 PostgreSQL 无法创建隔离 schema 失败，未验证数据库回归及 CI 完整门禁，保持未勾选；未安装或启动数据库、Docker 等基础服务。

@@ -4,6 +4,7 @@ package cd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/suma/suma/server/internal/testutil"
 	"io"
@@ -112,6 +113,54 @@ func TestRealDockerCDDeliveryRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSmokeRuntime(t, ctx, runner, cleanupSpec)
+	// Reapply the same release again: identical configuration and the same image
+	// must still replace the old containers when the operator requests rollback.
+	beforeIDs := smokeContainerIDs(t, ctx, runner, cleanupSpec)
+	repeatRollback, err := service.Rollback(ctx, projectName, first.ID, Actor{Name: "Docker smoke"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	smokeWaitTask(t, ctx, db, repeatRollback.ID, task.StatusSuccess)
+	afterIDs := smokeContainerIDs(t, ctx, runner, cleanupSpec)
+	for service, before := range beforeIDs {
+		if afterIDs[service] == "" || afterIDs[service] == before {
+			t.Fatalf("rollback did not replace service %s container", service)
+		}
+	}
+}
+
+func smokeContainerIDs(t *testing.T, ctx context.Context, runner compose.Runner, spec compose.ExecutionSpec) map[string]string {
+	t.Helper()
+	value, err := runner.PS(ctx, spec, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type container struct{ ID, Service string }
+	var rows []container
+	if strings.HasPrefix(strings.TrimSpace(value), "[") {
+		if err := json.Unmarshal([]byte(value), &rows); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		for _, line := range strings.Split(strings.TrimSpace(value), "\n") {
+			var row container
+			if err := json.Unmarshal([]byte(line), &row); err != nil {
+				t.Fatal(err)
+			}
+			rows = append(rows, row)
+		}
+	}
+	ids := map[string]string{}
+	for _, row := range rows {
+		if row.ID == "" || row.Service == "" {
+			t.Fatal("missing container identity")
+		}
+		ids[row.Service] = row.ID
+	}
+	if len(ids) == 0 {
+		t.Fatal("no deployed containers")
+	}
+	return ids
 }
 
 // TestRealDockerMultiNodeConsistency requires two independent engines: the

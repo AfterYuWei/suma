@@ -329,6 +329,10 @@ func TestServiceRollbackRestoresPreviousSuccessfulRelease(t *testing.T) {
 	if rolledBack.Status != StatusRolledBack || rolledBack.TaskID != rollbackTask.ID || rolledBack.TriggerType != "rollback" || rolledBack.CommitSHA != first.CommitSHA || rolledBack.ID == first.ID {
 		t.Fatalf("rollback release = %#v", rolledBack)
 	}
+	specs := harness.runner.UpSpecs()
+	if len(specs) != 3 || specs[0].ForceRecreate || specs[1].ForceRecreate || !specs[2].ForceRecreate || specs[2].Files[0] != specs[0].Files[0] {
+		t.Fatalf("rollback must recreate the selected Compose release: %#v", specs)
+	}
 	drift, err := harness.service.Drift(context.Background(), harness.project.Name)
 	if err != nil {
 		t.Fatal(err)
@@ -568,14 +572,16 @@ func (f *fakeGitClient) MaxConcurrent() int {
 }
 
 type fakeComposeRunner struct {
-	mu       sync.Mutex
-	calls    []string
-	rendered string
-	health   string
-	validate error
-	pull     error
-	up       error
-	ps       error
+	mu         sync.Mutex
+	calls      []string
+	rendered   string
+	health     string
+	validate   error
+	pull       error
+	up         error
+	upSpecs    []compose.ExecutionSpec
+	upFailures []error
+	ps         error
 }
 
 type fakeTargetResolver struct{}
@@ -650,10 +656,22 @@ func (f *fakeComposeRunner) PullRelease(context.Context, compose.ExecutionSpec, 
 	return f.pull
 }
 
-func (f *fakeComposeRunner) UpRelease(context.Context, compose.ExecutionSpec, int, io.Writer) error {
+func (f *fakeComposeRunner) UpSpecs() []compose.ExecutionSpec {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]compose.ExecutionSpec(nil), f.upSpecs...)
+}
+
+func (f *fakeComposeRunner) UpRelease(_ context.Context, spec compose.ExecutionSpec, _ int, _ io.Writer) error {
 	f.record("up")
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.upSpecs = append(f.upSpecs, spec)
+	if len(f.upFailures) > 0 {
+		err := f.upFailures[0]
+		f.upFailures = f.upFailures[1:]
+		return err
+	}
 	return f.up
 }
 
