@@ -10,6 +10,7 @@ import { useListPagination } from '../../components/ui/use-list-pagination'
 import { Progress } from '../../components/ui/progress'
 import { Spinner } from '../../components/ui/spinner'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui/table'
+import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip'
 import { Check, CheckCircle2, ChevronDownIcon, GitCommitHorizontal, History, Loader2, MoreHorizontal, RotateCcw, Rocket, TriangleAlert, X, XCircle } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { CDConfiguration, CDDrift, DeliveryRelease } from './types'
@@ -208,7 +209,13 @@ function ReleaseDetails({ release, zh }: { release: DeliveryRelease; zh: boolean
       [zh ? '镜像' : 'Images', images.join(', ') || '—'],
     ]} />
     {!!deployments.length && (
-      <><Table>
+      <><Table className="min-w-192 table-fixed">
+        <colgroup>
+          <col className="w-36" />
+          <col className="w-36" />
+          <col className="w-[40%]" />
+          <col />
+        </colgroup>
         <TableHeader>
           <TableRow>
             <TableHead>{zh ? '节点' : 'Node'}</TableHead>
@@ -219,11 +226,23 @@ function ReleaseDetails({ release, zh }: { release: DeliveryRelease; zh: boolean
         </TableHeader>
         <TableBody>
           {(pagination.items as Deployment[]).map((deployment) => (
-            <TableRow key={deployment.id}>
-              <TableCell>{deployment.node_name}</TableCell>
+            <TableRow key={deployment.id} className="[&>td]:align-top">
+              <TableCell className="whitespace-normal break-words [overflow-wrap:anywhere]">{deployment.node_name}</TableCell>
               <TableCell><ReleaseStatus status={String(deployment.status)} zh={zh} /></TableCell>
-              <TableCell className="min-w-48"><div className="font-mono text-xs">{deployment.task_id || '—'}</div>{['pulling', 'deploying', 'verifying', 'rolling_back'].includes(deployment.status) && <div className="mt-1"><Progress value={deployment.progress ?? 0} /><p className="mt-1 text-xs text-muted-foreground">{deployment.message}</p></div>}</TableCell>
-              <TableCell className="min-w-64 whitespace-normal break-all text-xs text-muted-foreground">
+              <TableCell>
+                <div className="whitespace-normal break-all font-mono text-xs">{deployment.task_id || '—'}</div>
+                {/* Keep the row height stable when live progress appears or finishes. */}
+                <div className="mt-1 h-6">
+                  {['pulling', 'deploying', 'verifying', 'rolling_back'].includes(deployment.status) && <>
+                    <Progress value={deployment.progress ?? 0} aria-label={zh ? `${deployment.node_name} 交付进度` : `Delivery progress for ${deployment.node_name}`} />
+                    {deployment.message && <Tooltip>
+                      <TooltipTrigger render={<p tabIndex={0} className="mt-1 truncate text-xs leading-4 text-muted-foreground" />}>{deployment.message}</TooltipTrigger>
+                      <TooltipContent>{deployment.message}</TooltipContent>
+                    </Tooltip>}
+                  </>}
+                </div>
+              </TableCell>
+              <TableCell className="whitespace-normal break-all text-xs text-muted-foreground">
                 {deployment.failure_reason && <p className="text-destructive">{deployment.failure_reason}</p>}
                 {deployment.rollback_result && <p>{zh ? '回滚结果' : 'Rollback'}: {deployment.rollback_result}</p>}
                 {!!deployment.attempts?.length && <details className="mt-1"><summary className="cursor-pointer">{zh ? `${deployment.attempts.length} 次尝试` : `${deployment.attempts.length} attempts`}</summary><div className="mt-2 flex flex-col gap-2 pl-3">{[...deployment.attempts].reverse().map((attempt) => <div key={attempt.id}><div className="flex flex-wrap items-center gap-2"><ReleaseStatus status={attempt.status} zh={zh} /><span>{attempt.operation.replaceAll('_', ' ')} → Release #{attempt.target_release_id}</span></div><p>{attempt.failure_reason || attempt.message || '—'}</p><p className="text-[11px]">{formatDateTime(attempt.started_at || attempt.created_at)}{attempt.finished_at ? ` → ${formatDateTime(attempt.finished_at)}` : ''}</p></div>)}</div></details>}
