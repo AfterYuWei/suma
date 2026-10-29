@@ -42,7 +42,7 @@ export function presentNotification(event: Event, language: string): Notificatio
  if (['auth.login','cd.completed','project.completed','cleanup.completed'].includes(event.type) && !failed) result.status = 'success'
  if (event.type === 'agent.error' && event.title.toLowerCase().includes('incompatible')) result.title = t('Agent 版本不兼容','Agent version incompatible')
  if (event.type === 'tls.expiring' && /^.{4}-.{2}-/.test(event.message)) result.summary = t('到期：','Expires: ')+event.message.slice(0,10)
- if (event.type === 'container.exited') { const code=event.message.match(/(?:exit=|exit code )(-?\d+)/)?.[1]; if(code) result.summary=t('退出码 ','Exit code ')+code }
+ if (event.type === 'container.exited') { const code=event.message.match(/(?:exit=|exit code |exited with code )(-?\d+)/)?.[1]; if(code) result.summary=t('退出码 ','Exit code ')+code }
  if (event.type === 'container.recovered') {
   if(event.message.includes('health')) result.title=t('健康检查已恢复','Health check recovered')
   if(event.message.includes('stably')) result.title=t('容器运行已稳定','Container running stably')
@@ -70,7 +70,7 @@ export function presentNotification(event: Event, language: string): Notificatio
  const aliases: Record<string,string[]> = { 'container.oom':['容器 OOM','Container OOM'],'container.unhealthy':['健康检查失败','Container unhealthy'],'container.restart_loop':['Container restart loop'],'image.available':['发现镜像更新'],'image.recreate_required':['镜像更新后需重建','Container recreation required'],'notification.failed':['渠道发送失败','Channel delivery failed'],'notification.recovered':['渠道发送恢复','Channel delivery recovered'],'cd.completed':['发布或回滚结果','Deployment or rollback completed'] }
  if(result.subject===result.title || titles[event.type]?.includes(result.subject) || aliases[event.type]?.includes(result.subject))result.subject=''
  if (!result.subject && /^(container|image|notification)\./.test(event.type)) result.subject=compactResource(event.resource_id || '')
- if (result.subject === event.node_name || result.subject === result.title) result.subject=''
+ if (result.subject === result.title || result.subject === event.node_name && !/^(container|image)\./.test(event.type)) result.subject=''
  result.subject=short(result.subject,80)
  if(!result.title) {result.title=short(event.title,100);result.summary=short(event.message,100)}
  if(!result.title)result.title=t('系统通知','System notification')
@@ -84,6 +84,68 @@ export function defaultNotificationText(event: Event, language: string, timestam
  const title=(event.severity === 'critical' ? language === 'en-US' ? 'Urgent · ' : '紧急 · ' : '')+display.title
  return [title,context.filter(Boolean).join(' · '),display.summary].filter(Boolean).join('\n')
 }
+export interface NotificationCard { title: string; status: string; fields: { label: string; value: string }[] }
+export function notificationCard(event: Event, language: string, timestamp: string): NotificationCard {
+ const t = (zh: string, en: string) => language === 'en-US' ? en : zh
+ const display = presentNotification(event,language), fields: NotificationCard['fields'] = []
+ const add = (label: string,value: string) => { if(value) fields.push({label,value:short(value,240)}) }
+ let subject = display.subject, label = t('相关资源','Resource')
+ if(event.type.startsWith('container.')) {
+  label=t('容器','Container')
+  if(!subject || /\b[0-9a-f]{40,64}\b/.test(event.resource_id || '') && [compactResource(event.resource_id || ''),event.resource_id].includes(subject))subject=t('名称不可用','Name unavailable')
+ } else if(event.type.startsWith('image.'))label=t('镜像 / 容器','Image / container')
+ else if(event.type.startsWith('cd.') || event.type==='project.completed')label=t('项目','Project')
+ else if(event.type.startsWith('task.'))label=t('任务','Task')
+ else if(event.type.startsWith('notification.'))label=t('通知渠道','Channel')
+ else if(event.type.startsWith('auth.') || event.type==='account.changed')label=t('账户','Account')
+ add(label,subject)
+ if(event.node_name)add(t('所属节点','Node'),event.node_name)
+ else if(event.node_id)add(t('所属节点','Node'),t('节点名称不可用','Node name unavailable'))
+ if(event.project !== subject)add(t('Compose 项目','Compose project'),event.project || '')
+ add(t('发生时间','Occurred at'),timestamp)
+ let reason=display.summary,advice=''
+ switch(event.type) {
+  case 'container.exited': {
+   const code=event.message.match(/(?:exit=|exit code |exited with code )(-?\d+)/)?.[1]
+   if(code) {
+    add(t('退出码','Exit code'),code)
+    const reasons: Record<string,[string,string]> = {
+     '137':['进程被 SIGKILL 强制终止；仅凭退出码无法确定是否内存不足。','Process terminated by SIGKILL; the exit code alone does not confirm an out-of-memory kill.'],
+     '143':['进程收到 SIGTERM 终止信号。','Process received SIGTERM.'],
+     '139':['进程发生段错误（SIGSEGV）。','Process encountered a segmentation fault (SIGSEGV).'],
+     '126':['启动命令无法执行，请检查文件权限及可执行格式。','Command could not be executed; check permissions and executable format.'],
+     '127':['启动命令不存在，请检查镜像及启动配置。','Command was not found; check the image and startup configuration.'],
+    }
+    reason=reasons[code] ? t(...reasons[code]) : t('容器主进程以非零状态退出。',"The container's main process exited with a non-zero status.")
+   } else reason=t('容器主进程异常退出，未取得退出码。','The container exited unexpectedly; no exit code was available.')
+   advice=t('查看容器日志和退出前的资源用量，确认重启策略及依赖服务。','Review container logs and resource usage before the exit, then check the restart policy and dependencies.')
+   break
+  }
+  case 'container.oom':
+   reason=t('Docker 检测到容器发生内存不足（OOM）事件。','Docker reported an out-of-memory (OOM) event for this container.')
+   advice=t('检查容器内存上限、节点可用内存和应用内存占用。','Check the container memory limit, available node memory and application memory usage.')
+   break
+  case 'container.unhealthy':
+   reason=t('容器健康检查连续失败，当前状态为 unhealthy。','Consecutive health checks failed; the container is unhealthy.')
+   advice=t('查看健康检查输出，确认探测命令、端口及依赖服务。','Review health check output, the probe command, ports and dependencies.')
+   break
+  case 'container.restart_loop':
+   reason=t('检测到容器短时间内反复重启。','The container restarted repeatedly within a short period.')
+   advice=t('查看最近一次退出原因和容器日志，检查启动配置与资源限制。','Review the most recent exit and container logs, then check startup settings and resource limits.')
+   break
+  case 'container.recovered':
+   if(event.message.includes('stably'))reason=t('已连续稳定运行至少两分钟。','Running stably for at least two minutes.')
+   else if(event.message.includes('health'))reason=t('健康检查已重新通过。','Health checks are passing again.')
+   break
+  case 'node.offline': case 'agent.error':
+   if(!reason)reason=t('控制端暂时无法连接该节点。','The control plane cannot currently reach this node.')
+   advice=t('检查节点网络、Docker 服务及 Agent 连接状态。','Check node connectivity, the Docker service and Agent connection.')
+ }
+ if(!reason && ['error','critical'].includes(display.status))reason=short(event.message,240)
+ add(t('状态说明','Status details'),reason)
+ add(t('建议排查','Suggested checks'),advice)
+ return {title:(display.status === 'critical' ? t('紧急 · ','Urgent · ') : '')+display.title,status:display.status,fields}
+}
 export function notificationTimestamp(time: string, timezone: string) {
  const parts=new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(time))
  const value=Object.fromEntries(parts.map(part=>[part.type,part.value]))
@@ -95,5 +157,5 @@ export function templateExample(type: string, language: string): NotificationEve
  const message=type==='container.recovered'?'Container has been running stably for at least two minutes':type==='auth.new_ip' || type==='auth.login'?'Login completed from 203.0.113.10':type==='auth.login_failed'?'Repeated authentication failures from 203.0.113.10':type==='container.exited'?'die exit=137':type==='image.check_failed'?'unavailable authentication_required':type==='tls.expiring'?'2026-11-01T00:00:00Z':type==='cd.awaiting_approval'?'Release aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa is ready for approval':type==='container.oom'?'oom exit=':''
  const info=recovered || type.endsWith('completed') || ['auth.login','account.changed','credential.changed','node.changed','image.available','image.recreate_required'].includes(type)
  const warning=['auth.new_ip','tls.expiring','container.exited','container.unhealthy','container.restart_loop','cd.awaiting_approval','cd.drift','cleanup.skipped','task.canceled'].includes(type)
- return {id:'example',type,severity:type==='auth.login_failed'?'critical':info?'info':warning?'warning':'error',time:'2026-10-11T04:00:00Z',node_id:'local',node_name:'Production',resource_id:container?'container-example':notification?'channel-example':cd?'gateway':'',title,project:cd?'gateway':'',message,task_id:'',read:false}
+ return {id:'example',type,severity:type==='auth.login_failed'?'critical':info?'info':warning?'warning':'error',time:'2026-10-11T04:00:00Z',node_id:'local',node_name:'Production',resource_id:container?'container-example':notification?'channel-example':cd?'gateway':'',title,project:container?'homelab':cd?'gateway':'',message,task_id:'',read:false}
 }

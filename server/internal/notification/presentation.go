@@ -33,6 +33,7 @@ func renderMessage(snapshot DeliverySnapshot, rows []database.NotificationEvent)
 		link := strings.TrimRight(snapshot.PublicURL, "/") + "/notifications#" + e.ID
 		if message.Default {
 			blocks = append(blocks, defaultEventText(e, snapshot.Language, e.Time.In(zone).Format("2006-01-02 15:04")))
+			message.Cards = append(message.Cards, buildMessageCard(e, snapshot.Language, e.Time.In(zone).Format("2006-01-02 15:04 -07:00")))
 		} else {
 			// Substitute once: placeholder-shaped resource/error text is data.
 			body := strings.NewReplacer("{{title}}", e.Title, "{{message}}", e.Message, "{{node}}", e.NodeName, "{{resource}}", e.ResourceID, "{{time}}", e.Time.In(zone).Format("2006-01-02 15:04:05 -07:00"), "{{url}}", link).Replace(snapshot.Policy.Template)
@@ -53,6 +54,7 @@ func renderMessage(snapshot DeliverySnapshot, rows []database.NotificationEvent)
 				more = fmt.Sprintf("%d more events in your inbox", len(message.Events)-len(blocks))
 			}
 			blocks = append(blocks, more)
+			message.More = more
 		}
 		if snapshot.PublicURL != "" {
 			message.URL = strings.TrimRight(snapshot.PublicURL, "/") + "/notifications"
@@ -72,7 +74,7 @@ type Presentation struct {
 	Status  string `json:"status"`
 }
 
-var exitCode = regexp.MustCompile(`(?:exit=|exit code )(-?\d+)`)
+var exitCode = regexp.MustCompile(`(?:exit=|exit code |exited with code )(-?\d+)`)
 var releaseCommit = regexp.MustCompile(`\b[0-9a-f]{40,64}\b`)
 
 func shortLine(value string, limit int) string {
@@ -287,7 +289,7 @@ func present(e event.Event, language string) Presentation {
 	if p.Subject == "" && (strings.HasPrefix(e.Type, "container.") || strings.HasPrefix(e.Type, "image.") || strings.HasPrefix(e.Type, "notification.")) {
 		p.Subject = compactResource(e.ResourceID)
 	}
-	if p.Subject == e.NodeName || p.Subject == p.Title {
+	if p.Subject == p.Title || p.Subject == e.NodeName && !strings.HasPrefix(e.Type, "container.") && !strings.HasPrefix(e.Type, "image.") {
 		p.Subject = ""
 	}
 	p.Subject = shortLine(p.Subject, 80)

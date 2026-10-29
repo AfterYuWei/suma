@@ -9,10 +9,11 @@ import { useI18n } from '../../lib/i18n'
 import { Check, Choice, ErrorText, Field } from './common'
 import { ruleSummary, toggle, useOpsText } from './helpers'
 import type { Catalog, Channel, DeliveryPolicy, Rule, Subscription } from './types'
-import { defaultNotificationText, notificationTimestamp, templateExample } from './presentation'
+import { defaultNotificationText, notificationCard, notificationTimestamp, templateExample } from './presentation'
+import { MessagePreview } from './message-preview'
 
-export function SubscriptionEditor({ value, channels, channelID, language, publicURL, onChange, onCreate }: {
- value: Subscription; channels: Channel[]; channelID?: string; language: string; publicURL: string; onChange: (value: Subscription) => void; onCreate: () => void
+export function SubscriptionEditor({ value, channels, channelID, provider, language, publicURL, onChange, onCreate }: {
+ value: Subscription; channels: Channel[]; channelID?: string; provider: string; language: string; publicURL: string; onChange: (value: Subscription) => void; onCreate: () => void
 }) {
  const t = useOpsText(), { language: uiLanguage } = useI18n(), [search, setSearch] = useState(''), [previewType,setPreviewType] = useState('')
  const rules = useQuery({ queryKey: ['notification-rules'], queryFn: () => api<Rule[]>('/notifications/rules') })
@@ -24,12 +25,13 @@ export function SubscriptionEditor({ value, channels, channelID, language, publi
  const missing = value.rule_ids.filter(id => rules.data && !rules.data.some(rule => rule.id === id))
  const sampleType = previewType || rules.data?.find(rule => value.rule_ids.includes(rule.id))?.config.events[0] || 'container.oom'
  const example = templateExample(sampleType,language)
- let time = '', customTime = ''
+ let time = '', customTime = '', cardTime = ''
  try {
   time = notificationTimestamp(example.time,policy.timezone)
   const offset = new Intl.DateTimeFormat('en-US',{timeZone:policy.timezone,timeZoneName:'longOffset'}).formatToParts(new Date(example.time)).find(part=>part.type === 'timeZoneName')?.value.replace('GMT','') || '+00:00'
   customTime = `${time}:00 ${offset}`
- } catch { time = customTime = t('请输入有效的 IANA 时区', 'Enter a valid IANA timezone') }
+  cardTime = `${time} ${offset}`
+ } catch { time = customTime = cardTime = t('请输入有效的 IANA 时区', 'Enter a valid IANA timezone') }
  const variables: Record<string,string> = { title:example.title,message:example.message,node:example.node_name,resource:example.resource_id,time:customTime,url:`${publicURL.replace(/\/$/,'')}/notifications#example` }
  const template = policy.template
  const clean = template.replace(/{{(title|message|node|resource|time|url)}}/g,'')
@@ -63,14 +65,14 @@ export function SubscriptionEditor({ value, channels, channelID, language, publi
    </div></details>
   </section>
   <details><summary className="cursor-pointer py-1 text-sm select-none">{t('消息模板与预览', 'Message template and preview')}</summary><div className="space-y-3 pt-3">
-   <p className="text-xs text-muted-foreground">{t('默认显示事件、资源和时间，必要时附简短原因。自定义模板仅改变正文。', 'The default shows the event, resource and time, with a short reason when available. Custom templates change message text only.')}</p>
-   <div className="flex flex-wrap gap-1 rounded-md bg-surface p-1" role="group" aria-label={t('预览场景', 'Preview scenario')}>{[['container.oom',t('异常', 'Fault')],['container.recovered',t('恢复', 'Recovery')],['cd.completed',t('结果', 'Result')],['auth.new_ip',t('安全', 'Security')]].map(([type,label])=><Button key={type} size="sm" variant={sampleType===type?'secondary':'ghost'} aria-pressed={sampleType===type} onClick={()=>setPreviewType(type)}>{label}</Button>)}</div>
-   <Field label={t('消息模板（可选）', 'Message template (optional)')}><textarea className="min-h-24 w-full rounded-md border bg-transparent p-2 font-mono text-xs" value={policy.template} maxLength={4000} onChange={event => update('template',event.target.value)} placeholder={t('留空使用精简默认模板', 'Leave blank for the concise default')} /></Field>
+   <p className="text-xs text-muted-foreground">{t('按平台呈现状态、资源名称、节点和时间；容器异常附原因说明及排查建议。自定义模板保留原有正文。', 'Platform-specific messages show status, resource names, node and time. Container alerts include details and suggested checks. Custom templates preserve your message text.')}</p>
+   <div className="flex flex-wrap gap-1 rounded-md bg-surface p-1" role="group" aria-label={t('预览场景', 'Preview scenario')}>{[['container.exited',t('退出', 'Exit')],['container.oom',t('内存不足', 'OOM')],['container.recovered',t('恢复', 'Recovery')],['cd.completed',t('结果', 'Result')],['auth.new_ip',t('安全', 'Security')]].map(([type,label])=><Button key={type} size="sm" variant={sampleType===type?'secondary':'ghost'} aria-pressed={sampleType===type} onClick={()=>setPreviewType(type)}>{label}</Button>)}</div>
+   <Field label={t('消息模板（可选）', 'Message template (optional)')}><textarea className="min-h-24 w-full rounded-md border bg-transparent p-2 font-mono text-xs" value={policy.template} maxLength={4000} onChange={event => update('template',event.target.value)} placeholder={t('留空使用平台默认样式', 'Leave blank for the platform default')} /></Field>
    {!!policy.template && <Button size="sm" variant="ghost" onClick={()=>update('template','')}>{t('恢复默认', 'Restore default')}</Button>}
    <details className="text-xs text-muted-foreground"><summary className="w-fit cursor-pointer select-none">{t('可用字段', 'Available fields')}</summary><dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 pt-2">{[['title',t('事件标题', 'Event title')],['message',t('事件描述', 'Event description')],['node',t('节点名称，可能为空', 'Node name; may be empty')],['resource',t('资源 ID，可能为空', 'Resource ID; may be empty')],['time',t('事件时间，使用订阅时区', 'Event time in the subscription timezone')],['url',t('事件详情链接', 'Event detail link')]].map(([field,label]) => <div key={field} className="contents"><dt className="font-mono text-muted-foreground">{`{{${field}}}`}</dt><dd className="min-w-0 break-words">{label}</dd></div>)}</dl></details>
    {unsupported && <ErrorText error={t('模板包含不支持的占位符，仅支持上面六个字段。', 'The template contains unsupported placeholders. Only the six fields above are supported.')} />}
-   <p className="text-xs text-muted-foreground">{t('示例预览，不会发送通知', 'Sample preview; no notification is sent')}</p><pre aria-label={t('消息预览', 'Message preview')} className="overflow-x-auto rounded-md bg-muted p-3 text-xs whitespace-pre-wrap break-words">{preview}</pre>
-   {!policy.template && publicURL && <Button variant="outline" size="sm" disabled>{language === 'en-US' ? 'View details' : '查看详情'}</Button>}
+   <p className="text-xs text-muted-foreground">{t('示例预览，不会发送通知；实际样式以平台客户端为准', 'Sample preview; no notification is sent. Appearance may vary by client.')}</p>
+   <MessagePreview provider={provider} card={notificationCard(example,language,cardTime)} text={preview} custom={!!template} language={language} url={publicURL ? `${publicURL.replace(/\/$/,'')}/notifications#example` : ''} />
   </div></details>
  </div>
 }

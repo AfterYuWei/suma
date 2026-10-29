@@ -137,6 +137,19 @@ type Message struct {
 	Title    string
 	Language string
 	Default  bool
+	Cards    []MessageCard
+	More     string
+}
+
+type MessageField struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+type MessageCard struct {
+	Title  string         `json:"title"`
+	Status string         `json:"status"`
+	Fields []MessageField `json:"fields"`
 }
 
 var Catalog = []CatalogEntry{

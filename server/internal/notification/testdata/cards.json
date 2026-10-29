@@ -1,0 +1,227 @@
+[
+  {
+    "event": {
+      "id": "card-example",
+      "type": "container.exited",
+      "severity": "warning",
+      "time": "2026-10-29T04:55:00Z",
+      "node_id": "1",
+      "node_name": "广州服务器",
+      "resource_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "title": "/redis-main",
+      "project": "homelab",
+      "message": "die exit=137"
+    },
+    "timestamp": "2026-10-29 12:55 +08:00",
+    "zh": {
+      "title": "容器异常退出",
+      "status": "warning",
+      "fields": [
+        {
+          "label": "容器",
+          "value": "redis-main"
+        },
+        {
+          "label": "所属节点",
+          "value": "广州服务器"
+        },
+        {
+          "label": "Compose 项目",
+          "value": "homelab"
+        },
+        {
+          "label": "发生时间",
+          "value": "2026-10-29 12:55 +08:00"
+        },
+        {
+          "label": "退出码",
+          "value": "137"
+        },
+        {
+          "label": "状态说明",
+          "value": "进程被 SIGKILL 强制终止；仅凭退出码无法确定是否内存不足。"
+        },
+        {
+          "label": "建议排查",
+          "value": "查看容器日志和退出前的资源用量，确认重启策略及依赖服务。"
+        }
+      ]
+    },
+    "en": {
+      "title": "Container exited unexpectedly",
+      "status": "warning",
+      "fields": [
+        {
+          "label": "Container",
+          "value": "redis-main"
+        },
+        {
+          "label": "Node",
+          "value": "广州服务器"
+        },
+        {
+          "label": "Compose project",
+          "value": "homelab"
+        },
+        {
+          "label": "Occurred at",
+          "value": "2026-10-29 12:55 +08:00"
+        },
+        {
+          "label": "Exit code",
+          "value": "137"
+        },
+        {
+          "label": "Status details",
+          "value": "Process terminated by SIGKILL; the exit code alone does not confirm an out-of-memory kill."
+        },
+        {
+          "label": "Suggested checks",
+          "value": "Review container logs and resource usage before the exit, then check the restart policy and dependencies."
+        }
+      ]
+    }
+  },
+  {
+    "event": {
+      "id": "card-example",
+      "type": "container.recovered",
+      "severity": "info",
+      "time": "2026-10-29T04:55:00Z",
+      "node_id": "1",
+      "node_name": "广州服务器",
+      "resource_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "title": "/redis-main",
+      "project": "homelab",
+      "message": "Container has been running stably for at least two minutes"
+    },
+    "timestamp": "2026-10-29 12:55 +08:00",
+    "zh": {
+      "title": "容器运行已稳定",
+      "status": "recovered",
+      "fields": [
+        {
+          "label": "容器",
+          "value": "redis-main"
+        },
+        {
+          "label": "所属节点",
+          "value": "广州服务器"
+        },
+        {
+          "label": "Compose 项目",
+          "value": "homelab"
+        },
+        {
+          "label": "发生时间",
+          "value": "2026-10-29 12:55 +08:00"
+        },
+        {
+          "label": "状态说明",
+          "value": "已连续稳定运行至少两分钟。"
+        }
+      ]
+    },
+    "en": {
+      "title": "Container running stably",
+      "status": "recovered",
+      "fields": [
+        {
+          "label": "Container",
+          "value": "redis-main"
+        },
+        {
+          "label": "Node",
+          "value": "广州服务器"
+        },
+        {
+          "label": "Compose project",
+          "value": "homelab"
+        },
+        {
+          "label": "Occurred at",
+          "value": "2026-10-29 12:55 +08:00"
+        },
+        {
+          "label": "Status details",
+          "value": "Running stably for at least two minutes."
+        }
+      ]
+    }
+  },
+  {
+    "event": {
+      "id": "card-example",
+      "type": "container.oom",
+      "severity": "error",
+      "time": "2026-10-29T04:55:00Z",
+      "node_id": "1",
+      "node_name": "广州服务器",
+      "resource_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "title": "/redis-main",
+      "project": "homelab",
+      "message": "oom exit="
+    },
+    "timestamp": "2026-10-29 12:55 +08:00",
+    "zh": {
+      "title": "容器内存不足",
+      "status": "error",
+      "fields": [
+        {
+          "label": "容器",
+          "value": "redis-main"
+        },
+        {
+          "label": "所属节点",
+          "value": "广州服务器"
+        },
+        {
+          "label": "Compose 项目",
+          "value": "homelab"
+        },
+        {
+          "label": "发生时间",
+          "value": "2026-10-29 12:55 +08:00"
+        },
+        {
+          "label": "状态说明",
+          "value": "Docker 检测到容器发生内存不足（OOM）事件。"
+        },
+        {
+          "label": "建议排查",
+          "value": "检查容器内存上限、节点可用内存和应用内存占用。"
+        }
+      ]
+    },
+    "en": {
+      "title": "Container out of memory",
+      "status": "error",
+      "fields": [
+        {
+          "label": "Container",
+          "value": "redis-main"
+        },
+        {
+          "label": "Node",
+          "value": "广州服务器"
+        },
+        {
+          "label": "Compose project",
+          "value": "homelab"
+        },
+        {
+          "label": "Occurred at",
+          "value": "2026-10-29 12:55 +08:00"
+        },
+        {
+          "label": "Status details",
+          "value": "Docker reported an out-of-memory (OOM) event for this container."
+        },
+        {
+          "label": "Suggested checks",
+          "value": "Check the container memory limit, available node memory and application memory usage."
+        }
+      ]
+    }
+  }
+]

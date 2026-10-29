@@ -179,57 +179,20 @@ func (a *Adapter) Check(ctx context.Context, c Channel, m Secrets) (map[string]a
 		return map[string]any{"connected": false, "requires_test_message": true}, nil
 	}
 }
-func telegramButtons(message Message) any {
-	rows := []any{}
-	if message.URL != "" {
-		rows = append(rows, []any{map[string]string{"text": messageAction(message), "url": message.URL}})
-	}
-	return map[string]any{"inline_keyboard": rows}
-}
-func feishuCard(message Message) map[string]any {
-	body, title := message.Text, "SUMA"
-	if message.Default && message.Title != "" {
-		title = message.Title
-		body = strings.TrimSpace(strings.TrimPrefix(body, title+"\n"))
-	}
-	elements := []any{map[string]any{"tag": "markdown", "content": escapeFeishu(body)}}
-	buttons := []any{}
-	if message.URL != "" {
-		buttons = append(buttons, map[string]any{"tag": "button", "text": map[string]string{"tag": "plain_text", "content": messageAction(message)}, "behaviors": []any{map[string]string{"type": "open_url", "default_url": message.URL}}})
-	}
-	if len(buttons) > 0 {
-		columns := []any{}
-		for _, b := range buttons {
-			columns = append(columns, map[string]any{"tag": "column", "width": "weighted", "weight": 1, "elements": []any{b}})
-		}
-		elements = append(elements, map[string]any{"tag": "column_set", "flex_mode": "flow", "columns": columns})
-	}
-	return map[string]any{"schema": "2.0", "config": map[string]any{"wide_screen_mode": true}, "header": map[string]any{"title": map[string]string{"tag": "plain_text", "content": title}}, "body": map[string]any{"elements": elements}}
-}
-func messageAction(message Message) string {
-	if message.Language == "en-US" {
-		return "View details"
-	}
-	return "查看详情"
-}
-func escapeFeishu(s string) string {
-	r := strings.NewReplacer("\\", "\\\\", "<", "\\<", ">", "\\>", "*", "\\*", "[", "\\[", "]", "\\]", "`", "\\`")
-	return r.Replace(s)
-}
 func (a *Adapter) Send(ctx context.Context, c Channel, m Secrets, message Message) (string, error) {
 	switch c.Provider {
 	case "telegram":
 		if c.Config.ChatID == "" {
 			return "", errors.New("select a recipient chat before sending a test")
 		}
-		runes := []rune(message.Text)
+		parts, rich := telegramParts(message)
 		first := ""
-		for len(runes) > 0 {
-			n := min(len(runes), 3500)
-			part := string(runes[:n])
-			runes = runes[n:]
+		for i, part := range parts {
 			body := map[string]any{"chat_id": c.Config.ChatID, "text": part, "link_preview_options": map[string]bool{"is_disabled": true}}
-			if len(runes) == 0 && message.URL != "" {
+			if rich {
+				body["parse_mode"] = "HTML"
+			}
+			if i == len(parts)-1 && message.URL != "" {
 				body["reply_markup"] = telegramButtons(message)
 			}
 			result, err := a.request(ctx, "POST", "https://api.telegram.org/bot"+m.Token+"/sendMessage", body, "", false, m)

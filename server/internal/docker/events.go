@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -50,7 +51,21 @@ func (a *Adapter) WatchEvents(ctx context.Context, consume func(event.Event)) er
 				}
 			}
 			if kind != "" {
-				consume(event.Event{Type: kind, Severity: severity, ResourceType: "container", ResourceID: message.Actor.ID, Project: message.Actor.Attributes["com.docker.compose.project"], Title: message.Actor.Attributes["name"], Message: string(message.Action) + " exit=" + message.Actor.Attributes["exitCode"]})
+				name, project := message.Actor.Attributes["name"], message.Actor.Attributes["com.docker.compose.project"]
+				if name == "" {
+					// A removed container may no longer be inspectable. Keep the
+					// event, but recover its name while Engine still has metadata.
+					lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+					row, err := a.client.ContainerInspect(lookupCtx, message.Actor.ID)
+					cancel()
+					if err == nil {
+						name = row.Name
+						if project == "" && row.Config != nil {
+							project = row.Config.Labels["com.docker.compose.project"]
+						}
+					}
+				}
+				consume(event.Event{Type: kind, Severity: severity, ResourceType: "container", ResourceID: message.Actor.ID, Project: project, Title: strings.TrimPrefix(name, "/"), Message: string(message.Action) + " exit=" + message.Actor.Attributes["exitCode"]})
 			}
 		}
 	}

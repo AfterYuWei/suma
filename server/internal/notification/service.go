@@ -306,7 +306,17 @@ func (s *Service) Test(ctx context.Context, id string, recipients ...string) err
 	if row.Config.Language == "en-US" {
 		text = "SUMA notification test"
 	}
-	_, err = s.deps.Sender.Send(ctx, row, m, Message{Text: text, Language: row.Config.Language})
+	channelLabel, descriptionLabel, description := "通知渠道", "状态说明", "测试消息已送达，通知渠道连接正常。"
+	if row.Config.Language == "en-US" {
+		channelLabel, descriptionLabel, description = "Channel", "Status details", "Test message delivered. The notification channel is connected."
+	}
+	message := Message{
+		Text: text, Title: text, Language: row.Config.Language, Default: true,
+		Cards: []MessageCard{{Title: text, Status: "success", Fields: []MessageField{
+			{channelLabel, shortLine(row.Name, 80)}, {descriptionLabel, description},
+		}}},
+	}
+	_, err = s.deps.Sender.Send(ctx, row, m, message)
 	if err == nil {
 		s.db.WithContext(ctx).Model(&database.NotificationChannel{}).Where("id = ?", row.ID).Updates(map[string]any{"last_error": "", "last_sent_at": s.deps.Now()})
 		s.Emit(event.Event{Type: "notification.recovered", Severity: "info", ResourceType: "notification_channel", ResourceID: row.ID, Title: row.Name, Message: "Notification channel test delivery succeeded", DedupeKey: deliveryIncidentKey(row, row.Config.ChatID)})
