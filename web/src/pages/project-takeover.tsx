@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useBlocker, useNavigate, useParams } from '@tanstack/react-router'
 import { AlertTriangle, Check, ChevronDown, ChevronLeft, ChevronRight, CirclePause, Eye, EyeOff, FileCheck2, FlaskConical, PencilLine, ShieldAlert, Trash2 } from 'lucide-react'
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -15,6 +15,8 @@ import { ListPagination } from '../components/ui/list-pagination'
 import { useListPagination } from '../components/ui/use-list-pagination'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Spinner } from '../components/ui/spinner'
+import { InlineStatus } from '../components/ui/inline-status'
+import { Tooltip, TooltipContent, TooltipTrigger } from '../components/ui/tooltip'
 import { StatusBadge } from '../components/ui/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
@@ -350,8 +352,9 @@ export function ProjectTakeoverPage() {
           <Tabs value={file} onValueChange={(value) => setFile(value as 'compose' | 'environment')}><TabsList><TabsTrigger value="compose">compose.yml</TabsTrigger><TabsTrigger value="environment">.env</TabsTrigger></TabsList></Tabs>
           <div className="h-[52vh] overflow-hidden rounded-lg ring-1 ring-foreground/10"><Suspense fallback={<div className="grid h-full place-items-center"><Spinner /></div>}><Monaco key={selected.label} language={selected.language} theme={dark ? 'vs-dark' : 'light'} value={selected.value} onChange={(value) => { setValidated(''); assessShadow.reset(); if (file === 'compose') setCompose(value ?? ''); else setEnvironment(value ?? '') }} options={{ fontFamily: '"JetBrains Mono", "HarmonyOS Sans SC", monospace', minimap: { enabled: false }, automaticLayout: true, wordWrap: 'on', scrollBeyondLastLine: false, readOnly: shadowSession !== null }} /></Suspense></div>
           {validate.isError && <Alert variant="destructive"><ShieldAlert /><AlertDescription>{takeoverMessage(validate.error.message, zh)}</AlertDescription></Alert>}
-          {validated === contentSignature && <Alert><Check /><AlertDescription>{zh ? 'Compose 与安全策略校验通过。可直接进入确认，也可以先进行隔离预演。' : 'Compose and security policy validation passed. Continue directly or run an isolated preview first.'}</AlertDescription></Alert>}
-          <div className="flex justify-end"><Button variant="outline" disabled={validate.isPending || shadowSession !== null} onClick={() => void validateDraft()}>{validate.isPending ? <Spinner /> : <FileCheck2 />}{zh ? '校验草稿' : 'Validate draft'}</Button></div>
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-3">
+            {validated === contentSignature && <InlineStatus tone="success" className="mr-auto flex-1">{zh ? 'Compose 与安全策略校验通过。可直接进入确认，也可以先进行隔离预演。' : 'Compose and security policy validation passed. Continue directly or run an isolated preview first.'}</InlineStatus>}
+            <Button variant="outline" disabled={validate.isPending || shadowSession !== null} onClick={() => void validateDraft()}>{validate.isPending ? <Spinner /> : <FileCheck2 />}{zh ? '校验草稿' : 'Validate draft'}</Button></div>
           {validated === contentSignature && <ShadowPreviewPanel zh={zh} assessment={assessShadow.data} assessError={assessShadow.error?.message} operationError={startShadow.error?.message || cleanupShadow.error?.message} assessing={assessShadow.isPending} starting={startShadow.isPending} session={shadowSession} task={shadowTask} status={shadowStatus.data} statusError={shadowStatus.error?.message} cleaning={cleanupShadow.isPending} onAssess={() => assessShadow.mutate()} onStart={() => startShadow.mutate()} onPostpone={() => void postpone()} onReject={() => { if (!shadowSession) return; if (shadowTask?.status === 'failed' || shadowTask?.status === 'canceled') { shadowSessionRef.current = null; setShadowSession(null) } else cleanupShadow.mutate(shadowSession) }} onAccept={async () => { if (shadowSession) await cleanupShadow.mutateAsync(shadowSession); setStep('confirm') }} />}
         </CardContent></Card>}
         {step === 'confirm' && <Card><CardHeader><CardTitle>{zh ? '确认接管 Project' : 'Confirm Project takeover'}</CardTitle></CardHeader><CardContent className="flex flex-col gap-4"><p className="text-sm text-muted-foreground">{zh ? '配置来源：' : 'Configuration source: '}{manual ? (zh ? '直接填写的 compose.yml 与 .env' : 'compose.yml and .env written directly') : draft.source === 'mapped' ? (zh ? '由安全源配置生成并复核的草稿' : 'Draft generated from the mapped source and reviewed') : (zh ? '由运行态重建并复核的草稿' : 'Draft reconstructed from runtime and reviewed')}</p><Alert><AlertTriangle /><AlertTitle>{zh ? '接管不会触发部署' : 'Takeover will not deploy'}</AlertTitle><AlertDescription>{zh ? 'SUMA 将原子保存 compose.yml、.env 和 .suma/project.json。现有容器、网络和运行状态不会改变。' : 'SUMA atomically saves compose.yml, .env, and .suma/project.json. Existing containers, networks, and runtime state remain unchanged.'}</AlertDescription></Alert><div className="space-y-2"><Label htmlFor="project-confirm">{zh ? `输入 Project 名称 ${projectName} 以确认` : `Type ${projectName} to confirm`}</Label><Input id="project-confirm" autoComplete="off" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></div>{takeover.isError && <ErrorState description={takeoverMessage(takeover.error.message, zh)} />}</CardContent></Card>}
@@ -372,6 +375,7 @@ export function ProjectTakeoverPage() {
 }
 
 function ShadowPreviewPanel({ zh, assessment, assessError, operationError, assessing, starting, session, task, status, statusError, cleaning, onAssess, onStart, onPostpone, onReject, onAccept }: { zh: boolean; assessment?: ShadowAssessment; assessError?: string; operationError?: string; assessing: boolean; starting: boolean; session: ShadowPreviewSession | null; task?: TaskRow; status?: ShadowPreviewStatus; statusError?: string; cleaning: boolean; onAssess: () => void; onStart: () => void; onPostpone: () => void; onReject: () => void; onAccept: () => Promise<void> }) {
+  const assessmentDescriptionID = useId()
   const logTail = useUIStore((state) => state.logTail)
   const { viewportRef: logViewportRef, onScroll: onLogScroll } = useLogAutoScroll<HTMLPreElement>(status?.logs || '', `${session?.session_id || ''}\n${logTail}`)
   const taskStatus = task?.status ?? session?.task.status ?? ''
@@ -390,9 +394,11 @@ function ShadowPreviewPanel({ zh, assessment, assessError, operationError, asses
       <ul className="list-disc space-y-1 pl-5 text-xs text-muted-foreground">{assessment.reasons.map((reason) => <li key={reason}>{takeoverMessage(reason, zh)}</li>)}</ul>
     </div>}
     {assessment?.eligible && !session && <div className="mt-3 flex flex-col gap-2">
-      <Alert><Check /><AlertTitle>{zh ? '满足严格隔离条件' : 'Strict isolation checks passed'}</AlertTitle><AlertDescription>{zh ? 'SUMA 将创建无固定端口、无生产数据挂载的临时 Project，并等待 healthcheck。' : 'SUMA will create a temporary Project without fixed ports or production data mounts and wait for healthchecks.'}</AlertDescription></Alert>
       {assessment.warnings.map((warning) => <p key={warning} className="text-xs text-amber-600 dark:text-amber-400">{takeoverMessage(warning, zh)}</p>)}
-      <Button className="self-end" disabled={starting} onClick={onStart}>{starting ? <Spinner /> : <FlaskConical />}{zh ? '启动隔离预演' : 'Start isolated preview'}</Button>
+      <div className="flex min-w-0 flex-wrap items-center justify-end gap-3">
+        <Tooltip><TooltipTrigger render={<InlineStatus aria-describedby={assessmentDescriptionID} tone="success" tabIndex={0} className="mr-auto rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-ring" />}>{zh ? '满足严格隔离条件' : 'Strict isolation checks passed'}</TooltipTrigger><TooltipContent id={assessmentDescriptionID} role="tooltip">{zh ? 'SUMA 将创建无固定端口、无生产数据挂载的临时 Project，并等待 healthcheck。' : 'SUMA will create a temporary Project without fixed ports or production data mounts and wait for healthchecks.'}</TooltipContent></Tooltip>
+        <Button disabled={starting} onClick={onStart}>{starting ? <Spinner /> : <FlaskConical />}{zh ? '启动隔离预演' : 'Start isolated preview'}</Button>
+      </div>
     </div>}
     {session && <div className="mt-3 flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -489,7 +495,7 @@ function EnvironmentStep({ variables, choices, revealed, zh, onChoice, onReveal 
     {reviewVariables.length ? <Card>
       <CardHeader><CardTitle>{zh ? '需要确认的环境变量' : 'Environment variables to review'}</CardTitle></CardHeader>
       <CardContent><EnvironmentVariableTable variables={reviewVariables} choices={choices} revealed={revealed} zh={zh} onChoice={onChoice} onReveal={onReveal} /></CardContent>
-    </Card> : <Alert><Check /><AlertTitle>{zh ? '没有需要确认的环境变量' : 'No environment variables require review'}</AlertTitle><AlertDescription>{zh ? '未发现 Compose 显式配置或运行态推断变量。' : 'No explicit Compose or runtime-inferred values were found.'}</AlertDescription></Alert>}
+    </Card> : <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-surface px-4 py-3"><InlineStatus tone="success">{zh ? '没有需要确认的环境变量' : 'No environment variables require review'}</InlineStatus><span className="text-xs text-muted-foreground">{zh ? '未发现 Compose 显式配置或运行态推断变量。' : 'No explicit Compose or runtime-inferred values were found.'}</span></div>}
 
     {unknownVariables.length > 0 && <Card className="border-destructive/40">
       <CardHeader><CardTitle className="text-destructive">{zh ? '来源未知，需要谨慎处理' : 'Unknown source — review carefully'}</CardTitle></CardHeader>

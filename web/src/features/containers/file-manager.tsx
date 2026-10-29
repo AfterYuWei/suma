@@ -7,6 +7,7 @@ import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../../components/ui/dropdown-menu'
 import { Spinner } from '../../components/ui/spinner'
+import { InlineStatus } from '../../components/ui/inline-status'
 import type { ContainerDetail } from './types'
 import { fileEntryKind, type FileEntry } from './file-entry'
 import { api, ApiError } from '../../lib/api'
@@ -56,7 +57,7 @@ export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nod
   const [cursorStack, setCursorStack] = useState<string[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [draft, setDraft] = useState<string | null>(null)
-  const [notice, setNotice] = useState('')
+  const [notice, setNotice] = useState<{ message: string; tone: 'success' | 'error' } | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [revisionID, setRevisionID] = useState<number | null>(null)
   const [taskID, setTaskID] = useState<string | null>(null)
@@ -78,7 +79,7 @@ export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nod
   useEffect(() => { onDirtyChange?.(!!dirty); return () => onDirtyChange?.(false) }, [dirty, onDirtyChange])
   useEffect(() => {
     if (!task.data || !['success', 'failed', 'canceled'].includes(task.data.status)) return
-    setNotice(task.data.status === 'success' ? tx('文件操作已完成。', 'File operation completed.') : tx(`文件操作失败：${task.data.message}`, `File operation failed: ${task.data.message}`))
+    setNotice({ message: task.data.status === 'success' ? tx('文件操作已完成。', 'File operation completed.') : tx(`文件操作失败：${task.data.message}`, `File operation failed: ${task.data.message}`), tone: task.data.status === 'success' ? 'success' : 'error' })
     void client.invalidateQueries({ queryKey: ['container-files', nodeID, container.id] })
     setTaskID(null)
   }, [task.data, client, nodeID, container.id, tx])
@@ -89,24 +90,24 @@ export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nod
   }
   const select = async (file: string) => {
     if (dirty && !await confirmDialog({ title: tx('放弃未保存的更改？', 'Discard unsaved changes?'), description: selected ?? '', confirmLabel: tx('放弃', 'Discard'), danger: true })) return
-    setSelected(file); setDraft(null); setHistoryOpen(false); setRevisionID(null); setNotice(''); setRevealed(false); setConflictContent(null); setShowConflictDiff(false)
+    setSelected(file); setDraft(null); setHistoryOpen(false); setRevisionID(null); setNotice(null); setRevealed(false); setConflictContent(null); setShowConflictDiff(false)
   }
   const refresh = () => { void listing.refetch(); if (selected) void content.refetch() }
 
   const save = async () => {
     if (!content.data || draft === null || !canSave || busy) return
-    setBusy(true); setNotice('')
+    setBusy(true); setNotice(null)
     try {
       const updated = await api<Content>(`${base}/content`, { method: 'PUT', body: JSON.stringify({ path: selected, content: draft, etag: content.data.etag }) })
       client.setQueryData(['container-file-content', nodeID, container.id, selected], updated)
       void client.invalidateQueries({ queryKey: ['container-file-history', nodeID, container.id, selected] })
       setConflictContent(null); setShowConflictDiff(false)
-      setNotice(tx('文件已保存。', 'File saved.'))
+      setNotice({ message: tx('文件已保存。', 'File saved.'), tone: 'success' })
     } catch (error) {
       if (error instanceof ApiError && error.status === 409 && selected) {
         try { setConflictContent(await api<Content>(`${base}/content?path=${encodeURIComponent(selected)}`)) } catch { /* Retain the draft even when refreshing the conflict fails. */ }
       }
-      setNotice(error instanceof ApiError && error.status === 409 ? tx('文件已在别处修改。请查看差异或重新加载后再保存。', 'The file changed elsewhere. Review the diff or reload before saving.') : (error as Error).message)
+      setNotice({ message: error instanceof ApiError && error.status === 409 ? tx('文件已在别处修改。请查看差异或重新加载后再保存。', 'The file changed elsewhere. Review the diff or reload before saving.') : (error as Error).message, tone: 'error' })
     } finally { setBusy(false) }
   }
 
@@ -138,13 +139,13 @@ export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nod
     } else if (kind === 'delete' && file) {
       if (!await confirmDialog({ title: tx(`删除 ${file.name}？`, `Delete ${file.name}?`), description: file.type === 'directory' ? tx('文件夹内的所有内容会被永久删除。', 'All contents of this folder will be permanently deleted.') : tx('此文件会被永久删除。', 'This file will be permanently deleted.'), confirmLabel: tx('删除', 'Delete'), danger: true })) return
     }
-    setBusy(true); setNotice('')
+    setBusy(true); setNotice(null)
     try {
       const result = await api<FileTask | { path: string }>(`${base}/actions`, { method: 'POST', body: JSON.stringify({ action: kind, path: source, target }) })
-      if ('id' in result) { setTaskID(result.id); setNotice(tx('文件操作已开始。', 'File operation started.')) }
-      else { setNotice(tx('文件操作已完成。', 'File operation completed.')); void client.invalidateQueries({ queryKey: ['container-files', nodeID, container.id] }) }
+      if ('id' in result) { setTaskID(result.id); setNotice(null) }
+      else { setNotice({ message: tx('文件操作已完成。', 'File operation completed.'), tone: 'success' }); void client.invalidateQueries({ queryKey: ['container-files', nodeID, container.id] }) }
       if (selected === source && (kind === 'delete' || kind === 'move' || kind === 'rename')) { setSelected(null); setDraft(null) }
-    } catch (error) { setNotice((error as Error).message) }
+    } catch (error) { setNotice({ message: (error as Error).message, tone: 'error' }) }
     finally { setBusy(false) }
   }
 
@@ -152,7 +153,9 @@ export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nod
   const mountShortcuts = mounts.filter((mount) => mount.type === 'bind' || mount.type === 'volume')
   const folderReadOnly = listing.data?.current_mount ? !listing.data.current_mount.read_write : container.read_only_rootfs
   const crumbs = folder === '/' ? [] : folder.split('/').filter(Boolean)
-  const noticeIsError = /失败|修改|failed|changed/.test(notice)
+  const operationStatus = taskID
+    ? <InlineStatus tone="pending" className="max-w-72">{tx('操作进行中：', 'Operation in progress: ')}{task.data?.message ?? tx('等待任务', 'Waiting for task')} {task.data?.progress ?? 0}%</InlineStatus>
+    : notice?.tone === 'success' ? <InlineStatus tone="success">{notice.message}</InlineStatus> : null
   if (container.state !== 'running' && !dirty) return <Alert><AlertTriangle /><AlertDescription>{tx('文件工具需要运行中的容器。启动容器后可浏览和编辑文件。', 'File tools require a running container. Start it to browse and edit files.')}</AlertDescription></Alert>
 
   return <div className="space-y-4">
@@ -166,8 +169,9 @@ export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nod
     </div>}
     <div className="grid h-[clamp(24rem,62vh,48rem)] min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
       <section data-slot="container-file-list" className={`min-h-0 min-w-0 flex-col overflow-hidden rounded-lg bg-card ${selected ? 'hidden lg:flex' : 'flex'}`}>
-        <div className="flex h-14 shrink-0 items-center justify-between gap-2 bg-surface px-3">
+        <div className="flex min-h-14 shrink-0 flex-wrap items-center justify-between gap-2 bg-surface px-3 py-2">
           <nav aria-label={tx('当前目录', 'Current directory')} className="flex min-w-0 items-center gap-1 overflow-x-auto text-sm"><Button size="sm" variant="ghost" className="shrink-0" onClick={() => void enter('/')}>/</Button>{crumbs.map((part, index) => <span key={`${index}-${part}`} className="flex shrink-0 items-center gap-1"><ChevronRight className="size-3 text-muted-foreground" /><Button size="sm" variant="ghost" className="max-w-40" title={part} onClick={() => void enter(`/${crumbs.slice(0, index + 1).join('/')}`)}><span className="truncate">{part}</span></Button></span>)}</nav>
+          {!selected && operationStatus}
           <div className="flex shrink-0 items-center gap-1"><Button size="icon-sm" variant="ghost" aria-label={tx('刷新文件列表', 'Refresh files')} onClick={refresh}><RefreshCw /></Button><Button size="icon-sm" variant="ghost" aria-label={tx('新建文件', 'New file')} disabled={busy || folderReadOnly} onClick={() => void action('create_file')}><FilePlus2 /></Button><Button size="icon-sm" variant="ghost" aria-label={tx('新建文件夹', 'New folder')} disabled={busy || folderReadOnly} onClick={() => void action('create_directory')}><FolderPlus /></Button></div>
         </div>
         <div data-slot="container-file-entries" className="min-h-0 flex-1 space-y-1 overflow-auto bg-card p-2">
@@ -196,7 +200,7 @@ export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nod
         {(listing.data?.next_cursor || cursorStack.length > 0) && <div className="flex shrink-0 justify-between bg-surface p-3"><Button size="sm" variant="ghost" disabled={!cursorStack.length} onClick={() => { setCursor(cursorStack.at(-1) ?? ''); setCursorStack((stack) => stack.slice(0, -1)) }}>{tx('上一页', 'Previous')}</Button><Button size="sm" variant="ghost" disabled={!listing.data?.next_cursor} onClick={() => { setCursorStack((stack) => [...stack, cursor]); setCursor(listing.data?.next_cursor ?? '') }}>{tx('下一页', 'Next')}</Button></div>}
       </section>
       {selected && <section data-slot="container-file-editor" className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg bg-card">
-        <div className="flex h-14 shrink-0 items-center justify-between gap-2 bg-surface px-3"><div className="flex min-w-0 flex-1 items-center gap-2"><Button size="icon-sm" variant="ghost" aria-label={tx('返回文件列表', 'Back to files')} className="shrink-0 lg:hidden" onClick={() => void enter(folder)}><ArrowLeft /></Button><span className="truncate font-mono text-sm" title={selected}>{selected}</span></div><div className="flex shrink-0 items-center gap-1"><Button size="sm" variant="ghost" onClick={() => { setHistoryOpen((open) => !open); setRevisionID(null) }}><History />{tx('历史', 'History')}</Button><Button size="sm" disabled={!canSave || busy} onClick={() => void save()}>{busy ? <Spinner /> : <Save />}{tx('保存', 'Save')}</Button></div></div>
+        <div className="flex min-h-14 shrink-0 flex-wrap items-center justify-between gap-2 bg-surface px-3 py-2"><div className="flex min-w-32 flex-1 items-center gap-2"><Button size="icon-sm" variant="ghost" aria-label={tx('返回文件列表', 'Back to files')} className="shrink-0 lg:hidden" onClick={() => void enter(folder)}><ArrowLeft /></Button><span className="truncate font-mono text-sm" title={selected}>{selected}</span></div>{operationStatus}<div className="ml-auto flex shrink-0 items-center gap-1"><Button size="sm" variant="ghost" onClick={() => { setHistoryOpen((open) => !open); setRevisionID(null) }}><History />{tx('历史', 'History')}</Button><Button size="sm" disabled={!canSave || busy} onClick={() => void save()}>{busy ? <Spinner /> : <Save />}{tx('保存', 'Save')}</Button></div></div>
         <div data-slot="container-file-content" className="flex min-h-0 flex-1 flex-col overflow-auto bg-card">
           {content.isPending && <p className="p-4 text-sm text-muted-foreground">{tx('正在读取文件…', 'Loading file…')}</p>}
           {content.isError && <Alert variant="destructive" className="m-2 w-auto text-file-error *:data-[slot=alert-description]:text-file-error"><AlertDescription>{content.error.message}</AlertDescription></Alert>}
@@ -211,8 +215,7 @@ export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nod
       </section>}
       {!selected && <section data-slot="container-file-editor" className="hidden min-h-0 min-w-0 flex-col overflow-hidden rounded-lg bg-card lg:flex"><div className="flex h-14 shrink-0 items-center bg-surface px-3 text-sm text-muted-foreground">{tx('文件预览', 'File preview')}</div><div data-slot="container-file-content" className="flex flex-1 flex-col items-center justify-center gap-3 bg-card p-4 text-center text-sm text-muted-foreground"><File className="size-8 opacity-50" /><p>{tx('选择文本文件开始编辑', 'Select a text file to edit')}</p></div></section>}
     </div>
-    {taskID && <p className="text-sm text-muted-foreground">{tx('操作进行中：', 'Operation in progress: ')}{task.data?.message ?? tx('等待任务', 'Waiting for task')} {task.data?.progress ?? 0}%</p>}
-    {notice && <Alert variant={noticeIsError ? 'destructive' : 'default'} className={noticeIsError ? 'text-file-error *:data-[slot=alert-description]:text-file-error' : undefined}><AlertDescription>{notice} {conflictContent && <Button size="sm" variant="ghost" onClick={() => setShowConflictDiff(true)}>{tx('查看差异', 'View diff')}</Button>} {conflictContent && <Button size="sm" variant="ghost" onClick={() => { client.setQueryData(['container-file-content', nodeID, container.id, selected], conflictContent); setDraft(conflictContent.content); setConflictContent(null); setShowConflictDiff(false); setNotice(tx('已加载最新内容。', 'Latest content loaded.')) }}>{tx('重新加载', 'Reload')}</Button>}</AlertDescription></Alert>}
+    {notice?.tone === 'error' && <Alert variant="destructive" className="text-file-error *:data-[slot=alert-description]:text-file-error"><AlertDescription>{notice.message} {conflictContent && <Button size="sm" variant="ghost" onClick={() => setShowConflictDiff(true)}>{tx('查看差异', 'View diff')}</Button>} {conflictContent && <Button size="sm" variant="ghost" onClick={() => { client.setQueryData(['container-file-content', nodeID, container.id, selected], conflictContent); setDraft(conflictContent.content); setConflictContent(null); setShowConflictDiff(false); setNotice({ message: tx('已加载最新内容。', 'Latest content loaded.'), tone: 'success' }) }}>{tx('重新加载', 'Reload')}</Button>}</AlertDescription></Alert>}
   </div>
 
   async function restoreRevision(id: number) {
@@ -222,9 +225,9 @@ export function ContainerFileManager({ nodeID, container, onDirtyChange }: { nod
     try {
       const updated = await api<Content>(`${base}/restore`, { method: 'POST', body: JSON.stringify({ path: selected, revision_id: id, etag: content.data.etag }) })
       client.setQueryData(['container-file-content', nodeID, container.id, selected], updated)
-      setDraft(updated.content); setRevisionID(null); setNotice(tx('版本已恢复。', 'Version restored.'))
+      setDraft(updated.content); setRevisionID(null); setNotice({ message: tx('版本已恢复。', 'Version restored.'), tone: 'success' })
       void client.invalidateQueries({ queryKey: ['container-file-history', nodeID, container.id, selected] })
-    } catch (error) { setNotice((error as Error).message) }
+    } catch (error) { setNotice({ message: (error as Error).message, tone: 'error' }) }
     finally { setBusy(false) }
   }
 }

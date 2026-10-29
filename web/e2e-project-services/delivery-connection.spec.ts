@@ -49,7 +49,7 @@ test('connection request uses draft username, hides stale results and preserves 
   await username.fill('changed-while-pending')
   finish!()
   await expect(page.getByRole('button', { name: 'Test connection', exact: true })).toBeEnabled()
-  await expect(page.getByText('Connection successful', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('status').filter({ hasText: 'Connection successful' })).toHaveCount(0)
   failure = true
   await page.getByRole('button', { name: 'Test connection', exact: true }).click()
   await expect(page.getByRole('alert').filter({ hasText: 'Connection failed' })).toContainText('404')
@@ -59,7 +59,13 @@ test('connection request uses draft username, hides stale results and preserves 
   await expect(page.getByText('Connection failed', { exact: true })).toHaveCount(0)
   failure = false
   await page.getByRole('button', { name: 'Test connection', exact: true }).click()
-  await expect(page.getByText('Connection successful', { exact: true })).toBeVisible()
+  await expect(page.getByRole('status').filter({ hasText: 'Connection successful' })).toBeVisible()
+  const success = page.getByRole('status').filter({ hasText: 'Connection successful' })
+  await success.focus()
+  await page.keyboard.press('Shift+Tab')
+  await page.keyboard.press('Tab')
+  await expect(page.getByRole('tooltip')).toContainText('a'.repeat(40))
+  await page.keyboard.press('Escape')
   expect(writes[2].body.repository.authentication.credential?.username).toBe('')
   expect(writes.every(write => write.path === '/delivery-projects/test-connection')).toBe(true)
   await expect(page.getByLabel('Token', { exact: true })).toHaveValue('test-only-secret')

@@ -59,8 +59,8 @@ async function editSource(page: Page, source: string) {
   await input.focus()
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
   await page.evaluate((text) => navigator.clipboard.writeText(text), source)
-  await page.keyboard.press('Control+A')
-  await page.keyboard.press('Control+V')
+  await page.keyboard.press('ControlOrMeta+A')
+  await page.keyboard.press('ControlOrMeta+V')
 }
 
 test('create, configure, save independently and review deployment', async ({

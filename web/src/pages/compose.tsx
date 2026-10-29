@@ -1,9 +1,9 @@
 import { useContainerWorkspace } from '../features/containers/use-container-workspace'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { CheckCircle2, ChevronDown, ChevronRight, CircleAlert, Download, Eye, MoreHorizontal, Pencil, Play, Plus, PowerOff, RefreshCw, Search, Square, Trash2, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, Download, Eye, MoreHorizontal, Pencil, Play, Plus, PowerOff, RefreshCw, Search, Square, Trash2, X } from 'lucide-react'
 import { Fragment, type ReactElement, type ReactNode, useRef, useState } from 'react'
-import { Alert, AlertDescription } from '../components/ui/alert'
+import { InlineStatus } from '../components/ui/inline-status'
 import { Button } from '../components/ui/button'
 import { Checkbox } from '../components/ui/checkbox'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../components/ui/dropdown-menu'
@@ -114,9 +114,11 @@ function ComposeNodePage({ nodeID }: { nodeID: string }) {
   const grid = 'grid grid-cols-[3.5rem_minmax(0,1fr)_minmax(5.5rem,auto)] items-center gap-x-3 gap-y-2 lg:grid-cols-[3.5rem_minmax(0,2fr)_minmax(8rem,1fr)_minmax(7rem,0.9fr)_7rem]'
   return <ResourceFrame compact title={zh ? '项目' : 'Projects'} detail={zh ? `${visible.length} / ${rows.length} 个项目` : `${visible.length} / ${rows.length} projects`} action={toolbar}>
     <div className="flex w-full min-w-0 flex-col gap-3">
-      <Button className="self-end" onClick={() => void navigate({ to: '/projects/new' })}><Plus />{t('newProject')}</Button>
+      <div className="flex min-w-0 flex-wrap items-center justify-end gap-3">
+        {feedbackView && <InlineStatus className="mr-auto flex-1" tone={feedbackView.error ? 'error' : feedbackView.pending ? 'pending' : 'success'}>{feedbackView.message}{feedback?.kind === 'task' && <> <Link className="underline underline-offset-2" to="/tasks">{zh ? '查看任务' : 'View task'}</Link></>}</InlineStatus>}
+        <Button onClick={() => void navigate({ to: '/projects/new' })}><Plus />{t('newProject')}</Button>
+      </div>
       {!!selectedRows.length && <div className="flex flex-wrap items-center gap-2"><span className="text-sm">{selectedRows.length} {zh ? '已选' : 'selected'}</span>{[['up', Play], ['stop', Square], ['restart', RefreshCw], ['down', PowerOff]].map(([name, Icon]) => <Button key={String(name)} variant={name === 'down' ? 'destructive' : 'outline'} size="sm" disabled={batch.isPending} onClick={() => void runBatch(String(name))}><Icon />{actionLabel(String(name), zh)}</Button>)}</div>}
-      {feedbackView && <Alert variant={feedbackView.error ? 'destructive' : 'default'}>{feedbackView.error ? <CircleAlert /> : feedbackView.pending ? <Spinner /> : <CheckCircle2 />}<AlertDescription>{feedbackView.message}{feedback?.kind === 'task' && <> <Link to="/tasks">{zh ? '查看任务' : 'View task'}</Link></>}</AlertDescription></Alert>}
       {batch.isError && <ErrorState description={batch.error.message} />}
       {(containers.isError || !fresh) && <p role="alert" className="text-xs text-muted-foreground">{zh ? '容器运行信息暂不可用。' : 'Container runtime information unavailable.'}<Button variant="ghost" size="sm" onClick={() => void containers.refetch()}>{zh ? '重试' : 'Retry'}</Button></p>}
       {query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载项目' : 'Loading projects'} /> : query.isError ? <ErrorState description={query.error.message} /> : <>

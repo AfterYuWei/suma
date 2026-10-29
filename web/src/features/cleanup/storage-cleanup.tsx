@@ -32,6 +32,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '../../components/ui/sheet'
+import { InlineStatus } from '../../components/ui/inline-status'
 import { Spinner } from '../../components/ui/spinner'
 import { StatusBadge } from '../../components/ui/status-badge'
 import { Switch } from '../../components/ui/switch'
@@ -517,19 +518,22 @@ export function CleanupNodeSheet({
           </SheetDescription>
         </SheetHeader>
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
-          <Tabs value={tab} onValueChange={setTab}>
-            <TabsList>
-              <TabsTrigger value="policy">
-                {zh ? '清理策略' : 'Cleanup policy'}
-              </TabsTrigger>
-              <TabsTrigger value="preview">
-                {zh ? '清理预览' : 'Cleanup preview'}
-              </TabsTrigger>
-              <TabsTrigger value="history">
-                {zh ? '执行历史' : 'Run history'}
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+            <Tabs value={tab} onValueChange={setTab}>
+              <TabsList>
+                <TabsTrigger value="policy">
+                  {zh ? '清理策略' : 'Cleanup policy'}
+                </TabsTrigger>
+                <TabsTrigger value="preview">
+                  {zh ? '清理预览' : 'Cleanup preview'}
+                </TabsTrigger>
+                <TabsTrigger value="history">
+                  {zh ? '执行历史' : 'Run history'}
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+            {notice && <InlineStatus tone="success" className="flex-1">{notice}</InlineStatus>}
+          </div>
           {view.isPending ? (
             <LoadingState
               label={zh ? '正在加载清理数据' : 'Loading cleanup data'}
@@ -754,11 +758,6 @@ export function CleanupNodeSheet({
                 <CleanupHistory nodeID={node.id} zh={zh} />
               )}
             </>
-          )}
-          {notice && (
-            <p role="status" className="text-sm text-muted-foreground">
-              {notice}
-            </p>
           )}
           {mutationError && <ErrorState description={mutationError} />}
           {view.data && saved && view.data.policy.version > saved.version && (

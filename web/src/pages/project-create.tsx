@@ -15,7 +15,7 @@ import {
   ValueInput
 } from '../components/docker/project-configuration'
 import { Button } from '../components/ui/button'
-import { Alert, AlertDescription } from '../components/ui/alert'
+import { InlineStatus } from '../components/ui/inline-status'
 import { Spinner } from '../components/ui/spinner'
 import {
   Dialog,
@@ -57,7 +57,7 @@ export function ProjectCreatePage() {
   const [name, setName] = useState(''),
     [compose, setCompose] = useState(emptyCompose),
     [environment, setEnvironment] = useState(''),
-    [notice, setNotice] = useState(''),
+    [notice, setNotice] = useState<{ message: string; tone: 'success' | 'error' } | null>(null),
     [validated, setValidated] = useState(''),
     [pendingConfiguration, setPendingConfiguration] = useState(false)
   const [review, setReview] = useState<{
@@ -108,7 +108,7 @@ export function ProjectCreatePage() {
     setEnvironment('')
     setValidated('')
     setReview(null)
-    setNotice('')
+    setNotice(null)
   }, [nodeID])
   const validName = /^[a-z0-9][a-z0-9_-]*$/.test(name),
     hasServices = configKeys(compose, ['services']).length > 0
@@ -134,7 +134,8 @@ export function ProjectCreatePage() {
           environment: env
         })
       }),
-    onError: (error) => setNotice(error.message)
+    onMutate: () => setNotice(null),
+    onError: (error) => setNotice({ message: error.message, tone: 'error' })
   })
   const validate = useMutation({
     mutationFn: (socket: boolean) =>
@@ -145,9 +146,10 @@ export function ProjectCreatePage() {
       }),
     onSuccess: () => {
       setValidated(signature)
-      setNotice(zh ? '校验通过' : 'Validation passed')
+      setNotice({ message: zh ? '校验通过' : 'Validation passed', tone: 'success' })
     },
-    onError: (error) => setNotice(error.message)
+    onMutate: () => setNotice(null),
+    onError: (error) => setNotice({ message: error.message, tone: 'error' })
   })
   const authorize = () => confirmDockerSocketMount(compose, zh)
   const save = async () => {
@@ -212,21 +214,22 @@ export function ProjectCreatePage() {
           search: { task: task.id, action: review.action }
         })
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : String(error))
+        setNotice({ message: error instanceof Error ? error.message : String(error), tone: 'error' })
         await navigate({
           to: '/projects/$backend/$projectName',
           params: { backend: 'compose', projectName: review.name }
         })
       }
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error))
+      setNotice({ message: error instanceof Error ? error.message : String(error), tone: 'error' })
     } finally {
       setDeploying(false)
     }
   }
   const busy = create.isPending || validate.isPending || deploying || !!review
   const toolbar = (
-    <div className="flex flex-wrap gap-2">
+    <div className="flex min-w-0 flex-wrap items-center gap-2">
+      {notice && (notice.tone === 'error' || validated === signature) && <InlineStatus tone={notice.tone} className="max-w-md">{notice.message}</InlineStatus>}
       <Button
         variant="outline"
         disabled={busy || pendingConfiguration || !validName || !hasServices}
@@ -305,11 +308,6 @@ export function ProjectCreatePage() {
               }}
             />
           </div>
-          {notice && (
-            <Alert>
-              <AlertDescription>{notice}</AlertDescription>
-            </Alert>
-          )}
           <ProjectConfiguration
             key={nodeID}
             nodeID={nodeID}

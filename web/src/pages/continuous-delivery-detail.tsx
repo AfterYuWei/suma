@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from '@tanstack/react-router'
-import { ChevronLeft, MoreHorizontal, RefreshCw, Trash2 } from 'lucide-react'
+import { ChevronLeft, MoreHorizontal, RefreshCw, Trash2, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../components/ui/dropdown-menu'
 import { Spinner } from '../components/ui/spinner'
+import { InlineStatus } from '../components/ui/inline-status'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { ErrorState } from '../components/ui/error-state'
 import { LoadingState } from '../components/ui/loading-state'
@@ -35,7 +36,7 @@ export function ContinuousDeliveryDetailPage() {
   const driftQuery = useQuery({ queryKey: ['delivery-drift', projectName], queryFn: () => api<CDDrift>(`/delivery-projects/${encodedName}/drift`), enabled: isGit, refetchInterval: 5_000 })
   const releasesQuery = useQuery({ queryKey: ['delivery-releases', projectName], queryFn: () => api<DeliveryRelease[]>(`/delivery-projects/${encodedName}/releases`), enabled: isGit, refetchInterval: 5_000 })
   const [view, setView] = useState<View>('Overview')
-  const [notice, setNotice] = useState('')
+  const [notice, setNotice] = useState<{ message: string; tone: 'success' | 'error' } | null>(null)
 
   useEffect(() => {
     if (cdQuery.data && !cdQuery.data.configured) setView('Settings')
@@ -44,23 +45,25 @@ export function ContinuousDeliveryDetailPage() {
   const sync = useMutation({
     mutationFn: () => api(`/delivery-projects/${encodedName}/sync`, { method: 'POST' }),
     onSuccess: () => {
-      setNotice(zh ? '同步任务已启动。' : 'Synchronization task started.')
+      setNotice({ message: zh ? '同步任务已启动。' : 'Synchronization task started.', tone: 'success' })
       void client.invalidateQueries({ queryKey: ['tasks'] })
       void client.invalidateQueries({ queryKey: ['delivery-drift', projectName] })
       void client.invalidateQueries({ queryKey: ['delivery-releases', projectName] })
     },
-    onError: (error) => setNotice(error.message),
+    onMutate: () => setNotice(null),
+    onError: (error) => setNotice({ message: error.message, tone: 'error' }),
   })
   const releaseAction = useMutation({
     mutationFn: ({ release, operation }: { release: DeliveryRelease; operation: ReleaseOperation }) => api(`/delivery-projects/${encodedName}/releases/${release.id}/${operation.endsWith('-failed') ? `remediations/${operation}` : operation}`, { method: 'POST' }),
     onSuccess: (_, variables) => {
       const queued = ['deploy', 'rollback', 'retry-failed', 'rollback-failed'].includes(variables.operation)
-      setNotice(queued ? (zh ? '交付任务已启动。' : 'Delivery task started.') : variables.operation === 'approve' ? (zh ? 'Release 已批准。' : 'Release approved.') : (zh ? 'Release 已拒绝。' : 'Release rejected.'))
+      setNotice({ message: queued ? (zh ? '交付任务已启动。' : 'Delivery task started.') : variables.operation === 'approve' ? (zh ? 'Release 已批准。' : 'Release approved.') : (zh ? 'Release 已拒绝。' : 'Release rejected.'), tone: 'success' })
       if (queued) void client.invalidateQueries({ queryKey: ['tasks'] })
       void client.invalidateQueries({ queryKey: ['delivery-releases', projectName] })
       void client.invalidateQueries({ queryKey: ['delivery-drift', projectName] })
     },
-    onError: (error) => setNotice(error.message),
+    onMutate: () => setNotice(null),
+    onError: (error) => setNotice({ message: error.message, tone: 'error' }),
   })
 
   const runReleaseAction = async (release: DeliveryRelease, operation: ReleaseOperation) => {
@@ -106,7 +109,7 @@ export function ContinuousDeliveryDetailPage() {
       await client.invalidateQueries({ queryKey: ['delivery-projects'] })
       void navigate({ to: '/continuous-delivery' })
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error))
+      setNotice({ message: error instanceof Error ? error.message : String(error), tone: 'error' })
     }
   }
 
@@ -141,17 +144,22 @@ export function ContinuousDeliveryDetailPage() {
           <div className="min-w-0 flex-1"><p className="text-sm font-medium">{zh ? '自动交付触发' : 'Automatic delivery triggers'}</p><p className="mt-1 text-xs text-muted-foreground">{configuration.automation_enabled === false ? (zh ? '轮询与 Webhook 已暂停。手动同步仅生成候选版本，仍可手动发布和回滚。已开始的任务会继续完成。' : 'Polling and webhooks are paused. Manual sync creates candidates; manual deploy and rollback remain available. Started tasks finish normally.') : (zh ? '轮询和 Webhook 按已保存的交付策略执行。' : 'Polling and webhooks follow the saved delivery policy.')}</p></div>
           <DeliveryAutomationSwitch projectName={projectName} enabled={configuration.automation_enabled !== false} zh={zh} />
         </div>}
-        {notice && <p className={cn('text-sm', sync.isError || releaseAction.isError ? 'text-destructive' : 'text-muted-foreground')}>{notice}</p>}
-        <Tabs value={view} onValueChange={(value) => setView(value as View)}>
-          <TabsList>
-            {tabs.map((name) => (
-              <TabsTrigger key={name} value={name}>{name === 'Overview' ? (zh ? '概览' : 'Overview') : name === 'Releases' ? (zh ? 'Release' : 'Releases') : (zh ? '设置' : 'Settings')}</TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
+        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+          <Tabs value={view} onValueChange={(value) => setView(value as View)}>
+            <TabsList>
+              {tabs.map((name) => (
+                <TabsTrigger key={name} value={name}>{name === 'Overview' ? (zh ? '概览' : 'Overview') : name === 'Releases' ? (zh ? 'Release' : 'Releases') : (zh ? '设置' : 'Settings')}</TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+          {notice && <div className="flex min-w-0 flex-1 items-start gap-1">
+            <InlineStatus tone={notice.tone}>{notice.message}</InlineStatus>
+            <Button variant="ghost" size="icon-xs" className="shrink-0" aria-label={zh ? '关闭操作提示' : 'Dismiss action message'} onClick={() => setNotice(null)}><X /></Button>
+          </div>}
+        </div>
         {view === 'Overview' && isGit && <CDOverview configuration={configuration} drift={driftQuery.data} releases={releasesQuery.data} error={(driftQuery.error || releasesQuery.error)?.message} zh={zh} />}
         {view === 'Releases' && isGit && (releasesQuery.isPending ? <LoadingState label={zh ? '正在加载 Release' : 'Loading releases'} /> : <ReleasePanel configuration={configuration} releases={releasesQuery.data} pendingReleaseID={releaseAction.isPending ? releaseAction.variables?.release.id : undefined} pendingOperation={releaseAction.isPending ? releaseAction.variables?.operation : undefined} zh={zh} onAction={(release, operation) => void runReleaseAction(release, operation)} />)}
-        {view === 'Settings' && <CDSettings projectName={projectName} configuration={configuration} zh={zh} onSaved={(value) => { client.setQueryData(['delivery-configuration', projectName], value); void client.invalidateQueries({ queryKey: ['delivery-projects'] }); setNotice(zh ? '持续交付配置已保存。' : 'Continuous delivery configuration saved.'); if (value.configured && !value.webhook_secret) setView('Overview') }} />}
+        {view === 'Settings' && <CDSettings projectName={projectName} configuration={configuration} zh={zh} onSaved={(value) => { client.setQueryData(['delivery-configuration', projectName], value); void client.invalidateQueries({ queryKey: ['delivery-projects'] }); setNotice(null); if (value.configured && !value.webhook_secret) { setView('Overview'); setNotice({ message: zh ? '持续交付配置已保存。' : 'Continuous delivery configuration saved.', tone: 'success' }) } }} />}
       </div>
     </ResourceFrame>
   </div>

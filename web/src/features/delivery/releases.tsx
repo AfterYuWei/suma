@@ -9,10 +9,11 @@ import { ListPagination } from '../../components/ui/list-pagination'
 import { useListPagination } from '../../components/ui/use-list-pagination'
 import { Progress } from '../../components/ui/progress'
 import { Spinner } from '../../components/ui/spinner'
+import { InlineStatus } from '../../components/ui/inline-status'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui/table'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip'
-import { Check, CheckCircle2, ChevronDownIcon, GitCommitHorizontal, History, Loader2, MoreHorizontal, RotateCcw, Rocket, TriangleAlert, X, XCircle } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { Check, CheckCircle2, ChevronDownIcon, GitCommitHorizontal, History, MoreHorizontal, RotateCcw, Rocket, TriangleAlert, X, XCircle } from 'lucide-react'
+import { useId, type ReactNode } from 'react'
 import type { CDConfiguration, CDDrift, DeliveryRelease } from './types'
 import { hasActiveRelease, parseStringList, repositoryName, shortCommit } from './types'
 import { deliveryOverviewNotice, driftReason } from './overview-notice'
@@ -24,14 +25,6 @@ const statusBadgeClass = (status: string) => ['succeeded', 'approved'].includes(
     : ['failed', 'rollback_failed', 'rejected'].includes(status)
       ? 'border-transparent bg-red-500/15 text-red-600 dark:text-red-400'
       : 'border-transparent bg-primary/10 text-primary'
-
-function Notice({ tone, title, children }: { tone: 'checking' | 'success' | 'warning'; title: string; children: ReactNode }) {
-  return <Alert className={tone === 'success' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-300' : tone === 'warning' ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300' : ''}>
-    {tone === 'checking' ? <Loader2 className="animate-spin" /> : tone === 'success' ? <CheckCircle2 /> : <TriangleAlert />}
-    <AlertTitle className="min-w-0 [overflow-wrap:anywhere]">{title}</AlertTitle>
-    <AlertDescription className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{children}</AlertDescription>
-  </Alert>
-}
 
 function DetailList({ items }: { items: [string, string][] }) {
   return <dl className="grid gap-x-8 gap-y-2.5 text-sm sm:grid-cols-2 xl:grid-cols-4">
@@ -55,20 +48,26 @@ function EmptyHint({ icon, title, description }: { icon: ReactNode; title: strin
 export function CDOverview({ configuration, drift, releases, error, zh }: { configuration: CDConfiguration; drift?: CDDrift; releases?: DeliveryRelease[]; error?: string; zh: boolean }) {
   const { formatDateTime } = useDateTime()
 
+  const noticeDescriptionID = useId()
   const latest = releases?.[0]
   const repository = configuration.repository
   const notice = deliveryOverviewNotice({ drift, latest, desiredCommit: configuration.desired_commit, error, zh })
   const nodePagination = useListPagination(drift?.nodes ?? [])
   return <div className="flex w-full flex-col gap-4">
-    <Notice
-      tone={notice.tone}
-      title={notice.title}
-    >
-      {notice.description}
-    </Notice>
     <Card>
-      <CardHeader><CardTitle>{zh ? '交付状态' : 'Delivery state'}</CardTitle></CardHeader>
+      <CardHeader className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <CardTitle>{zh ? '交付状态' : 'Delivery state'}</CardTitle>
+        {notice.tone !== 'warning' && <Tooltip>
+          <TooltipTrigger render={<InlineStatus aria-describedby={noticeDescriptionID} tone={notice.tone === 'success' ? 'success' : 'pending'} tabIndex={0} className="rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-ring" />}>{notice.title}</TooltipTrigger>
+          <TooltipContent id={noticeDescriptionID} role="tooltip">{notice.description}</TooltipContent>
+        </Tooltip>}
+      </CardHeader>
       <CardContent>
+        {notice.tone === 'warning' && <Alert className="mb-4 border-amber-500/30 bg-amber-500/10 text-amber-700 dark:border-amber-500/20 dark:text-amber-300">
+          <TriangleAlert />
+          <AlertTitle className="min-w-0 [overflow-wrap:anywhere]">{notice.title}</AlertTitle>
+          <AlertDescription className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{notice.description}</AlertDescription>
+        </Alert>}
         <DetailList items={[
           [zh ? '仓库' : 'Repository', `${repositoryName(repository.clone_url)} · ${repository.clone_url}`],
           [zh ? '跟踪引用' : 'Tracked ref', `${repository.ref_type}:${repository.ref}`],

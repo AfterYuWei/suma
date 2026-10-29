@@ -37,6 +37,7 @@ import {
 import { ErrorState } from '../components/ui/error-state'
 import { LoadingState } from '../components/ui/loading-state'
 import { Spinner } from '../components/ui/spinner'
+import { InlineStatus } from '../components/ui/inline-status'
 import { StatusBadge } from '../components/ui/status-badge'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { confirmExternalProjectCleanup } from '../features/compose/external-project-cleanup'
@@ -112,7 +113,7 @@ export function ComposeDetailPage() {
   const [view, setView] = useState<View>('Files')
   const [compose, setCompose] = useState('')
   const [environment, setEnvironment] = useState('')
-  const [notice, setNotice] = useState('')
+  const [notice, setNotice] = useState<{ message: string; tone: 'success' | 'error' | 'pending' } | null>(null)
   const [baseline, setBaseline] = useState<Project | null>(null)
   const [validated, setValidated] = useState('')
   const [pendingConfiguration, setPendingConfiguration] = useState(false)
@@ -216,10 +217,10 @@ export function ComposeDetailPage() {
       client.setQueryData(['project', nodeID, backend, projectName], row)
       setBaseline(row)
       setConflict(false)
-      setNotice(zh ? '已保存。' : 'Saved.')
+      setNotice({ message: zh ? '已保存。' : 'Saved.', tone: 'success' })
     },
     onError: (error) => {
-      setNotice(error.message)
+      setNotice({ message: error.message, tone: 'error' })
       if (error instanceof ApiError && error.status === 409) {
         setConflict(true)
         void query.refetch()
@@ -235,9 +236,9 @@ export function ComposeDetailPage() {
       }),
     onSuccess: () => {
       setValidated(signature)
-      setNotice(zh ? 'Compose 配置有效。' : 'Compose configuration is valid.')
+      setNotice({ message: zh ? 'Compose 配置有效。' : 'Compose configuration is valid.', tone: 'success' })
     },
-    onError: (error) => setNotice(error.message)
+    onError: (error) => setNotice({ message: error.message, tone: 'error' })
   })
   const action = useMutation({
     mutationFn: (name: string) =>
@@ -249,21 +250,20 @@ export function ComposeDetailPage() {
         }
       ),
     onMutate: (name) => {
-      setNotice('')
+      setNotice(null)
       setOperation({ action: name, taskID: '' })
       setOperationOpen(true)
     },
     onSuccess: (task, name) => {
       setOperation({ action: name, taskID: task.id })
       client.setQueryData(['compose-action-task', nodeID, task.id], task)
-      setNotice(
-        zh
-          ? `${composeActionLabel(name, zh)}任务已启动。`
-          : `${composeActionLabel(name, zh)} task started.`
-      )
+      setNotice({
+        message: zh ? `${composeActionLabel(name, zh)}任务已启动。` : `${composeActionLabel(name, zh)} task started.`,
+        tone: 'pending',
+      })
       void client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] })
     },
-    onError: (error) => setNotice(error.message)
+    onError: (error) => setNotice({ message: error.message, tone: 'error' })
   })
   const trackedTask = useQuery({
     queryKey: ['compose-action-task', nodeID, operation?.taskID],
@@ -328,7 +328,7 @@ export function ComposeDetailPage() {
       bypassNavigationPrompt.current = true
       void navigate({ to: '/tasks' })
     },
-    onError: (error) => setNotice(error.message)
+    onError: (error) => setNotice({ message: error.message, tone: 'error' })
   })
   const authorizeDockerSocket = () => confirmDockerSocketMount(compose, zh)
   const saveFiles = async () => {
@@ -348,15 +348,16 @@ export function ComposeDetailPage() {
   useEffect(() => {
     const task = trackedTask.data
     if (!task || task.status === 'pending' || task.status === 'running') return
-    setNotice(
-      task.status === 'success'
+    setNotice({
+      tone: task.status === 'success' ? 'success' : 'error',
+      message: task.status === 'success'
         ? zh
           ? `${composeActionLabel(operation?.action || '', zh)}完成。`
           : `${composeActionLabel(operation?.action || '', zh)} completed.`
         : zh
           ? `${composeActionLabel(operation?.action || '', zh)}${task.status === 'canceled' ? '已取消' : '失败'}：${task.message}`
-          : `${composeActionLabel(operation?.action || '', zh)} ${task.status}: ${task.message}`
-    )
+          : `${composeActionLabel(operation?.action || '', zh)} ${task.status}: ${task.message}`,
+    })
     void Promise.all([
       client.invalidateQueries({
         queryKey: ['project', nodeID, backend, projectName]
@@ -442,7 +443,7 @@ export function ComposeDetailPage() {
       client.setQueryData(['compose-action-task', nodeID, task.id], task)
     } catch (error) {
       setReview(null)
-      setNotice(error instanceof Error ? error.message : String(error))
+      setNotice({ message: error instanceof Error ? error.message : String(error), tone: 'error' })
       if (error instanceof ApiError && error.status === 409) {
         setConflict(true)
         void query.refetch()
@@ -685,35 +686,31 @@ export function ComposeDetailPage() {
                 </AlertDescription>
               </Alert>
             )}
-          {notice && (
-            <p
-              className={`text-sm ${action.isError ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'}`}
-            >
-              {notice}
-            </p>
-          )}
-          <Tabs value={view} onValueChange={(value) => setView(value as View)}>
-            <TabsList>
-              {(project.managed
-                ? ['Files', 'Services', 'Logs']
-                : ['Services', 'Logs']
-              ).map((name) => (
-                <TabsTrigger key={name} value={name}>
-                  {name === 'Files'
-                    ? zh
-                      ? '配置'
-                      : 'Configuration'
-                    : name === 'Services'
+          <div className="flex w-full min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+            <Tabs value={view} onValueChange={(value) => setView(value as View)}>
+              <TabsList>
+                {(project.managed
+                  ? ['Files', 'Services', 'Logs']
+                  : ['Services', 'Logs']
+                ).map((name) => (
+                  <TabsTrigger key={name} value={name}>
+                    {name === 'Files'
                       ? zh
-                        ? '服务'
-                        : 'Services'
-                      : zh
-                        ? '日志'
-                        : 'Logs'}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
+                        ? '配置'
+                        : 'Configuration'
+                      : name === 'Services'
+                        ? zh
+                          ? '服务'
+                          : 'Services'
+                        : zh
+                          ? '日志'
+                          : 'Logs'}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+            {notice && <InlineStatus tone={notice.tone} className="flex-1">{notice.message}</InlineStatus>}
+          </div>
           {conflict && (
             <Alert className="w-full">
               <AlertTitle>

@@ -1,9 +1,11 @@
 import { useMutation } from '@tanstack/react-query'
-import { Check, PlugZap } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { PlugZap } from 'lucide-react'
+import { useEffect, useId, useRef } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '../../components/ui/alert'
 import { Button } from '../../components/ui/button'
 import { Spinner } from '../../components/ui/spinner'
+import { InlineStatus } from '../../components/ui/inline-status'
+import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip'
 import { api } from '../../lib/api'
 import type { GitConnectionInput, GitConnectionResult, GitRepositoryConfiguration } from './types'
 
@@ -14,6 +16,7 @@ export function GitConnectionTest({ repository, nodeIDs, projectName, creating, 
   creating: boolean
   zh: boolean
 }) {
+  const descriptionID = useId()
   const controller = useRef<AbortController | null>(null)
   const scope = creating ? '' : projectName
   useEffect(() => () => controller.current?.abort(), [scope])
@@ -34,16 +37,13 @@ export function GitConnectionTest({ repository, nodeIDs, projectName, creating, 
       <Button type="button" variant="outline" size="sm" aria-busy={test.isPending} disabled={test.isPending || !input.repository.clone_url || !input.repository.ref || missingCredential} onClick={() => test.mutate({ input, signature })}>
         {test.isPending ? <Spinner aria-hidden="true" /> : <PlugZap />}{test.isPending ? (zh ? '测试中…' : 'Testing…') : (zh ? '测试连接' : 'Test connection')}
       </Button>
-      <span className="text-xs text-muted-foreground">{zh ? '使用当前填写的配置，仅读取远端引用，不保存或发布。' : 'Uses the current draft to read remote refs. Does not save or deploy.'}</span>
+      {current && test.isSuccess ? <Tooltip>
+        <TooltipTrigger render={<InlineStatus aria-describedby={descriptionID} tone="success" tabIndex={0} className="rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-ring" />}>{zh ? '连接成功' : 'Connection successful'}{test.data.ref_checked && test.data.commit_sha && ` · ${test.data.commit_sha.slice(0, 8)}`}</TooltipTrigger>
+        <TooltipContent id={descriptionID} role="tooltip" className="whitespace-pre-wrap">{test.data.ref_checked
+          ? `${input.repository.ref_type}:${input.repository.ref} · ${test.data.commit_sha ?? '—'}\n${zh ? '已验证仓库访问及引用；Compose 文件将在同步时检查。' : 'Repository access and ref verified; Compose files are checked during sync.'}`
+          : (zh ? '仓库可访问。指定 Commit 将在同步时验证；本次测试未检查 Compose 文件。' : 'Repository is accessible. The specified commit will be verified during sync; Compose files were not checked.')}</TooltipContent>
+      </Tooltip> : <span className="text-xs text-muted-foreground">{zh ? '使用当前填写的配置，仅读取远端引用，不保存或发布。' : 'Uses the current draft to read remote refs. Does not save or deploy.'}</span>}
     </div>
-    {current && test.isSuccess && <Alert role="status" className="min-w-0">
-      <Check /><AlertTitle>{zh ? '连接成功' : 'Connection successful'}</AlertTitle>
-      <AlertDescription className="break-words [overflow-wrap:anywhere]">{test.data.ref_checked
-        ? `${input.repository.ref_type}:${input.repository.ref} · ${test.data.commit_sha}`
-        : (zh ? '仓库可访问。指定 Commit 将在同步时验证；本次测试未检查 Compose 文件。' : 'Repository is accessible. The specified commit will be verified during sync; Compose files were not checked.')}
-        {test.data.ref_checked && <span className="mt-1 block">{zh ? '已验证仓库访问及引用；Compose 文件将在同步时检查。' : 'Repository access and ref verified; Compose files are checked during sync.'}</span>}
-      </AlertDescription>
-    </Alert>}
     {current && test.isError && <Alert variant="destructive" className="min-w-0">
       <AlertTitle>{zh ? '连接失败' : 'Connection failed'}</AlertTitle>
       <AlertDescription className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{test.error.message}
