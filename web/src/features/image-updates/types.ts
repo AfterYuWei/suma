@@ -1,6 +1,6 @@
 export interface ImageUsage { container_id: string; container_name: string; project?: string; service?: string; state: string; image_id: string; reference: string; delivery_project?: string }
 export interface ImageUpdateResult { reference: string; registry?: string; platform: { os: string; architecture: string; variant?: string }; local_image_id: string; remote_manifest_digest?: string; remote_config_digest?: string; status: string; reason_code?: string; checked_at?: string; stale: boolean; pull_required: boolean; recreate_required: boolean; containers: ImageUsage[] }
-export interface ImageUpdateView { results: ImageUpdateResult[]; running_task_id?: string }
+export interface ImageUpdateView { results: ImageUpdateResult[]; running_task_id?: string; candidate?: ProjectImageCandidate }
 export interface ImageUpdatePolicy { version: number; enabled: boolean; interval_hours: number; next_run_at?: string; registry_credentials: Record<string, number> }
 export interface RegistryCredential { id: number; name: string; server_address: string; authorized_node_ids: string[] }
 export interface CheckTarget { image_ids?: string[]; project_name?: string }
@@ -14,3 +14,7 @@ export function reasonLabel(reason: string | undefined, zh: boolean) {
  const labels: Record<string, string> = { untagged: '无镜像标签', image_id: '镜像 ID 无跟踪标签', invalid_reference: '镜像引用无效', digest_pinned: '固定摘要不跟踪标签更新', authentication_required: '需要仓库认证', credential_unavailable: '凭据不可用或节点未获授权', rate_limited: '仓库请求限流，请稍后重试', timeout: '查询超时', registry_unreachable: '控制端无法通过 HTTPS 访问仓库', reference_not_found: '仓库中不存在该引用', platform_unavailable: '仓库不支持当前镜像平台', unsupported_manifest: '不支持该镜像格式' }
  return zh ? labels[reason || ''] || reason || '' : (reason || '').replaceAll('_', ' ')
 }
+export interface ProjectImageService { name: string; reference: string; manifest_digest: string; config_digest: string; os: string; architecture: string; variant?: string; replicas: number }
+export interface ProjectImageCandidate { id: string; node_id: string; project: string; status: 'pending' | 'publishing' | 'succeeded' | 'failed' | 'canceled' | 'superseded'; task_id?: string; message?: string; services: ProjectImageService[]; requires_docker_socket: boolean }
+export interface ProjectImagePolicy { project: string; version: number; mode: 'inherit' | 'custom' | 'disabled'; cron: string; timezone: string; next_run_at?: string; last_error?: string }
+export interface ProjectImageSummary { project: string; updated_services: number; blocked_services: number; recreate_required: boolean; checked_at?: string; error?: string; candidate?: ProjectImageCandidate }

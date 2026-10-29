@@ -1,3 +1,7 @@
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog'
+import { ProjectImageUpdates } from '../features/image-updates/project-updates'
+import { candidateStatus } from '../features/image-updates/project-helpers'
+import type { ProjectImageSummary } from '../features/image-updates/types'
 import { useContainerWorkspace } from '../features/containers/use-container-workspace'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
@@ -51,6 +55,9 @@ function ComposeNodePage({ nodeID }: { nodeID: string }) {
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [takeoverName, setTakeoverName] = useState('')
+ const [updateProject, setUpdateProject] = useState('')
+ const imageSummaries = useQuery({ queryKey: ['project-image-summaries', nodeID], queryFn: ({ signal }) => api<ProjectImageSummary[]>(nodePath(nodeID, '/image-updates/projects'), { signal }), refetchInterval: 5000, retry: false })
+ const updateByProject = new Map((imageSummaries.data || []).map(row => [row.project, row]))
   const [feedback, setFeedback] = useState<ProjectFeedback | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [serviceOverlay, setServiceOverlay] = useState(false)
@@ -126,13 +133,14 @@ function ComposeNodePage({ nodeID }: { nodeID: string }) {
         {!visible.length && <p className="rounded-lg bg-surface p-8 text-center text-sm text-muted-foreground">{rows.length ? zh ? '没有符合条件的项目。' : 'No matching projects.' : zh ? '未发现项目。' : 'No projects discovered.'}</p>}
         <div className="space-y-0.5">{pagination.items.map(entry => {
           const row = entry.project, status = projectStatus(entry), open = expanded.has(row.name)
+ const imageSummary = updateByProject.get(row.name)
           const serviceCount = available ? groupServices(entry.containers, row.declared_service_names ?? []).length : row.service_count
           return <Fragment key={row.name}><div className={`${grid} cursor-pointer rounded-lg px-3 py-[7px] hover:bg-muted/25`} data-testid="project-row" data-project={row.name} onClick={event => { if (event.currentTarget.contains(event.target as Node) && !(event.target as Element).closest('a, button, input, [data-slot="checkbox"]')) toggleExpanded(row.name) }}>
             <div className="flex items-center gap-3">
               <Checkbox disabled={!row.managed} checked={selected.has(row.name)} onCheckedChange={value => toggleRow(row.name, value === true)} aria-label={projectDisplayName(row)} />
               <Button variant="ghost" size="icon-xs" aria-expanded={open} aria-label={`${zh ? '展开服务' : 'Expand services'} · ${projectDisplayName(row)}`} onClick={() => toggleExpanded(row.name)}><ChevronRight className={`transition-transform ${open ? 'rotate-90' : ''}`} /></Button>
             </div>
-            <div className="min-w-0"><div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1"><TooltipHint content={row.delivery_project_name && row.delivery_project_name !== row.name ? `${zh ? 'Compose 项目名' : 'Compose project name'}: ${row.name}` : undefined}><Link to="/projects/$backend/$projectName" params={{ backend: row.backend, projectName: row.name }} className="max-w-full truncate text-sm font-medium hover:underline">{projectDisplayName(row)}</Link></TooltipHint><StatusBadge tone={row.managed ? 'outline' : 'neutral'}>{row.delivery_project_name ? 'CD' : row.managed ? zh ? '托管' : 'Managed' : zh ? '外部' : 'External'}</StatusBadge></div><p className="mt-1 text-xs text-muted-foreground">{serviceCount} {zh ? '服务' : 'services'}{row.managed && !row.declared_service_names && ` · ${zh ? '声明不可用' : 'Declarations unavailable'}`}</p></div>
+            <div className="min-w-0"><div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1"><TooltipHint content={row.delivery_project_name && row.delivery_project_name !== row.name ? `${zh ? 'Compose 项目名' : 'Compose project name'}: ${row.name}` : undefined}><Link to="/projects/$backend/$projectName" params={{ backend: row.backend, projectName: row.name }} className="max-w-full truncate text-sm font-medium hover:underline">{projectDisplayName(row)}</Link></TooltipHint><StatusBadge tone={row.managed ? 'outline' : 'neutral'}>{row.delivery_project_name ? 'CD' : row.managed ? zh ? '托管' : 'Managed' : zh ? '外部' : 'External'}</StatusBadge></div><p className="mt-1 text-xs text-muted-foreground">{serviceCount} {zh ? '服务' : 'services'}{row.managed && !row.declared_service_names && ` · ${zh ? '声明不可用' : 'Declarations unavailable'}`}{row.managed && !row.delivery_project_name && <Button variant="ghost" size="sm" className="ml-2 h-auto p-0 text-xs" aria-label={`${zh ? '项目镜像更新' : 'Project image updates'} · ${row.name}`} onClick={() => setUpdateProject(row.name)}>{imageSummary?.candidate?.status === 'publishing' ? candidateStatus('publishing', zh) : imageSummary?.candidate?.status === 'failed' ? candidateStatus('failed', zh) : imageSummary?.updated_services ? `${imageSummary.recreate_required ? (zh ? '待重建' : 'Recreate pending') : (zh ? '有更新' : 'Updates')} · ${imageSummary.updated_services}${imageSummary.blocked_services ? (zh ? '（含停止服务）' : ' (includes stopped services)') : ''}` : imageSummary?.error ? (zh ? '检测异常' : 'Check failed') : (zh ? '镜像检测' : 'Image checks')}</Button>}</p></div>
             <div className="col-start-2 flex flex-col items-start gap-1 lg:col-start-auto lg:row-start-auto"><StatusBadge tone={status === 'running' ? 'success' : status === 'degraded' ? 'warning' : 'neutral'}>{statusLabel(status, zh)}</StatusBadge><span className="text-xs text-muted-foreground">{available ? `${entry.summary.running}/${entry.summary.total}` : '—'} {zh ? '容器运行中' : 'containers running'}{entry.summary.abnormal > 0 && <span className="ml-2 text-destructive">{entry.summary.abnormal} {zh ? '异常' : 'abnormal'}</span>}{available && entry.summary.unknown > 0 && <span className="ml-2">{entry.summary.unknown} {zh ? '健康未知' : 'health unknown'}</span>}</span></div>
             <div className="col-start-3 row-start-2 lg:col-start-auto lg:row-start-auto"><ProjectResourceSummary summary={entry.summary} zh={zh} /></div>
             <div className="col-start-3 row-start-1 lg:col-start-auto lg:row-start-auto"><ProjectActions row={{ ...row, status }} zh={zh} onTakeover={() => setTakeoverName(row.name)} onFeedback={setFeedback} onMenuChange={setMenuOpen} /></div>
@@ -141,7 +149,8 @@ function ComposeNodePage({ nodeID }: { nodeID: string }) {
         {visible.length > pagination.pageSize && <ListPagination {...pagination} zh={zh} />}
       </>}
     </div>
-    <ContainerWorkspaceDialog workspace={workspace} rows={observedRows} available={available} zh={zh} />
+    <Dialog open={!!updateProject} onOpenChange={open => { if (!open) setUpdateProject('') }}><DialogContent className="max-h-[85dvh] overflow-auto sm:max-w-2xl"><DialogHeader><DialogTitle className="break-all">{updateProject} · {zh ? '镜像更新' : 'Image updates'}</DialogTitle></DialogHeader>{updateProject && <ProjectImageUpdates key={updateProject} nodeID={nodeID} projectName={updateProject} />}</DialogContent></Dialog>
+      <ContainerWorkspaceDialog workspace={workspace} rows={observedRows} available={available} zh={zh} />
     <TakeoverWarningDialog open={!!takeoverName} projectName={takeoverName} zh={zh} onOpenChange={open => { if (!open) setTakeoverName('') }} onContinue={() => { const name = takeoverName; setTakeoverName(''); void navigate({ to: '/projects/$backend/$projectName/takeover', params: { backend: 'compose', projectName: name } }) }} />
   </ResourceFrame>
 }

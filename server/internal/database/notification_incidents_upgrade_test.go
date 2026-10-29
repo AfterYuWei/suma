@@ -110,7 +110,11 @@ func TestNotificationIncidentUpgradePreservesHistoryAndQueuedEvidence(t *testing
 	againPool, _ := again.DB()
 	defer againPool.Close()
 	again.Model(&database.SchemaMigration{}).Count(&count)
-	if count != 5 {
+	entries, readErr := os.ReadDir("migrations")
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if count != int64(len(entries)) {
 		t.Fatal("migration replayed", count)
 	}
 }

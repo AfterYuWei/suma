@@ -186,13 +186,13 @@ func (a *Adapter) Send(ctx context.Context, c Channel, m Secrets, message Messag
 			return "", errors.New("select a recipient chat before sending a test")
 		}
 		parts, rich := telegramParts(message)
-		first := ""
+		receipt := ""
 		for i, part := range parts {
 			body := map[string]any{"chat_id": c.Config.ChatID, "text": part, "link_preview_options": map[string]bool{"is_disabled": true}}
 			if rich {
 				body["parse_mode"] = "HTML"
 			}
-			if i == len(parts)-1 && message.URL != "" {
+			if i == len(parts)-1 && (message.URL != "" || message.PublishToken != "") {
 				body["reply_markup"] = telegramButtons(message)
 			}
 			result, err := a.request(ctx, "POST", "https://api.telegram.org/bot"+m.Token+"/sendMessage", body, "", false, m)
@@ -206,11 +206,11 @@ func (a *Adapter) Send(ctx context.Context, c Channel, m Secrets, message Messag
 			if sent.ID == 0 {
 				return "", errors.New("Telegram returned no message receipt")
 			}
-			if first == "" {
-				first = strconv.FormatInt(sent.ID, 10)
+			if receipt == "" || message.PublishToken != "" {
+				receipt = strconv.FormatInt(sent.ID, 10)
 			}
 		}
-		return first, nil
+		return receipt, nil
 	case "feishu_app":
 		if c.Config.ChatID == "" {
 			return "", errors.New("select a recipient chat before sending a test")

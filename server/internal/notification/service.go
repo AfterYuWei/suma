@@ -25,10 +25,11 @@ type Sender interface {
 	Send(context.Context, Channel, Secrets, Message) (string, error)
 }
 type Dependencies struct {
-	Sender        Sender
-	Now           func() time.Time
-	OnError       func(error)
-	FeishuConnect func(context.Context, Channel, Secrets, func(ConnectionStatus), func(Incoming) error)
+	ProjectUpdates ProjectUpdateService
+	Sender         Sender
+	Now            func() time.Time
+	OnError        func(error)
+	FeishuConnect  func(context.Context, Channel, Secrets, func(ConnectionStatus), func(Incoming) error)
 }
 type Service struct {
 	db              *gorm.DB
@@ -110,6 +111,9 @@ func (s *Service) SaveChannel(ctx context.Context, id string, in ChannelInput) (
 		if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 			return Channel{}, fmt.Errorf("%w: public links require an HTTPS origin", ErrInvalid)
 		}
+	}
+	if err := validateApprovers(in.Provider, in.Config.ApproverIDs); err != nil {
+		return Channel{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -259,7 +263,7 @@ func (s *Service) SaveChannel(ctx context.Context, id string, in ChannelInput) (
 	}); err != nil {
 		return Channel{}, err
 	}
-	if originalToken != previous.Token || originalAppID != in.Config.AppID || !needsConnection(decodeChannel(row)) {
+	if originalToken != previous.Token || originalAppID != in.Config.AppID || oldConfig.AutoDiscover != in.Config.AutoDiscover || (len(oldConfig.ApproverIDs) > 0) != (len(in.Config.ApproverIDs) > 0) || !needsConnection(decodeChannel(row)) {
 		s.stopDiscoveryLocked(row.ID)
 	}
 	if s.cancel != nil && needsConnection(decodeChannel(row)) {
@@ -651,6 +655,7 @@ func (s *Service) Start() {
 		defer ticker.Stop()
 		for {
 			s.error(s.Tick(ctx))
+			s.error(s.refreshProjectActions(ctx))
 			select {
 			case <-ctx.Done():
 				return
@@ -754,7 +759,14 @@ func (s *Service) deliver(ctx context.Context, row database.NotificationDelivery
 	m, err := s.material(channel)
 	var remoteID string
 	if err == nil {
-		remoteID, err = s.deps.Sender.Send(ctx, channel, m, s.render(snapshot, events))
+		message := s.render(snapshot, events)
+		err = s.prepareProjectAction(ctx, channel, row, events, &message)
+		if err == nil {
+			remoteID, err = s.deps.Sender.Send(ctx, channel, m, message)
+			if err != nil && message.PublishToken != "" && strings.Contains(err.Error(), message.PublishToken) {
+				err = errors.New(strings.ReplaceAll(err.Error(), message.PublishToken, "[REDACTED]"))
+			}
+		}
 	}
 	status, reason := "sent", ""
 	due := now

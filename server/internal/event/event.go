@@ -4,6 +4,7 @@ package event
 import "time"
 
 type Event struct {
+	CandidateID  string    `json:"candidate_id,omitempty"`
 	ID           string    `json:"id"`
 	Type         string    `json:"type"`
 	Severity     string    `json:"severity"`

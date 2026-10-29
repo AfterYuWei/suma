@@ -419,6 +419,12 @@ func (s *Service) Action(ctx context.Context, name, action string) (database.Tas
 	return s.ActionWithRevision(ctx, name, action, "")
 }
 func (s *Service) ActionWithRevision(ctx context.Context, name, action, expected string, allowDockerSocket ...bool) (database.Task, error) {
+	return s.action(ctx, name, action, expected, nil, allowDockerSocket...)
+}
+func (s *Service) UpdateSelected(ctx context.Context, name, revision string, update SelectedUpdate) (database.Task, error) {
+	return s.action(ctx, name, "update", revision, &update, update.AllowDockerSocket)
+}
+func (s *Service) action(ctx context.Context, name, action, expected string, selected *SelectedUpdate, allowDockerSocket ...bool) (database.Task, error) {
 	unlock := s.lockProject(name)
 	defer unlock()
 	if s.operationActive(name) {
@@ -448,7 +454,15 @@ func (s *Service) ActionWithRevision(ctx context.Context, name, action, expected
 	}
 	key := s.operationKey(name)
 	s.operations.Store(key, true)
-	result, startErr := s.tasks.StartWithIDForNode(s.effectiveNodeID(), s.effectiveNodeName(), "compose."+action, strings.Title(action)+" "+name, func(ctx context.Context, taskID string, report task.Reporter) error {
+	result, startErr := s.tasks.StartWithIDForNode(s.effectiveNodeID(), s.effectiveNodeName(), "compose."+action, strings.Title(action)+" "+name, func(ctx context.Context, taskID string, report task.Reporter) (workErr error) {
+		if selected != nil {
+			defer func() {
+				if workErr == nil && ctx.Err() != nil {
+					workErr = ctx.Err()
+				}
+				selected.Complete(taskID, workErr)
+			}()
+		}
 		defer s.operations.Delete(key)
 		if err := s.checkRevision(project.Path, revision); err != nil {
 			return err
@@ -461,12 +475,31 @@ func (s *Service) ActionWithRevision(ctx context.Context, name, action, expected
 				return err
 			}
 		}
+		var finalErr error
+
+		var spec ExecutionSpec
+		if selected != nil {
+			if err := selected.Start(ctx, taskID); err != nil {
+				finalErr = err
+				return err
+			}
+			var cleanup func()
+			spec, cleanup, finalErr = s.selectedSpec(ctx, project, *selected)
+			if finalErr != nil {
+				return finalErr
+			}
+			defer cleanup()
+			if finalErr = selected.Check(ctx); finalErr != nil {
+				return finalErr
+			}
+		}
 		var err error
 		runner := s.runner
 		if action == "pull" || action == "update" || action == "up" {
 			var config string
-			runner, config, err = s.registryRunner(ctx, project)
+			runner, config, err = s.registryRunner(ctx, project, spec.Services...)
 			if err != nil {
+				finalErr = err
 				return err
 			}
 			if config != "" {
@@ -504,7 +537,19 @@ func (s *Service) ActionWithRevision(ctx context.Context, name, action, expected
 		case "build":
 			err = run(5, 95, func(output io.Writer) error { return s.runner.Build(ctx, project.Path, output) })
 		case "update":
-			if err = run(5, 55, func(output io.Writer) error { return runner.Pull(ctx, project.Path, output) }); err == nil {
+			if selected != nil {
+				err = run(5, 55, func(output io.Writer) error { return runner.PullRelease(ctx, spec, output) })
+				if err == nil {
+					err = selected.Check(ctx)
+				}
+				if err == nil {
+					err = s.validateSelectedRuntime(ctx, name, selected.Services)
+				}
+				if err == nil {
+					report(60, "Images verified; recreating selected services")
+					err = run(60, 95, func(output io.Writer) error { return runner.UpRelease(ctx, spec, 120, output) })
+				}
+			} else if err = run(5, 55, func(output io.Writer) error { return runner.Pull(ctx, project.Path, output) }); err == nil {
 				report(60, "Images ready; recreating Compose services")
 				err = run(60, 95, func(output io.Writer) error { return runner.Up(ctx, project.Path, output) })
 			}
@@ -514,6 +559,7 @@ func (s *Service) ActionWithRevision(ctx context.Context, name, action, expected
 		if err == nil && (action == "up" || action == "update") {
 			_ = s.markDeployed(project)
 		}
+		finalErr = err
 		if err != nil && redact(err.Error()) != err.Error() {
 			return errors.New(redact(err.Error()))
 		}

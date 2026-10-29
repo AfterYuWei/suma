@@ -81,7 +81,8 @@ async function setup(page: Page, options: {
     else if (path.endsWith('/image-updates')) {
       if (options.error === 'image-updates') return route.fulfill({ status: 503, json: { code: 1, message: 'Image checks unavailable', data: null } })
       data = { results: updates }
-    } else if (path.endsWith('/image-updates/policy')) data = { enabled: false, interval_hours: 6, registry_credentials: {} }
+    } else if (path.endsWith('/image-updates/projects/database/policy')) data = { project: 'database', version: 0, mode: 'inherit', cron: '0 */6 * * *', timezone: 'UTC' }
+    else if (path.endsWith('/image-updates/policy')) data = { enabled: false, interval_hours: 6, registry_credentials: {} }
     else if (path.endsWith('/image-updates/check')) data = { id: 'check-task', status: 'success', progress: 100, message: 'Checked project images' }
     else if (path.endsWith('/tasks/check-task')) data = { id: 'check-task', status: 'success', progress: 100, message: 'Checked project images' }
     else if (path.endsWith('/projects/compose/database/validate')) data = { valid: true }

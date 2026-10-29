@@ -9,6 +9,13 @@ import (
 
 func telegramButtons(message Message) any {
 	rows := []any{}
+	if message.PublishToken != "" {
+		label := "发布"
+		if message.Language == "en-US" {
+			label = "Publish"
+		}
+		rows = append(rows, []any{map[string]string{"text": label, "callback_data": "publish:" + message.PublishToken}})
+	}
 	if message.URL != "" {
 		rows = append(rows, []any{map[string]string{"text": messageAction(message), "url": message.URL}})
 	}
@@ -44,6 +51,13 @@ func feishuCard(message Message) map[string]any {
 			body = strings.TrimSpace(strings.TrimPrefix(body, message.Title+"\n"))
 		}
 		elements = append(elements, map[string]any{"tag": "markdown", "content": escapeFeishu(body)})
+	}
+	if message.PublishToken != "" {
+		label := "发布"
+		if message.Language == "en-US" {
+			label = "Publish"
+		}
+		elements = append(elements, map[string]any{"tag": "column_set", "flex_mode": "flow", "columns": []any{map[string]any{"tag": "column", "width": "weighted", "weight": 1, "elements": []any{map[string]any{"tag": "button", "type": "primary", "text": map[string]string{"tag": "plain_text", "content": label}, "behaviors": []any{map[string]any{"type": "callback", "value": map[string]string{"publish_token": message.PublishToken}}}}}}}})
 	}
 	if message.URL != "" {
 		button := map[string]any{"tag": "button", "type": "primary", "text": map[string]string{"tag": "plain_text", "content": messageAction(message)}, "behaviors": []any{map[string]string{"type": "open_url", "default_url": message.URL}}}

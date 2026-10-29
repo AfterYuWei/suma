@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/distribution/reference"
+	"github.com/suma/suma/server/internal/compose"
 	"github.com/suma/suma/server/internal/credential"
 	"github.com/suma/suma/server/internal/event"
 	"regexp"
@@ -35,6 +36,7 @@ type LocalImage struct {
 	Platform Platform
 }
 type Usage struct {
+	OneOff          bool   `json:"one_off,omitempty"`
 	ContainerID     string `json:"container_id"`
 	ContainerName   string `json:"container_name"`
 	Project         string `json:"project,omitempty"`
@@ -74,11 +76,20 @@ type Dependencies struct {
 	Runtime     func(context.Context, string) (Runtime, error)
 	Resolver    Resolver
 	Credentials CredentialStore
+	Projects    func(context.Context, string) ([]compose.Project, error)
+	Compose     func(context.Context, string) (*compose.Service, error)
+	Nodes       func(context.Context) ([]string, error)
+	OnError     func(error)
 	Now         func() time.Time
 }
 type Actor struct {
-	UserID *uint
-	IP     string
+	UserID     *uint
+	IP         string
+	Source     string `json:"source,omitempty"`
+	ChannelID  string `json:"channel_id,omitempty"`
+	ChatID     string `json:"chat_id,omitempty"`
+	ExternalID string `json:"external_id,omitempty"`
+	Name       string `json:"name,omitempty"`
 }
 type CheckInput struct {
 	ImageIDs            []string        `json:"image_ids,omitempty"`
@@ -114,8 +125,9 @@ type Result struct {
 	Containers           []Usage    `json:"containers"`
 }
 type View struct {
-	Results       []Result `json:"results"`
-	RunningTaskID string   `json:"running_task_id,omitempty"`
+	Results       []Result   `json:"results"`
+	RunningTaskID string     `json:"running_task_id,omitempty"`
+	Candidate     *Candidate `json:"candidate,omitempty"`
 }
 type target struct {
 	result Result

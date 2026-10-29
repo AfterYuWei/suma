@@ -164,6 +164,9 @@ func New(logger *slog.Logger) (*App, error) {
 	taskService.SetEventSink(func(e event.Event) {
 		var row database.Task
 		if db.First(&row, "id = ?", e.TaskID).Error == nil {
+			if row.Type == "image.updates.check" {
+				return
+			}
 			if strings.HasPrefix(row.Type, "compose.") {
 				e.Type = "project.completed"
 			}
@@ -186,7 +189,27 @@ func New(logger *slog.Logger) (*App, error) {
 			return imageUpdateRuntime{adapter: adapter, db: db}, nil
 		},
 		Resolver: registry.Adapter{}, Credentials: registryCredentials,
+		Compose: func(ctx context.Context, id string) (*composeService.Service, error) {
+			return imageUpdateCompose(ctx, nodes, compose, runner, id)
+		},
+		Projects: func(ctx context.Context, id string) ([]composeService.Project, error) {
+			svc, err := imageUpdateCompose(ctx, nodes, compose, runner, id)
+			if err != nil {
+				return nil, err
+			}
+			return svc.List(ctx)
+		},
+		Nodes: func(ctx context.Context) ([]string, error) {
+			rows, err := nodes.List(ctx)
+			ids := []string{}
+			for _, row := range rows {
+				ids = append(ids, row.ID)
+			}
+			return ids, err
+		},
+		OnError: func(err error) { logger.Warn("project image update", "error", err) },
 	})
+	notifications.SetProjectUpdates(imageUpdates)
 	containerMonitoring, err := containermonitor.New(db, taskService, containermonitor.Dependencies{
 		Nodes: func(ctx context.Context) ([]containermonitor.Node, error) {
 			views, err := nodes.List(ctx)

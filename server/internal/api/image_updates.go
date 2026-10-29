@@ -6,6 +6,7 @@ import (
 	"github.com/suma/suma/server/internal/imageupdate"
 	"gorm.io/gorm"
 	"net/http"
+	"time"
 )
 
 func imageUpdateFailure(c *gin.Context, err error) {
@@ -16,7 +17,7 @@ func imageUpdateFailure(c *gin.Context, err error) {
 	}
 	status := http.StatusUnprocessableEntity
 	message := "Invalid image detection request or credential selection"
-	if errors.Is(err, imageupdate.ErrConflict) {
+	if errors.Is(err, imageupdate.ErrConflict) || errors.Is(err, imageupdate.ErrSuperseded) {
 		status = http.StatusConflict
 		message = err.Error()
 	}
@@ -39,6 +40,7 @@ func registerImageUpdateRoutes(v1 *gin.RouterGroup, deps Dependencies) {
 		u := currentUser(c)
 		return imageupdate.Actor{UserID: &u.ID, IP: requestClientIP(c)}
 	}
+	registerProjectImageUpdateRoutes(routes, deps, actor)
 	routes.GET("", func(c *gin.Context) {
 		rows, err := deps.ImageUpdates.View(c.Request.Context(), c.Param("nodeID"), c.Query("project_name"))
 		if err != nil {
@@ -78,5 +80,62 @@ func registerImageUpdateRoutes(v1 *gin.RouterGroup, deps Dependencies) {
 			return
 		}
 		success(c, row)
+	})
+}
+
+func registerProjectImageUpdateRoutes(routes *gin.RouterGroup, deps Dependencies, actor func(*gin.Context) imageupdate.Actor) {
+	routes.GET("/projects", func(c *gin.Context) {
+		rows, err := deps.ImageUpdates.ProjectSummaries(c.Request.Context(), c.Param("nodeID"))
+		if err != nil {
+			imageUpdateFailure(c, err)
+			return
+		}
+		success(c, rows)
+	})
+	routes.POST("/schedule/preview", func(c *gin.Context) {
+		var in imageupdate.ScheduleInput
+		if !bindCleanup(c, &in) {
+			return
+		}
+		rows, err := imageupdate.PreviewSchedule(in, time.Now())
+		if err != nil {
+			imageUpdateFailure(c, err)
+			return
+		}
+		success(c, rows)
+	})
+	routes.GET("/projects/:project/policy", func(c *gin.Context) {
+		row, err := deps.ImageUpdates.ProjectPolicy(c.Request.Context(), c.Param("nodeID"), c.Param("project"))
+		if err != nil {
+			imageUpdateFailure(c, err)
+			return
+		}
+		success(c, row)
+	})
+	routes.PUT("/projects/:project/policy", func(c *gin.Context) {
+		var in imageupdate.ProjectPolicyInput
+		if !bindCleanup(c, &in) {
+			return
+		}
+		row, err := deps.ImageUpdates.SaveProjectPolicy(c.Request.Context(), c.Param("nodeID"), c.Param("project"), in, actor(c))
+		if err != nil {
+			imageUpdateFailure(c, err)
+			return
+		}
+		success(c, row)
+	})
+	routes.POST("/projects/:project/candidates/:candidate/publish", func(c *gin.Context) {
+		var in struct {
+			AllowDockerSocket bool `json:"allow_docker_socket"`
+		}
+		if !bindCleanup(c, &in) {
+			return
+		}
+		row, err := deps.ImageUpdates.Publish(c.Request.Context(), c.Param("nodeID"), c.Param("project"), c.Param("candidate"), actor(c), in.AllowDockerSocket)
+		if err != nil {
+			imageUpdateFailure(c, err)
+			return
+		}
+		c.JSON(http.StatusAccepted, envelope{Code: 0, Message: "success", Data: row})
 	})
 }

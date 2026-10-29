@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -24,6 +25,8 @@ const (
 	StatusFailed      = "failed"
 	StatusCanceled    = "canceled"
 )
+
+var ErrNotExecuted = errors.New("operation was not executed")
 
 type Event struct {
 	Type     string    `json:"type"`
@@ -142,6 +145,9 @@ func (s *Service) run(ctx context.Context, row database.Task, work Work) {
 	status, message := StatusSuccess, "Completed"
 	if err != nil {
 		status, message = StatusFailed, err.Error()
+	}
+	if errors.Is(err, ErrNotExecuted) {
+		status = StatusCanceled
 	}
 	if ctx.Err() != nil {
 		status, message = StatusCanceled, "Canceled"

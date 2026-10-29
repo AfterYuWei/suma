@@ -1,3 +1,4 @@
+import { ProjectImageUpdates } from '../features/image-updates/project-updates'
 import { useContainerWorkspace } from '../features/containers/use-container-workspace'
 import { useImageUpdates } from '../features/image-updates/hooks'
 import { useProjectObservation } from '../features/compose/use-project-observation'
@@ -796,8 +797,9 @@ export function ComposeDetailPage() {
             </>
           )}
 
-          {view === 'Services' && (
-            <ProjectServices
+          {view === 'Services' && (<>
+            {project?.managed && !project.delivery_project_name && <ProjectImageUpdates nodeID={nodeID} projectName={projectName} details={false} />}
+              <ProjectServices
               key={`${nodeID}/${projectName}`}
               nodeID={nodeID}
               projectName={projectName}
@@ -811,7 +813,7 @@ export function ComposeDetailPage() {
               updateError={imageUpdates.error?.message}
               zh={zh}
             />
-          )}
+          </>)}
           {view === 'Logs' && <ProjectLogs key={`${nodeID}/${projectName}`} nodeID={nodeID} projectName={projectName} />}
         </div>
       </ResourceFrame>

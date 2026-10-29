@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 
@@ -14,7 +15,7 @@ import (
 
 func (s *Service) SetRegistryCredentials(service *credential.RegistryService) { s.registries = service }
 
-func (s *Service) registryRunner(ctx context.Context, project Project) (Runner, string, error) {
+func (s *Service) registryRunner(ctx context.Context, project Project, selected ...string) (Runner, string, error) {
 	if s.registries == nil {
 		return s.runner, "", nil
 	}
@@ -35,7 +36,10 @@ func (s *Service) registryRunner(ctx context.Context, project Project) (Runner, 
 		return nil, "", errors.New("unable to read rendered Compose images")
 	}
 	images := []string{}
-	for _, service := range configuration.Services {
+	for name, service := range configuration.Services {
+		if len(selected) > 0 && !slices.Contains(selected, name) {
+			continue
+		}
 		if service.Image != "" {
 			images = append(images, service.Image)
 		}

@@ -109,3 +109,15 @@ func projectLogsService(nodes *nodeService.Service, compose *composeService.Serv
 		},
 	})
 }
+
+func imageUpdateCompose(ctx context.Context, nodes *nodeService.Service, base *composeService.Service, runner *composeService.CLIRunner, id string) (*composeService.Service, error) {
+	target, view, err := nodes.ComposeTarget(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	runtime, err := nodes.Runtime(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return base.ForNode(id, view.Name, runner.ForTarget(target), runtime, view.ConnectionType == nodeService.ConnectionUnix), nil
+}

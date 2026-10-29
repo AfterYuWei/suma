@@ -15,6 +15,7 @@ var ErrConflict = errors.New("configuration changed; reload before saving")
 var ErrInvalid = errors.New("invalid notification configuration")
 
 type Config struct {
+	ApproverIDs  []string     `json:"approver_ids,omitempty"`
 	Endpoint     string       `json:"endpoint,omitempty"`
 	ChatID       string       `json:"chat_id,omitempty"`
 	Targets      []Target     `json:"targets,omitempty"`
@@ -131,14 +132,15 @@ type Incoming struct {
 	Private   bool
 }
 type Message struct {
-	Text     string
-	URL      string
-	Events   []event.Event
-	Title    string
-	Language string
-	Default  bool
-	Cards    []MessageCard
-	More     string
+	PublishToken string
+	Text         string
+	URL          string
+	Events       []event.Event
+	Title        string
+	Language     string
+	Default      bool
+	Cards        []MessageCard
+	More         string
 }
 
 type MessageField struct {

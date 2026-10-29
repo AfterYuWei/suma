@@ -7,7 +7,6 @@ import (
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/credential"
 	"github.com/suma/suma/server/internal/database"
-	"github.com/suma/suma/server/internal/event"
 	"github.com/suma/suma/server/internal/task"
 	"gorm.io/gorm"
 	"sort"
@@ -27,6 +26,7 @@ type Service struct {
 	deps     Dependencies
 	mu       sync.Mutex
 	running  map[string]string
+	scopes   map[string]string
 	cancels  map[string]context.CancelFunc
 	cache    map[string]map[string]cached
 	slots    chan struct{}
@@ -39,7 +39,7 @@ func NewService(db *gorm.DB, tasks *task.Service, audits *audit.Service, deps De
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
-	return &Service{db: db, tasks: tasks, audit: audits, deps: deps, running: map[string]string{}, cancels: map[string]context.CancelFunc{}, cache: map[string]map[string]cached{}, slots: make(chan struct{}, 4)}
+	return &Service{db: db, tasks: tasks, audit: audits, deps: deps, running: map[string]string{}, scopes: map[string]string{}, cancels: map[string]context.CancelFunc{}, cache: map[string]map[string]cached{}, slots: make(chan struct{}, 4)}
 }
 func (s *Service) Policy(ctx context.Context, id string) (Policy, error) {
 	if _, err := s.deps.Node(ctx, id); err != nil {
@@ -155,19 +155,14 @@ func (s *Service) View(ctx context.Context, id, project string) (View, error) {
 	age := time.Duration(p.IntervalHours) * time.Hour
 	result := View{Results: []Result{}}
 	s.mu.Lock()
-	pendingEvents := []event.Event{}
-	defer func() {
-		s.mu.Unlock()
-		if s.deps.Emit != nil {
-			for _, e := range pendingEvents {
-				s.deps.Emit(e)
-			}
-		}
-	}()
-	result.RunningTaskID = s.running[id]
+	defer s.mu.Unlock()
+	result.RunningTaskID = s.scopes[cacheScope(id, project)]
+	if project != "" {
+		return s.projectViewLocked(ctx, node, project, inv, age)
+	}
 	for _, t := range targets(inv, CheckInput{ProjectName: project}) {
 		r := t.result
-		if c, ok := s.cache[id][key(r)]; ok && c.RuntimeKey == node.RuntimeKey {
+		if c, ok := s.cache[cacheScope(id, project)][key(r)]; ok && c.RuntimeKey == node.RuntimeKey {
 			r = c.Result
 			r.Containers = t.result.Containers
 			r.Stale = r.CheckedAt == nil || s.deps.Now().Sub(*r.CheckedAt) >= age
@@ -180,9 +175,6 @@ func (s *Service) View(ctx context.Context, id, project string) (View, error) {
 			}
 		} else if r.Status == "unchecked" && result.RunningTaskID != "" {
 			r.Status = "checking"
-		}
-		if r.RecreateRequired && !r.PullRequired {
-			pendingEvents = append(pendingEvents, event.Event{Type: "image.recreate_required", Severity: "info", NodeID: node.ID, NodeName: node.Name, ResourceType: "image", ResourceID: r.LocalImageID, Title: r.Reference, Message: "Local image updated; containers still use an older image", DedupeKey: node.ID + "|" + r.Reference + "|" + r.RemoteManifestDigest + "|recreate"})
 		}
 		result.Results = append(result.Results, r)
 	}
@@ -236,8 +228,17 @@ func (s *Service) Check(ctx context.Context, id string, in CheckInput, actor Act
 	if current := s.running[id]; current != "" {
 		return database.Task{}, &BusyError{TaskID: current}
 	}
+	if in.ProjectName != "" && s.deps.Compose != nil {
+		if _, err := s.project(ctx, id, in.ProjectName); err != nil {
+			return database.Task{}, err
+		}
+	}
+	kind := "image.updates.check"
+	if in.ProjectName != "" {
+		kind = "project.image.check"
+	}
 	ready := make(chan struct{})
-	row, err := s.tasks.StartWithIDForNode(id, node.Name, "image.updates.check", "Check image updates", func(taskCtx context.Context, taskID string, report task.Reporter) error {
+	row, err := s.tasks.StartWithIDForNode(id, node.Name, kind, "Check image updates", func(taskCtx context.Context, taskID string, report task.Reporter) error {
 		<-ready
 		ctx, cancel := context.WithTimeout(taskCtx, 15*time.Minute)
 		s.mu.Lock()
@@ -247,11 +248,17 @@ func (s *Service) Check(ctx context.Context, id string, in CheckInput, actor Act
 			cancel()
 			s.mu.Lock()
 			delete(s.running, id)
+			delete(s.scopes, cacheScope(id, in.ProjectName))
 			delete(s.cancels, id)
 			s.mu.Unlock()
 			s.wg.Done()
 		}()
 		err := s.check(ctx, node, in, mappings, report)
+		if in.ProjectName != "" && s.deps.Compose != nil && ctx.Err() == nil {
+			if saveErr := s.observeProject(ctx, node, in.ProjectName, err); saveErr != nil {
+				return saveErr
+			}
+		}
 		outcome := "success"
 		if err != nil {
 			outcome = "failed"
@@ -267,6 +274,7 @@ func (s *Service) Check(ctx context.Context, id string, in CheckInput, actor Act
 	}
 	s.wg.Add(1)
 	s.running[id] = row.ID
+	s.scopes[cacheScope(id, in.ProjectName)] = row.ID
 	close(ready)
 	s.record(ctx, id, actor, "image.updates.check", "success", row.ID)
 	return row, nil
@@ -290,7 +298,11 @@ func (s *Service) material(ctx context.Context, id, host string, cid uint) (cred
 	}
 	return m, nil
 }
-func (s *Service) check(ctx context.Context, node Node, in CheckInput, mappings map[string]uint, report task.Reporter) error {
+func (s *Service) check(ctx context.Context, node Node, in CheckInput, mappings map[string]uint, report task.Reporter, batches ...*lookupBatch) error {
+	batch := &lookupBatch{entries: map[string]*lookupEntry{}}
+	if len(batches) > 0 {
+		batch = batches[0]
+	}
 	runtime, err := s.deps.Runtime(ctx, node.ID)
 	if err != nil {
 		return ErrUnavailable
@@ -331,15 +343,7 @@ func (s *Service) check(ctx context.Context, node Node, in CheckInput, mappings 
 					m, err := s.material(ctx, node.ID, r.Registry, mappings[r.Registry])
 					code := "credential_unavailable"
 					if err == nil && r.Platform.OS != "" && r.Platform.Architecture != "" {
-						select {
-						case s.slots <- struct{}{}:
-						case <-ctx.Done():
-							return
-						}
-						lookupCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-						remote, lookupErr := s.deps.Resolver.Resolve(lookupCtx, r.Reference, r.Platform, m)
-						cancel()
-						<-s.slots
+						remote, lookupErr := s.resolve(ctx, r.Reference, r.Platform, m, batch)
 						if lookupErr == nil {
 							r.RemoteManifestDigest = remote.ManifestDigest
 							r.RemoteConfigDigest = remote.ConfigDigest
@@ -375,12 +379,12 @@ func (s *Service) check(ctx context.Context, node Node, in CheckInput, mappings 
 				current, nodeErr := s.deps.Node(ctx, node.ID)
 				if nodeErr == nil && current.RuntimeKey == node.RuntimeKey {
 					s.mu.Lock()
-					if s.cache[node.ID] == nil {
-						s.cache[node.ID] = map[string]cached{}
+					if s.cache[cacheScope(node.ID, in.ProjectName)] == nil {
+						s.cache[cacheScope(node.ID, in.ProjectName)] = map[string]cached{}
 					}
-					for k, c := range s.cache[node.ID] {
+					for k, c := range s.cache[cacheScope(node.ID, in.ProjectName)] {
 						if c.Result.CheckedAt == nil || now.Sub(*c.Result.CheckedAt) > 24*time.Hour {
-							delete(s.cache[node.ID], k)
+							delete(s.cache[cacheScope(node.ID, in.ProjectName)], k)
 						}
 					}
 					cacheSize := 0
@@ -388,29 +392,11 @@ func (s *Service) check(ctx context.Context, node Node, in CheckInput, mappings 
 						cacheSize += len(results)
 					}
 					if cacheSize >= 10000 {
-						s.cache = map[string]map[string]cached{node.ID: {}}
+						s.cache = map[string]map[string]cached{cacheScope(node.ID, in.ProjectName): {}}
 					}
-					s.cache[node.ID][key(r)] = cached{RuntimeKey: node.RuntimeKey, Result: r}
+					s.cache[cacheScope(node.ID, in.ProjectName)][key(r)] = cached{RuntimeKey: node.RuntimeKey, Result: r}
 					s.mu.Unlock()
-					if s.deps.Emit != nil {
-						if r.Status == "current" || r.Status == "update_available" || r.Status == "recreate_required" {
-							s.deps.Emit(event.Event{Type: "image.check_recovered", Severity: "info", NodeID: node.ID, NodeName: node.Name, ResourceType: "image", ResourceID: r.LocalImageID, Title: r.Reference, Message: "Image registry check succeeded", Time: now})
-						}
-						kind := ""
-						severity := "info"
-						switch r.Status {
-						case "update_available":
-							kind = "image.available"
-						case "recreate_required":
-							kind = "image.recreate_required"
-						case "unavailable":
-							kind = "image.check_failed"
-							severity = "warning"
-						}
-						if kind != "" {
-							s.deps.Emit(event.Event{Type: kind, Severity: severity, NodeID: node.ID, NodeName: node.Name, ResourceType: "image", ResourceID: r.LocalImageID, Title: r.Reference, Message: r.Status + " " + r.RemoteManifestDigest + " " + r.ReasonCode, DedupeKey: node.ID + "|" + r.Reference + "|" + r.RemoteManifestDigest + "|" + kind})
-						}
-					}
+
 				}
 			}
 		}()
@@ -444,6 +430,7 @@ func (s *Service) record(ctx context.Context, id string, actor Actor, action, re
 	}
 }
 func (s *Service) Start() {
+	s.report(s.db.Model(&database.ProjectImageCandidate{}).Where("status = ?", "publishing").Updates(map[string]any{"status": "canceled", "message": "SUMA restarted; publication was not replayed", "updated_at": s.deps.Now()}).Error)
 	ctx, cancel := context.WithCancel(context.Background())
 	s.stop = cancel
 	s.wg.Add(1)
@@ -463,6 +450,7 @@ func (s *Service) Start() {
 	}()
 }
 func (s *Service) ScanDue(ctx context.Context) {
+	global := map[string]bool{}
 	var rows []database.ImageUpdatePolicy
 	now := s.deps.Now().UTC()
 	if s.db.WithContext(ctx).Where("enabled = ? AND next_run_at <= ?", true, now).Find(&rows).Error != nil {
@@ -478,7 +466,15 @@ func (s *Service) ScanDue(ctx context.Context) {
 		if err != nil || !node.Enabled || !node.Available {
 			continue
 		}
-		_, _ = s.Check(ctx, row.NodeID, CheckInput{}, Actor{})
+		if s.deps.Nodes == nil {
+			_, err := s.Check(ctx, row.NodeID, CheckInput{}, Actor{})
+			s.report(err)
+		} else {
+			global[row.NodeID] = true
+		}
+	}
+	if s.deps.Nodes != nil {
+		s.scanProjectDue(ctx, global)
 	}
 }
 func (s *Service) Stop() {

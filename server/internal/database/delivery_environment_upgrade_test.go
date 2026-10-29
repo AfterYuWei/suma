@@ -53,7 +53,7 @@ func TestDeliveryEnvironmentUpgradeRetainsProductionEvidence(t *testing.T) {
 		// Exclude only the new field and migration ledger entry being introduced.
 		query := "SELECT COALESCE(jsonb_agg(value ORDER BY value::text), '[]'::jsonb)::text FROM (SELECT to_jsonb(t) - 'environment_ciphertext' AS value FROM " + table + " t"
 		if table == "schema_migrations" {
-			query += " WHERE key <> '0005_delivery_environment.sql'"
+			query += " WHERE key < '0005'"
 		}
 		query += ") rows"
 		if err := connection.QueryRow(query).Scan(&value); err != nil {
@@ -95,7 +95,11 @@ func TestDeliveryEnvironmentUpgradeRetainsProductionEvidence(t *testing.T) {
 	}
 	var count int64
 	again.Model(&database.SchemaMigration{}).Count(&count)
-	if count != 5 {
+	entries, readErr := os.ReadDir("migrations")
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if count != int64(len(entries)) {
 		t.Fatal("migration was not recorded exactly once", count)
 	}
 }

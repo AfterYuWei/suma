@@ -35,6 +35,8 @@ type Runner interface {
 
 type ExecutionSpec struct {
 	Environment   map[string]string `json:"-"`
+	Services      []string          `json:"-"`
+	Replicas      map[string]int    `json:"-"`
 	ForceRecreate bool              `json:"-"`
 	ProjectName   string
 	ProjectDir    string
@@ -265,16 +267,23 @@ func (r *CLIRunner) ValidateRelease(ctx context.Context, spec ExecutionSpec, out
 	return r.runSpec(ctx, spec, output, "config", "--quiet")
 }
 func (r *CLIRunner) PullRelease(ctx context.Context, spec ExecutionSpec, output io.Writer) error {
-	return r.runSpec(ctx, spec, output, "pull", "--policy", "always")
+	return r.runSpec(ctx, spec, output, append([]string{"pull", "--policy", "always"}, spec.Services...)...)
 }
 func (r *CLIRunner) UpRelease(ctx context.Context, spec ExecutionSpec, timeout int, output io.Writer) error {
 	args := []string{"up", "-d", "--remove-orphans", "--wait"}
+	if len(spec.Services) > 0 {
+		args = []string{"up", "-d", "--wait", "--no-deps", "--no-build", "--pull", "never"}
+		for _, name := range spec.Services {
+			args = append(args, "--scale", fmt.Sprintf("%s=%d", name, spec.Replicas[name]))
+		}
+	}
 	if spec.ForceRecreate {
 		args = append(args, "--force-recreate")
 	}
 	if timeout > 0 {
 		args = append(args, "--wait-timeout", fmt.Sprintf("%d", timeout))
 	}
+	args = append(args, spec.Services...)
 	return r.runSpec(ctx, spec, output, args...)
 }
 func (r *CLIRunner) DownRelease(ctx context.Context, spec ExecutionSpec, output io.Writer) error {

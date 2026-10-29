@@ -111,7 +111,7 @@ func (s *Service) enqueue(tx *gorm.DB, c Channel, target string, e event.Event, 
 	part := e.ID
 	if source == "fallback" {
 		part = origin
-	} else if !urgent(e) && snapshot.Policy.Mode != "immediate" && status == "pending" {
+	} else if e.CandidateID == "" && !urgent(e) && snapshot.Policy.Mode != "immediate" && status == "pending" {
 		part = due.Format(time.RFC3339Nano)
 	}
 	batch := hash(encode([]string{c.ID, target, source, part, encode(snapshot), encode(fallbackVersion)}))

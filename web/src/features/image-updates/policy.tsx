@@ -15,7 +15,7 @@ import { ImageUpdateCheck, RegistrySelections } from './image-updates'
 import { type ImageUpdatePolicy, type RegistryCredential, registryHost } from './types'
 export function ImageUpdatePolicyPanel({ nodeID }: { nodeID: string }) {
  const { language } = useI18n(); const zh = language === 'zh-CN'
- return <section className="flex flex-col gap-5"><div><h3 className="text-sm font-medium">{zh ? '镜像更新检测' : 'Image update detection'}</h3><p className="mt-1 text-sm text-muted-foreground">{zh ? '管理当前节点的检测策略。定时检测默认关闭，只查询镜像元数据。发现更新后，由你确认拉取和部署。仓库需能从 SUMA 控制端通过 HTTPS 访问。' : 'Manage the current node’s check policy. Scheduled checks are off by default. Checks query metadata; pulling and deployment remain manual. Registries must be reachable over HTTPS from SUMA.'}</p></div>{nodeID && <PolicyEditor key={nodeID} nodeID={nodeID} zh={zh} />}</section>
+ return <section className="flex flex-col gap-5"><div><h3 className="text-sm font-medium">{zh ? '镜像更新检测' : 'Image update detection'}</h3><p className="mt-1 text-sm text-muted-foreground">{zh ? '管理当前节点的检测策略。定时检测默认关闭，只查询镜像元数据。结果仅显示在镜像页，不发送通知，也不改变项目检测结果。仓库需能从 SUMA 控制端通过 HTTPS 访问。' : 'Manage the current node’s check policy. Scheduled checks are off by default. Results stay on the image page without notifications or changes to project checks. Registries must be reachable over HTTPS from SUMA.'}</p></div>{nodeID && <PolicyEditor key={nodeID} nodeID={nodeID} zh={zh} />}</section>
 }
 function PolicyEditor({ nodeID, zh }: { nodeID: string; zh: boolean }) {
   const { formatDateTime } = useDateTime()

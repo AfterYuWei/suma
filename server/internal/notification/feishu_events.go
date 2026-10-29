@@ -4,10 +4,11 @@ import (
 	"context"
 
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
+	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
-func feishuEventHandler(c Channel, botID func() string, enqueue func(Incoming) error, observe func(string)) *dispatcher.EventDispatcher {
+func feishuEventHandler(c Channel, botID func() string, enqueue func(Incoming) error, observe func(string), actions ...func(context.Context, ProjectActionInput) (string, error)) *dispatcher.EventDispatcher {
 	handler := dispatcher.NewEventDispatcher("", "").OnP2MessageReceiveV1(func(_ context.Context, e *larkim.P2MessageReceiveV1) error {
 		observe("received")
 		if e == nil || e.Event == nil || e.Event.Message == nil || e.Event.Sender == nil || e.Event.Sender.SenderId == nil {
@@ -63,6 +64,22 @@ func feishuEventHandler(c Channel, botID func() string, enqueue func(Incoming) e
 		}
 		return nil
 	})
+	if len(actions) > 0 {
+		handler.OnP2CardActionTrigger(func(ctx context.Context, e *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
+			var actionErr error
+			if e == nil || e.Event == nil || e.Event.Operator == nil || e.Event.Context == nil || e.Event.Action == nil || e.EventV2Base == nil || e.EventV2Base.Header == nil || e.EventV2Base.Header.AppID != c.Config.AppID {
+				actionErr = ErrInvalid
+			} else {
+				token, _ := e.Event.Action.Value["publish_token"].(string)
+				_, actionErr = actions[0](ctx, ProjectActionInput{ChannelID: c.ID, ChatID: e.Event.Context.OpenChatID, UserID: ptr(e.Event.Operator.TenantKey) + ":" + e.Event.Operator.OpenID, Token: token})
+			}
+			kind := "success"
+			if actionErr != nil {
+				kind = "error"
+			}
+			return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: kind, Content: callbackMessage(c.Config.Language, actionErr)}}, nil
+		})
+	}
 	handler.Config.Logger = quietSDKLogger{}
 	return handler
 }

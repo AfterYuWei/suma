@@ -34,7 +34,7 @@ func (a *Adapter) UpdateInventory(ctx context.Context) (imageupdate.Inventory, e
 		if inspect.Config != nil {
 			ref = inspect.Config.Image
 		}
-		result.Containers = append(result.Containers, imageupdate.Usage{ContainerID: row.ID, ContainerName: shortContainerName(row.ID, row.Names), Project: row.Labels["com.docker.compose.project"], Service: row.Labels["com.docker.compose.service"], State: string(row.State), ImageID: row.ImageID, Reference: ref, DeliveryProject: strings.TrimSpace(row.Labels["io.suma.delivery.project"])})
+		result.Containers = append(result.Containers, imageupdate.Usage{OneOff: strings.EqualFold(row.Labels["com.docker.compose.oneoff"], "true"), ContainerID: row.ID, ContainerName: shortContainerName(row.ID, row.Names), Project: row.Labels["com.docker.compose.project"], Service: row.Labels["com.docker.compose.service"], State: string(row.State), ImageID: row.ImageID, Reference: ref, DeliveryProject: strings.TrimSpace(row.Labels["io.suma.delivery.project"])})
 	}
 	return result, nil
 }

@@ -416,3 +416,22 @@ Connection state is held in memory. Feishu returns `message_count`, `last_messag
 | POST | `/notifications/deliveries/:id/resend` | Queue a separate manual delivery using the original snapshot |
 
 Delivery evidence includes `chat_id`. Schema incompatibility returns HTTP 503 / `20802`; the current legacy message mentions fresh initialization, but it does not authorize resetting production data. Production is live: future upgrades must retain existing state through new versioned SQL migrations, preserving published migration files and historical evidence. The application does not automatically delete existing data.
+
+
+## Image detection and project publishing
+
+All paths below are relative to `/api/v1/nodes/:nodeID/image-updates` and require the existing session and browser Origin checks.
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| GET | `/` | Image-page results; `project_name` selects independent project observations and its latest candidate |
+| POST | `/check` | Existing `image_ids` or `project_name` target; returns a 202 Task |
+| GET / PUT | `/policy` | Existing node image-check switch, interval and credential selections |
+| GET | `/projects` | One batch of project update summaries and latest publication state |
+| GET / PUT | `/projects/:project/policy` | PUT accepts only `expected_version`, `mode` (`inherit`, `custom`, `disabled`), five-field `cron`, and IANA `timezone` |
+| POST | `/schedule/preview` | Accepts `cron` and `timezone`; returns the next five absolute UTC timestamps |
+| POST | `/projects/:project/candidates/:candidate/publish` | Accepts `allow_docker_socket`; returns a 202 Task; service and digest selection comes from the server candidate |
+
+Image-page checks cover every image on the selected node and emit no notifications, including indirect check Task failure/cancellation alerts. They cannot populate project results or candidates. Only independent managed Compose project checks create project notifications. Publishing verifies versions before pulling and again before recreation, pins the selected digests, preserves stopped/paused services and replica counts, and supersedes drifted candidates for another explicit Publish action. CD retains its separate Release workflow.
+
+Notification channel configuration adds optional `approver_ids`: Feishu `tenant_key:open_id` values or Telegram numeric user IDs. An empty list provides no Publish action. Provider callbacks validate current authorization, channel destination and a hashed, candidate-scoped action token; they do not enable text commands or identity binding. Feishu uses the existing persistent connection with `card.action.trigger`; Telegram callback polling does not require recipient discovery.
