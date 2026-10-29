@@ -52,3 +52,20 @@ test('notification inbox has a coherent empty state', async ({ page }) => {
  await expect(page.getByText('Your inbox is empty', { exact: true })).toBeVisible()
  await expect(page.locator('article')).toHaveCount(0)
 })
+
+test('inbox bulk read persists across reloads', async ({ page }) => {
+ await page.addInitScript(() => {
+  sessionStorage.setItem('suma-demo-session', '1')
+  localStorage.setItem('suma-language', 'zh-CN')
+  if (sessionStorage.getItem('suma-demo-notifications-v2')) return
+  const items = Array.from({ length: 3 }, (_, index) => ({ id: `bulk-${index}`, type: 'container.oom', severity: 'error', time: '2026-10-29T04:00:00Z', node_id: 'local', node_name: 'Local', resource_id: `container-${index}`, title: 'Memory limit exceeded', message: 'Memory limit exceeded', task_id: '', read: index === 2 }))
+  sessionStorage.setItem('suma-demo-notifications-v2', JSON.stringify({ serial: 0, channels: [], rules: [], deliveries: [], inbox: { unread: 2, items } }))
+ })
+ await page.goto('/notifications')
+ await page.getByRole('button', { name: '全部已读', exact: true }).click()
+ await expect(page.getByText('0 条未读', { exact: true })).toBeVisible()
+ await page.reload()
+ await expect(page.getByRole('button', { name: '全部已读', exact: true })).toBeDisabled()
+ await expect(page.getByRole('button', { name: '标为已读', exact: true })).toHaveCount(0)
+ await expect(page.locator('article')).toHaveCount(3)
+})

@@ -90,6 +90,7 @@ export function mockNotifications(path: string, method: string, body: Record<str
   deliveries.unshift({ ...source, id: identifier(), source: 'manual', origin_delivery_id: source.id, status: 'pending', reason: 'manual resend', attempts: 0, due_at: now, created_at: now })
   return { queued: true }
  }
+ if (path === '/notifications/inbox/read-all' && method === 'POST') { for (const item of inbox.items) item.read = true; inbox.unread = 0; return { read: true } }
  if (path === '/notifications/inbox') return inbox
  if (/\/notifications\/inbox\/[^/]+\/read$/.test(path)) { const item = inbox.items.find(e => e.id === path.split('/')[3]); if (item && !item.read) { item.read = true; inbox.unread-- } return { read: true } }
  return undefined

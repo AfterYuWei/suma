@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/suma/suma/server/internal/testutil"
 	"path/filepath"
 	"strings"
@@ -118,6 +119,62 @@ func TestSecretsDedupDurableDeliveryAndUnread(t *testing.T) {
 		t.Fatal("sent row replayed")
 	}
 }
+func TestReadAllPreservesUsersHistoryAndLaterEvents(t *testing.T) {
+	s, db, _, now := fixture(t)
+	ctx := context.Background()
+	if err := s.ReadAll(ctx, 1); err != nil {
+		t.Fatal("empty inbox", err)
+	}
+	rows := make([]database.NotificationEvent, 205)
+	for index := range rows {
+		id := fmt.Sprintf("read-all-%03d", index)
+		rows[index] = database.NotificationEvent{ID: id, Type: "task.failed", Severity: "error", DataJSON: fmt.Sprintf(`{"id":%q,"type":"task.failed"}`, id), CreatedAt: now.Add(time.Duration(index) * time.Second)}
+	}
+	if err := db.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	for user, id := range map[uint]string{1: rows[0].ID, 2: rows[1].ID} {
+		if err := s.Read(ctx, user, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	originalReadAt := *now
+	*now = now.Add(time.Hour)
+	for range 2 {
+		if err := s.ReadAll(ctx, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inbox, err := s.Inbox(ctx, 1)
+	if err != nil || inbox.Unread != 0 || len(inbox.Items) != 200 {
+		t.Fatal("bulk read did not cover the entire inbox", inbox.Unread, len(inbox.Items), err)
+	}
+	for _, item := range inbox.Items {
+		if !item.Read {
+			t.Fatal("visible event remained unread", item.ID)
+		}
+	}
+	var count int64
+	if err := db.Model(&database.NotificationRead{}).Where("user_id = ?", 1).Count(&count).Error; err != nil || count != 205 {
+		t.Fatal("bulk read was limited to visible events or duplicated reads", count, err)
+	}
+	var previous database.NotificationRead
+	if err := db.First(&previous, "user_id = ? AND event_id = ?", 1, rows[0].ID).Error; err != nil || !previous.ReadAt.Equal(originalReadAt) {
+		t.Fatal("existing read timestamp changed", err)
+	}
+	other, err := s.Inbox(ctx, 2)
+	if err != nil || other.Unread != 204 {
+		t.Fatal("another user's read state changed", other.Unread, err)
+	}
+	if err := s.Ingest(ctx, event.Event{ID: "after-read-all", Type: "task.failed", ResourceID: "new-task"}); err != nil {
+		t.Fatal(err)
+	}
+	inbox, err = s.Inbox(ctx, 1)
+	if err != nil || inbox.Unread != 1 {
+		t.Fatal("later events must remain unread", inbox.Unread, err)
+	}
+}
+
 func TestQuietUrgencyMergeAndDailyTimezone(t *testing.T) {
 	s, _, sender, now := fixture(t)
 	c := channel(t, s)

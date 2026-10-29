@@ -61,6 +61,9 @@ func TestNotificationAuthenticatedHTTP(t *testing.T) {
 			t.Fatalf("unprotected %s: %d", path, r.Code)
 		}
 	}
+	if res := request("POST", "/notifications/inbox/read-all", "", false); res.Code != http.StatusUnauthorized {
+		t.Fatal("unprotected bulk read", res.Code)
+	}
 	create := `{"name":"Webhook","provider":"webhook","enabled":false,"version":0,"config":{"endpoint":"https://example.com/SECRETURL","subscription":{"rule_ids":[],"policy":{"timezone":"UTC","mode":"immediate"}},"language":"en-US"},"secrets":{"authorization":"Bearer SECRETAUTH"}}`
 	r := request("POST", "/notifications/channels", create, true)
 	if r.Code != 200 || strings.Contains(r.Body.String(), "SECRET") {
@@ -158,6 +161,25 @@ func TestNotificationAuthenticatedHTTP(t *testing.T) {
 	for _, delivery := range deliveries.Data {
 		if len(delivery.MatchedRules) != 1 || delivery.MatchedRules[0].ID != savedRule.Data.ID {
 			t.Fatal("subscription did not apply the selected rule to both conversations")
+		}
+	}
+	var inbox struct{ Data notification.Inbox }
+	res = request("GET", "/notifications/inbox", "", true)
+	if err := json.Unmarshal(res.Body.Bytes(), &inbox); err != nil || inbox.Data.Unread == 0 {
+		t.Fatal("missing unread event before bulk read", err)
+	}
+	for range 2 {
+		if res := request("POST", "/notifications/inbox/read-all", "", true); res.Code != http.StatusOK {
+			t.Fatal("bulk read failed", res.Code, res.Body.String())
+		}
+	}
+	res = request("GET", "/notifications/inbox", "", true)
+	if err := json.Unmarshal(res.Body.Bytes(), &inbox); err != nil || inbox.Data.Unread != 0 {
+		t.Fatal("bulk read did not persist", err)
+	}
+	for _, item := range inbox.Data.Items {
+		if !item.Read {
+			t.Fatal("inbox item remained unread", item.ID)
 		}
 	}
 	// Deleting a rule detaches defaults and makes stale channel writes conflict.

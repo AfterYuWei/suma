@@ -620,6 +620,21 @@ func (s *Service) Read(ctx context.Context, userID uint, id string) error {
 	}
 	return s.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&database.NotificationRead{UserID: userID, EventID: id, ReadAt: s.deps.Now()}).Error
 }
+
+// ReadAll marks the statement's current events read, including those outside
+// the inbox's display limit. Existing reads retain their original timestamp.
+func (s *Service) ReadAll(ctx context.Context, userID uint) error {
+	return s.db.WithContext(ctx).Exec(`
+		INSERT INTO notification_reads (user_id, event_id, read_at)
+		SELECT ?, events.id, ? FROM notification_events AS events
+		WHERE NOT EXISTS (
+			SELECT 1 FROM notification_reads AS reads
+			WHERE reads.user_id = ? AND reads.event_id = events.id
+		)
+		ON CONFLICT (user_id, event_id) DO NOTHING
+	`, userID, s.deps.Now(), userID).Error
+}
+
 func (s *Service) Start() {
 	s.mu.Lock()
 	if s.cancel != nil {

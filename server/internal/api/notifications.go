@@ -145,6 +145,13 @@ func registerNotificationRoutes(v1 *gin.RouterGroup, deps Dependencies) {
 			}
 			success(c, result)
 		})
+		routes.POST("/inbox/read-all", func(c *gin.Context) {
+			if err := service.ReadAll(c.Request.Context(), currentUser(c).ID); err != nil {
+				operationsFailure(c, err)
+				return
+			}
+			success(c, gin.H{"read": true})
+		})
 		routes.POST("/inbox/:id/read", func(c *gin.Context) {
 			if err := service.Read(c.Request.Context(), currentUser(c).ID, c.Param("id")); err != nil {
 				operationsFailure(c, err)

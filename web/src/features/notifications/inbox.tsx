@@ -1,7 +1,9 @@
+import { CheckCheck } from 'lucide-react'
 import { Link } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
+import { Spinner } from '../../components/ui/spinner'
 import { ResourceFrame } from '../../pages/images'
 import { api } from '../../lib/api'
 import { useDateTime } from '../../lib/time-zone'
@@ -13,8 +15,11 @@ import { compactResource, presentNotification } from './presentation'
 export function NotificationInbox() {
  const t = useOpsText(), client = useQueryClient(), { formatDateTime } = useDateTime(), { language } = useI18n()
  const query = useQuery({ queryKey: ['notification-inbox'], queryFn: () => api<Inbox>('/notifications/inbox'), refetchInterval: 5000 })
- const read = useMutation({ mutationFn: (id: string) => api(`/notifications/inbox/${id}/read`, { method: 'POST' }), onSuccess: () => { void client.invalidateQueries({ queryKey: ['notification-inbox'] }) } })
- return <ResourceFrame title={t('站内消息', 'Inbox')} detail={`${query.data?.unread || 0} ${t('条未读', 'unread')}`} action={<Button variant="outline" nativeButton={false} render={<Link to="/settings" hash="notifications" />}>{t('通知设置', 'Notification settings')}</Button>}>
+ const read = useMutation({ mutationFn: (id: string | undefined) => api(id === undefined ? '/notifications/inbox/read-all' : `/notifications/inbox/${encodeURIComponent(id)}/read`, { method: 'POST' }), onSuccess: () => client.invalidateQueries({ queryKey: ['notification-inbox'] }) })
+ return <ResourceFrame title={t('站内消息', 'Inbox')} detail={`${query.data?.unread || 0} ${t('条未读', 'unread')}`} action={<div className="flex flex-wrap items-center gap-2">
+  <Button variant="outline" aria-busy={read.isPending && read.variables === undefined} disabled={!query.data?.unread || read.isPending} onClick={() => read.mutate(undefined)}>{read.isPending && read.variables === undefined ? <Spinner aria-hidden="true" /> : <CheckCheck />}{t('全部已读', 'Mark all read')}</Button>
+  <Button variant="outline" nativeButton={false} render={<Link to="/settings" hash="notifications" />}>{t('通知设置', 'Notification settings')}</Button>
+ </div>}>
   <div className="space-y-2"><ErrorText error={query.error || read.error} />
    {query.data?.items.map(e => { const display = presentNotification(e,language), context = [e.node_name || compactResource(e.node_id || ''),display.subject,formatDateTime(e.time)].filter(Boolean); return <article id={e.id} data-event-id={e.id} key={e.id} className="scroll-mt-4 space-y-2 rounded-md bg-surface p-4">
     <div className="flex flex-wrap items-start gap-3">
