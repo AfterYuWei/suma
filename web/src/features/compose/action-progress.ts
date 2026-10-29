@@ -1,3 +1,5 @@
+import { compactTaskLogs } from '../tasks/compact-task-logs'
+
 export interface ComposeTask {
   id: string
   type: string
@@ -12,6 +14,11 @@ export interface ComposeTaskLog {
   level: string
   message: string
   created_at: string
+}
+
+export type ComposeOutputLog = Omit<ComposeTaskLog, 'id' | 'created_at'> & {
+  id: number | 'live'
+  created_at?: string
 }
 
 export interface ComposeOperation {
@@ -66,6 +73,23 @@ export function parseComposeResource(message: string): ComposeResourceProgress |
     detail: pair ? `${pair[1]} / ${pair[2]}` : /\d+(?:\.\d+)?\s*(?:[kMGT]?i?B)\b/i.exec(rawDetail)?.[0] ?? '',
     percent: total > 0 ? Math.min(100, Math.max(0, Math.round(current / total * 100))) : undefined,
   }
+}
+
+export function composeOutputLogs(task: ComposeTask | undefined, logs: ComposeTaskLog[]): ComposeOutputLog[] {
+  const output = compactTaskLogs(logs)
+  const current = parseComposeResource(task?.message ?? '')
+  // Repeated counters only update Task.message on the server. Overlay that
+  // frame in the output without fabricating a historical log or timestamp.
+  if (task?.status !== 'running' || current?.kind !== 'layer' || (current.stage !== 'downloading' && current.stage !== 'extracting')) return output
+  const index = output.findIndex(log => {
+    const row = parseComposeResource(log.message)
+    return row?.kind === 'layer' && row.name === current.name
+  })
+  const previous = index >= 0 ? parseComposeResource(output[index].message) : undefined
+  // Independent polling may deliver logs from a newer stage or byte count.
+  if (previous && (previous.stage !== current.stage || bytes(previous.detail.split(' / ')[0]) > bytes(current.detail.split(' / ')[0]))) return output
+  if (output[index]?.message === task.message) return output
+  return [...output.filter((_, rowIndex) => rowIndex !== index), { id: 'live', level: 'info', message: task.message }]
 }
 
 export function composeProgress(action: string, task: ComposeTask | undefined, logs: ComposeTaskLog[]) {

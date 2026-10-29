@@ -7,9 +7,8 @@ import { Spinner } from '../../components/ui/spinner'
 import { StatusBadge } from '../../components/ui/status-badge'
 import { useDateTime } from '../../lib/time-zone'
 import { cn } from '../../lib/utils'
-import { compactTaskLogs } from '../tasks/compact-task-logs'
 import { useLogAutoScroll } from '../containers/use-log-auto-scroll'
-import { composeActionLabel, composeProgress, composeStageLabel, type ComposeOperation, type ComposeResourceProgress, type ComposeTask, type ComposeTaskLog } from './action-progress'
+import { composeActionLabel, composeOutputLogs, composeProgress, composeStageLabel, type ComposeOperation, type ComposeOutputLog, type ComposeResourceProgress, type ComposeTask, type ComposeTaskLog } from './action-progress'
 
 export function ComposeActionDialog(props: {
   open: boolean; operation: ComposeOperation | null; task?: ComposeTask; logs: ComposeTaskLog[]
@@ -110,7 +109,7 @@ function ComposeActionContent({ operation, task, logs, submitting, loading, erro
         </details>}
         {visibleImages.length === 0 && progress.resources.length === 0 && progress.layers.length === 0 && running && <p className="py-1 text-xs text-muted-foreground">{zh ? '等待 Docker Compose 报告资源状态…' : 'Waiting for Docker Compose resource updates…'}</p>}
       </div>
-      <LiveOutput logs={logs} taskID={operation?.taskID} zh={zh} />
+      <LiveOutput logs={logs} task={task} taskID={operation?.taskID} zh={zh} />
     </div>
     <DialogFooter className="mt-0 shrink-0 flex-row flex-wrap justify-end">
       <p className="mr-auto max-w-md self-center text-xs leading-relaxed text-muted-foreground">{running ? zh ? '关闭窗口后任务继续在后台执行。' : 'The task continues in the background when this window is closed.' : zh ? '可在任务中心查看完整记录。' : 'Review the complete record in the Task Center.'}</p>
@@ -146,18 +145,20 @@ function ResourceRow({ row, finished, running, zh }: { row: ComposeResourceProgr
   </div>
 }
 
-function LiveOutput({ logs, taskID, zh }: { logs: ComposeTaskLog[]; taskID?: string; zh: boolean }) {
+function LiveOutput({ logs, task, taskID, zh }: { logs: ComposeTaskLog[]; task?: ComposeTask; taskID?: string; zh: boolean }) {
   const { formatTime } = useDateTime()
-  const visibleLogs = compactTaskLogs(logs)
+  const visibleLogs = composeOutputLogs(task, logs)
   return <section aria-label={zh ? '实时输出' : 'Live output'} className="flex min-h-0 min-w-0 flex-col gap-2">
     <div className="flex shrink-0 items-center gap-2 text-xs"><Terminal className="size-3.5 text-muted-foreground" /><h3 className="font-medium">{zh ? '实时输出' : 'Live output'}</h3><span className="ml-auto text-muted-foreground tabular-nums">{zh ? `${visibleLogs.length} 条` : `${visibleLogs.length} entries`}</span></div>
     <OutputLines logs={visibleLogs} taskID={taskID} formatTime={formatTime} zh={zh} />
   </section>
 }
 
-function OutputLines({ logs, taskID, formatTime, zh }: { logs: ComposeTaskLog[]; taskID?: string; formatTime: (date: string) => string; zh: boolean }) {
-  const { viewportRef, onScroll } = useLogAutoScroll<HTMLDivElement>(logs.at(-1)?.id, taskID)
+function OutputLines({ logs, taskID, formatTime, zh }: { logs: ComposeOutputLog[]; taskID?: string; formatTime: (date: string) => string; zh: boolean }) {
+  const latest = logs.at(-1)
+  const latestHistory = logs.at(latest?.id === 'live' ? -2 : -1)
+  const { viewportRef, onScroll } = useLogAutoScroll<HTMLDivElement>(`${latestHistory?.id}:${latest?.message}`, taskID)
   return <div ref={viewportRef} onScroll={onScroll} data-testid="compose-output-viewport" className="min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-lg bg-muted/40 p-3">
-    {logs.length === 0 ? <p className="text-xs text-muted-foreground">{zh ? '暂无输出' : 'No output yet'}</p> : <div className="space-y-2">{logs.map(log => <div key={log.id} className="flex items-baseline gap-3 font-mono text-xs leading-relaxed"><span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{formatTime(log.created_at)}</span><span className={cn('min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]', log.level === 'error' && 'text-destructive')}>{log.message}</span></div>)}</div>}
+    {logs.length === 0 ? <p className="text-xs text-muted-foreground">{zh ? '暂无输出' : 'No output yet'}</p> : <div className="grid grid-cols-[max-content_minmax(0,1fr)] items-baseline gap-x-3 gap-y-2 font-mono text-xs leading-relaxed">{logs.map(log => <div key={log.id} className="contents"><span className="text-[11px] text-muted-foreground tabular-nums">{log.created_at ? formatTime(log.created_at) : zh ? '实时' : 'Live'}</span><span className={cn('min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]', log.level === 'error' && 'text-destructive')}>{log.message}</span></div>)}</div>}
   </div>
 }

@@ -1,8 +1,43 @@
 import { describe, expect, it } from 'vitest'
-import { composeProgress, parseComposeResource, type ComposeTask, type ComposeTaskLog } from './action-progress'
+import { composeOutputLogs, composeProgress, parseComposeResource, type ComposeTask, type ComposeTaskLog } from './action-progress'
 
 const task = (overrides: Partial<ComposeTask> = {}): ComposeTask => ({ id: 'pull-task', name: 'Update app', type: 'compose.update', status: 'running', progress: 55, message: '', ...overrides })
 const logs = (...messages: string[]): ComposeTaskLog[] => messages.map((message, id) => ({ id, message, level: 'info', created_at: '2026-10-24T04:00:00Z' }))
+
+describe('Compose live output', () => {
+  it('replaces a persisted counter with the live frame without inventing a timestamp', () => {
+    const history = logs('api Pulling', 'abcdef123456 Downloading 1MB/10MB', 'fedcba654321 Waiting')
+    const original = structuredClone(history)
+    for (const counter of ['4MB', '8MB']) {
+      const message = `abcdef123456 Downloading ${counter}/10MB`
+      const output = composeOutputLogs(task({ message }), history)
+      expect(output).toHaveLength(3)
+      expect(output.at(-1)).toEqual({ id: 'live', level: 'info', message })
+      expect(output.map(row => row.message)).not.toContain(history[1].message)
+    }
+    expect(history).toEqual(original)
+    expect(composeOutputLogs(task({ message: 'abcdef123456 Extracting 8MB' }), [])).toEqual([
+      { id: 'live', level: 'info', message: 'abcdef123456 Extracting 8MB' },
+    ])
+  })
+
+  it('retains newer historical stages and counters when task polling lags', () => {
+    for (const newer of ['abcdef123456 Downloading 9MB/10MB', 'abcdef123456 Download complete', 'abcdef123456 Extracting 1MB', 'abcdef123456 Pull complete']) {
+      const history = logs(newer)
+      expect(composeOutputLogs(task({ message: 'abcdef123456 Downloading 8MB/10MB' }), history)).toEqual(history)
+    }
+  })
+
+  it('does not duplicate persisted frames or display terminal tasks as live', () => {
+    const history = logs('abcdef123456 Downloading 8MB/10MB')
+    expect(composeOutputLogs(task({ message: history[0].message }), history)).toEqual(history)
+    for (const status of ['pending', 'success', 'failed', 'canceled']) {
+      expect(composeOutputLogs(task({ status, message: 'abcdef123456 Downloading 9MB/10MB' }), history)).toEqual(history)
+    }
+    expect(composeOutputLogs(undefined, history)).toEqual(history)
+    expect(composeOutputLogs(task({ message: 'Starting docker compose update' }), history)).toEqual(history)
+  })
+})
 
 describe('Compose resource progress', () => {
   it('reads old and current Compose image formats without guessing layer ownership', () => {

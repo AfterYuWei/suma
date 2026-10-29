@@ -141,6 +141,49 @@ test('raw output follows new messages and preserves the position when reading ea
   expect(await viewport.evaluate(el => el.scrollTop)).toBe(0)
 })
 
+test('live output refreshes byte counters without new historical logs', async ({ page }) => {
+  const { state, dialog } = await setup(page)
+  const output = dialog.getByRole('region', { name: 'Live output' })
+  await expect(output.getByText('fedcba654321 Downloading 42MB/100MB', { exact: true })).toBeVisible()
+  await expect(output.getByText('fedcba654321 Downloading 10MB/100MB', { exact: true })).toHaveCount(0)
+  await expect(output.getByText('6 entries', { exact: true })).toBeVisible()
+
+  state.task.message = 'fedcba654321 Downloading 68MB/100MB'
+  await expect(output.getByText(state.task.message, { exact: true })).toBeVisible()
+  await expect(output.getByText('fedcba654321 Downloading 42MB/100MB', { exact: true })).toHaveCount(0)
+  await expect(output.getByText('6 entries', { exact: true })).toBeVisible()
+  const historicalBounds = await output.getByText('Starting docker compose update', { exact: true }).boundingBox()
+  const liveBounds = await output.getByText(state.task.message, { exact: true }).boundingBox()
+  expect(liveBounds!.x).toBe(historicalBounds!.x)
+  await dialog.screenshot({ path: '/tmp/suma-compose-progress-live-counter.png' })
+
+  await dialog.getByRole('button', { name: 'Run in background', exact: true }).click()
+  state.task.message = 'fedcba654321 Downloading 90MB/100MB'
+  await page.getByRole('button', { name: 'View task progress', exact: true }).click()
+  await expect(output.getByText(state.task.message, { exact: true })).toBeVisible()
+  expect(state.writes).toEqual([])
+
+  // A newer log response must win over a task response from the prior stage.
+  state.logs = makeLogs([...initial, 'fedcba654321 Download complete'])
+  await expect(output.getByText('fedcba654321 Download complete', { exact: true })).toBeVisible()
+  await expect(output.getByText(state.task.message, { exact: true })).toHaveCount(0)
+})
+
+test('counter-only updates follow the bottom and keep earlier output readable', async ({ page }) => {
+  const { state, dialog } = await setup(page)
+  state.logs = makeLogs([...initial, ...Array.from({ length: 90 }, (_, index) => `output line ${index}`)])
+  const viewport = dialog.getByTestId('compose-output-viewport')
+  await expect(viewport.getByText('output line 89', { exact: true })).toBeAttached()
+  state.task.message = 'fedcba654321 Downloading 68MB/100MB'
+  await expect(viewport.getByText(state.task.message, { exact: true })).toBeAttached()
+  await expect.poll(() => viewport.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(2)
+
+  await viewport.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll', { bubbles: true })) })
+  state.task.message = 'fedcba654321 Downloading 90MB/100MB'
+  await expect(viewport.getByText(state.task.message, { exact: true })).toBeAttached()
+  expect(await viewport.evaluate(el => el.scrollTop)).toBe(0)
+})
+
 test('desktop panels scroll independently and keep the footer visible on a laptop', async ({ page }) => {
   const { state, dialog } = await setup(page, 'zh-CN', 'dark', 1366)
   await page.setViewportSize({ width: 1366, height: 768 })
