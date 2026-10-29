@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func auditNotifications(db *gorm.DB, notify *notification.Service) func(database.AuditLog) {
+func auditNotifications(db *gorm.DB, emit event.Sink) func(database.AuditLog) {
 	return func(row database.AuditLog) {
 		kind := ""
 		severity := "info"
@@ -27,7 +27,7 @@ func auditNotifications(db *gorm.DB, notify *notification.Service) func(database
 			var count int64
 			db.Model(&database.AuditLog{}).Where("id < ? AND action = ? AND result = ? AND user_id = ? AND ip = ?", row.ID, "login", "success", row.UserID, row.IP).Count(&count)
 			if count == 0 {
-				notify.Emit(event.Event{Type: "auth.new_ip", Severity: "warning", Scope: "control_plane", ActorID: row.UserID, Title: "New login IP", Message: message, DedupeKey: fmt.Sprintf("login-ip:%d:%s", *row.UserID, row.IP)})
+				emit(event.Event{Type: "auth.new_ip", Severity: "warning", Scope: "control_plane", ActorID: row.UserID, Title: "New login IP", Message: message, DedupeKey: fmt.Sprintf("login-ip:%d:%s", *row.UserID, row.IP)})
 			}
 		case strings.Contains(row.Action, "password") || strings.Contains(row.Action, "two_factor") || strings.Contains(row.Action, "passkey"):
 			if row.Result == "success" {
@@ -47,6 +47,8 @@ func auditNotifications(db *gorm.DB, notify *notification.Service) func(database
 			}
 		case row.Action == "cleanup.skip":
 			kind = "cleanup.skipped"
+		case row.Action == "cd.sync" && row.Result == "success":
+			return
 		case strings.HasPrefix(row.Action, "cd.") && row.Result != "accepted" && row.TaskID != "":
 			kind = "cd.completed"
 		}
@@ -56,7 +58,7 @@ func auditNotifications(db *gorm.DB, notify *notification.Service) func(database
 		if row.Result == "failed" || row.Result == "partial_failed" {
 			severity = "error"
 		}
-		notify.Emit(event.Event{Type: kind, Severity: severity, Scope: row.Scope, NodeID: row.NodeID, NodeName: row.NodeName, ResourceType: row.ResourceType, ResourceID: row.ResourceName, Title: row.Action, Message: message, TaskID: row.TaskID, ReleaseID: row.ReleaseID, ActorID: row.UserID, Time: row.CreatedAt})
+		emit(event.Event{Type: kind, Severity: severity, Scope: row.Scope, NodeID: row.NodeID, NodeName: row.NodeName, ResourceType: row.ResourceType, ResourceID: row.ResourceName, Title: row.Action, Message: message, TaskID: row.TaskID, ReleaseID: row.ReleaseID, ActorID: row.UserID, Time: row.CreatedAt})
 	}
 }
 

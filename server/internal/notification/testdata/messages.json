@@ -424,18 +424,18 @@
     "event": {
       "id": "sample",
       "type": "cd.completed",
-      "severity": "info",
+      "severity": "error",
       "time": "2026-10-11T04:00:00Z",
       "node_id": "local",
       "node_name": "Production",
       "resource_id": "gateway",
       "resource_type": "delivery_project",
       "title": "cd.sync",
-      "message": "cd.sync: success"
+      "message": "cd.sync: failed"
     },
     "timezone": "Asia/Shanghai",
-    "zh": "代码同步完成\nProduction · gateway · 2026-10-11 12:00",
-    "en": "Git sync completed\nProduction · gateway · 2026-10-11 12:00"
+    "zh": "代码同步失败\nProduction · gateway · 2026-10-11 12:00",
+    "en": "Git sync failed\nProduction · gateway · 2026-10-11 12:00"
   },
   {
     "event": {

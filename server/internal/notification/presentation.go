@@ -174,10 +174,9 @@ func present(e event.Event, language string) Presentation {
 			}
 		}
 		if strings.HasPrefix(e.Title, "cd.sync") {
+			p.Title = e.Title
 			if failed {
 				p.Title = t("代码同步失败", "Git sync failed")
-			} else {
-				p.Title = t("代码同步完成", "Git sync completed")
 			}
 		}
 		if strings.HasPrefix(e.Title, "cd.approve") {

@@ -159,7 +159,7 @@ func New(logger *slog.Logger) (*App, error) {
 		logger.Info("SUMA initialization key", "setup_token", setupToken, "expires_at", setupExpires.UTC().Format(time.RFC3339))
 	}
 	notifications := notification.NewService(db, secretStore, notification.Dependencies{OnError: func(err error) { logger.Warn("notification service", "error", err) }})
-	auditService.SetSink(auditNotifications(db, notifications))
+	auditService.SetSink(auditNotifications(db, notifications.Emit))
 	continuousDelivery.SetEventSink(notifications.Emit)
 	taskService.SetEventSink(func(e event.Event) {
 		var row database.Task

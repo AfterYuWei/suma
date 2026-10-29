@@ -81,7 +81,7 @@ func TestOnlyCompleteLoginEmitsNotificationAndNewIPOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	notify := notification.NewService(db, store, notification.Dependencies{})
-	sink := auditNotifications(db, notify)
+	sink := auditNotifications(db, notify.Emit)
 	user := uint(1)
 	for _, row := range []database.AuditLog{{Action: "login", Result: "requires_two_factor", UserID: &user, IP: "test-IP"}, {Action: "login", Result: "failed", UserID: &user, IP: "test-IP"}} {
 		db.Create(&row)
@@ -103,5 +103,41 @@ func TestOnlyCompleteLoginEmitsNotificationAndNewIPOnce(t *testing.T) {
 	}
 	if counts["auth.login"] != 2 || counts["auth.new_ip"] != 1 {
 		t.Fatal(counts)
+	}
+}
+
+func TestAuditCDResultNotifications(t *testing.T) {
+	for _, tc := range []struct {
+		action, result, severity string
+	}{
+		{"cd.sync", "success", ""},
+		{"cd.sync", "accepted", ""},
+		{"cd.sync", "failed", "error"},
+		{"cd.deploy", "success", "info"},
+		{"cd.deploy", "failed", "error"},
+		{"cd.deploy", "partial_failed", "error"},
+		{"cd.rollback", "success", "info"},
+		{"cd.rollback", "failed", "error"},
+		{"cd.reject", "success", "info"},
+	} {
+		t.Run(tc.action+"/"+tc.result, func(t *testing.T) {
+			var events []event.Event
+			sink := auditNotifications(nil, func(e event.Event) { events = append(events, e) })
+			row := database.AuditLog{Action: tc.action, Result: tc.result, TaskID: "cd-task", ResourceType: "delivery_project", ResourceName: "shop"}
+			sink(row)
+			if tc.severity == "" {
+				if len(events) != 0 {
+					t.Fatalf("unexpected notification: %+v", events)
+				}
+				return
+			}
+			if len(events) != 1 {
+				t.Fatalf("got %d notifications, want 1", len(events))
+			}
+			e := events[0]
+			if e.Type != "cd.completed" || e.Severity != tc.severity || e.Title != row.Action || e.TaskID != row.TaskID || e.ResourceID != row.ResourceName {
+				t.Fatalf("incorrect CD result notification: %+v", e)
+			}
+		})
 	}
 }

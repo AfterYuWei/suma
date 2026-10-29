@@ -49,7 +49,10 @@ export function presentNotification(event: Event, language: string): Notificatio
  }
  if (event.type === 'cd.awaiting_approval') { result.status='pending';const commit=event.message.match(/\b[0-9a-f]{40,64}\b/)?.[0];if(commit)result.summary=t('版本 ','Commit ')+commit.slice(0,7) }
  if (event.type === 'cd.completed') result.title=event.title.includes('rollback') ? failed ? t('回滚失败','Rollback failed') : t('回滚完成','Rollback completed') : failed ? t('发布失败','Deployment failed') : result.title
- if (event.type === 'cd.completed' && event.title.startsWith('cd.sync')) result.title=failed?t('代码同步失败','Git sync failed'):t('代码同步完成','Git sync completed')
+ if (event.type === 'cd.completed' && event.title.startsWith('cd.sync')) {
+  result.title=event.title
+  if(failed)result.title=t('代码同步失败','Git sync failed')
+ }
  if (event.type === 'cd.completed' && event.title.startsWith('cd.approve')) result.title=failed?t('发布审核失败','Release review failed'):t('发布已批准','Release approved')
  if (event.type === 'cd.completed' && event.title.startsWith('cd.reject')) {result.title=failed?t('发布审核失败','Release review failed'):t('发布已拒绝','Release rejected');if(!failed)result.status='canceled'}
  if (event.type === 'project.completed' && failed) result.title=t('项目操作失败','Project operation failed')
