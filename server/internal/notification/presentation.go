@@ -33,10 +33,10 @@ func renderMessage(snapshot DeliverySnapshot, rows []database.NotificationEvent)
 		link := strings.TrimRight(snapshot.PublicURL, "/") + "/notifications#" + e.ID
 		if message.Default {
 			blocks = append(blocks, defaultEventText(e, snapshot.Language, e.Time.In(zone).Format("2006-01-02 15:04")))
-			message.Cards = append(message.Cards, buildMessageCard(e, snapshot.Language, e.Time.In(zone).Format("2006-01-02 15:04 -07:00")))
+			message.Cards = append(message.Cards, buildMessageCard(e, snapshot.Language, e.Time.In(zone).Format("2006-01-02 15:04")))
 		} else {
 			// Substitute once: placeholder-shaped resource/error text is data.
-			body := strings.NewReplacer("{{title}}", e.Title, "{{message}}", e.Message, "{{node}}", e.NodeName, "{{resource}}", e.ResourceID, "{{time}}", e.Time.In(zone).Format("2006-01-02 15:04:05 -07:00"), "{{url}}", link).Replace(snapshot.Policy.Template)
+			body := strings.NewReplacer("{{title}}", e.Title, "{{message}}", e.Message, "{{node}}", e.NodeName, "{{resource}}", e.ResourceID, "{{time}}", e.Time.In(zone).Format("2006-01-02 15:04:05"), "{{url}}", link).Replace(snapshot.Policy.Template)
 			blocks = append(blocks, body)
 		}
 		if snapshot.PublicURL != "" {

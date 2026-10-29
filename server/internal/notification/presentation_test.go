@@ -65,12 +65,50 @@ func TestConciseNotificationBatchPreservesFullEvidenceAndCustomTemplates(t *test
 	e.Title = "{{message}}"
 	e.Message = "literal {{url}}"
 	message = renderMessage(snapshot, []database.NotificationEvent{eventRow(e)})
-	if !strings.HasPrefix(message.Text, "{{message}}\nliteral {{url}}\nProduction\n") || !strings.Contains(message.Text, "2026-10-25 02:30:00 +01:00") || !strings.HasSuffix(message.Text, "https://suma.example/notifications#first") || message.Default {
+	if !strings.HasPrefix(message.Text, "{{message}}\nliteral {{url}}\nProduction\n") || !strings.Contains(message.Text, "2026-10-25 02:30:00\n") || !strings.HasSuffix(message.Text, "https://suma.example/notifications#first") || message.Default {
 		t.Fatal("custom variables were recursively expanded or changed", message.Text)
 	}
 	message = renderMessage(DeliverySnapshot{Policy: DeliveryPolicy{Timezone: "UTC"}}, []database.NotificationEvent{eventRow(e)})
 	if message.URL != "" || strings.Contains(message.Text, "/notifications#") {
 		t.Fatal("default advertised an unusable relative link")
+	}
+}
+
+func TestNotificationTimesUseSubscriptionTimezoneWithoutOffset(t *testing.T) {
+	now := time.Date(2026, 10, 25, 1, 30, 0, 0, time.UTC)
+	for zone, expected := range map[string]string{
+		"Asia/Shanghai":    "2026-10-25 09:30",
+		"America/New_York": "2026-10-24 21:30",
+		"Europe/Berlin":    "2026-10-25 02:30",
+		"UTC":              "2026-10-25 01:30",
+	} {
+		t.Run(zone, func(t *testing.T) {
+			snapshot := DeliverySnapshot{Language: "en-US", Policy: DeliveryPolicy{Timezone: zone}}
+			rows := []database.NotificationEvent{eventRow(event.Event{ID: "time-example", Type: "container.exited", Title: "redis", Time: now})}
+			message := renderMessage(snapshot, rows)
+			found := false
+			for _, field := range message.Cards[0].Fields {
+				if field.Label == "Occurred at" {
+					found = true
+					if field.Value != expected {
+						t.Fatalf("got %q, want %q", field.Value, expected)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("card has no occurrence time")
+			}
+			parts, _ := telegramParts(message)
+			for _, text := range []string{message.Text, encode(feishuCard(message)), strings.Join(parts, "\n")} {
+				if !strings.Contains(text, expected) || strings.Contains(text, "+00:00") || strings.Contains(text, "+08:00") || strings.Contains(text, "+01:00") || strings.Contains(text, "-04:00") {
+					t.Fatal("provider timestamp did not match the configured wall time", text)
+				}
+			}
+			snapshot.Policy.Template = "{{time}}"
+			if text := renderMessage(snapshot, rows).Text; text != expected+":00" {
+				t.Fatalf("custom timestamp: got %q, want %q", text, expected+":00")
+			}
+		})
 	}
 }
 

@@ -25,13 +25,11 @@ export function SubscriptionEditor({ value, channels, channelID, provider, langu
  const missing = value.rule_ids.filter(id => rules.data && !rules.data.some(rule => rule.id === id))
  const sampleType = previewType || rules.data?.find(rule => value.rule_ids.includes(rule.id))?.config.events[0] || 'container.oom'
  const example = templateExample(sampleType,language)
- let time = '', customTime = '', cardTime = ''
+ let time = '', customTime = ''
  try {
   time = notificationTimestamp(example.time,policy.timezone)
-  const offset = new Intl.DateTimeFormat('en-US',{timeZone:policy.timezone,timeZoneName:'longOffset'}).formatToParts(new Date(example.time)).find(part=>part.type === 'timeZoneName')?.value.replace('GMT','') || '+00:00'
-  customTime = `${time}:00 ${offset}`
-  cardTime = `${time} ${offset}`
- } catch { time = customTime = cardTime = t('请输入有效的 IANA 时区', 'Enter a valid IANA timezone') }
+  customTime = `${time}:00`
+ } catch { time = customTime = t('请输入有效的 IANA 时区', 'Enter a valid IANA timezone') }
  const variables: Record<string,string> = { title:example.title,message:example.message,node:example.node_name,resource:example.resource_id,time:customTime,url:`${publicURL.replace(/\/$/,'')}/notifications#example` }
  const template = policy.template
  const clean = template.replace(/{{(title|message|node|resource|time|url)}}/g,'')
@@ -72,7 +70,7 @@ export function SubscriptionEditor({ value, channels, channelID, provider, langu
    <details className="text-xs text-muted-foreground"><summary className="w-fit cursor-pointer select-none">{t('可用字段', 'Available fields')}</summary><dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 pt-2">{[['title',t('事件标题', 'Event title')],['message',t('事件描述', 'Event description')],['node',t('节点名称，可能为空', 'Node name; may be empty')],['resource',t('资源 ID，可能为空', 'Resource ID; may be empty')],['time',t('事件时间，使用订阅时区', 'Event time in the subscription timezone')],['url',t('事件详情链接', 'Event detail link')]].map(([field,label]) => <div key={field} className="contents"><dt className="font-mono text-muted-foreground">{`{{${field}}}`}</dt><dd className="min-w-0 break-words">{label}</dd></div>)}</dl></details>
    {unsupported && <ErrorText error={t('模板包含不支持的占位符，仅支持上面六个字段。', 'The template contains unsupported placeholders. Only the six fields above are supported.')} />}
    <p className="text-xs text-muted-foreground">{t('示例预览，不会发送通知；实际样式以平台客户端为准', 'Sample preview; no notification is sent. Appearance may vary by client.')}</p>
-   <MessagePreview provider={provider} card={notificationCard(example,language,cardTime)} text={preview} custom={!!template} language={language} url={publicURL ? `${publicURL.replace(/\/$/,'')}/notifications#example` : ''} />
+   <MessagePreview provider={provider} card={notificationCard(example,language,time)} text={preview} custom={!!template} language={language} url={publicURL ? `${publicURL.replace(/\/$/,'')}/notifications#example` : ''} />
   </div></details>
  </div>
 }

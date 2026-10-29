@@ -12,7 +12,7 @@
       "project": "homelab",
       "message": "die exit=137"
     },
-    "timestamp": "2026-10-29 12:55 +08:00",
+    "timestamp": "2026-10-29 12:55",
     "zh": {
       "title": "容器异常退出",
       "status": "warning",
@@ -31,7 +31,7 @@
         },
         {
           "label": "发生时间",
-          "value": "2026-10-29 12:55 +08:00"
+          "value": "2026-10-29 12:55"
         },
         {
           "label": "退出码",
@@ -65,7 +65,7 @@
         },
         {
           "label": "Occurred at",
-          "value": "2026-10-29 12:55 +08:00"
+          "value": "2026-10-29 12:55"
         },
         {
           "label": "Exit code",
@@ -95,7 +95,7 @@
       "project": "homelab",
       "message": "Container has been running stably for at least two minutes"
     },
-    "timestamp": "2026-10-29 12:55 +08:00",
+    "timestamp": "2026-10-29 12:55",
     "zh": {
       "title": "容器运行已稳定",
       "status": "recovered",
@@ -114,7 +114,7 @@
         },
         {
           "label": "发生时间",
-          "value": "2026-10-29 12:55 +08:00"
+          "value": "2026-10-29 12:55"
         },
         {
           "label": "状态说明",
@@ -140,7 +140,7 @@
         },
         {
           "label": "Occurred at",
-          "value": "2026-10-29 12:55 +08:00"
+          "value": "2026-10-29 12:55"
         },
         {
           "label": "Status details",
@@ -162,7 +162,7 @@
       "project": "homelab",
       "message": "oom exit="
     },
-    "timestamp": "2026-10-29 12:55 +08:00",
+    "timestamp": "2026-10-29 12:55",
     "zh": {
       "title": "容器内存不足",
       "status": "error",
@@ -181,7 +181,7 @@
         },
         {
           "label": "发生时间",
-          "value": "2026-10-29 12:55 +08:00"
+          "value": "2026-10-29 12:55"
         },
         {
           "label": "状态说明",
@@ -211,7 +211,7 @@
         },
         {
           "label": "Occurred at",
-          "value": "2026-10-29 12:55 +08:00"
+          "value": "2026-10-29 12:55"
         },
         {
           "label": "Status details",
