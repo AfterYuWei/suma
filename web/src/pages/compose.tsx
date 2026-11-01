@@ -5,8 +5,8 @@ import type { ProjectImageSummary } from '../features/image-updates/types'
 import { useContainerWorkspace } from '../features/containers/use-container-workspace'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { ChevronDown, ChevronRight, Download, Eye, MoreHorizontal, Pencil, Play, Plus, PowerOff, RefreshCw, Search, Square, Trash2, X } from 'lucide-react'
-import { Fragment, type ReactElement, type ReactNode, useRef, useState } from 'react'
+import { ChevronDown, ChevronRight, Download, Eye, Logs, MoreHorizontal, Pencil, Play, Plus, PowerOff, RefreshCw, Search, Square, Trash2, X } from 'lucide-react'
+import { Fragment, lazy, Suspense, type MouseEventHandler, type ReactElement, type ReactNode, useRef, useState } from 'react'
 import { InlineStatus } from '../components/ui/inline-status'
 import { Button } from '../components/ui/button'
 import { Checkbox } from '../components/ui/checkbox'
@@ -38,6 +38,8 @@ import { useUIStore } from '../stores/ui'
 import { useProjectViewStore } from '../stores/project-view'
 import { ResourceFrame } from './images'
 
+const ProjectLogs = lazy(() => import('../features/project-logs/project-logs').then(module => ({ default: module.ProjectLogs })))
+
 const statusLabel = (status: string, zh: boolean) => ({ running: zh ? '运行中' : 'Running', degraded: zh ? '部分运行' : 'Partially running', stopped: zh ? '已停止' : 'Stopped', paused: zh ? '已暂停' : 'Paused', not_created: zh ? '未创建' : 'Not created' }[status] ?? status)
 interface ProjectTask { id: string; status: string; message: string }
 type ProjectFeedback =
@@ -55,6 +57,8 @@ function ComposeNodePage({ nodeID }: { nodeID: string }) {
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [takeoverName, setTakeoverName] = useState('')
+  const [logProject, setLogProject] = useState<ProjectSummary | null>(null)
+  const logOpener = useRef<HTMLElement | null>(null)
  const [updateProject, setUpdateProject] = useState('')
  const imageSummaries = useQuery({ queryKey: ['project-image-summaries', nodeID], queryFn: ({ signal }) => api<ProjectImageSummary[]>(nodePath(nodeID, '/image-updates/projects'), { signal }), refetchInterval: 5000, retry: false })
  const updateByProject = new Map((imageSummaries.data || []).map(row => [row.project, row]))
@@ -81,7 +85,7 @@ function ComposeNodePage({ nodeID }: { nodeID: string }) {
   }
   const entries = rows.map(project => { const instances = byProject.get(project.name) ?? []; return { project, containers: instances, summary: aggregate(instances, observation), available } })
   const sorted = selectProjects(entries, view)
-  if (!(selected.size || menuOpen || serviceOverlay || workspace.active || takeoverName) || !order.current.length) order.current = sorted.map(entry => entry.project.name)
+  if (!(selected.size || menuOpen || serviceOverlay || workspace.active || takeoverName || logProject) || !order.current.length) order.current = sorted.map(entry => entry.project.name)
   const ranks = new Map(order.current.map((name, index) => [name, index]))
   const visible = [...sorted].sort((a, b) => (ranks.get(a.project.name) ?? Infinity) - (ranks.get(b.project.name) ?? Infinity))
   const pagination = useListPagination(visible, `${nodeID}:${JSON.stringify(view)}`)
@@ -143,14 +147,20 @@ function ComposeNodePage({ nodeID }: { nodeID: string }) {
             <div className="min-w-0"><div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1"><TooltipHint content={row.delivery_project_name && row.delivery_project_name !== row.name ? `${zh ? 'Compose 项目名' : 'Compose project name'}: ${row.name}` : undefined}><Link to="/projects/$backend/$projectName" params={{ backend: row.backend, projectName: row.name }} className="max-w-full truncate text-sm font-medium hover:underline">{projectDisplayName(row)}</Link></TooltipHint><StatusBadge tone={row.managed ? 'outline' : 'neutral'}>{row.delivery_project_name ? 'CD' : row.managed ? zh ? '托管' : 'Managed' : zh ? '外部' : 'External'}</StatusBadge></div><p className="mt-1 text-xs text-muted-foreground">{serviceCount} {zh ? '服务' : 'services'}{row.managed && !row.declared_service_names && ` · ${zh ? '声明不可用' : 'Declarations unavailable'}`}{row.managed && !row.delivery_project_name && <Button variant="ghost" size="sm" className="ml-2 h-auto p-0 text-xs" aria-label={`${zh ? '项目镜像更新' : 'Project image updates'} · ${row.name}`} onClick={() => setUpdateProject(row.name)}>{imageSummary?.candidate?.status === 'publishing' ? candidateStatus('publishing', zh) : imageSummary?.candidate?.status === 'failed' ? candidateStatus('failed', zh) : imageSummary?.updated_services ? `${imageSummary.recreate_required ? (zh ? '待重建' : 'Recreate pending') : (zh ? '有更新' : 'Updates')} · ${imageSummary.updated_services}${imageSummary.blocked_services ? (zh ? '（含停止服务）' : ' (includes stopped services)') : ''}` : imageSummary?.error ? (zh ? '检测异常' : 'Check failed') : (zh ? '镜像检测' : 'Image checks')}</Button>}</p></div>
             <div className="col-start-2 flex flex-col items-start gap-1 lg:col-start-auto lg:row-start-auto"><StatusBadge tone={status === 'running' ? 'success' : status === 'degraded' ? 'warning' : 'neutral'}>{statusLabel(status, zh)}</StatusBadge><span className="text-xs text-muted-foreground">{available ? `${entry.summary.running}/${entry.summary.total}` : '—'} {zh ? '容器运行中' : 'containers running'}{entry.summary.abnormal > 0 && <span className="ml-2 text-destructive">{entry.summary.abnormal} {zh ? '异常' : 'abnormal'}</span>}{available && entry.summary.unknown > 0 && <span className="ml-2">{entry.summary.unknown} {zh ? '健康未知' : 'health unknown'}</span>}</span></div>
             <div className="col-start-3 row-start-2 lg:col-start-auto lg:row-start-auto"><ProjectResourceSummary summary={entry.summary} zh={zh} /></div>
-            <div className="col-start-3 row-start-1 lg:col-start-auto lg:row-start-auto"><ProjectActions row={{ ...row, status }} zh={zh} onTakeover={() => setTakeoverName(row.name)} onFeedback={setFeedback} onMenuChange={setMenuOpen} /></div>
+            <div className="col-start-3 row-start-1 lg:col-start-auto lg:row-start-auto"><ProjectActions row={{ ...row, status }} zh={zh} onLogs={opener => { logOpener.current = opener; setLogProject(row) }} onTakeover={() => setTakeoverName(row.name)} onFeedback={setFeedback} onMenuChange={setMenuOpen} /></div>
           </div>{open && <div className="p-3 lg:ml-[4.25rem]"><ProjectServices key={`${nodeID}/${row.name}`} nodeID={nodeID} projectName={row.name} rows={entry.containers} declared={row.declared_service_names ?? []} declarationUnavailable={row.managed && !row.declared_service_names} loading={containers.isPending} error={!available && !containers.isPending ? zh ? '运行信息暂不可用' : 'Runtime information unavailable' : undefined} observation={observation} showUpdates={false} onOverlayChange={setServiceOverlay} zh={zh} onOpenContainer={(row, tab, opener) => void workspace.open(row, tab, opener)} /></div>}</Fragment>
         })}</div>
         {visible.length > pagination.pageSize && <ListPagination {...pagination} zh={zh} />}
       </>}
     </div>
     <Dialog open={!!updateProject} onOpenChange={open => { if (!open) setUpdateProject('') }}><DialogContent className="max-h-[85dvh] overflow-auto sm:max-w-2xl"><DialogHeader><DialogTitle className="break-all">{updateProject} · {zh ? '镜像更新' : 'Image updates'}</DialogTitle></DialogHeader>{updateProject && <ProjectImageUpdates key={updateProject} nodeID={nodeID} projectName={updateProject} />}</DialogContent></Dialog>
-      <ContainerWorkspaceDialog workspace={workspace} rows={observedRows} available={available} zh={zh} />
+    <Dialog open={!!logProject} onOpenChange={open => { if (!open) setLogProject(null) }}>
+      <DialogContent className="flex max-h-[90dvh] flex-col overflow-y-auto sm:max-w-[1100px]" finalFocus={() => logOpener.current}>
+        <DialogHeader className="pr-8"><DialogTitle className="break-all">{logProject && projectDisplayName(logProject)} · {zh ? '日志' : 'Logs'}</DialogTitle></DialogHeader>
+        {logProject && <div className="min-h-0 min-w-0"><Suspense fallback={<LoadingState compact label={zh ? '正在加载日志' : 'Loading logs'} />}><ProjectLogs key={logProject.name} nodeID={nodeID} projectName={logProject.name} /></Suspense></div>}
+      </DialogContent>
+    </Dialog>
+    <ContainerWorkspaceDialog workspace={workspace} rows={observedRows} available={available} zh={zh} />
     <TakeoverWarningDialog open={!!takeoverName} projectName={takeoverName} zh={zh} onOpenChange={open => { if (!open) setTakeoverName('') }} onContinue={() => { const name = takeoverName; setTakeoverName(''); void navigate({ to: '/projects/$backend/$projectName/takeover', params: { backend: 'compose', projectName: name } }) }} />
   </ResourceFrame>
 }
@@ -171,7 +181,7 @@ function projectFeedbackView(feedback: ProjectFeedback | null, task: ProjectTask
   return { error: true, pending: false, message: zh ? `${feedback.projectName} ${operation}失败：${task.message || task.status}` : `${operation} failed for ${feedback.projectName}: ${task.message || task.status}` }
 }
 
-function ProjectActions({ row, zh, onTakeover, onFeedback, onMenuChange }: { row: ProjectSummary; zh: boolean; onTakeover: () => void; onFeedback: (feedback: ProjectFeedback) => void; onMenuChange: (open: boolean) => void }) {
+function ProjectActions({ row, zh, onLogs, onTakeover, onFeedback, onMenuChange }: { row: ProjectSummary; zh: boolean; onLogs: (opener: HTMLElement) => void; onTakeover: () => void; onFeedback: (feedback: ProjectFeedback) => void; onMenuChange: (open: boolean) => void }) {
   const nodeID = useUIStore((state) => state.currentNodeID)
   const client = useQueryClient()
   const action = useMutation({ mutationFn: (name: string) => api<ProjectTask>(nodePath(nodeID, `/projects/compose/${encodeURIComponent(row.name)}/actions/${name}`), { method: 'POST' }), onMutate: (name) => onFeedback({ kind: 'pending', projectName: row.name, action: name }), onSuccess: (task, name) => { onFeedback({ kind: 'task', projectName: row.name, action: name, taskID: task.id }); void client.invalidateQueries({ queryKey: ['projects', nodeID] }); void client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] }) }, onError: (error, name) => onFeedback({ kind: 'error', projectName: row.name, action: name, message: error.message }) })
@@ -210,6 +220,7 @@ function ProjectActions({ row, zh, onTakeover, onFeedback, onMenuChange }: { row
   const primaryAction = row.status === 'running' || row.status === 'degraded' ? 'stop' : 'up'
   const supported = (capability: ProjectCapability) => row.capabilities.includes(capability)
   return <div className="flex items-center justify-end" aria-busy={busy}>
+    <ActionIcon label={`${zh ? '查看项目日志' : 'View project logs'} · ${projectDisplayName(row)}`} onClick={event => onLogs(event.currentTarget)}><Logs /></ActionIcon>
     <ActionIcon label={row.managed ? (zh ? '编辑项目' : 'Edit Project') : (zh ? '查看项目' : 'View Project')}><Link to="/projects/$backend/$projectName" params={{ backend: row.backend, projectName: row.name }}>{row.managed ? <Pencil /> : <Eye />}</Link></ActionIcon>
     {row.managed && supported(primaryAction === 'stop' ? 'stop' : 'deploy') && <ActionIcon label={actionLabel(primaryAction, zh)} disabled={busy} onClick={() => void run(primaryAction)}>{action.isPending ? <Spinner /> : primaryAction === 'stop' ? <Square /> : <Play />}</ActionIcon>}
     <DropdownMenu onOpenChange={onMenuChange}><DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" disabled={busy} aria-label={zh ? '更多项目操作' : 'More project actions'}><MoreHorizontal /></Button>} /><DropdownMenuContent align="end">
@@ -218,6 +229,6 @@ function ProjectActions({ row, zh, onTakeover, onFeedback, onMenuChange }: { row
   </div>
 }
 
-function ActionIcon({ label, destructive, disabled, onClick, children }: { label: string; destructive?: boolean; disabled?: boolean; onClick?: () => void; children: ReactNode }) {
+function ActionIcon({ label, destructive, disabled, onClick, children }: { label: string; destructive?: boolean; disabled?: boolean; onClick?: MouseEventHandler<HTMLButtonElement>; children: ReactNode }) {
   return <TooltipHint content={label}><Button variant="ghost" size="icon-sm" className={destructive ? 'text-destructive' : undefined} disabled={disabled} onClick={onClick} aria-label={label} nativeButton={!!onClick} render={!onClick && typeof children === 'object' ? children as ReactElement : undefined}>{onClick ? children : null}</Button></TooltipHint>
 }

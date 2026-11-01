@@ -11,7 +11,16 @@ async function setup(page: Page, language = 'en-US', theme = 'dark') {
  const state = { calls: [] as string[], writes: [] as { path: string; body: unknown }[], rows: [container('a', 'alpha'), container('b', 'alpha', 'app:v2'), container('c', 'beta'), { ...container('d', 'external'), state: 'exited' }, { ...container('e', 'alpha', 'job:v1'), labels: { 'com.docker.compose.project': 'alpha', 'com.docker.compose.service': 'job', 'com.docker.compose.oneoff': 'True' } }], unhealthy: 'beta', betaCPU: 20, extraCount: 0, failMetrics: false, sockets: [] as string[], closed: [] as string[] }
  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
  await page.addInitScript(({ language, theme }) => { localStorage.setItem('suma-language', language); localStorage.setItem('suma-theme', theme); localStorage.setItem('suma-node', 'local'); localStorage.setItem('suma-list-page-size', '20') }, { language, theme })
- await page.routeWebSocket('**/ws/**', ws => { state.sockets.push(ws.url()); ws.onClose(() => state.closed.push(ws.url())); if (ws.url().includes('/logs')) ws.send('hello from container\n'); else ws.send('$ ready\r\n') })
+ await page.routeWebSocket('**/ws/**', ws => {
+  state.sockets.push(ws.url()); ws.onClose(() => state.closed.push(ws.url()))
+  const project = new URL(ws.url()).pathname.match(/\/projects\/compose\/([^/]+)\/logs$/)?.[1]
+  if (project) {
+   const rows = project === 'edge-app' ? [container('f', project)] : state.rows
+   const sources = rows.filter(row => row.labels['com.docker.compose.project'] === project && row.labels['com.docker.compose.oneoff'] !== 'True').map(row => ({ container_id: row.id, container_name: row.name, service: 'web', instance: 1, state: row.state, one_off: false, orphan: false }))
+   ws.send(JSON.stringify({ type: 'snapshot', sources, entries: sources.map(source => ({ id: source.container_id, time: created, service: source.service, container_id: source.container_id, container_name: source.container_name, stream: 'stdout', text: `hello from ${project}` })), errors: [], truncated: false }))
+  } else if (ws.url().includes('/logs')) ws.send('hello from container\n')
+  else ws.send('$ ready\r\n')
+ })
  await page.route('**/api/v1/**', async route => {
   const request = route.request(), path = new URL(request.url()).pathname.replace('/api/v1', '')
   state.calls.push(path)
@@ -27,6 +36,7 @@ async function setup(page: Page, language = 'en-US', theme = 'dark') {
   else if (path.endsWith('/image-updates/projects')) data = []
   else if (path.endsWith('/projects')) data = projects
   else if (path.endsWith('/projects/compose/alpha')) data = { ...projects.find(project => project.name === 'alpha'), compose: 'services:\n  web:\n    image: app:v1\n  worker:\n    image: worker:v1\n', environment: '', metadata: { origin: 'created' } }
+  else if (path.endsWith('/log-sources')) data = rows.filter(row => row.labels['com.docker.compose.project'] === path.split('/').at(-2) && row.labels['com.docker.compose.oneoff'] !== 'True').map(row => ({ container_id: row.id, container_name: row.name, service: 'web', instance: 1, state: row.state, one_off: false, orphan: false }))
   else if (path.endsWith('/containers')) data = rows
   else if (path.endsWith('/containers/runtime')) data = rows.filter(row => row.state === 'running').map(row => ({ id: row.id, state: row.state, health_status: row.labels['com.docker.compose.project'] === state.unhealthy ? 'unhealthy' : 'none', restart_count: 0, memory_limit_bytes: 0, observed_at: new Date().toISOString() }))
   else if (path.endsWith('/containers/metrics')) {
@@ -52,6 +62,22 @@ for (const language of ['en-US', 'zh-CN']) for (const theme of ['dark', 'light']
   await expect(page.getByTestId('project-row').first()).toHaveAttribute('data-project', 'beta')
   await page.screenshot({ path: `/tmp/suma-project-toolbar-${language}-${theme}-${width}.png`, fullPage: true })
   const expand = alpha.getByRole('button', { name: `${zh ? '展开服务' : 'Expand services'} · alpha` })
+  expect(state.calls.some(path => path.endsWith('/log-sources'))).toBe(false)
+  const quickLogs = alpha.getByRole('button', { name: `${zh ? '查看项目日志' : 'View project logs'} · alpha`, exact: true })
+  await quickLogs.focus(); await page.keyboard.press('Enter')
+  const projectLogs = page.getByRole('dialog', { name: `alpha · ${zh ? '日志' : 'Logs'}`, exact: true })
+  await expect(projectLogs.getByTestId('project-log-lines')).toContainText('hello from alpha')
+  await expect(page).toHaveURL(/\/projects$/)
+  const logBounds = (await projectLogs.boundingBox())!
+  expect(logBounds.x).toBeGreaterThanOrEqual(0); expect(logBounds.x + logBounds.width).toBeLessThanOrEqual(width)
+  expect(logBounds.y).toBeGreaterThanOrEqual(0); expect(logBounds.y + logBounds.height).toBeLessThanOrEqual(900)
+  expect(await projectLogs.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+  await page.screenshot({ path: `/tmp/suma-project-quick-logs-${language}-${theme}-${width}.png`, fullPage: true })
+  await page.keyboard.press('Escape'); await expect(projectLogs).toHaveCount(0)
+  await expect(quickLogs).toBeFocused()
+  await expect(expand).toHaveAttribute('aria-expanded', 'false')
+  await expect.poll(() => state.closed.length).toBe(state.sockets.length)
+  expect(state.writes).toEqual([])
   const checkbox = alpha.getByRole('checkbox', { name: 'alpha', exact: true })
   const checkBoxBounds = (await checkbox.boundingBox())!, expandBounds = (await expand.boundingBox())!, nameBounds = (await alpha.getByRole('link', { name: 'alpha', exact: true }).boundingBox())!
   expect(expandBounds.x).toBeGreaterThanOrEqual(checkBoxBounds.x + checkBoxBounds.width)
@@ -128,6 +154,76 @@ test('search, filters, operations and per-node preferences', async ({ page }) =>
  await page.getByRole('combobox', { name: 'Current Docker node' }).click(); await page.getByRole('option', { name: /local/ }).click()
  await expect(page.getByTestId('project-row')).toHaveCount(1); await expect(page.getByTestId('project-row')).toContainText('beta')
 })
+test('quick logs preserve filters and expansion for stopped external and empty projects', async ({ page }) => {
+ const { state, errors } = await setup(page)
+ const search = page.getByRole('textbox', { name: 'Search projects, services or images' })
+ await search.fill('external')
+ const expand = page.getByRole('button', { name: 'Expand services · external', exact: true })
+ await expand.click()
+ await page.getByRole('button', { name: 'View project logs · external', exact: true }).click()
+ const dialog = page.getByRole('dialog', { name: 'external · Logs', exact: true })
+ await expect(dialog.getByTestId('project-log-lines')).toContainText('hello from external')
+ await expect(dialog.getByTestId('project-log-lines')).not.toContainText('hello from alpha')
+ await dialog.getByRole('button', { name: 'Close', exact: true }).click()
+ await expect(expand).toHaveAttribute('aria-expanded', 'true')
+ await expect(search).toHaveValue('external')
+ await search.fill('idle')
+ await page.getByRole('button', { name: 'View project logs · idle', exact: true }).click()
+ await expect(page.getByRole('dialog').getByTestId('project-log-lines')).toContainText('No logs match the current view')
+ await page.keyboard.press('Escape')
+ await expect.poll(() => state.closed.length).toBe(state.sockets.length)
+ expect(state.writes).toEqual([]); expect(errors).toEqual([])
+})
+
+test('quick logs freeze resource sorting and release streams on node changes', async ({ page }) => {
+ const { state, errors } = await setup(page)
+ await page.getByRole('button', { name: 'Sort', exact: true }).click(); await page.getByRole('menuitem', { name: 'CPU', exact: true }).click()
+ await expect(page.getByTestId('project-row').first()).toHaveAttribute('data-project', 'alpha')
+ await page.getByRole('button', { name: 'View project logs · alpha', exact: true }).click()
+ await expect(page.getByTestId('project-log-lines')).toContainText('hello from alpha')
+ state.betaCPU = 300
+ await expect(page.getByTestId('project-row').filter({ hasText: 'beta' })).toContainText('CPU 300.0%', { timeout: 10_000 })
+ await expect(page.getByTestId('project-row').first()).toHaveAttribute('data-project', 'alpha')
+ await page.keyboard.press('Escape')
+ await expect(page.getByTestId('project-row').first()).toHaveAttribute('data-project', 'beta')
+ await page.getByRole('button', { name: 'View project logs · beta', exact: true }).click()
+ await expect(page.getByTestId('project-log-lines')).toContainText('hello from beta')
+ await page.evaluate(async () => {
+  const source = performance.getEntriesByType('resource').map(entry => entry.name).find(url => new URL(url).pathname === '/src/stores/ui.ts') ?? '/src/stores/ui.ts'
+  const { useUIStore } = await import(source)
+  useUIStore.getState().setCurrentNodeID('edge')
+ })
+ await expect(page.getByRole('dialog')).toHaveCount(0)
+ await expect.poll(() => state.closed.length).toBe(state.sockets.length)
+ await page.getByRole('button', { name: 'View project logs · edge-app', exact: true }).click()
+ await expect(page.getByTestId('project-log-lines')).toContainText('hello from edge-app')
+ expect(state.sockets.at(-1)).toContain('/ws/nodes/edge/projects/compose/edge-app/logs?')
+ await page.keyboard.press('Escape')
+ await expect.poll(() => state.closed.length).toBe(state.sockets.length)
+ expect(state.writes).toEqual([]); expect(errors).toEqual([])
+})
+
+test('closing quick logs cancels pending source and history requests', async ({ page }) => {
+ await setup(page)
+ let sourcesStarted = 0, sourcesAborted = 0, historyStarted = 0, historyAborted = 0
+ const endpoint = '/api/v1/nodes/local/projects/compose/alpha'
+ page.on('requestfailed', request => {
+  if (!request.failure()?.errorText.includes('ERR_ABORTED')) return
+  if (new URL(request.url()).pathname === `${endpoint}/log-sources`) sourcesAborted++
+  if (new URL(request.url()).pathname === `${endpoint}/logs/history`) historyAborted++
+ })
+ // Pending routes are aborted by the browser when their query observer unmounts.
+ await page.route(url => url.pathname === `${endpoint}/log-sources`, () => { sourcesStarted++ })
+ await page.route(url => url.pathname === `${endpoint}/logs/history`, () => { historyStarted++ })
+ await page.getByRole('button', { name: 'View project logs · alpha', exact: true }).click()
+ await expect.poll(() => sourcesStarted).toBeGreaterThan(0)
+ await page.getByRole('combobox', { name: 'Log time range', exact: true }).click()
+ await page.getByRole('option', { name: 'Last hour', exact: true }).click()
+ await expect.poll(() => historyStarted).toBeGreaterThan(0)
+ await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click()
+ await expect.poll(() => sourcesAborted === sourcesStarted && historyAborted === historyStarted).toBe(true)
+})
+
 async function editFileDraft(page: Page) {
  await page.getByRole('button', { name: 'Expand services · beta' }).click()
  await openContainerAction(page, 'beta-web-c', 'Files')
