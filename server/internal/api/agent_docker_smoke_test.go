@@ -389,10 +389,6 @@ func TestRealDockerAgentInPlaceComposeReconnectAndRevoke(t *testing.T) {
 		t.Fatalf("third CD release: %+v, %v", thirdReleases, err)
 	}
 	third := thirdReleases[0]
-	adminID := uint(1)
-	if _, err := delivery.Approve(ctx, cdName, third.ID, cd.Actor{UserID: &adminID, Name: "Agent smoke"}); err != nil {
-		t.Fatal(err)
-	}
 	docker("stop", name)
 	await("local", "offline")
 	failedTask, err := delivery.Deploy(ctx, cdName, third.ID, cd.Actor{Name: "Agent smoke"})
@@ -402,18 +398,22 @@ func TestRealDockerAgentInPlaceComposeReconnectAndRevoke(t *testing.T) {
 	waitTask(failedTask.ID, task.StatusFailed)
 	docker("start", name)
 	await("local", "online")
-	retry, err := delivery.RetryFailedNodes(ctx, cdName, third.ID, cd.Actor{Name: "Agent smoke"})
+	third, err = delivery.GetRelease(ctx, cdName, third.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry, err := delivery.RetryFailedNodes(ctx, cdName, third.ID, *third.LatestRecordID, cd.Actor{Name: "Agent smoke"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitTask(retry.Task.ID, task.StatusSuccess)
-	rollback, err := delivery.Rollback(ctx, cdName, firstReleases[0].ID, cd.Actor{Name: "Agent smoke"})
+	rollback, err := delivery.Rollback(ctx, cdName, firstReleases[0].ID, *firstReleases[0].LatestRecordID, nil, cd.Actor{Name: "Agent smoke"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitTask(rollback.ID, task.StatusSuccess)
-	rolledBack, err := delivery.ListReleases(ctx, cdName)
-	if err != nil || len(rolledBack) < 3 || rolledBack[0].Status != cd.StatusRolledBack {
+	rolledBack, err := delivery.GetRelease(ctx, cdName, firstReleases[0].ID)
+	if err != nil || rolledBack.Status != cd.StatusSucceeded {
 		t.Fatalf("Agent CD rollback: %+v, %v", rolledBack, err)
 	}
 	if err := base.Targeted(target).DownRelease(ctx, cleanupSpec, io.Discard); err != nil {

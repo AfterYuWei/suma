@@ -148,6 +148,14 @@ func (s *RegistryService) Update(ctx context.Context, id uint, input RegistryInp
 }
 
 func (s *RegistryService) Delete(ctx context.Context, id uint) error {
+	var gitopsUsed int64
+	if err := s.db.WithContext(ctx).Model(&database.ProjectCD{}).Where("enabled = true AND registry_credential_ids_json::jsonb @> ?::jsonb", "["+strconv.FormatUint(uint64(id), 10)+"]").Count(&gitopsUsed).Error; err != nil {
+		return err
+	}
+	if gitopsUsed > 0 {
+		return errors.New("credential is used by a GitOps project")
+	}
+
 	var used int64
 	if err := s.db.WithContext(ctx).Model(&database.ImageUpdateRegistryCredential{}).Where("credential_id = ?", id).Count(&used).Error; err != nil {
 		return err

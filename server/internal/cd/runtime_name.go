@@ -73,6 +73,16 @@ func (s *Service) claimDeploymentNamespace(ctx context.Context, project database
 				allowed[filepath.Clean(filepath.Join(release.WorktreePath, filepath.Dir(files[0])))] = true
 			}
 		}
+		var records []database.DeliveryRecord
+		if err := s.db.WithContext(ctx).Select("worktree_path", "compose_files_json").Where("project_id = ?", project.ID).Find(&records).Error; err != nil {
+			return err
+		}
+		for _, record := range records {
+			var files []string
+			if json.Unmarshal([]byte(record.ComposeFilesJSON), &files) == nil && len(files) > 0 {
+				allowed[filepath.Clean(filepath.Join(record.WorktreePath, filepath.Dir(files[0])))] = true
+			}
+		}
 		for _, container := range snapshot.Containers {
 			directory := container.Labels[compose.WorkingDirLabel]
 			if directory == "" || !allowed[filepath.Clean(directory)] {

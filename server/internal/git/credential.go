@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -60,6 +61,11 @@ func (s *CredentialService) List(ctx context.Context) ([]database.GitCredential,
 		if err := s.db.WithContext(ctx).Model(&database.DeliveryProject{}).Where("git_credential_id = ?", rows[index].ID).Count(&rows[index].UsedBy).Error; err != nil {
 			return nil, err
 		}
+		var extra int64
+		if err := s.db.WithContext(ctx).Model(&database.ProjectCD{}).Where("enabled = true AND git_credential_id = ?", rows[index].ID).Count(&extra).Error; err != nil {
+			return nil, err
+		}
+		rows[index].UsedBy += extra
 		var grants []database.GitCredentialNode
 		if err := s.db.WithContext(ctx).Where("credential_id = ?", rows[index].ID).Order("node_id ASC").Find(&grants).Error; err != nil {
 			return nil, err
@@ -211,7 +217,11 @@ func (s *CredentialService) Delete(ctx context.Context, id uint) error {
 	if err := s.db.WithContext(ctx).Model(&database.DeliveryProject{}).Where("git_credential_id = ?", id).Count(&count).Error; err != nil {
 		return err
 	}
-	if count > 0 {
+	var gitopsCount int64
+	if err := s.db.WithContext(ctx).Model(&database.ProjectCD{}).Where("enabled = true AND git_credential_id = ?", id).Count(&gitopsCount).Error; err != nil {
+		return err
+	}
+	if count+gitopsCount > 0 {
 		return errors.New("credential is used by a Compose project")
 	}
 	if err := s.db.WithContext(ctx).Model(&database.GitCredentialNode{}).Where("credential_id = ?", id).Count(&count).Error; err != nil {
@@ -454,4 +464,58 @@ func validateCredentialUpdate(input CredentialInput, current database.GitCredent
 		copy.KnownHosts = "unchanged"
 	}
 	return validateCredential(copy)
+}
+
+// InlineMaterial validates and merges an owner-local credential without using
+// CD project IDs or persisting a global credential as a side effect.
+func (s *CredentialService) InlineMaterial(ciphertext []byte, input *CredentialInput) (CredentialMaterial, []byte, error) {
+	var current CredentialInput
+	if len(ciphertext) > 0 {
+		raw, err := s.secrets.Decrypt(ciphertext)
+		if err != nil {
+			return CredentialMaterial{}, nil, err
+		}
+		if err := json.Unmarshal([]byte(raw), &current); err != nil {
+			return CredentialMaterial{}, nil, errors.New("cannot decode project Git credential")
+		}
+	}
+	if input != nil {
+		next := *input
+		if next.AuthType == current.AuthType {
+			if next.Secret == "" {
+				next.Secret = current.Secret
+			}
+			if next.PrivateKey == "" {
+				next.PrivateKey = current.PrivateKey
+			}
+			if next.Passphrase == "" {
+				next.Passphrase = current.Passphrase
+			}
+			if next.KnownHosts == "" {
+				next.KnownHosts = current.KnownHosts
+			}
+			if next.CustomCA == "" {
+				next.CustomCA = current.CustomCA
+			}
+		}
+		current = next
+	}
+	if current.AuthType == "" {
+		current.AuthType = AuthNone
+	}
+	if current.Name == "" {
+		current.Name = "Project Git credential"
+	}
+	if err := validateCredential(current); err != nil {
+		return CredentialMaterial{}, nil, err
+	}
+	raw, err := json.Marshal(current)
+	if err != nil {
+		return CredentialMaterial{}, nil, err
+	}
+	encrypted, err := s.secrets.Encrypt(string(raw))
+	if err != nil {
+		return CredentialMaterial{}, nil, err
+	}
+	return CredentialMaterial{AuthType: current.AuthType, Username: current.Username, Secret: current.Secret, PrivateKey: current.PrivateKey, Passphrase: current.Passphrase, KnownHosts: current.KnownHosts, CustomCA: current.CustomCA}, encrypted, nil
 }

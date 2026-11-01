@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Copy, Eye, EyeOff, Plus, Save, Trash2 } from 'lucide-react'
+import { Copy, Plus, Save, Trash2 } from 'lucide-react'
 import { Children, cloneElement, isValidElement, type FormEvent, type ReactElement, type ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '../../components/ui/alert'
 import { Button } from '../../components/ui/button'
@@ -20,7 +20,7 @@ import { choiceDialog } from '../../stores/dialog'
 import { nodesForFilteredSelection, type DockerNode } from '../../lib/nodes'
 import { useUIStore } from '../../stores/ui'
 import { GitConnectionTest } from './connection-test'
-import { EnvironmentQuickAdd } from './environment-quick-add'
+import { EnvironmentFields } from './environment-fields'
 import {
   type CDConfiguration,
   type CDConfigureInput,
@@ -76,7 +76,6 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
   const [environmentLoading, setEnvironmentLoading] = useState(false)
   const [environmentError, setEnvironmentError] = useState('')
   const environmentRequest = useRef<AbortController | null>(null)
-  const [quickEnvironment, setQuickEnvironment] = useState(false)
   const [revealedWebhookSecret, setRevealedWebhookSecret] = useState('')
   const [secretCopied, setSecretCopied] = useState(false)
   const configurationSignature = useRef(JSON.stringify(toDraft(initial)))
@@ -254,27 +253,7 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
 
     <SettingsSection title={zh ? '手动环境变量' : 'Manual environment variables'} description={zh ? '用于 Compose 的 ${VARIABLE} 插值，覆盖环境变量文件中的同名值。容器需要的变量请在 Compose 的 environment 中引用。' : 'Used for ${VARIABLE} interpolation, overriding matching values in the environment file. Reference them in Compose environment to pass them to containers.'}>
       <p className="text-xs text-muted-foreground">{zh ? '值会加密保存，默认隐藏。点击“显示变量值”可查看并编辑已保存的值；未修改时保留，清空输入框保存为空值，删除行后保存即可移除。修改后请重新同步并发布。' : 'Values are encrypted and hidden by default. Show variable values to view and edit saved values. Unchanged values are kept; clear an input to save an empty value, or remove a row to delete it. Sync and deploy again after changes.'}</p>
-      <div className="flex min-w-0 flex-col gap-2">
-        {(draft.environment ?? []).map((variable, index) => {
-          const update = (patch: Partial<typeof variable>) => setDraft(current => ({ ...current, environment: current.environment?.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row) }))
-          const savedValue = variable.has_value ? environmentValues?.[variable.name] : undefined
-          return <div key={index} className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg bg-muted/35 p-2 sm:flex-nowrap" data-testid="cd-environment-row">
-            <Input aria-label={`${zh ? '变量名称' : 'Variable name'} ${index + 1}`} className="min-w-0 flex-1 font-mono sm:max-w-64" value={variable.name} maxLength={256} readOnly={variable.has_value} onChange={event => update({ name: event.target.value })} placeholder="APP_ENV" autoComplete="off" />
-            <div className="order-3 flex w-full min-w-0 gap-2 sm:order-none sm:w-auto sm:flex-1">
-              <Input aria-label={`${zh ? '变量值' : 'Variable value'} ${index + 1}`} type={showEnvironment ? 'text' : 'password'} className="font-mono" value={variable.value ?? savedValue ?? ''} onChange={event => update({ value: event.target.value })} placeholder={variable.has_value && variable.value === undefined && savedValue === undefined ? (zh ? '已保存 · 显示后可查看' : 'Saved · show to view') : (zh ? '空值' : 'Empty value')} autoComplete="new-password" spellCheck={false} />
-              <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"><Checkbox aria-label={`${zh ? '使用空值' : 'Use empty value'} ${index + 1}`} checked={variable.value === ''} onCheckedChange={checked => update({ value: checked ? '' : undefined })} /><span aria-hidden="true">{zh ? '空值' : 'Empty'}</span></label>
-            </div>
-            <Button type="button" variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={`${zh ? '删除变量' : 'Remove variable'} ${index + 1}`} onClick={() => setDraft(current => ({ ...current, environment: current.environment?.filter((_, rowIndex) => rowIndex !== index) }))}><Trash2 /></Button>
-          </div>
-        })}
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" variant="outline" size="sm" disabled={(draft.environment?.length ?? 0) >= 100} onClick={() => setDraft(current => ({ ...current, environment: [...current.environment ?? [], { name: '', value: undefined }] }))}><Plus />{zh ? '添加环境变量' : 'Add variable'}</Button>
-        <Button type="button" variant="ghost" size="sm" onClick={() => setQuickEnvironment(true)}>{zh ? '快速添加' : 'Quick add'}</Button>
-        {!!draft.environment?.length && <Button type="button" variant="ghost" size="sm" disabled={environmentLoading} aria-busy={environmentLoading} aria-pressed={showEnvironment} onClick={() => void toggleEnvironment()}>{environmentLoading ? <Spinner aria-hidden="true" /> : showEnvironment ? <EyeOff /> : <Eye />}{environmentLoading ? (zh ? '读取中…' : 'Loading…') : showEnvironment ? (zh ? '隐藏变量值' : 'Hide variable values') : (zh ? '显示变量值' : 'Show variable values')}</Button>}
-      </div>
-      {environmentError && <p role="alert" className="text-sm text-destructive">{environmentError}</p>}
-      {quickEnvironment && <EnvironmentQuickAdd variables={draft.environment ?? []} zh={zh} onAdd={environment => setDraft(current => ({ ...current, environment }))} onClose={() => setQuickEnvironment(false)} />}
+      <EnvironmentFields variables={draft.environment ?? []} onChange={environment=>setDraft(current=>({...current,environment}))} zh={zh} environmentValues={environmentValues} showEnvironment={showEnvironment} environmentLoading={environmentLoading} environmentError={environmentError} toggleEnvironment={toggleEnvironment} />
     </SettingsSection>
 
     <SettingsSection title={zh ? 'Git 认证' : 'Git authentication'} description={zh ? '凭据独立加密保存，可用于任何兼容的 HTTPS 或 SSH 仓库；公开仓库可以不选择。' : 'Credentials are encrypted separately and work with any compatible HTTPS or SSH repository. Public repositories need none.'}>
@@ -282,7 +261,7 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
       <GitConnectionTest repository={draft.repository} nodeIDs={draft.node_ids} projectName={projectName} creating={!!creation} zh={zh} />
     </SettingsSection>
 
-    <SettingsSection title={zh ? '目标节点' : 'Target nodes'} description={zh ? '一次审批后并行发布到全部选中节点；修改只影响后续 Release。' : 'One approval deploys to every selected node in parallel. Changes affect only future releases.'}>
+    <SettingsSection title={zh ? '目标节点' : 'Target nodes'} description={zh ? '每次发布使用当前选中节点；回滚默认使用所选配置快照的节点。' : 'Publishing uses the currently selected nodes; rollback defaults to the selected configuration snapshot’s nodes.'}>
       {nodes.isError && <p role="alert" className="text-xs text-destructive">{nodes.error.message}</p>}
       <TargetSelector nodes={nodes.data || []} value={draft.node_ids} zh={zh} onChange={(node_ids) => setDraft((current) => ({ ...current, node_ids }))} />
     </SettingsSection>
@@ -317,7 +296,7 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
       </div>
       <label className="flex max-w-xl cursor-pointer items-start gap-2">
         <Checkbox checked={draft.auto_rollback} onCheckedChange={(checked) => setDraft((current) => ({ ...current, auto_rollback: !!checked }))} className="mt-0.5" />
-        <span className="text-sm">{zh ? '部署失败时自动回滚' : 'Automatically roll back failed deployments'}<span className="mt-0.5 block text-xs text-muted-foreground">{zh ? '仅回到上一个成功的 Compose Release，不会回滚存储卷中的数据。' : 'Restores only the previous successful Compose release; volume data is never rolled back.'}</span></span>
+        <span className="text-sm">{zh ? '部署失败时自动回滚' : 'Automatically roll back failed deployments'}<span className="mt-0.5 block text-xs text-muted-foreground">{zh ? '各节点恢复到部署前的配置快照，不会回滚存储卷中的数据。' : 'Restores each node’s previous configuration snapshot; volume data is never rolled back.'}</span></span>
       </label>
     </SettingsSection>
 
@@ -390,7 +369,7 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 
 const emptyCredential = (): GitCredentialInput => ({ name: '', auth_type: 'http_token', username: '', secret: '', private_key: '', passphrase: '', known_hosts: '', custom_ca: '' })
 
-function CredentialSelector({ zh, nodeIDs, value, onChange, creating }: { zh: boolean; nodeIDs: string[]; value: GitAuthentication; onChange: (value: GitAuthentication) => void; creating?: boolean }) {
+export function CredentialSelector({ zh, nodeIDs, value, onChange, creating }: { zh: boolean; nodeIDs: string[]; value: GitAuthentication; onChange: (value: GitAuthentication) => void; creating?: boolean }) {
   const query = useQuery({ queryKey: ['git-credentials'], queryFn: () => api<GitCredential[]>('/credentials/git') })
   const available = (query.data || []).filter((row) => nodeIDs.every((id) => row.authorized_node_ids?.includes(id)))
   const input = value.credential || { ...emptyCredential(), ...value.summary }
@@ -451,7 +430,7 @@ function CredentialSelector({ zh, nodeIDs, value, onChange, creating }: { zh: bo
   </div>
 }
 
-function TargetSelector({ nodes, value, zh, onChange }: { nodes: DockerNode[]; value: string[]; zh: boolean; onChange: (value: string[]) => void }) {
+export function TargetSelector({ nodes, value, zh, onChange }: { nodes: DockerNode[]; value: string[]; zh: boolean; onChange: (value: string[]) => void }) {
   const currentGroupFilter = useUIStore((state) => state.currentGroupFilter)
   const { filtered, outsideSelected } = nodesForFilteredSelection(nodes, currentGroupFilter, value)
   const enabled = filtered.filter((node) => node.enabled)

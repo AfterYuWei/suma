@@ -44,7 +44,7 @@ SUMA is a single control plane for multi-node Docker management. Manage Engines 
 - Connect any HTTPS/SSH Git repository (GitLab, GitHub, or self-hosted); credentials are AES-GCM encrypted at rest
 - Webhook triggers: GitHub/GitLab-compatible push headers plus a generic signed fallback; scheduled polling sync also available
 - Every delivery is an immutable Release: exact commit plus a fingerprint of the rendered Compose configuration, fully auditable
-- Delivery modes: observe / manual approval / automatic, with parallel multi-node deployment and failed-node-only rollback
+- Delivery modes: observe / confirmed manual publication / automatic, with parallel multi-node deployment and failed-node-only rollback
 - Deployment health gates and drift detection keep the runtime reconciled with the desired state
 
 ### Authentication center

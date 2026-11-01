@@ -36,7 +36,7 @@ Compose and continuous delivery are separate aggregates with independent lifecyc
 
 - A SUMA-managed `Project backend=compose` owns editable `compose.yml`, `.env`, and non-secret `.suma/project.json` files below the configured Compose root. An external Compose Project is taken over as one Project, never per Container. Local Unix nodes prefer the complete ordered source set only after path, symlink, file, size, and associated-file checks; any failure falls back for the whole Project to Inspect-based reconstruction. TCP and Agent nodes never read remote label paths. Takeover atomically saves configuration without deploying or changing existing containers.
 - Optional shadow preview is a temporary Compose Project, not a new domain object. A strict eligibility policy permits only isolatable stateless drafts, rewrites owned network names into the temporary namespace, uses Tasks for start/cleanup, and provides TTL/page-leave/restart recovery. It never switches production traffic.
-- A Delivery Project owns repository configuration, synchronization policy, credentials, releases, approvals, deployment history, drift, and rollback state.
+- A Delivery Project owns repository configuration, synchronization policy, credentials, Git releases, deployment confirmations and operation history, drift, and rollback state.
 - Creating or deleting either project type never implicitly creates or deletes the other.
 - Compose is one deployment adapter invoked by a delivery release; it is not the CD aggregate root.
 - Docker Swarm's official object is a Swarm Stack. Future SUMA support would map it to `Project backend=swarm`; no Swarm adapter, runner, API, scheduler, task model, or menu is implemented now.
@@ -50,20 +50,20 @@ manual sync, periodic reconciliation, or verified webhook
   -> Git fetch and exact commit resolution
   -> detached worktree cleanliness and path/source-policy checks
   -> docker compose config validation, runtime policy, and canonical config hash
-  -> release record with exact commit/config identity
-  -> approval/manual deploy or automatic delivery
-  -> snapshot target nodes
+  -> one Release per project/repository/commit
+  -> confirmed manual deployment or automatic delivery
+  -> immutable DeliveryRecord configuration and target snapshot
   -> pull and deploy concurrently through a target-specific Compose runner
   -> per-node Docker health observation and result
   -> immutable per-node Attempt history and failed-node-only retry/rollback
   -> aggregate release/task/audit final status
 ```
 
-Drift uses each target's confirmed `DeliveryTargetState` to select the release specification, then probes targets concurrently with bounded timeouts and a short shared cache. Aggregation is tri-state: confirmed commit/runtime failures are degraded, reachability/indeterminate errors are unknown, and healthy requires every target to agree and pass runtime checks. Startup reconciliation is database-only and transactionally interrupts nonterminal Attempts/Deployments/Tasks before recomputing Release and project activity.
+Drift uses each target's confirmed `DeliveryTargetState.active_record_id` to select its actual configuration snapshot (legacy states retain their original release specification), then probes targets concurrently with bounded timeouts and a short shared cache. Aggregation is tri-state: confirmed commit/runtime failures are degraded, reachability/indeterminate errors are unknown, and healthy requires every target to agree and pass runtime checks. Startup reconciliation is database-only and transactionally interrupts nonterminal Attempts/Deployments/Tasks before recomputing Release and project activity.
 
-An in-process reservation plus project lock serializes sync, approval/rejection, delivery, and rollback for each Delivery Project, including work queued before its task goroutine starts. The background reconciler checks due projects at startup and every 15 seconds, using each project's configured synchronization interval. The Compose adapter always receives a stable explicit runtime name, project directory, ordered file list, and optional environment file, so different commit worktree paths do not change runtime identity. SUMA does not execute repository scripts, build application source, run tests, or build/publish images.
+An in-process reservation plus project lock serializes sync, rejection, delivery, and rollback for each Delivery Project, including work queued before its task goroutine starts. The background reconciler checks due projects at startup and every 15 seconds, using each project's configured synchronization interval. The Compose adapter always receives a stable explicit runtime name, project directory, ordered file list, and optional environment file, so different commit worktree paths do not change runtime identity. SUMA does not execute repository scripts, build application source, run tests, or build/publish images.
 
-Approval and rejection are explicit release state transitions; approval alone does not deploy. Rollback creates and deploys a new release record based on a previously successful release. It never runs `down -v` and never reverses application data or database migrations. Manual rollback changes an `auto` project to `manual` before restoration. An automatic restoration after a failed Compose apply also changes the project to `manual`, preventing the polling reconciler from immediately replaying the newer revision. Git remains the desired source, so a long-term rollback should also revert or fix the repository revision.
+Confirming publication records approval and immediately starts deployment; candidates use `ready` and rejection remains explicit. Rollback selects a complete configuration record (including failed records) and appends a DeliveryRecord while retaining the Git Release identity. It never runs `down -v` and never reverses application data or database migrations. Manual rollback changes an `auto` project to `manual` before restoration. An automatic restoration after a failed Compose apply also changes the project to `manual`, preventing the polling reconciler from immediately replaying the newer revision. Git remains the desired source, so a long-term rollback should also revert or fix the repository revision.
 
 ## Web application
 
@@ -113,3 +113,9 @@ Adapter HTTP clients enforce HTTPS/private-address policy, validated DNS dialing
 Only SUMA-owned notification configuration, recipient metadata, event/delivery evidence and per-user read state are persisted. Docker remains authoritative for current resources. Restart resumes durable delivery leases and configured discovery connections. The global Audit service retains ordinary user operations and notification configuration changes, with node/Task/Release associations.
 
 PostgreSQL 18.6 is the only application database. Startup requires SUMA_DATABASE_DSN and applies an embedded, transaction-locked fresh baseline. DataRoot is independent. Every database test uses an isolated real PostgreSQL schema. No historical migration or automatic database reset is provided. See [PostgreSQL operations](doc/postgresql.md) and [notification setup](doc/notifications.md).
+
+Delivery operations append `DeliveryRecord` rows while retaining the Git Release ID. Publishing snapshots current saved settings; retry uses its explicit source record, and rollback selects a complete historical record with an optional one-operation node override. Node Attempts link to the operation record and previous configuration record. Automatic rollback has separate evidence and cannot change the original failure. Migration 0007 retains duplicate legacy Release IDs as aliases, maps attempts by original IDs, and marks unrecorded historical policy fields incomplete instead of inferring them from current settings.
+
+### 项目 CD 与持续交付
+
+`projectcd` 是节点项目的单节点 CD 部署模式，GitOps 负责其 Git 来源与同步；`cd` 管理全局批量多节点交付。两者调用 `deployment.DeployNode` 共享镜像拉取、Compose 应用和健康确认，并共用来源校验、配置指纹、环境变量与 Webhook 解析。各自保留配置和操作证据，项目 CD 不创建全局 Release。普通项目以 `deployment_mode=manual|cd` 表达部署模式，仍使用 `backend=compose`。说明见 `doc/project-cd.md`。

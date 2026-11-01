@@ -38,7 +38,7 @@ func securityBoundary(service *settings.Service) gin.HandlerFunc {
 		}
 		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), securityContextKey{}, policy))
 		initialize := c.Request.URL.Path == "/api/v1/auth/initialize"
-		if !unsafeMethod(c.Request.Method) || strings.HasPrefix(c.Request.URL.Path, "/api/v1/webhooks/git/") {
+		if !unsafeMethod(c.Request.Method) || (strings.HasPrefix(c.Request.URL.Path, "/api/v1/webhooks/git/") || strings.HasPrefix(c.Request.URL.Path, "/api/v1/webhooks/gitops/")) {
 			c.Next()
 			return
 		}

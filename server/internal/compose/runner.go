@@ -373,3 +373,16 @@ func (r *CLIRunner) commandEnvironment() ([]string, func(), error) {
 	}
 	return filtered, cleanup, nil
 }
+
+// ExportConfiguration merges source files while preserving variable expressions
+// and file references. It is used only to prepare a checked manual conversion.
+func (r *CLIRunner) ExportConfiguration(ctx context.Context, spec ExecutionSpec) (string, error) {
+	return r.captureSpec(ctx, spec, io.Discard, "config", "--no-interpolate", "--no-env-resolution", "--no-path-resolution", "--format", "json")
+}
+
+func (r *CLIRunner) ProjectLifecycle(ctx context.Context, spec ExecutionSpec, action string) error {
+	if action != "start" && action != "stop" && action != "restart" {
+		return errors.New("unsupported project lifecycle action")
+	}
+	return r.runSpec(ctx, spec, io.Discard, action)
+}

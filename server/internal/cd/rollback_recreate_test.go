@@ -49,7 +49,7 @@ func TestRollbackRecreatesUnchangedLatestAndStopsOnPullFailure(t *testing.T) {
 					h.runner.mu.Unlock()
 				}
 				before := len(h.runner.Calls())
-				rollback, err := h.service.Rollback(ctx, h.project.Name, first.ID, Actor{Name: "operator"})
+				rollback, err := h.service.Rollback(ctx, h.project.Name, first.ID, *first.LatestRecordID, nil, Actor{Name: "operator"})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -118,9 +118,7 @@ func TestAutomaticRollbackForcesContainerReplacement(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := task.StatusFailed
-			if targeted {
-				want = task.StatusSuccess
-			}
+
 			waitTask(t, h.db, secondTask.ID, want)
 			assertCallSubsequence(t, h.runner.Calls()[before:], []string{"pull", "up", "pull", "up", "ps"})
 			specs := h.runner.UpSpecs()

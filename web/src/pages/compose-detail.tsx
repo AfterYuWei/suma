@@ -1,3 +1,5 @@
+import {useProjectCD} from '../features/project-cd/queries'
+import { ProjectCD, ProjectCDEnvironment } from '../features/project-cd/project-cd'
 import { ProjectImageUpdates } from '../features/image-updates/project-updates'
 import { useContainerWorkspace } from '../features/containers/use-container-workspace'
 import { useImageUpdates } from '../features/image-updates/hooks'
@@ -78,7 +80,7 @@ import {
 import { registerProjectNavigationGuard } from '../lib/project-navigation-guard'
 import { ApiError } from '../lib/api'
 import { configKeys, type ConfigPath } from '../features/compose/document'
-type View = 'Files' | 'Services' | 'Logs'
+type View = 'Files' | 'Services' | 'Logs' | 'CD'
 const statusTone = (status: string) =>
   status === 'running'
     ? 'success'
@@ -112,6 +114,8 @@ export function ComposeDetailPage() {
     enabled: backend === 'compose'
   })
   const [view, setView] = useState<View>('Files')
+  const [gitOpsDirty,setGitOpsDirty]=useState(false)
+  const gitops = useProjectCD(nodeID, projectName, !!query.data?.managed && !query.data?.delivery_project_name && (view === 'CD' || query.data?.deployment_mode === 'cd'))
   const [compose, setCompose] = useState('')
   const [environment, setEnvironment] = useState('')
   const [notice, setNotice] = useState<{ message: string; tone: 'success' | 'error' | 'pending' } | null>(null)
@@ -529,7 +533,7 @@ export function ComposeDetailPage() {
 
   const headerActions = (
     <div className="flex flex-wrap items-center gap-2">
-      {project.managed && (
+      {project.managed && project.deployment_mode !== 'cd' && (
         <>
           {view === 'Files' && (
             <>
@@ -670,7 +674,7 @@ export function ComposeDetailPage() {
             </Alert>
           )}
           {project.managed &&
-            project.metadata?.origin === 'takeover' &&
+            project.metadata?.origin === 'takeover' && !(project.deployment_mode === 'cd' && gitops.configuration.data?.applied) &&
             !project.metadata.last_deployed_at && (
               <Alert className="w-full">
                 <AlertTitle>
@@ -688,11 +692,11 @@ export function ComposeDetailPage() {
               </Alert>
             )}
           <div className="flex w-full min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
-            <Tabs value={view} onValueChange={(value) => setView(value as View)}>
+            <Tabs value={view} onValueChange={async(value)=>{if(!gitOpsDirty || await confirmDialog({title:zh?'放弃未保存的 CD 配置？':'Discard unsaved CD settings?',danger:true})){setView(value as View)}}}>
               <TabsList>
                 {(project.managed
-                  ? ['Files', 'Services', 'Logs']
-                  : ['Services', 'Logs']
+                  ? ['Files', 'Services', 'Logs', 'CD']
+                  : ['Services', 'Logs', 'CD']
                 ).map((name) => (
                   <TabsTrigger key={name} value={name}>
                     {name === 'Files'
@@ -703,7 +707,7 @@ export function ComposeDetailPage() {
                         ? zh
                           ? '服务'
                           : 'Services'
-                        : zh
+                        : name === 'CD' ? 'CD' : zh
                           ? '日志'
                           : 'Logs'}
                   </TabsTrigger>
@@ -764,13 +768,18 @@ export function ComposeDetailPage() {
                 key={`${nodeID}:${projectName}`}
                 nodeID={nodeID}
                 onPendingChange={setPendingConfiguration}
-                compose={compose}
+                readOnly={project.deployment_mode === 'cd'}
+                sourceFiles={project.deployment_mode === 'cd' ? gitops.preview.data?.files : undefined}
+                environmentPanel={project.deployment_mode === 'cd' && gitops.configuration.data ? <ProjectCDEnvironment onDirtyChange={setGitOpsDirty} key={`${nodeID}/${projectName}`} nodeID={nodeID} projectName={projectName} configuration={gitops.configuration.data} repositoryEnvironment={gitops.preview.data?.repository_environment ?? ''} zh={zh} /> : undefined}
+                compose={project.deployment_mode === 'cd' ? gitops.preview.data?.compose ?? compose : compose}
                 environment={environment}
                 onCompose={(value) => {
+                  if(project.deployment_mode === 'cd') return
                   setCompose(value)
                   setValidated('')
                 }}
                 onEnvironment={(value) => {
+                  if(project.deployment_mode === 'cd') return
                   setEnvironment(value)
                   setValidated('')
                 }}
@@ -783,7 +792,9 @@ export function ComposeDetailPage() {
                   !!review
                 }
               />
-              <p className="text-xs text-muted-foreground">
+              {project.deployment_mode === 'cd' && gitops.preview.isError && <InlineStatus tone="error">{gitops.preview.error.message}</InlineStatus>}
+              {project.deployment_mode === 'cd' && <p className="text-xs text-muted-foreground">{zh?'Git 管理 · 配置只读':'Git managed · read only'} · {gitops.preview.data?.commit_sha.slice(0,8) ?? '—'} · {gitops.preview.data?.applied ? (zh?'已应用':'Applied') : (zh?'待应用':'Not applied')}</p>}
+              <p className="text-xs text-muted-foreground" hidden={project.deployment_mode === 'cd'}>
                 {dirty ? (zh ? '未保存' : 'Unsaved') : zh ? '已保存' : 'Saved'}{' '}
                 ·{' '}
                 {validated === signature
@@ -798,7 +809,7 @@ export function ComposeDetailPage() {
           )}
 
           {view === 'Services' && (<>
-            {project?.managed && !project.delivery_project_name && <ProjectImageUpdates nodeID={nodeID} projectName={projectName} details={false} />}
+            {project?.managed && !project.delivery_project_name && project.deployment_mode !== 'cd' && <ProjectImageUpdates nodeID={nodeID} projectName={projectName} details={false} />}
               <ProjectServices
               key={`${nodeID}/${projectName}`}
               nodeID={nodeID}
@@ -815,6 +826,8 @@ export function ComposeDetailPage() {
             />
           </>)}
           {view === 'Logs' && <ProjectLogs key={`${nodeID}/${projectName}`} nodeID={nodeID} projectName={projectName} />}
+          {view === 'CD' && (project.delivery_project_name ? <p className="text-sm">{zh?'此项目由全局持续交付管理。':'This project is managed by global Continuous Delivery.'}<Button variant="link" onClick={()=>void navigate({to:'/continuous-delivery/$projectName',params:{projectName:project.delivery_project_name!}})}>{zh?'打开持续交付':'Open Continuous Delivery'}</Button></p> : !project.managed ? <p className="text-sm text-muted-foreground">{zh?'请先接管此项目，再关联 Git 仓库。':'Take over this project before connecting a Git repository.'}</p> : gitops.configuration.data ? <ProjectCD onDirtyChange={setGitOpsDirty} nodeID={nodeID} projectName={projectName} configuration={gitops.configuration.data} initialEnvironment={project.environment} baselineCompose={project.compose} zh={zh}/> : gitops.configuration.isError ? <ErrorState description={gitops.configuration.error.message}/> : <LoadingState label={zh?'正在加载 CD 配置':'Loading CD settings'}/>)}
+
         </div>
       </ResourceFrame>
       <ContainerWorkspaceDialog workspace={workspace} rows={services.data ?? []} available={!!services.data && !services.isError} zh={zh} />

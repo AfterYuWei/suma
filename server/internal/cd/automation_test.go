@@ -34,7 +34,7 @@ func TestPausedAutomationPreservesManualLifecycle(t *testing.T) {
 	if first.Status != StatusSucceeded {
 		t.Fatal("manual lifecycle unavailable while paused", first.Status)
 	}
-	rollback, err := h.service.Rollback(ctx, h.project.Name, first.ID, Actor{Name: "operator"})
+	rollback, err := h.service.Rollback(ctx, h.project.Name, first.ID, *first.LatestRecordID, nil, Actor{Name: "operator"})
 	if err != nil {
 		t.Fatal(err)
 	}

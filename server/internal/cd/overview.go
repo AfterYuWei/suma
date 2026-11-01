@@ -110,8 +110,14 @@ func (s *Service) projectOverview(ctx context.Context, row database.DeliveryProj
 		item.NodeIDs = nodeIDs
 	}
 	var releases []database.DeliveryRelease
-	if err := s.db.WithContext(ctx).Where("project_id = ?", row.ID).Order("id DESC").Limit(50).Find(&releases).Error; err == nil && len(releases) > 0 {
+	if err := s.db.WithContext(ctx).Where("project_id = ? AND canonical_release_id IS NULL", row.ID).Order("id DESC").Limit(50).Find(&releases).Error; err == nil && len(releases) > 0 {
 		latest := releases[0]
+		if row.DesiredCommit != "" {
+			var desired database.DeliveryRelease
+			if err := s.db.WithContext(ctx).Where("project_id = ? AND repository_url = ? AND commit_sha = ? AND canonical_release_id IS NULL", row.ID, row.GitCloneURL, row.DesiredCommit).First(&desired).Error; err == nil {
+				latest = desired
+			}
+		}
 		item.LatestRelease = &ReleaseSummary{ID: latest.ID, Status: latest.Status, CommitSHA: latest.CommitSHA, TriggerType: latest.TriggerType, CreatedAt: latest.CreatedAt}
 		switch latest.Status {
 		case StatusAwaitingApproval:

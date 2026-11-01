@@ -42,20 +42,23 @@ type BatchResult struct {
 	Success bool   `json:"success"`
 }
 type Service struct {
-	root         string
-	runner       Runner
-	tasks        *task.Service
-	containers   containerdomain.Service
-	nodeID       string
-	nodeName     string
-	localSources bool
-	instanceID   string
-	projectLocks *sync.Map
-	operations   *sync.Map
-	registries   *credential.RegistryService
+	projectCDView   func(context.Context, string, string) (ProjectDeployment, error)
+	projectCDAction func(context.Context, string, string, string) (database.Task, error)
+	db              *gorm.DB
+	root            string
+	runner          Runner
+	tasks           *task.Service
+	containers      containerdomain.Service
+	nodeID          string
+	nodeName        string
+	localSources    bool
+	instanceID      string
+	projectLocks    *sync.Map
+	operations      *sync.Map
+	registries      *credential.RegistryService
 }
 
-func NewService(_ *gorm.DB, root string, runner Runner, tasks *task.Service, containers containerdomain.Service) (*Service, error) {
+func NewService(db *gorm.DB, root string, runner Runner, tasks *task.Service, containers containerdomain.Service) (*Service, error) {
 	absolute, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -63,10 +66,10 @@ func NewService(_ *gorm.DB, root string, runner Runner, tasks *task.Service, con
 	if err := os.MkdirAll(absolute, 0o750); err != nil {
 		return nil, err
 	}
-	return &Service{root: absolute, runner: runner, tasks: tasks, containers: containers, nodeID: "local", nodeName: "Local", localSources: true, instanceID: fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano()), projectLocks: &sync.Map{}, operations: &sync.Map{}}, nil
+	return &Service{db: db, root: absolute, runner: runner, tasks: tasks, containers: containers, nodeID: "local", nodeName: "Local", localSources: true, instanceID: fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano()), projectLocks: &sync.Map{}, operations: &sync.Map{}}, nil
 }
 func (s *Service) ForNode(nodeID, nodeName string, runner Runner, containers containerdomain.Service, localSources bool) *Service {
-	return &Service{root: s.root, runner: runner, tasks: s.tasks, containers: containers, nodeID: nodeID, nodeName: nodeName, localSources: localSources, instanceID: s.instanceID, projectLocks: s.projectLocks, operations: s.operations, registries: s.registries}
+	return &Service{db: s.db, projectCDAction: s.projectCDAction, projectCDView: s.projectCDView, root: s.root, runner: runner, tasks: s.tasks, containers: containers, nodeID: nodeID, nodeName: nodeName, localSources: localSources, instanceID: s.instanceID, projectLocks: s.projectLocks, operations: s.operations, registries: s.registries}
 }
 func (s *Service) List(ctx context.Context) ([]Project, error) {
 	containers, err := s.containers.List(ctx)
@@ -99,7 +102,11 @@ func (s *Service) List(ctx context.Context) ([]Project, error) {
 	}
 	result := make([]Project, 0, len(byName))
 	for _, project := range byName {
-		result = append(result, decorate(project, containers))
+		value := decorate(project, containers)
+		if err := s.decorateDeployment(ctx, &value); err != nil {
+			return nil, err
+		}
+		result = append(result, value)
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].UpdatedAt.Equal(result[j].UpdatedAt) {
@@ -148,6 +155,9 @@ func (s *Service) getUnlocked(ctx context.Context, name string) (Project, error)
 	}
 	project.Environment = string(environment)
 	project.Revision = configurationRevision(project.Compose, project.Environment)
+	if err := s.decorateDeployment(ctx, &project); err != nil {
+		return Project{}, err
+	}
 	return project, nil
 }
 
@@ -251,6 +261,10 @@ func (s *Service) Save(ctx context.Context, name, content, environment string) (
 func (s *Service) SaveWithRevision(ctx context.Context, name, content, environment, expected string) (Project, error) {
 	unlock := s.lockProject(name)
 	defer unlock()
+	if err := s.requireManual(name); err != nil {
+		return Project{}, err
+	}
+
 	if s.operationActive(name) {
 		return Project{}, ErrProjectBusy
 	}
@@ -278,6 +292,9 @@ func (s *Service) Remove(ctx context.Context, name string) error {
 	return s.removeUnlocked(ctx, name)
 }
 func (s *Service) removeUnlocked(_ context.Context, name string) error {
+	if err := s.requireManual(name); err != nil {
+		return err
+	}
 	project, err := s.managedProject(name)
 	if err != nil {
 		return err
@@ -294,6 +311,9 @@ func (s *Service) removeUnlocked(_ context.Context, name string) error {
 func (s *Service) ForceRemove(ctx context.Context, name string, preserveVolumes bool) error {
 	unlock := s.lockProject(name)
 	defer unlock()
+	if err := s.requireManual(name); err != nil {
+		return err
+	}
 	if s.operationActive(name) {
 		return ErrProjectBusy
 	}
@@ -425,8 +445,19 @@ func (s *Service) UpdateSelected(ctx context.Context, name, revision string, upd
 	return s.action(ctx, name, "update", revision, &update, update.AllowDockerSocket)
 }
 func (s *Service) action(ctx context.Context, name, action, expected string, selected *SelectedUpdate, allowDockerSocket ...bool) (database.Task, error) {
+	if owned, err := s.projectCDOwned(name); err != nil {
+		return database.Task{}, err
+	} else if owned {
+		if s.projectCDAction != nil && (action == "start" || action == "stop" || action == "restart") {
+			return s.projectCDAction(ctx, s.effectiveNodeID(), name, action)
+		}
+		return database.Task{}, ErrProjectCDManaged
+	}
 	unlock := s.lockProject(name)
 	defer unlock()
+	if err := s.requireManual(name); err != nil {
+		return database.Task{}, err
+	}
 	if s.operationActive(name) {
 		return database.Task{}, ErrProjectBusy
 	}

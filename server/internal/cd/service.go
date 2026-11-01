@@ -4,14 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -22,6 +19,7 @@ import (
 	"github.com/suma/suma/server/internal/compose"
 	credentialrepo "github.com/suma/suma/server/internal/credential"
 	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/deployment"
 	"github.com/suma/suma/server/internal/event"
 	gitrepo "github.com/suma/suma/server/internal/git"
 	"github.com/suma/suma/server/internal/secret"
@@ -35,7 +33,7 @@ const (
 	ModeAuto    = "auto"
 
 	StatusValidating       = "validating"
-	StatusAwaitingApproval = "awaiting_approval"
+	StatusAwaitingApproval = "ready"
 	StatusApproved         = "approved"
 	StatusRejected         = "rejected"
 	StatusPulling          = "pulling"
@@ -643,26 +641,42 @@ func (s *Service) syncLocked(ctx context.Context, projectID uint, taskID, trigge
 		images[i] = compose.RedactEnvironment(images[i], spec.Environment)
 	}
 	var existing database.DeliveryRelease
-	err = s.db.WithContext(ctx).Where("project_id = ? AND commit_sha = ? AND config_hash = ? AND status IN ?", project.ID, revision.CommitSHA, configHash, []string{StatusAwaitingApproval, StatusApproved, StatusSucceeded, StatusRolledBack}).Order("id DESC").First(&existing).Error
+	err = s.db.WithContext(ctx).Where("project_id = ? AND repository_url = ? AND commit_sha = ? AND canonical_release_id IS NULL", project.ID, project.GitCloneURL, revision.CommitSHA).First(&existing).Error
 	if err == nil {
+		filesJSON, _ := json.Marshal(repository.ComposeFiles)
+		imagesJSON, _ := json.Marshal(images)
+		if err := s.db.WithContext(ctx).Model(&existing).Updates(map[string]any{"config_hash": configHash, "image_references": string(imagesJSON), "compose_files_json": string(filesJSON), "environment_file": repository.EnvironmentFile, "environment_ciphertext": project.EnvironmentCiphertext, "worktree_path": revision.WorktreePath}).Error; err != nil {
+			return err
+		}
 		if err := s.db.WithContext(ctx).Model(&project).Update("observed_commit", revision.CommitSHA).Error; err != nil {
 			return err
 		}
-		if !autoDeploy || (project.ActiveReleaseID != nil && *project.ActiveReleaseID == existing.ID) {
+		if !autoDeploy || existing.Status == StatusRejected {
+			report(100, "Commit already synchronized")
+			return nil
+		}
+		record, err := s.snapshotRecord(ctx, project, existing, AttemptDeploy, actor)
+		if err != nil {
+			return err
+		}
+		var activeCount int64
+		var nodeIDs []string
+		if err := json.Unmarshal([]byte(record.NodeIDsJSON), &nodeIDs); err != nil {
+			return err
+		}
+		if err := s.db.WithContext(ctx).Table("delivery_target_states AS state").Joins("JOIN delivery_records AS record ON record.id = state.active_record_id").Where("state.project_id = ? AND state.node_id IN ? AND state.active_release_id = ? AND record.config_hash = ?", project.ID, nodeIDs, existing.ID, configHash).Count(&activeCount).Error; err != nil {
+			return err
+		}
+		if activeCount == int64(len(nodeIDs)) {
 			report(100, "Commit already reconciled")
 			return nil
 		}
-		if existing.Status == StatusAwaitingApproval || existing.Status == StatusApproved {
-			return s.deployLocked(ctx, project, existing, taskID, false, actor, report)
-		}
-		reconcileRelease := database.DeliveryRelease{ProjectID: existing.ProjectID, RepositoryURL: existing.RepositoryURL, GitRef: existing.GitRef, CommitSHA: existing.CommitSHA, CommitMessage: existing.CommitMessage, CommitAuthor: existing.CommitAuthor, ConfigHash: existing.ConfigHash, ImageReferences: existing.ImageReferences, TaskID: taskID, Status: StatusAwaitingApproval, TriggerType: "reconcile", TriggerActor: actor.Name, PreviousReleaseID: project.ActiveReleaseID, WorktreePath: existing.WorktreePath, ComposeFilesJSON: existing.ComposeFilesJSON, EnvironmentFile: existing.EnvironmentFile, EnvironmentCiphertext: existing.EnvironmentCiphertext}
-		if err := s.db.WithContext(ctx).Create(&reconcileRelease).Error; err != nil {
+
+		record.TriggerType = trigger
+		if err := s.db.WithContext(ctx).Create(&record).Error; err != nil {
 			return err
 		}
-		if err := s.snapshotReleaseTargets(ctx, project.ID, reconcileRelease.ID); err != nil {
-			return err
-		}
-		return s.deployLocked(ctx, project, reconcileRelease, taskID, false, actor, report)
+		return s.executeRecord(ctx, project, existing, record, taskID, report, true)
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
@@ -690,80 +704,21 @@ func (s *Service) syncLocked(ctx context.Context, projectID uint, taskID, trigge
 		return err
 	}
 	if autoDeploy {
-		return s.deployLocked(ctx, project, release, taskID, false, actor, report)
+		record, err := s.snapshotRecord(ctx, project, release, AttemptDeploy, actor)
+		if err != nil {
+			return err
+		}
+		record.TriggerType = trigger
+		if err := s.db.WithContext(ctx).Create(&record).Error; err != nil {
+			return err
+		}
+		return s.executeRecord(ctx, project, release, record, taskID, report, true)
 	}
 	if s.emit != nil {
 		s.emit(event.Event{Type: "cd.awaiting_approval", Severity: "warning", Scope: "control_plane", Project: project.Name, ResourceType: "release", ResourceID: fmt.Sprint(release.ID), ReleaseID: &release.ID, TaskID: taskID, Title: project.Name, Message: "Release " + release.CommitSHA + " is ready for approval"})
 	}
 	report(100, "Release is ready for approval")
 	return nil
-}
-
-func (s *Service) Deploy(ctx context.Context, name string, releaseID uint, actor Actor) (database.Task, error) {
-	project, release, err := s.projectRelease(ctx, name, releaseID)
-	if err != nil {
-		return database.Task{}, err
-	}
-	if project.ReconcileMode == ModeObserve {
-		return database.Task{}, errors.New("observe mode does not allow deployments")
-	}
-	if release.Status != StatusApproved && release.Status != StatusFailed {
-		return database.Task{}, fmt.Errorf("release cannot be deployed from status %s", release.Status)
-	}
-	if !s.reserve(project.ID) {
-		return database.Task{}, errors.New("another delivery operation is already queued for this project")
-	}
-	row, err := s.tasks.StartWithID("cd.deploy", "Deploy "+name, func(ctx context.Context, taskID string, report task.Reporter) error {
-		defer s.releaseReservation(project.ID)
-		lock := s.projectLock(project.ID)
-		lock.Lock()
-		defer lock.Unlock()
-		if err := s.db.WithContext(ctx).First(&project, project.ID).Error; err != nil {
-			return err
-		}
-		if err := s.db.WithContext(ctx).First(&release, release.ID).Error; err != nil {
-			return err
-		}
-		err := s.deployLocked(ctx, project, release, taskID, false, actor, report)
-		s.recordFinal(actor, "cd.deploy", name, taskID, &release.ID, err)
-		return err
-	})
-	if err != nil {
-		s.releaseReservation(project.ID)
-	}
-	return row, err
-}
-
-func (s *Service) Approve(ctx context.Context, name string, releaseID uint, actor Actor) (database.DeliveryRelease, error) {
-	project, release, err := s.projectRelease(ctx, name, releaseID)
-	if err != nil {
-		return release, err
-	}
-	if project.ReconcileMode == ModeObserve {
-		return release, errors.New("observe mode does not allow approvals")
-	}
-	if actor.UserID == nil {
-		return release, errors.New("an authenticated user is required to approve a release")
-	}
-	if !s.reserve(project.ID) {
-		return release, errors.New("another delivery operation is already queued for this project")
-	}
-	defer s.releaseReservation(project.ID)
-	lock := s.projectLock(project.ID)
-	lock.Lock()
-	defer lock.Unlock()
-	if err := s.db.WithContext(ctx).First(&release, release.ID).Error; err != nil {
-		return release, err
-	}
-	if release.Status != StatusAwaitingApproval {
-		return release, fmt.Errorf("release cannot be approved from status %s", release.Status)
-	}
-	now := time.Now()
-	if err := s.db.WithContext(ctx).Model(&release).Updates(map[string]any{"status": StatusApproved, "approved_by": *actor.UserID, "approved_at": now}).Error; err != nil {
-		return release, err
-	}
-	s.recordFinal(actor, "cd.approve", name, release.TaskID, &release.ID, nil)
-	return release, s.db.WithContext(ctx).First(&release, release.ID).Error
 }
 
 func (s *Service) Reject(ctx context.Context, name string, releaseID uint, actor Actor) (database.DeliveryRelease, error) {
@@ -792,393 +747,11 @@ func (s *Service) Reject(ctx context.Context, name string, releaseID uint, actor
 	return release, s.db.WithContext(ctx).First(&release, release.ID).Error
 }
 
-func (s *Service) Rollback(ctx context.Context, name string, releaseID uint, actor Actor) (database.Task, error) {
-	project, release, err := s.projectRelease(ctx, name, releaseID)
-	if err != nil {
-		return database.Task{}, err
-	}
-	if release.Status != StatusSucceeded && release.Status != StatusRolledBack {
-		return database.Task{}, errors.New("only a previously successful release can be restored")
-	}
-	if project.ReconcileMode == ModeObserve {
-		return database.Task{}, errors.New("observe mode does not allow rollbacks")
-	}
-	if !s.reserve(project.ID) {
-		return database.Task{}, errors.New("another delivery operation is already queued for this project")
-	}
-	if project.ReconcileMode == ModeAuto {
-		if err := s.db.WithContext(ctx).Model(&project).Update("reconcile_mode", ModeManual).Error; err != nil {
-			s.releaseReservation(project.ID)
-			return database.Task{}, err
-		}
-		project.ReconcileMode = ModeManual
-	}
-	rollbackRelease := database.DeliveryRelease{
-		ProjectID: release.ProjectID, RepositoryURL: release.RepositoryURL,
-		GitRef: release.GitRef, CommitSHA: release.CommitSHA, CommitMessage: release.CommitMessage,
-		CommitAuthor: release.CommitAuthor, ConfigHash: release.ConfigHash, ImageReferences: release.ImageReferences,
-		Status: StatusAwaitingApproval, TriggerType: "rollback", TriggerActor: actor.Name,
-		PreviousReleaseID: project.ActiveReleaseID, WorktreePath: release.WorktreePath, ComposeFilesJSON: release.ComposeFilesJSON, EnvironmentFile: release.EnvironmentFile, EnvironmentCiphertext: release.EnvironmentCiphertext,
-	}
-	if err := s.db.WithContext(ctx).Create(&rollbackRelease).Error; err != nil {
-		s.releaseReservation(project.ID)
-		return database.Task{}, err
-	}
-	if err := s.snapshotReleaseTargets(ctx, project.ID, rollbackRelease.ID); err != nil {
-		s.releaseReservation(project.ID)
-		return database.Task{}, err
-	}
-	row, err := s.tasks.StartWithID("cd.rollback", "Roll back "+name, func(ctx context.Context, taskID string, report task.Reporter) error {
-		defer s.releaseReservation(project.ID)
-		lock := s.projectLock(project.ID)
-		lock.Lock()
-		defer lock.Unlock()
-		if err := s.db.WithContext(ctx).First(&project, project.ID).Error; err != nil {
-			return err
-		}
-		if err := s.db.WithContext(ctx).First(&rollbackRelease, rollbackRelease.ID).Error; err != nil {
-			return err
-		}
-		err := s.deployLocked(ctx, project, rollbackRelease, taskID, true, actor, report)
-		s.recordFinal(actor, "cd.rollback", name, taskID, &rollbackRelease.ID, err)
-		return err
-	})
-	if err != nil {
-		s.releaseReservation(project.ID)
-		_ = s.db.WithContext(ctx).Delete(&rollbackRelease).Error
-	}
-	return row, err
-}
-
-func (s *Service) deployLocked(ctx context.Context, project database.DeliveryProject, release database.DeliveryRelease, taskID string, rollback bool, actor Actor, report task.Reporter) error {
-	if s.targets != nil {
-		return s.deployTargetsLocked(ctx, project, release, taskID, rollback, actor, report)
-	}
-	if err := s.git.Verify(ctx, release.WorktreePath, release.CommitSHA); err != nil {
-		return s.failRelease(ctx, release.ID, err)
-	}
-	spec, err := s.releaseSpec(runtimeName(project), release)
-	if err != nil {
-		return err
-	}
-	spec.ForceRecreate = rollback || release.Status == StatusFailed
-	now := time.Now()
-	status := StatusPulling
-	if rollback {
-		status = StatusRollingBack
-	}
-	if err := s.db.WithContext(ctx).Model(&release).Updates(map[string]any{"status": status, "task_id": taskID, "started_at": now, "failure_reason": ""}).Error; err != nil {
-		return err
-	}
-	report(15, "Pulling deployment images")
-	if err := s.compose.PullRelease(ctx, spec, &reportWriter{report: report, progress: 30}); err != nil {
-		return s.failRelease(ctx, release.ID, err)
-	}
-	if err := s.db.WithContext(ctx).Model(&release).Update("status", StatusDeploying).Error; err != nil {
-		return err
-	}
-	report(55, "Applying Compose release")
-	if err := s.compose.UpRelease(ctx, spec, project.DeploymentTimeout, &reportWriter{report: report, progress: 70}); err != nil {
-		failure := s.failRelease(ctx, release.ID, err)
-		if project.AutoRollback && !rollback && release.PreviousReleaseID != nil {
-			_ = s.db.WithContext(ctx).Model(&project).Update("reconcile_mode", ModeManual).Error
-			project.ReconcileMode = ModeManual
-			var previous database.DeliveryRelease
-			if loadErr := s.db.WithContext(ctx).First(&previous, *release.PreviousReleaseID).Error; loadErr == nil {
-				report(80, "Deployment failed; restoring previous release")
-				restore := database.DeliveryRelease{ProjectID: previous.ProjectID, RepositoryURL: previous.RepositoryURL, GitRef: previous.GitRef, CommitSHA: previous.CommitSHA, CommitMessage: previous.CommitMessage, CommitAuthor: previous.CommitAuthor, ConfigHash: previous.ConfigHash, ImageReferences: previous.ImageReferences, TaskID: taskID, Status: StatusAwaitingApproval, TriggerType: "automatic_rollback", TriggerActor: "SUMA", PreviousReleaseID: &release.ID, WorktreePath: previous.WorktreePath, ComposeFilesJSON: previous.ComposeFilesJSON, EnvironmentFile: previous.EnvironmentFile, EnvironmentCiphertext: previous.EnvironmentCiphertext}
-				if createErr := s.db.WithContext(ctx).Create(&restore).Error; createErr == nil {
-					_ = s.deployLocked(ctx, project, restore, taskID, true, Actor{Name: "SUMA"}, report)
-				}
-			}
-		}
-		return failure
-	}
-	if err := s.db.WithContext(ctx).Model(&release).Update("status", StatusVerifying).Error; err != nil {
-		return err
-	}
-	report(85, "Reading deployed service health")
-	health, err := s.compose.PS(ctx, spec, io.Discard)
-	if err != nil {
-		return s.failRelease(ctx, release.ID, err)
-	}
-	if !runtimeIsHealthy(health) {
-		return s.failRelease(ctx, release.ID, errors.New("Compose services did not reach a running and healthy state"))
-	}
-	finished := time.Now()
-	finalStatus := StatusSucceeded
-	if rollback {
-		finalStatus = StatusRolledBack
-	}
-	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&release).Updates(map[string]any{"status": finalStatus, "health_summary": health, "finished_at": finished, "failure_reason": ""}).Error; err != nil {
-			return err
-		}
-		if err := tx.Model(&project).Updates(map[string]any{"active_release_id": release.ID, "active_commit": release.CommitSHA, "observed_commit": release.CommitSHA}).Error; err != nil {
-			return err
-		}
-		return upsertTargetState(tx, project.ID, "local", release.ID, release.CommitSHA, health)
-	}); err != nil {
-		return err
-	}
-	s.invalidateDrift(project.ID)
-	report(100, "Compose release is healthy")
-	return nil
-}
-
-type targetResult struct {
-	success    bool
-	rolledBack bool
-	err        error
-}
-
-func (s *Service) deployTargetsLocked(ctx context.Context, project database.DeliveryProject, release database.DeliveryRelease, taskID string, rollback bool, actor Actor, report task.Reporter) error {
-	if err := s.git.Verify(ctx, release.WorktreePath, release.CommitSHA); err != nil {
-		return s.failRelease(ctx, release.ID, err)
-	}
-	targeted, ok := s.compose.(TargetedRunner)
-	if !ok {
-		return s.failRelease(ctx, release.ID, errors.New("Compose runner does not support node targets"))
-	}
-	if err := s.snapshotReleaseTargets(ctx, project.ID, release.ID); err != nil {
-		return s.failRelease(ctx, release.ID, err)
-	}
-	var deployments []database.DeliveryReleaseDeployment
-	if err := s.db.WithContext(ctx).Where("release_id = ?", release.ID).Order("node_id ASC").Find(&deployments).Error; err != nil {
-		return s.failRelease(ctx, release.ID, err)
-	}
-	if len(deployments) == 0 {
-		return s.failRelease(ctx, release.ID, errors.New("release has no deployment targets"))
-	}
-	now := time.Now()
-	startStatus := StatusPulling
-	if rollback {
-		startStatus = StatusRollingBack
-	}
-	if err := s.db.WithContext(ctx).Model(&release).Updates(map[string]any{"status": startStatus, "task_id": taskID, "started_at": now, "failure_reason": ""}).Error; err != nil {
-		return err
-	}
-	report(10, fmt.Sprintf("Deploying to %d Docker nodes", len(deployments)))
-	results := make(chan targetResult, len(deployments))
-	childIDs := make([]string, 0, len(deployments))
-	operation := AttemptDeploy
-	auditAction := "cd.deploy.node"
-	if rollback {
-		operation = AttemptManualRollback
-		auditAction = "cd.rollback.node"
-	}
-	for index := range deployments {
-		deployment := deployments[index]
-		var state database.DeliveryTargetState
-		if err := s.db.WithContext(ctx).Where("project_id = ? AND node_id = ?", project.ID, deployment.NodeID).First(&state).Error; err == nil {
-			deployment.PreviousReleaseID = state.ActiveReleaseID
-			_ = s.db.Model(&deployment).Update("previous_release_id", state.ActiveReleaseID).Error
-		}
-		attempt, attemptErr := s.createAttempt(ctx, deployment.ID, operation, release.ID, "")
-		if attemptErr != nil {
-			_ = s.failDeployment(ctx, deployment.ID, attemptErr)
-			s.recordNodeFinal(actor, auditAction, project.Name, deployment.NodeID, deployment.NodeName, "", release.ID, attemptErr)
-			results <- targetResult{err: attemptErr}
-			continue
-		}
-		target, err := s.composeTargetForProject(ctx, project.ID, deployment.NodeID)
-		if err != nil {
-			_ = s.failDeployment(ctx, deployment.ID, err)
-			_ = s.finishAttempt(ctx, attempt.ID, StatusFailed, err.Error(), "")
-			s.recordNodeFinal(actor, auditAction, project.Name, deployment.NodeID, deployment.NodeName, "", release.ID, err)
-			results <- targetResult{err: err}
-			continue
-		}
-		child, err := s.tasks.StartWithIDForNode(target.NodeID, target.NodeName, "cd.deploy.node", "Deploy "+project.Name+" to "+target.NodeName, func(childCtx context.Context, childID string, childReport task.Reporter) error {
-			_ = s.db.Model(&database.DeliveryReleaseDeployment{}).Where("id = ?", deployment.ID).Update("task_id", childID).Error
-			_ = s.db.Model(&database.DeliveryDeploymentAttempt{}).Where("id = ?", attempt.ID).Update("task_id", childID).Error
-			err := s.deployOneTarget(childCtx, project, release, deployment, targeted.Targeted(target), attempt.ID, childID, rollback, childReport)
-			s.recordNodeFinal(actor, auditAction, project.Name, target.NodeID, target.NodeName, childID, release.ID, err)
-			var current database.DeliveryReleaseDeployment
-			_ = s.db.First(&current, deployment.ID).Error
-			results <- targetResult{success: err == nil, rolledBack: current.Status == StatusRolledBack, err: err}
-			return err
-		})
-		if err != nil {
-			_ = s.failDeployment(ctx, deployment.ID, err)
-			_ = s.finishAttempt(ctx, attempt.ID, StatusFailed, err.Error(), "")
-			s.recordNodeFinal(actor, auditAction, project.Name, deployment.NodeID, deployment.NodeName, "", release.ID, err)
-			results <- targetResult{err: err}
-			continue
-		}
-		childIDs = append(childIDs, child.ID)
-		_ = s.db.Model(&deployment).Update("task_id", child.ID).Error
-	}
-	successes, rolledBack := 0, 0
-	failures := make([]string, 0)
-	for range deployments {
-		select {
-		case result := <-results:
-			if result.success {
-				successes++
-			} else if result.rolledBack {
-				rolledBack++
-			} else if result.err != nil {
-				failures = append(failures, result.err.Error())
-			}
-		case <-ctx.Done():
-			for _, id := range childIDs {
-				s.tasks.Cancel(id)
-			}
-			return s.failRelease(context.Background(), release.ID, ctx.Err())
-		}
-	}
-	failureReason := strings.Join(failures, "; ")
-	finalStatus, err := s.recomputeReleaseAndProject(ctx, project.ID, release.ID, failureReason)
-	if err != nil {
-		return err
-	}
-	s.invalidateDrift(project.ID)
-	report(100, fmt.Sprintf("Deployment complete: %d succeeded, %d rolled back, %d failed", successes, rolledBack, len(deployments)-successes-rolledBack))
-	if finalStatus == StatusRolledBack {
-		return nil
-	}
-	if successes != len(deployments) {
-		return fmt.Errorf("release completed on %d of %d nodes", successes, len(deployments))
-	}
-	return nil
-}
-
-func (s *Service) deployOneTarget(ctx context.Context, project database.DeliveryProject, release database.DeliveryRelease, deployment database.DeliveryReleaseDeployment, runner compose.Runner, attemptID uint, taskID string, rollback bool, report task.Reporter) error {
-	spec, err := s.releaseSpec(runtimeName(project), release)
-	if err != nil {
-		return s.failDeployment(ctx, deployment.ID, err)
-	}
-	spec.ForceRecreate = rollback || deployment.Status == StatusFailed || deployment.Status == StatusRolledBack
-	if err := s.claimDeploymentNamespace(ctx, project, deployment.NodeID, spec); err != nil {
-		_ = s.finishAttempt(ctx, attemptID, StatusFailed, err.Error(), "")
-		return s.failDeployment(ctx, deployment.ID, err)
-	}
-	now := time.Now()
-	status := StatusPulling
-	if rollback {
-		status = StatusRollingBack
-	}
-	_ = s.db.WithContext(ctx).Model(&deployment).Updates(map[string]any{"status": status, "started_at": now, "failure_reason": ""}).Error
-	_ = s.db.WithContext(ctx).Model(&database.DeliveryDeploymentAttempt{}).Where("id = ?", attemptID).Updates(map[string]any{"status": status, "started_at": now, "task_id": taskID, "failure_reason": ""}).Error
-	report(15, "Pulling deployment images")
-	if err := runner.PullRelease(ctx, spec, &reportWriter{report: report, progress: 30}); err != nil {
-		return s.failAndMaybeRollbackTarget(ctx, project, release, deployment, runner, attemptID, taskID, rollback, err, report)
-	}
-	_ = s.db.WithContext(ctx).Model(&deployment).Update("status", StatusDeploying).Error
-	_ = s.db.WithContext(ctx).Model(&database.DeliveryDeploymentAttempt{}).Where("id = ?", attemptID).Update("status", StatusDeploying).Error
-	report(55, "Applying Compose release")
-	if err := runner.UpRelease(ctx, spec, project.DeploymentTimeout, &reportWriter{report: report, progress: 70}); err != nil {
-		return s.failAndMaybeRollbackTarget(ctx, project, release, deployment, runner, attemptID, taskID, rollback, err, report)
-	}
-	_ = s.db.WithContext(ctx).Model(&deployment).Update("status", StatusVerifying).Error
-	_ = s.db.WithContext(ctx).Model(&database.DeliveryDeploymentAttempt{}).Where("id = ?", attemptID).Update("status", StatusVerifying).Error
-	health, err := runner.PS(ctx, spec, io.Discard)
-	if err != nil {
-		return s.failAndMaybeRollbackTarget(ctx, project, release, deployment, runner, attemptID, taskID, rollback, err, report)
-	}
-	if !runtimeIsHealthy(health) {
-		return s.failAndMaybeRollbackTarget(ctx, project, release, deployment, runner, attemptID, taskID, rollback, errors.New("Compose services did not reach a running and healthy state"), report)
-	}
-	finished := time.Now()
-	final := StatusSucceeded
-	if rollback {
-		final = StatusRolledBack
-	}
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&database.DeliveryReleaseDeployment{}).Where("id = ?", deployment.ID).Updates(map[string]any{"status": final, "health_summary": health, "finished_at": finished, "failure_reason": ""}).Error; err != nil {
-			return err
-		}
-		if err := tx.Model(&database.DeliveryDeploymentAttempt{}).Where("id = ?", attemptID).Updates(map[string]any{"status": final, "health_summary": health, "finished_at": finished, "failure_reason": ""}).Error; err != nil {
-			return err
-		}
-		return upsertTargetState(tx, project.ID, deployment.NodeID, release.ID, release.CommitSHA, health)
-	})
-}
-
-func (s *Service) failAndMaybeRollbackTarget(ctx context.Context, project database.DeliveryProject, release database.DeliveryRelease, deployment database.DeliveryReleaseDeployment, runner compose.Runner, attemptID uint, taskID string, rollback bool, deployErr error, report task.Reporter) error {
-	_ = s.failDeployment(ctx, deployment.ID, deployErr)
-	_ = s.finishAttempt(ctx, attemptID, StatusFailed, deployErr.Error(), "")
-	if !project.AutoRollback || rollback || deployment.PreviousReleaseID == nil {
-		return deployErr
-	}
-	var previous database.DeliveryRelease
-	if err := s.db.WithContext(ctx).First(&previous, *deployment.PreviousReleaseID).Error; err != nil {
-		return deployErr
-	}
-	spec, err := s.releaseSpec(runtimeName(project), previous)
-	if err != nil {
-		return deployErr
-	}
-	spec.ForceRecreate = true
-	report(80, "Deployment failed; restoring this node's previous release")
-	rollbackAttempt, createErr := s.createAttempt(ctx, deployment.ID, AttemptAutoRollback, previous.ID, taskID)
-	if createErr != nil {
-		return deployErr
-	}
-	started := time.Now()
-	_ = s.db.WithContext(ctx).Model(&rollbackAttempt).Updates(map[string]any{"status": StatusRollingBack, "started_at": started}).Error
-	_ = s.db.WithContext(ctx).Model(&database.DeliveryReleaseDeployment{}).Where("id = ?", deployment.ID).Update("rollback_result", "running").Error
-	if err := runner.PullRelease(ctx, spec, io.Discard); err != nil {
-		_ = s.db.WithContext(ctx).Model(&database.DeliveryReleaseDeployment{}).Where("id = ?", deployment.ID).Update("rollback_result", "failed").Error
-		_ = s.finishAttempt(ctx, rollbackAttempt.ID, StatusFailed, err.Error(), "")
-		return deployErr
-	}
-	if err := runner.UpRelease(ctx, spec, project.DeploymentTimeout, io.Discard); err != nil {
-		_ = s.db.WithContext(ctx).Model(&database.DeliveryReleaseDeployment{}).Where("id = ?", deployment.ID).Update("rollback_result", "failed").Error
-		_ = s.finishAttempt(ctx, rollbackAttempt.ID, StatusFailed, err.Error(), "")
-		return deployErr
-	}
-	health, err := runner.PS(ctx, spec, io.Discard)
-	if err != nil || !runtimeIsHealthy(health) {
-		_ = s.db.WithContext(ctx).Model(&database.DeliveryReleaseDeployment{}).Where("id = ?", deployment.ID).Update("rollback_result", "failed").Error
-		message := "Compose services did not reach a running and healthy state"
-		if err != nil {
-			message = err.Error()
-		}
-		_ = s.finishAttempt(ctx, rollbackAttempt.ID, StatusFailed, message, health)
-		return deployErr
-	}
-	finished := time.Now()
-	_ = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&database.DeliveryReleaseDeployment{}).Where("id = ?", deployment.ID).Updates(map[string]any{"status": StatusRolledBack, "rollback_result": "succeeded", "health_summary": health, "finished_at": finished, "failure_reason": deployErr.Error()}).Error; err != nil {
-			return err
-		}
-		if err := tx.Model(&database.DeliveryDeploymentAttempt{}).Where("id = ?", rollbackAttempt.ID).Updates(map[string]any{"status": StatusRolledBack, "health_summary": health, "finished_at": finished}).Error; err != nil {
-			return err
-		}
-		return upsertTargetState(tx, project.ID, deployment.NodeID, previous.ID, previous.CommitSHA, health)
-	})
-	return deployErr
-}
-
-func (s *Service) failDeployment(ctx context.Context, id uint, err error) error {
-	now := time.Now()
-	_ = s.db.WithContext(ctx).Model(&database.DeliveryReleaseDeployment{}).Where("id = ?", id).Updates(map[string]any{"status": StatusFailed, "failure_reason": err.Error(), "finished_at": now}).Error
-	return err
-}
-
-func (s *Service) createAttempt(ctx context.Context, deploymentID uint, operation string, targetReleaseID uint, taskID string) (database.DeliveryDeploymentAttempt, error) {
-	attempt := database.DeliveryDeploymentAttempt{
-		DeploymentID: deploymentID, Operation: operation, TargetReleaseID: targetReleaseID,
-		TaskID: taskID, Status: task.StatusPending,
-	}
-	return attempt, s.db.WithContext(ctx).Create(&attempt).Error
-}
-
 func (s *Service) finishAttempt(ctx context.Context, id uint, status, failureReason, healthSummary string) error {
 	finished := time.Now()
 	return s.db.WithContext(ctx).Model(&database.DeliveryDeploymentAttempt{}).Where("id = ?", id).Updates(map[string]any{
 		"status": status, "failure_reason": failureReason, "health_summary": healthSummary, "finished_at": finished,
 	}).Error
-}
-
-func upsertTargetState(tx *gorm.DB, projectID uint, nodeID string, releaseID uint, commit, health string) error {
-	id := releaseID
-	state := database.DeliveryTargetState{ProjectID: projectID, NodeID: nodeID}
-	return tx.Where("project_id = ? AND node_id = ?", projectID, nodeID).Assign(map[string]any{
-		"active_release_id": &id, "observed_commit": commit, "health_summary": health,
-	}).FirstOrCreate(&state).Error
 }
 
 func (s *Service) recomputeReleaseAndProject(ctx context.Context, projectID, releaseID uint, failureReason string) (string, error) {
@@ -1311,20 +884,63 @@ func (s *Service) RemoveProject(ctx context.Context, name string, force, preserv
 	lock := s.projectLock(project.ID)
 	lock.Lock()
 	defer lock.Unlock()
-	if force && project.ActiveReleaseID != nil {
-		var release database.DeliveryRelease
-		if err := s.db.WithContext(ctx).First(&release, *project.ActiveReleaseID).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	if force {
+		var states []database.DeliveryTargetState
+		if err := s.db.WithContext(ctx).Where("project_id = ? AND active_release_id IS NOT NULL", project.ID).Order("node_id ASC").Find(&states).Error; err != nil {
 			return err
-		} else if err == nil {
-			spec, specErr := s.releaseSpec(runtimeName(project), release)
-			if specErr != nil {
-				return specErr
+		}
+		for _, state := range states {
+			var release database.DeliveryRelease
+			if err := s.db.WithContext(ctx).First(&release, *state.ActiveReleaseID).Error; err != nil {
+				return err
+			}
+			runner := s.compose
+			if state.ActiveRecordID != nil {
+				var record database.DeliveryRecord
+				if err := s.db.WithContext(ctx).First(&record, *state.ActiveRecordID).Error; err != nil {
+					return err
+				}
+				release = recordRelease(release, record)
+				var err error
+				runner, err = s.recordRunner(ctx, record, state.NodeID)
+				if err != nil {
+					return err
+				}
+			} else if s.targets != nil {
+				target, err := s.composeTargetForProject(ctx, project.ID, state.NodeID)
+				if err != nil {
+					return err
+				}
+				targeted, ok := s.compose.(TargetedRunner)
+				if !ok {
+					return errors.New("Compose runner does not support node targets")
+				}
+				runner = targeted.Targeted(target)
+			}
+			spec, err := s.releaseSpec(runtimeName(project), release)
+			if err != nil {
+				return err
+			}
+			if err := runner.ForceDownRelease(ctx, spec, preserveVolumes, io.Discard); err != nil {
+				return fmt.Errorf("force down delivery on node %s: %w", state.NodeID, err)
+			}
+		}
+		// Older single-node deployments may predate per-node target state.
+		if len(states) == 0 && project.ActiveReleaseID != nil {
+			var release database.DeliveryRelease
+			if err := s.db.WithContext(ctx).First(&release, *project.ActiveReleaseID).Error; err != nil {
+				return err
+			}
+			spec, err := s.releaseSpec(runtimeName(project), release)
+			if err != nil {
+				return err
 			}
 			if err := s.compose.ForceDownRelease(ctx, spec, preserveVolumes, io.Discard); err != nil {
-				return fmt.Errorf("force down delivery release: %w", err)
+				return err
 			}
 		}
 	}
+
 	if err := s.git.Cleanup(project.ID); err != nil {
 		return err
 	}
@@ -1346,6 +962,9 @@ func (s *Service) RemoveProject(ctx context.Context, name string, force, preserv
 			if err := tx.Where("release_id IN ?", releaseIDs).Delete(&database.DeliveryReleaseDeployment{}).Error; err != nil {
 				return err
 			}
+		}
+		if err := tx.Where("project_id = ?", project.ID).Delete(&database.DeliveryRecord{}).Error; err != nil {
+			return err
 		}
 		if err := tx.Where("project_id = ?", project.ID).Delete(&database.DeliveryRelease{}).Error; err != nil {
 			return err
@@ -1372,7 +991,7 @@ func (s *Service) ListReleases(ctx context.Context, name string) ([]database.Del
 		return nil, err
 	}
 	var releases []database.DeliveryRelease
-	if err := s.db.WithContext(ctx).Where("project_id = ?", project.ID).Order("id DESC").Limit(100).Find(&releases).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("project_id = ? AND canonical_release_id IS NULL", project.ID).Order("id DESC").Limit(100).Find(&releases).Error; err != nil {
 		return nil, err
 	}
 	for index := range releases {
@@ -1525,6 +1144,14 @@ func (s *Service) probeNodeDrift(ctx context.Context, project database.DeliveryP
 	if project.DesiredCommit != "" && release.CommitSHA != project.DesiredCommit {
 		result.Status, result.Drifted, result.ReasonCode, result.Reason = DriftDegraded, true, "desired_commit_mismatch", "active release differs from desired Git commit"
 	}
+	if state.ActiveRecordID != nil {
+		var record database.DeliveryRecord
+		if err := s.db.WithContext(ctx).First(&record, *state.ActiveRecordID).Error; err != nil {
+			result.Status, result.ReasonCode, result.Reason = DriftUnknown, "release_spec_unavailable", "active configuration record is unavailable"
+			return result
+		}
+		release = recordRelease(release, record)
+	}
 	spec, err := s.releaseSpec(runtimeName(project), release)
 	if err != nil {
 		result.Status, result.ReasonCode, result.Reason = DriftUnknown, "release_spec_unavailable", err.Error()
@@ -1560,12 +1187,25 @@ func (s *Service) probeNodeDrift(ctx context.Context, project database.DeliveryP
 }
 
 func (s *Service) loadReleaseDetails(ctx context.Context, release *database.DeliveryRelease) error {
+	var latestRecord *database.DeliveryRecord
+	deploymentReleaseID := release.ID
+	if release.LatestRecordID != nil {
+		var record database.DeliveryRecord
+		if err := s.db.WithContext(ctx).First(&record, *release.LatestRecordID).Error; err != nil {
+			return err
+		}
+		latestRecord = &record
+		if record.LegacyReleaseID != nil {
+			deploymentReleaseID = *record.LegacyReleaseID
+		}
+	}
+
 	if release.ApprovedBy != nil {
 		if err := s.db.WithContext(ctx).Model(&database.User{}).Where("id = ?", *release.ApprovedBy).Pluck("username", &release.ApprovedByName).Error; err != nil {
 			return err
 		}
 	}
-	if err := s.db.WithContext(ctx).Where("release_id = ?", release.ID).Order("node_id ASC").Find(&release.Deployments).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("release_id = ?", deploymentReleaseID).Order("node_id ASC").Find(&release.Deployments).Error; err != nil {
 		return err
 	}
 	release.Remediation.RetryFailedNodeIDs = []string{}
@@ -1586,13 +1226,27 @@ func (s *Service) loadReleaseDetails(ctx context.Context, release *database.Deli
 				deployment.Progress, deployment.Message = row.Progress, row.Message
 			}
 		}
-		if deployment.Status == StatusFailed || deployment.Status == StatusRolledBack {
-			release.Remediation.RetryFailedNodeIDs = append(release.Remediation.RetryFailedNodeIDs, deployment.NodeID)
+	}
+	if latestRecord != nil {
+		if !latestRecord.SnapshotComplete && latestRecord.RestoreRecordsJSON == "" {
+			return nil
 		}
-		if deployment.Status == StatusFailed && deployment.PreviousReleaseID != nil && deployment.RollbackResult != "succeeded" {
-			release.Remediation.RollbackFailedNodeIDs = append(release.Remediation.RollbackFailedNodeIDs, deployment.NodeID)
+		release.Remediation.SourceRecordID = release.LatestRecordID
+		var attempts []database.DeliveryDeploymentAttempt
+		if err := s.db.WithContext(ctx).Where("record_id = ? AND status IN ?", *release.LatestRecordID, []string{StatusFailed, StatusInterrupted}).Find(&attempts).Error; err != nil {
+			return err
+		}
+		for _, a := range attempts {
+			release.Remediation.RetryFailedNodeIDs = append(release.Remediation.RetryFailedNodeIDs, a.NodeID)
+			if a.PreviousRecordID != nil {
+				var previous database.DeliveryRecord
+				if s.db.WithContext(ctx).First(&previous, *a.PreviousRecordID).Error == nil && previous.SnapshotComplete {
+					release.Remediation.RollbackFailedNodeIDs = append(release.Remediation.RollbackFailedNodeIDs, a.NodeID)
+				}
+			}
 		}
 	}
+
 	return nil
 }
 
@@ -1602,39 +1256,7 @@ func (s *Service) invalidateDrift(projectID uint) {
 	s.driftMu.Unlock()
 }
 
-func runtimeIsHealthy(value string) bool {
-	type service struct {
-		State  string `json:"State"`
-		Health string `json:"Health"`
-	}
-	rows := []service{}
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return false
-	}
-	if strings.HasPrefix(trimmed, "[") {
-		if json.Unmarshal([]byte(trimmed), &rows) != nil {
-			return false
-		}
-	} else {
-		for _, line := range strings.Split(trimmed, "\n") {
-			var row service
-			if json.Unmarshal([]byte(line), &row) != nil {
-				return false
-			}
-			rows = append(rows, row)
-		}
-	}
-	if len(rows) == 0 {
-		return false
-	}
-	for _, row := range rows {
-		if !strings.EqualFold(row.State, "running") || (row.Health != "" && !strings.EqualFold(row.Health, "healthy")) {
-			return false
-		}
-	}
-	return true
-}
+var runtimeIsHealthy = deployment.RuntimeIsHealthy
 
 func (s *Service) project(ctx context.Context, name string) (database.DeliveryProject, error) {
 	var project database.DeliveryProject
@@ -1705,52 +1327,46 @@ func (s *Service) replaceRegistryCredentials(ctx context.Context, db *gorm.DB, p
 }
 
 func (s *Service) composeTargetForProject(ctx context.Context, projectID uint, nodeID string) (compose.Target, error) {
-	target, err := s.targets.ResolveComposeTarget(ctx, nodeID)
-	if err != nil {
-		return target, err
-	}
 	ids, err := s.projectRegistryCredentialIDs(ctx, projectID)
+	if err != nil {
+		return compose.Target{}, err
+	}
+	return s.composeTargetWithCredentials(ctx, nodeID, ids)
+}
+func (s *Service) composeTargetWithCredentials(ctx context.Context, nodeID string, ids []uint) (compose.Target, error) {
+	target, err := s.targets.ResolveComposeTarget(ctx, nodeID)
 	if err != nil || len(ids) == 0 {
 		return target, err
 	}
-	if s.registries == nil {
-		return target, errors.New("registry credential service is unavailable")
-	}
-	auths := map[string]map[string]string{}
-	for _, id := range ids {
-		if err := s.registries.AuthorizedForNode(ctx, id, nodeID); err != nil {
-			return target, err
-		}
-		material, err := s.registries.Material(ctx, id)
-		if err != nil {
-			return target, err
-		}
-		entry := map[string]string{}
-		if material.AuthType == credentialrepo.RegistryToken {
-			entry["identitytoken"] = material.Secret
-		} else {
-			entry["auth"] = base64.StdEncoding.EncodeToString([]byte(material.Username + ":" + material.Secret))
-		}
-		auths[material.ServerAddress] = entry
-	}
-	encoded, err := json.Marshal(map[string]any{"auths": auths})
+	config, err := deployment.RegistryConfiguration(ctx, s.registries, nodeID, ids)
 	if err != nil {
 		return target, err
 	}
-	target.DockerConfig = string(encoded)
+	target.DockerConfig = config
 	return target, nil
 }
 
 func (s *Service) validateDeploymentTargets(ctx context.Context, projectID uint, spec compose.ExecutionSpec, rendered string) error {
+	ids, err := s.projectNodeIDs(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	return s.validateDeploymentNodeTargets(ctx, ids, spec, rendered)
+}
+func (s *Service) validateDeploymentNodeTargets(ctx context.Context, ids []string, spec compose.ExecutionSpec, rendered string) error {
+	var gitopsOwners int64
+	if err := s.db.WithContext(ctx).Model(&database.ProjectCD{}).Where("node_id IN ? AND project_name = ? AND enabled = true", ids, spec.ProjectName).Count(&gitopsOwners).Error; err != nil {
+		return err
+	}
+	if gitopsOwners > 0 {
+		return errors.New("Compose namespace is managed by node GitOps")
+	}
+
 	if err := validateDeploymentPolicy(rendered); err != nil {
 		return err
 	}
 	remote := false
 	if s.targets != nil {
-		ids, err := s.projectNodeIDs(ctx, projectID)
-		if err != nil {
-			return err
-		}
 		for _, id := range ids {
 			var row database.Node
 			if err := s.db.WithContext(ctx).Where("id = ?", id).First(&row).Error; err != nil {
@@ -1819,6 +1435,11 @@ func (s *Service) projectRelease(ctx context.Context, name string, id uint) (dat
 	}
 	var release database.DeliveryRelease
 	err = s.db.WithContext(ctx).Where("id = ? AND project_id = ?", id, project.ID).First(&release).Error
+	if err == nil && release.CanonicalReleaseID != nil {
+		canonicalID := *release.CanonicalReleaseID
+		release = database.DeliveryRelease{}
+		err = s.db.WithContext(ctx).Where("id = ? AND project_id = ?", canonicalID, project.ID).First(&release).Error
+	}
 	return project, release, err
 }
 
@@ -1896,62 +1517,11 @@ func runtimeName(project database.DeliveryProject) string {
 }
 
 func releaseExecutionSpec(projectName string, release database.DeliveryRelease) (compose.ExecutionSpec, error) {
-	files := []string{}
+	var files []string
 	if err := json.Unmarshal([]byte(release.ComposeFilesJSON), &files); err != nil {
 		return compose.ExecutionSpec{}, fmt.Errorf("decode release Compose files: %w", err)
 	}
-	if len(files) == 0 {
-		return compose.ExecutionSpec{}, errors.New("release has no Compose files")
-	}
-	worktree := release.WorktreePath
-	realRoot, err := filepath.EvalSymlinks(worktree)
-	if err != nil {
-		return compose.ExecutionSpec{}, fmt.Errorf("resolve Git worktree: %w", err)
-	}
-	environmentFile := release.EnvironmentFile
-	spec := compose.ExecutionSpec{ProjectName: projectName}
-	for _, value := range files {
-		path, err := safeFile(realRoot, value)
-		if err != nil {
-			return compose.ExecutionSpec{}, err
-		}
-		spec.Files = append(spec.Files, path)
-	}
-	spec.ProjectDir = filepath.Dir(spec.Files[0])
-	if environmentFile != "" {
-		path, err := safeFile(realRoot, environmentFile)
-		if err != nil {
-			return compose.ExecutionSpec{}, err
-		}
-		spec.EnvFiles = append(spec.EnvFiles, path)
-	}
-	return spec, nil
-}
-
-func safeFile(root, value string) (string, error) {
-	path, err := filepath.EvalSymlinks(filepath.Join(root, filepath.FromSlash(value)))
-	if err != nil {
-		return "", fmt.Errorf("resolve deployment file %q: %w", value, err)
-	}
-	if err := below(root, path); err != nil {
-		return "", err
-	}
-	info, err := os.Stat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		return "", fmt.Errorf("deployment file %q is not a regular file", value)
-	}
-	if info.Size() > maxDeploymentFileSize {
-		return "", fmt.Errorf("deployment file %q exceeds the %d-byte limit", value, maxDeploymentFileSize)
-	}
-	return path, nil
-}
-
-func below(root, value string) error {
-	relative, err := filepath.Rel(root, value)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
-		return errors.New("deployment path escapes the Git worktree")
-	}
-	return nil
+	return deployment.ResolveSpec(projectName, release.WorktreePath, files, release.EnvironmentFile)
 }
 
 func imageReferences(rendered string) []string {

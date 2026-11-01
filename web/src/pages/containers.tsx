@@ -183,7 +183,7 @@ function LiveContainersPage() {
   </>
 
   return <ResourceFrame compact title={t('containers')} detail={zh ? `${rows.length === query.data?.length ? '' : `${rows.length} / `}${query.data?.length ?? 0} 个容器` : `${rows.length === query.data?.length ? '' : `${rows.length} / `}${query.data?.length ?? 0} containers`} lead={statusStrip} action={toolbar}>
-      <div className="mb-3 flex justify-end"><Button size="sm" disabled={!nodeID} nativeButton={false} render={<Link to="/containers/new" />}><Plus />{zh ? '新增容器' : 'New container'}</Button></div>
+      <div className="mb-3 flex justify-end"><Button disabled={!nodeID} nativeButton={false} render={<Link to="/containers/new" />}><Plus />{zh ? '新增容器' : 'New container'}</Button></div>
       {query.isPending && <LoadingState compact rows={7} label={zh ? '正在加载容器' : 'Loading containers'} />}
       {query.isError && <ErrorState description={zh ? '无法连接 Docker Engine。' : 'Unable to reach the Docker Engine.'} />}
       {!!operationError && (

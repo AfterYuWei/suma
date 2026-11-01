@@ -1,3 +1,4 @@
+import type {ProjectCDConfiguration,ProjectCDRecord} from '../features/project-cd/queries'
 import { createMonitoringMock } from '../features/monitoring/mock'
 import type { Instance } from '../features/monitoring/types'
 import { mockNotifications, persistMockNotifications } from '../features/notifications/mock'
@@ -10,7 +11,7 @@ import type { User } from '../features/auth/types'
 import type { Project, ProjectSummary, ProjectTakeoverDraft, ShadowAssessment, ShadowPreviewSession, ShadowPreviewStatus } from '../features/compose/types'
 import type { ContainerDetail, ContainerDiagnostics, ContainerMetrics, ContainerSummary } from '../features/containers/types'
 import { containerCreateRequest, type ContainerCreateDraft, type CreateContainerRequest } from '../features/containers/create'
-import type { CDConfiguration, CDConfigureInput, CDDrift, DeliveryProject, DeliveryRelease, GitCredential } from '../features/delivery/types'
+import type { CDConfiguration, CDConfigureInput, CDDrift, DeliveryProject, DeliveryRecord, DeliveryRelease, GitCredential } from '../features/delivery/types'
 import type { DockerNode, NodeGroup } from './nodes'
 import { ApiError, type DemoCredentials, type DemoStream } from './api'
 
@@ -82,6 +83,9 @@ const projects: ProjectSummary[] = [
 for (const project of projects) if (project.managed) project.declared_service_names = [...new Set(containerSets.local.filter(row => row.labels['com.docker.compose.project'] === project.name).map(row => row.labels['com.docker.compose.service']).filter(Boolean))]
 
 const projectConfigurations = new Map<string, Project>()
+const projectCDConfigurations = new Map<string,ProjectCDConfiguration>()
+const projectCDRecords = new Map<string,ProjectCDRecord[]>()
+const projectCDValues = new Map<string,Record<string,string>>()
 let projectRevision = 0
 const projectDetail = (row: ProjectSummary): Project => ({ ...row, path: `/srv/compose/${row.name}`, can_manage: row.managed, config_files: ['compose.yml'], services: row.service_count, containers: row.instance_count, compose: 'services:\n' + (row.declared_service_names ?? ['app']).map(name => `  ${name}:\n    image: ghcr.io/example/${row.name}:latest\n    restart: unless-stopped\n`).join(''), environment: 'APP_ENV=production\n', metadata: { origin: row.managed ? 'created' : 'takeover', claimed_at: earlier, last_deployed_at: now } })
 
@@ -125,6 +129,7 @@ const deliveryProjects: DeliveryProject[] = [
 ]
 
 const deliveryConfigurations = new Map<string, CDConfiguration>()
+const deliveryRecords = new Map<string, DeliveryRecord[]>()
 const deliveryEnvironments = new Map<string, Record<string, string>>()
 const cdConfiguration = (name: string): CDConfiguration => ({ configured: true, automation_enabled: true, repository: { clone_url: `https://github.com/example/${name}.git`, ref_type: 'branch', ref: name === 'gateway-prod' ? 'main' : 'stable', authentication: { source: 'center', credential_id: 1, summary: { name: 'GitHub Demo', auth_type: 'http_token', username: 'suma-demo' } }, compose_files: ['compose.yml'], environment_file: '.env' }, reconcile_mode: name === 'gateway-prod' ? 'auto' : 'manual', sync_interval_seconds: 300, desired_commit: name === 'gateway-prod' ? '7a31f0c87aa1' : 'f4c9a82e10d2', observed_commit: name === 'gateway-prod' ? '7a31f0c87aa1' : 'f4c9a82e10d2', active_release_id: name === 'gateway-prod' ? 184 : 181, auto_rollback: true, deployment_timeout: 180, webhook_enabled: true, webhook_id: `demo-${name}`, webhook_secret: '', node_ids: name === 'gateway-prod' ? ['local', 'edge-hk'] : ['local', 'nas-prod'], registry_credential_ids: [1] })
 
@@ -449,7 +454,35 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
       return clone(deliveryConfigurations.get(name) || cdConfiguration(name)) as T
     }
     if (suffix === '/drift') return clone({ drifted: false, status: 'healthy', desired_commit: project.desired_commit ?? '', observed_commit: project.observed_commit ?? '', active_commit: project.observed_commit ?? '', active_release_id: project.active_release_id, runtime_healthy: true, checked_at: now, nodes: project.node_ids.map((nodeID) => ({ node_id: nodeID, node_name: nodes.find((item) => item.id === nodeID)?.name ?? nodeID, status: 'healthy' as const, drifted: false, active_release_id: project.active_release_id, active_commit: project.observed_commit, health_summary: '[{"State":"running","Health":"healthy"}]', checked_at: now })) } satisfies CDDrift) as T
-    if (suffix === '/releases') return clone(project.active_release_id ? releases.map((release) => ({ ...release, project_id: project.id })) : []) as T
+    const recordRows: DeliveryRecord[] = releases.map(release => ({
+      id: release.id + 1000, project_id: project.id, release_id: release.id, operation: 'deploy', actor_name: release.trigger_actor, trigger_type: release.trigger_type, status: release.status,
+      snapshot_complete: true, config_hash: release.config_hash, image_references: release.image_references, compose_files: release.compose_files, environment_file: '.env', environment: [], node_ids: [...project.node_ids], registry_credential_ids: [1], deployment_timeout: 180, auto_rollback: true, commit_sha: release.commit_sha, commit_message: release.commit_message, created_at: release.created_at,
+      task_id: release.task_id, attempts: (release.deployments || []).flatMap(deployment => (deployment.attempts || []).map(attempt => ({ ...attempt, node_id: deployment.node_id, node_name: deployment.node_name }))),
+    }))
+    const projectRecords = deliveryRecords.get(name) || recordRows
+    deliveryRecords.set(name, projectRecords)
+    if (suffix === '/records') {
+      const filtered = projectRecords.filter(record => (!url.searchParams.has('release_id') || record.release_id === Number(url.searchParams.get('release_id'))) && (!url.searchParams.has('operation') || record.operation === url.searchParams.get('operation')) && (!url.searchParams.has('status') || record.status === url.searchParams.get('status')))
+      const page = Number(url.searchParams.get('page') || 1), pageSize = Number(url.searchParams.get('page_size') || 20)
+      return clone({ items: filtered.slice((page - 1) * pageSize, page * pageSize), total: filtered.length, page, page_size: pageSize, counts: Object.fromEntries(['deploy', 'retry', 'manual_rollback', 'auto_rollback', 'rollback_failed'].map(operation => [operation, projectRecords.filter(record => record.operation === operation).length])) }) as T
+    }
+    const recordMatch = suffix.match(/^\/records\/(\d+)(\/environment)?$/)
+    if (recordMatch) return clone(recordMatch[2] ? {} : projectRecords.find(record => record.id === Number(recordMatch[1]))) as T
+    const actionMatch = suffix.match(/^\/releases\/(\d+)\/(deploy|rollback|reject)$/)
+    if (actionMatch && method === 'POST') {
+      const release = releases.find(release => release.id === Number(actionMatch[1]))
+      if (!release) throw new ApiError('Release not found', 17706, 404)
+      if (actionMatch[2] === 'reject') { release.status = 'rejected'; return clone(release) as T }
+      const source = actionMatch[2] === 'rollback' ? projectRecords.find(record => record.id === body.record_id && record.release_id === release.id) : undefined
+      if (actionMatch[2] === 'rollback' && !source) throw new ApiError('Configuration record not found', 17706, 404)
+      const baseRecord = source || recordRows.find(record => record.release_id === release.id)
+      if (!baseRecord) throw new ApiError('Configuration record not found', 17706, 404)
+      const overrideNodes = Array.isArray(body.node_ids) && body.node_ids.every((node): node is string => typeof node === 'string') ? body.node_ids : undefined
+      const record: DeliveryRecord = { ...baseRecord, id: Math.max(...projectRecords.map(record => record.id), 1000) + 1, operation: source ? 'manual_rollback' : 'deploy', source_record_id: source?.id, status: 'succeeded', actor_name: user.username, node_ids: overrideNodes || source?.node_ids || cdConfiguration(name).node_ids, created_at: new Date().toISOString() }
+      projectRecords.unshift(record); release.latest_record_id = record.id; release.status = 'succeeded'; project.active_release_id = release.id
+      return clone({ task: { id: crypto.randomUUID(), status: 'success' }, record_id: record.id }) as T
+    }
+    if (suffix === '/releases') return clone(project.active_release_id ? releases.map((release) => ({ ...release, project_id: project.id, latest_record_id: release.latest_record_id || release.id + 1000 })) : []) as T
     return {} as T
   }
 
@@ -616,8 +649,41 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
       const row = projects.find((item) => item.name === name) ?? projects[0]
       const configurationKey = `${nodeID}/${name}`
       const detail = projectConfigurations.get(configurationKey) ?? { ...projectDetail(row), revision: 'demo-config-0' }
-      if (!rest && method === 'GET') return clone(detail) as T
+      const cd=projectCDConfigurations.get(configurationKey) ?? {configured:false,enabled:false,revision:0,repository:{clone_url:'',ref_type:'branch',ref:'main',compose_files:['compose.yml'],environment_file:'',authentication:{source:'none'}},environment:[],registry_credential_ids:[],deployment_timeout:120,sync_interval_seconds:300,automation_enabled:false,initial_application_required:true,webhook_enabled:false} satisfies ProjectCDConfiguration
+      const records=projectCDRecords.get(configurationKey) ?? []
+      if(rest.startsWith('/gitops')){
+        const action=rest.slice('/gitops'.length)
+        if(action==='' && method==='GET')return clone(cd) as T
+        if(action==='/test-connection')return {ref_checked:true,commit_sha:'d'.repeat(40)} as T
+        if(action==='/records')return clone({items:records.slice((Number(url.searchParams.get('page')||1)-1)*20,Number(url.searchParams.get('page')||1)*20),total:records.length}) as T
+        if(action==='/preview')return clone({record_id:cd.candidate?.id ?? cd.applied?.id,commit_sha:'d'.repeat(40),applied:!!cd.applied,compose:detail.compose,files:cd.repository.compose_files.map(path=>({path,content:detail.compose})),repository_environment:'APP_ENV=production\n'}) as T
+        if(action==='/environment/values')return clone(projectCDValues.get(configurationKey) ?? {}) as T
+        if(action==='/environment' && method==='GET')return clone(cd.environment) as T
+        if(body.expected_revision!==undefined && body.expected_revision!==cd.revision)throw new ApiError('CD configuration changed',20902,409)
+        if(action==='' && method==='PUT'){
+          const next:ProjectCDConfiguration={...cd,...body,configured:true,enabled:true,revision:cd.revision+1,repository:{...cd.repository,...(typeof body.repository==='object'&&body.repository!==null?body.repository:{})}}
+          next.repository.authentication={...next.repository.authentication,credential:undefined}
+          if(Array.isArray(body.environment)){const values:Record<string,string>={};for(const variable of body.environment)if(typeof variable.name==='string' && typeof variable.value==='string')values[variable.name]=variable.value;projectCDValues.set(configurationKey,values);next.environment=Object.keys(values).map(name=>({name,has_value:true}))}
+          projectCDConfigurations.set(configurationKey,next);return clone(next) as T
+        }
+        if(action==='/environment' && method==='PUT'){
+          const values=projectCDValues.get(configurationKey) ?? {};const nextValues:Record<string,string>={}
+          if(Array.isArray(body.environment))for(const variable of body.environment)if(typeof variable.name==='string')nextValues[variable.name]=typeof variable.value==='string'?variable.value:values[variable.name]??''
+          projectCDValues.set(configurationKey,nextValues);cd.environment=Object.keys(nextValues).map(name=>({name,has_value:true}));cd.revision++;cd.candidate=undefined;projectCDConfigurations.set(configurationKey,cd);return clone(cd) as T
+        }
+        if(action==='/automation'){if(body.enabled===true && cd.initial_application_required)throw new ApiError('Confirm first application',20902,422);cd.automation_enabled=body.enabled===true;projectCDConfigurations.set(configurationKey,cd);return clone(cd) as T}
+        if(action==='/detach'){cd.enabled=false;cd.automation_enabled=false}
+        else if(action==='/check' || action==='/apply' || action.includes('/rollback')){
+          const operation=action==='/check'?'check':action==='/apply'?'apply':'rollback'
+          const record:ProjectCDRecord={id:records.length+1,operation,status:'succeeded',task_id:`demo-project-cd-${Date.now()}`,actor:'Demo admin',revision:cd.revision,commit_sha:'d'.repeat(40),commit_message:'Demo Git configuration',config_hash:'e'.repeat(64),created_at:new Date().toISOString(),failure_reason:''}
+          records.unshift(record);projectCDRecords.set(configurationKey,records)
+          if(operation==='check')cd.candidate=record;else{cd.applied=record;cd.initial_application_required=false;if(operation==='rollback')cd.automation_enabled=false}
+        }
+        projectCDConfigurations.set(configurationKey,cd);return {id:`demo-project-cd-${Date.now()}`,status:'success',progress:100,message:'Demo operation completed'} as T
+      }
+      if (!rest && method === 'GET') return clone({...detail,deployment_mode:cd.enabled?'cd':'manual'}) as T
       if (!rest && method === 'PUT') {
+        if(cd.enabled)throw new ApiError('Project uses CD deployment mode',20902,409)
         if (body.expected_revision && body.expected_revision !== detail.revision) throw new ApiError('Project configuration changed', 20411, 409)
         if (composeProblems(String(body.compose)).length) throw new ApiError('Compose YAML cannot be parsed', 20404, 422)
         const saved = { ...detail, declared_service_names: configKeys(String(body.compose), ['services']), compose: String(body.compose), environment: String(body.environment ?? ''), revision: `demo-config-${++projectRevision}` }

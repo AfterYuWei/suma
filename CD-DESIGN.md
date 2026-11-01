@@ -188,20 +188,19 @@ Images may use tags or immutable digests. Digests are recommended for reproducib
 
 ## Release and drift model
 
-Each release records repository URL, ref, exact commit SHA, commit author/message, canonical config hash, image references, trigger, actor, task, Compose-source snapshot fields, approval, and immutable target snapshots. Each target Deployment records its node/name snapshot, latest child task, previous active Release, timing, failure reason, health observation, rollback result, and the latest aggregate status. Every deploy, retry, manual rollback, and automatic rollback is retained as an independent Attempt with its target Release, Task, timing, result, failure reason, and health summary.
+A Release identifies one project/repository/commit and retains Git metadata. Each delivery action appends a DeliveryRecord containing its frozen Compose/environment configuration, target nodes, credential references, timeout, rollback policy, actor and result. Attempts link node outcomes to the operation and previous configuration record. Target state references the actual configuration applied, so different settings for the same Git commit remain distinguishable.
 
-Relevant statuses are:
+Relevant lifecycle transitions are:
 
 ```text
-awaiting_approval -> approved -> pulling -> deploying -> verifying -> succeeded
-        |               |          \-------------------------------> failed
-        `---------------+-> rejected
+ready -> confirmed publication -> validating -> deploying -> succeeded / partial_failed / failed
+  `-> rejected
 
-successful release selected -> new rollback release -> rolling_back
-                               -> deploying -> verifying -> rolled_back / failed
+selected complete snapshot -> new DeliveryRecord -> validating -> deploying -> succeeded / failed
+                             (same Git Release ID)
 ```
 
-Approval and rejection are synchronous state changes. Approval does not start delivery. The deploy endpoint accepts an explicitly `approved` release or retries a previously approved `failed` release. Auto mode proceeds directly from its newly prepared release without requiring a user approval record.
+Publication records approval and starts delivery immediately. It snapshots current saved settings while retaining the selected commit. Retry requires an explicit current failure record and reuses its configuration; rollback requires a selected complete record and may temporarily override its nodes without updating project settings. Complete failed and partial snapshots are selectable and are validated again. Legacy snapshots with missing policy evidence remain readable and cannot be selected as a common rollback configuration. Auto mode publishes valid synchronized commits without a separate user approval step.
 
 Drift is reported per current target and aggregated as `healthy`, `degraded`, or `unknown`. No active release, a commit mismatch, or missing/not-running/unhealthy containers is a confirmed degraded state. An unreachable or indeterminate target is unknown and does not by itself set `drifted`; a confirmed failure takes precedence when degraded and unknown nodes coexist. Runtime container truth is read from Docker and is not mirrored into PostgreSQL as desired state. Project-level active Release/commit is persisted only while all current targets agree.
 
@@ -213,7 +212,7 @@ After a process restart, SUMA performs database-only recovery in one transaction
 
 ## Rollback boundary
 
-Rollback means creating a new release record that redeploys an older release's recorded worktree and Compose file set. It is allowed only for a release that previously succeeded or was successfully restored. Observe mode blocks rollback. If the project is in auto mode, a manual rollback first persists `manual` mode so the reconciler cannot immediately replay the newer desired commit.
+Rollback appends an operation record that reapplies the selected configuration snapshot while retaining its Git Release. Any complete snapshot is eligible; its prior success or failure is shown in the selection dialog. Observe mode blocks rollback. If the project is in auto mode, a manual rollback first persists `manual` mode so the reconciler cannot immediately replay the newer desired commit.
 
 Restoration retains the always-pull image policy: a mutable tag such as `latest` resolves to its current registry content, while an explicitly pinned digest retains that exact image identity. Manual and automatic rollbacks force container recreation after pulling, including when the rendered configuration and image are unchanged. Failed-release redeployment and failed-node retry also force recreation on their selected nodes. These operations use `up --force-recreate --remove-orphans --wait`, preserve volumes, and stop before `up` when pulling fails.
 
@@ -227,7 +226,7 @@ Rollback does not:
 
 A Compose service cannot use a writable bind mount in Git delivery. Use named volumes for writable persistent data; bind mounts must be read-only and use permitted paths on each target Docker host. Release identity protects the recorded Git/config reference; it is not an application-data snapshot and does not preserve the contents of external host configuration files.
 
-If automatic rollback is enabled and a node deployment fails, SUMA restores that node's own previous active Release. Successful nodes remain on the new Release. Multi-node delivery is not atomic and does not attempt a cross-node transaction. Operators should disable automatic rollback for deployments with irreversible migrations and should revert/fix Git after restoration so desired and active state converge.
+If automatic rollback is enabled and a node deployment fails, SUMA restores that node’s own previous active configuration snapshot and keeps separate rollback evidence. Successful nodes remain on the new Release. Multi-node delivery is not atomic and does not attempt a cross-node transaction. Operators should disable automatic rollback for deployments with irreversible migrations and should revert/fix Git after restoration so desired and active state converge.
 
 ## Runtime configuration
 

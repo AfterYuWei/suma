@@ -17,6 +17,9 @@ func (s *Service) Recover(ctx context.Context) error {
 	var releaseIDs []uint
 	var projectIDs []uint
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&database.DeliveryRecord{}).Where("status IN ?", active).Updates(map[string]any{"status": StatusInterrupted, "failure_reason": reason, "finished_at": finished}).Error; err != nil {
+			return err
+		}
 		var attempts []database.DeliveryDeploymentAttempt
 		if err := tx.Where("status IN ?", active).Find(&attempts).Error; err != nil {
 			return err
@@ -68,6 +71,16 @@ func (s *Service) Recover(ctx context.Context) error {
 				return err
 			}
 			projectIDs = appendUniqueUint(projectIDs, release.ProjectID)
+			if release.LatestRecordID != nil {
+				var record database.DeliveryRecord
+				if err := tx.First(&record, *release.LatestRecordID).Error; err != nil {
+					return err
+				}
+				if err := tx.Model(&release).Updates(map[string]any{"status": record.Status, "failure_reason": record.FailureReason, "finished_at": record.FinishedAt}).Error; err != nil {
+					return err
+				}
+				continue
+			}
 			var count int64
 			if err := tx.Model(&database.DeliveryReleaseDeployment{}).Where("release_id = ?", release.ID).Count(&count).Error; err != nil {
 				return err

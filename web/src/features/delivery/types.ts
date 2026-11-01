@@ -133,6 +133,7 @@ export interface DeliveryDeploymentAttempt {
 }
 
 export interface DeliveryRelease {
+  latest_record_id?: number
   id: number
   project_id: number
   repository_url: string
@@ -159,6 +160,7 @@ export interface DeliveryRelease {
   updated_at: string
   deployments?: { id: number; node_id: string; node_name: string; task_id?: string; status: string; previous_release_id?: number; failure_reason?: string; rollback_result?: string; health_summary?: string; started_at?: string; finished_at?: string; progress?: number; message?: string; attempts?: DeliveryDeploymentAttempt[] }[]
   remediation: {
+    source_record_id?: number
     retry_failed_node_ids: string[]
     rollback_failed_node_ids: string[]
   }
@@ -241,4 +243,49 @@ export function repositoryName(value: string) {
   const clean = value.replace(/\.git$/, '').replace(/\/$/, '')
   const separator = Math.max(clean.lastIndexOf('/'), clean.lastIndexOf(':'))
   return separator >= 0 ? clean.slice(separator + 1) : clean
+}
+
+export interface DeliveryRecord {
+  id: number
+  project_id: number
+  release_id: number
+  source_record_id?: number
+  legacy_release_id?: number
+  operation: 'deploy' | 'retry' | 'manual_rollback' | 'auto_rollback' | 'rollback_failed'
+  actor_name: string
+  trigger_type: string
+  task_id?: string
+  status: string
+  failure_reason?: string
+  health_summary?: string
+  snapshot_complete: boolean
+  snapshot_note?: string
+  config_hash: string
+  image_references: string
+  compose_files: string
+  environment_file: string
+  environment: CDEnvironmentVariable[]
+  node_ids: string[]
+  registry_credential_ids: number[]
+  git_credential_id?: number
+  deployment_timeout: number
+  auto_rollback: boolean
+  commit_sha: string
+  commit_message: string
+  started_at?: string
+  finished_at?: string
+  created_at: string
+  attempts: (DeliveryDeploymentAttempt & { node_id: string; node_name: string; previous_record_id?: number; target_record_id?: number })[]
+}
+export interface DeliveryRecordPage {
+  items: DeliveryRecord[]
+  total: number
+  page: number
+  page_size: number
+  counts: Record<string, number>
+}
+
+export function recordOperationLabel(operation: string, zh: boolean) {
+  const labels: Record<string, [string, string]> = { deploy: ['发布', 'Deploy'], retry: ['重试', 'Retry'], manual_rollback: ['回滚', 'Roll back'], auto_rollback: ['自动回滚', 'Automatic rollback'], rollback_failed: ['失败节点回滚', 'Roll back failed nodes'] }
+  return labels[operation]?.[zh ? 0 : 1] || operation
 }

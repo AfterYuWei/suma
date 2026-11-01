@@ -100,7 +100,7 @@ func (s *Service) project(ctx context.Context, node, name string) (compose.Proje
 	if err != nil {
 		return row, err
 	}
-	if !row.Managed || row.DeliveryProjectName != "" {
+	if !row.Managed || row.DeliveryProjectName != "" || row.DeploymentMode == "cd" {
 		return row, errors.New("image publishing requires an ordinary managed Compose project")
 	}
 	var count int64

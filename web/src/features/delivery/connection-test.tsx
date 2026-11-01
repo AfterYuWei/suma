@@ -9,7 +9,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/too
 import { api } from '../../lib/api'
 import type { GitConnectionInput, GitConnectionResult, GitRepositoryConfiguration } from './types'
 
-export function GitConnectionTest({ repository, nodeIDs, projectName, creating, zh }: {
+export function GitConnectionTest({ repository, nodeIDs, projectName, creating, zh, endpoint }: {
+  endpoint?: string
   repository: GitRepositoryConfiguration
   nodeIDs: string[]
   projectName: string
@@ -27,7 +28,7 @@ export function GitConnectionTest({ repository, nodeIDs, projectName, creating, 
     mutationFn: ({ input }: { input: GitConnectionInput; signature: string }) => {
       controller.current?.abort()
       controller.current = new AbortController()
-      return api<GitConnectionResult>(creating ? '/delivery-projects/test-connection' : `/delivery-projects/${encodeURIComponent(projectName)}/test-connection`, { method: 'POST', body: JSON.stringify(input), signal: controller.current.signal })
+      return api<GitConnectionResult>(endpoint ?? (creating ? '/delivery-projects/test-connection' : `/delivery-projects/${encodeURIComponent(projectName)}/test-connection`), { method: 'POST', body: JSON.stringify(input), signal: controller.current.signal })
     },
   })
   const current = test.variables?.signature === signature

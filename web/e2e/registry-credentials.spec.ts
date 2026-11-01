@@ -13,9 +13,10 @@ for(const language of ['zh-CN','en-US']) for(const theme of ['dark','light']) fo
   await expect(sheet.getByText(/CNB/)).toBeVisible()
   await expect(sheet.getByLabel(zh?'密码或访问令牌':'Password or access token',{exact:true})).toHaveAttribute('type','password')
   await type.click();const menu=page.getByRole('listbox');await expect(page.getByRole('option',{name:basic,exact:true})).toBeVisible()
-  const trigger=await type.boundingBox(),popup=await menu.boundingBox()
-  expect(trigger).toBeTruthy();expect(popup).toBeTruthy()
-  expect(popup!.y).toBeGreaterThanOrEqual(trigger!.y+trigger!.height-1)
+  await expect.poll(async()=>{
+   const trigger=await type.boundingBox(),popup=await menu.boundingBox()
+   return trigger&&popup?popup.y-trigger.y-trigger.height:-Infinity
+  }).toBeGreaterThanOrEqual(-1)
   await expect.poll(async()=>{
    const trigger=await type.boundingBox(),popup=await menu.boundingBox()
    return trigger&&popup?Math.max(Math.abs(popup.x-trigger.x),Math.abs(popup.width-trigger.width)):Infinity

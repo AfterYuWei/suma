@@ -51,7 +51,14 @@ func TestDeliveryAutomationUpgradeRetainsProductionEvidence(t *testing.T) {
 		t.Helper()
 		var value string
 		// Exclude only the new field and migration ledger entry being introduced.
-		query := "SELECT COALESCE(jsonb_agg(value ORDER BY value::text), '[]'::jsonb)::text FROM (SELECT to_jsonb(t) - 'automation_enabled' - 'environment_ciphertext' AS value FROM " + table + " t"
+		projection := "to_jsonb(t) - 'environment_ciphertext' - 'canonical_release_id' - 'latest_record_id' - 'legacy_snapshot_json'"
+		if table == "delivery_projects" {
+			projection += " - 'automation_enabled'"
+		}
+		if table == "delivery_releases" {
+			projection += " - 'status'"
+		}
+		query := "SELECT COALESCE(jsonb_agg(value ORDER BY value::text), '[]'::jsonb)::text FROM (SELECT " + projection + " AS value FROM " + table + " t"
 		if table == "schema_migrations" {
 			query += " WHERE key < '0004'"
 		}

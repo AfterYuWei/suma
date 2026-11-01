@@ -95,17 +95,20 @@ func TestRealDockerCDDeliveryRollback(t *testing.T) {
 		t.Fatalf("second release = %#v", second)
 	}
 
-	rollbackTask, err := service.Rollback(ctx, projectName, first.ID, Actor{Name: "Docker smoke"})
+	rollbackTask, err := service.Rollback(ctx, projectName, first.ID, *first.LatestRecordID, nil, Actor{Name: "Docker smoke"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	smokeWaitTask(t, ctx, db, rollbackTask.ID, task.StatusSuccess)
 	releases, err := service.ListReleases(ctx, projectName)
-	if err != nil || len(releases) < 3 {
+	if err != nil || len(releases) != 2 {
 		t.Fatalf("releases after rollback = %#v, %v", releases, err)
 	}
-	rolledBack := releases[0]
-	if rolledBack.Status != StatusRolledBack || rolledBack.CommitSHA != firstCommit {
+	rolledBack, err := service.GetRelease(ctx, projectName, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rolledBack.Status != StatusSucceeded || rolledBack.CommitSHA != firstCommit {
 		t.Fatalf("rollback release = %#v", rolledBack)
 	}
 	cleanupSpec, err = releaseExecutionSpec(runtimeProjectName, rolledBack)
@@ -116,7 +119,7 @@ func TestRealDockerCDDeliveryRollback(t *testing.T) {
 	// Reapply the same release again: identical configuration and the same image
 	// must still replace the old containers when the operator requests rollback.
 	beforeIDs := smokeContainerIDs(t, ctx, runner, cleanupSpec)
-	repeatRollback, err := service.Rollback(ctx, projectName, first.ID, Actor{Name: "Docker smoke"})
+	repeatRollback, err := service.Rollback(ctx, projectName, first.ID, *first.LatestRecordID, nil, Actor{Name: "Docker smoke"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,13 +270,7 @@ func TestRealDockerMultiNodeConsistency(t *testing.T) {
 	smokeWaitTask(t, ctx, db, secondTask.ID, task.StatusSuccess)
 	secondReleases, _ := service.ListReleases(ctx, projectName)
 	second := secondReleases[0]
-	userID := uint(1)
-	if _, err := service.Approve(ctx, projectName, second.ID, Actor{UserID: &userID, Name: "Docker smoke"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Model(&database.Node{}).Where("id = ?", remote.ID).Update("enabled", false).Error; err != nil {
-		t.Fatal(err)
-	}
+	service.compose = smokeFailureRunner{Runner: runner, targeted: runner, blockedNode: remote.ID}
 	secondDeploy, err := service.Deploy(ctx, projectName, second.ID, Actor{Name: "Docker smoke"})
 	if err != nil {
 		t.Fatal(err)
@@ -283,10 +280,8 @@ func TestRealDockerMultiNodeConsistency(t *testing.T) {
 	if second.Status != StatusPartialFailed {
 		t.Fatalf("partial release = %#v", second)
 	}
-	if err := db.Model(&database.Node{}).Where("id = ?", remote.ID).Update("enabled", true).Error; err != nil {
-		t.Fatal(err)
-	}
-	retry, err := service.RetryFailedNodes(ctx, projectName, second.ID, Actor{Name: "Docker smoke"})
+	service.compose = runner
+	retry, err := service.RetryFailedNodes(ctx, projectName, second.ID, *second.LatestRecordID, Actor{Name: "Docker smoke"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,21 +294,18 @@ func TestRealDockerMultiNodeConsistency(t *testing.T) {
 	smokeWaitTask(t, ctx, db, thirdTask.ID, task.StatusSuccess)
 	thirdReleases, _ := service.ListReleases(ctx, projectName)
 	third := thirdReleases[0]
-	if _, err := service.Approve(ctx, projectName, third.ID, Actor{UserID: &userID, Name: "Docker smoke"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Model(&database.Node{}).Where("id = ?", "local").Update("enabled", false).Error; err != nil {
-		t.Fatal(err)
-	}
+	service.compose = smokeFailureRunner{Runner: runner, targeted: runner, blockedNode: "local"}
 	deploy, err := service.Deploy(ctx, projectName, third.ID, Actor{Name: "Docker smoke"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	smokeWaitTask(t, ctx, db, deploy.ID, task.StatusFailed)
-	if err := db.Model(&database.Node{}).Where("id = ?", "local").Update("enabled", true).Error; err != nil {
+	service.compose = runner
+	third, err = service.GetRelease(ctx, projectName, third.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	rollback, err := service.RollbackFailedNodes(ctx, projectName, third.ID, Actor{Name: "Docker smoke"})
+	rollback, err := service.RollbackFailedNodes(ctx, projectName, third.ID, *third.LatestRecordID, Actor{Name: "Docker smoke"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,4 +409,26 @@ func assertSmokeRuntime(t *testing.T, ctx context.Context, runner compose.Runner
 	if !runtimeIsHealthy(value) {
 		t.Fatalf("Compose runtime is not healthy: %s", value)
 	}
+}
+
+// Inject only the selected node's pull failure; validation and every successful
+// node still execute against the real Docker engines.
+type smokeFailureRunner struct {
+	compose.Runner
+	targeted    TargetedRunner
+	blockedNode string
+}
+
+func (r smokeFailureRunner) Targeted(target compose.Target) compose.Runner {
+	runner := r.targeted.Targeted(target)
+	if target.NodeID == r.blockedNode {
+		return smokePullFailure{Runner: runner}
+	}
+	return runner
+}
+
+type smokePullFailure struct{ compose.Runner }
+
+func (r smokePullFailure) PullRelease(context.Context, compose.ExecutionSpec, io.Writer) error {
+	return fmt.Errorf("controlled node pull failure")
 }

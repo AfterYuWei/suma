@@ -88,52 +88,62 @@ func TestDeliveryEnvironmentValidationDoesNotChangeConfiguration(t *testing.T) {
 	}
 }
 
-func TestDeliveryEnvironmentReleaseSnapshotsSurviveChangesAndRollback(t *testing.T) {
+func TestDeliveryEnvironmentRecordSnapshotsSurviveChangesAndRollback(t *testing.T) {
 	h := newCDHarness(t, ModeManual)
 	ctx := context.Background()
 	configuration, _ := h.service.GetConfiguration(ctx, h.project.Name)
-	input := ConfigureInput{Repository: configuration.Repository, ReconcileMode: ModeManual, SyncIntervalSeconds: 300, DeploymentTimeout: 60,
-		Environment: []EnvironmentVariable{{Name: "APP_VERSION", Value: environmentValue("version-one")}}}
+	input := ConfigureInput{Repository: configuration.Repository, ReconcileMode: ModeManual, SyncIntervalSeconds: 300, DeploymentTimeout: 60, Environment: []EnvironmentVariable{{Name: "APP_VERSION", Value: environmentValue("version-one")}}}
 	if _, err := h.service.Configure(ctx, h.project.Name, input); err != nil {
 		t.Fatal(err)
 	}
 	first := syncAndDeploy(t, h)
+	firstRecord := *first.LatestRecordID
 	input.Environment[0].Value = environmentValue("version-two")
 	if _, err := h.service.Configure(ctx, h.project.Name, input); err != nil {
 		t.Fatal(err)
 	}
-	second := syncAndDeploy(t, h) // Same commit and rendered Compose; manual values still create a new release.
-	if first.ID == second.ID || first.ConfigHash == second.ConfigHash {
-		t.Fatal("environment-only change reused a release")
+	// Publishing needs no extra Git sync and uses the current saved settings.
+	operation, err := h.service.Deploy(ctx, h.project.Name, first.ID, Actor{Name: "operator"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, release := range []database.DeliveryRelease{first, second} {
-		spec, err := h.service.releaseSpec("fixture", release)
+	waitTask(t, h.db, operation.ID, "success")
+	second, err := h.service.GetRelease(ctx, h.project.Name, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != second.ID || firstRecord == *second.LatestRecordID {
+		t.Fatal("Git identity or operation identity was lost")
+	}
+	for id, want := range map[uint]string{firstRecord: "version-one", *second.LatestRecordID: "version-two"} {
+		record, err := h.service.GetRecord(ctx, h.project.Name, id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		expected := "version-one"
-		if release.ID == second.ID {
-			expected = "version-two"
+		spec, err := h.service.releaseSpec("fixture", recordRelease(first, record))
+		if err != nil || spec.Environment["APP_VERSION"] != want {
+			t.Fatal("snapshot lost environment", err)
 		}
-		if spec.Environment["APP_VERSION"] != expected {
-			t.Fatal("release did not retain its environment")
-		}
-		raw, _ := json.Marshal(release)
-		if strings.Contains(string(raw), expected) || strings.Contains(string(raw), "environment_ciphertext") {
-			t.Fatal("release exposed environment")
+		raw, _ := json.Marshal(record)
+		if strings.Contains(string(raw), want) || strings.Contains(string(raw), "environment_ciphertext") {
+			t.Fatal("record exposed environment")
 		}
 	}
-	rollbackTask, err := h.service.Rollback(ctx, h.project.Name, first.ID, Actor{Name: "operator"})
+	rollback, err := h.service.Rollback(ctx, h.project.Name, first.ID, firstRecord, nil, Actor{Name: "operator"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitTask(t, h.db, rollbackTask.ID, "success")
+	waitTask(t, h.db, rollback.ID, "success")
+	specs := h.runner.UpSpecs()
+	if specs[len(specs)-1].Environment["APP_VERSION"] != "version-one" {
+		t.Fatal("rollback lost selected environment")
+	}
+	saved, err := h.service.GetEnvironmentValues(ctx, h.project.Name)
+	if err != nil || saved["APP_VERSION"] != "version-two" {
+		t.Fatal("rollback mutated settings")
+	}
 	releases, err := h.service.ListReleases(ctx, h.project.Name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	spec, err := h.service.releaseSpec("fixture", releases[0])
-	if err != nil || spec.Environment["APP_VERSION"] != "version-one" {
-		t.Fatal("rollback lost original environment", err)
+	if err != nil || len(releases) != 1 {
+		t.Fatal("operation created another release", err)
 	}
 }

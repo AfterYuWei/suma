@@ -233,6 +233,7 @@ func projectConfigurationTransportSmoke(t *testing.T, transport, unixHost string
 		t.Fatalf("runtime mismatch: %v", err)
 	}
 	projectDialogRuntimeSmoke(t, ctx, h, nodeID, name, rows[0].ID)
+	projectCDTransportSmoke(t, ctx, root, nodeID, transport, db, nodes, current, tasks, store)
 	if transport != "unix" {
 		unsafe, _ := json.Marshal(map[string]string{"name": name, "compose": "services: {app: {image: alpine:3.24, volumes: ['./relative:/data']}}\n", "environment": ""})
 		if result := h.request(http.MethodPost, path+"/validate", unsafe); result.Code != 422 {

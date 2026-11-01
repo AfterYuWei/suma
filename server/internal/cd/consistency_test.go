@@ -54,8 +54,8 @@ func TestDriftAggregatesNodesConcurrentlyAndCaches(t *testing.T) {
 	if err := harness.db.Model(&database.DeliveryProject{}).Where("id = ?", harness.project.ID).Update("desired_commit", commit).Error; err != nil {
 		t.Fatal(err)
 	}
-	healthyA := &fakeComposeRunner{health: `[{"State":"running","Health":"healthy"}]`}
-	healthyB := &fakeComposeRunner{health: `[{"State":"running","Health":"healthy"}]`}
+	healthyA := &fakeComposeRunner{rendered: harness.runner.rendered, health: `[{"State":"running","Health":"healthy"}]`}
+	healthyB := &fakeComposeRunner{rendered: harness.runner.rendered, health: `[{"State":"running","Health":"healthy"}]`}
 	runnerA := &delayedPSRunner{fakeComposeRunner: healthyA, delay: 150 * time.Millisecond}
 	runnerB := &delayedPSRunner{fakeComposeRunner: healthyB, delay: 150 * time.Millisecond}
 	harness.service.compose = &targetedFakeRunner{fakeComposeRunner: harness.runner, runners: map[string]compose.Runner{"node-a": runnerA, "node-b": runnerB}}
@@ -186,10 +186,18 @@ func TestRetryIncludesAutoRolledBackNode(t *testing.T) {
 	if err := harness.db.Create(&database.DeliveryTargetState{ProjectID: harness.project.ID, NodeID: "node-a", ActiveReleaseID: &oldID, ObservedCommit: old.CommitSHA}).Error; err != nil {
 		t.Fatal(err)
 	}
-	healthy := &fakeComposeRunner{health: `[{"State":"running","Health":"healthy"}]`}
+	healthy := &fakeComposeRunner{rendered: harness.runner.rendered, health: `[{"State":"running","Health":"healthy"}]`}
 	harness.service.compose = &targetedFakeRunner{fakeComposeRunner: harness.runner, runners: map[string]compose.Runner{"node-a": healthy}}
 	harness.service.SetTargetResolver(fakeTargetResolver{})
-	result, err := harness.service.RetryFailedNodes(context.Background(), harness.project.Name, current.ID, Actor{Name: "operator"})
+	oldRecord := fixtureRecord(t, harness, &old, []string{"node-a"}, StatusSucceeded)
+	source := fixtureRecord(t, harness, &current, []string{"node-a"}, StatusFailed)
+	if err := harness.db.Create(&database.DeliveryDeploymentAttempt{DeploymentID: deployment.ID, RecordID: &source.ID, PreviousRecordID: &oldRecord.ID, Operation: AttemptDeploy, TargetReleaseID: current.ID, NodeID: "node-a", NodeName: "A", Status: StatusFailed}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.db.Model(&database.DeliveryTargetState{}).Where("project_id = ? AND node_id = ?", harness.project.ID, "node-a").Update("active_record_id", oldRecord.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	result, err := harness.service.RetryFailedNodes(context.Background(), harness.project.Name, current.ID, *current.LatestRecordID, Actor{Name: "operator"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,11 +248,22 @@ func TestRollbackFailedNodesRestoresEachNodesPreviousRelease(t *testing.T) {
 	if err := harness.db.Create(&[]database.DeliveryTargetState{{ProjectID: harness.project.ID, NodeID: "node-a", ActiveReleaseID: &oldAID, ObservedCommit: oldA.CommitSHA}, {ProjectID: harness.project.ID, NodeID: "node-b", ActiveReleaseID: &oldBID, ObservedCommit: oldB.CommitSHA}}).Error; err != nil {
 		t.Fatal(err)
 	}
-	healthyA := &fakeComposeRunner{health: `[{"State":"running","Health":"healthy"}]`}
-	healthyB := &fakeComposeRunner{health: `[{"State":"running","Health":"healthy"}]`}
+	healthyA := &fakeComposeRunner{rendered: harness.runner.rendered, health: `[{"State":"running","Health":"healthy"}]`}
+	healthyB := &fakeComposeRunner{rendered: harness.runner.rendered, health: `[{"State":"running","Health":"healthy"}]`}
 	harness.service.compose = &targetedFakeRunner{fakeComposeRunner: harness.runner, runners: map[string]compose.Runner{"node-a": healthyA, "node-b": healthyB}}
 	harness.service.SetTargetResolver(fakeTargetResolver{})
-	result, err := harness.service.RollbackFailedNodes(context.Background(), harness.project.Name, current.ID, Actor{Name: "operator"})
+	oldRecordA := fixtureRecord(t, harness, &oldA, []string{"node-a"}, StatusSucceeded)
+	oldRecordB := fixtureRecord(t, harness, &oldB, []string{"node-b"}, StatusSucceeded)
+	source := fixtureRecord(t, harness, &current, []string{"node-a", "node-b"}, StatusFailed)
+	for i, previous := range []uint{oldRecordA.ID, oldRecordB.ID} {
+		if err := harness.db.Create(&database.DeliveryDeploymentAttempt{DeploymentID: deployments[i].ID, RecordID: &source.ID, PreviousRecordID: &previous, Operation: AttemptDeploy, TargetReleaseID: current.ID, NodeID: deployments[i].NodeID, NodeName: deployments[i].NodeName, Status: StatusFailed}).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := harness.db.Model(&database.DeliveryTargetState{}).Where("project_id = ? AND node_id = ?", harness.project.ID, deployments[i].NodeID).Update("active_record_id", previous).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := harness.service.RollbackFailedNodes(context.Background(), harness.project.Name, current.ID, *current.LatestRecordID, Actor{Name: "operator"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +276,7 @@ func TestRollbackFailedNodesRestoresEachNodesPreviousRelease(t *testing.T) {
 		t.Fatalf("per-node rollback states = %#v", states)
 	}
 	var attempts []database.DeliveryDeploymentAttempt
-	if err := harness.db.Where("operation = ?", AttemptManualRollback).Order("deployment_id").Find(&attempts).Error; err != nil {
+	if err := harness.db.Where("operation = ?", "rollback_failed").Order("deployment_id").Find(&attempts).Error; err != nil {
 		t.Fatal(err)
 	}
 	if len(attempts) != 2 || attempts[0].TargetReleaseID != oldA.ID || attempts[1].TargetReleaseID != oldB.ID {
@@ -265,7 +284,7 @@ func TestRollbackFailedNodesRestoresEachNodesPreviousRelease(t *testing.T) {
 	}
 	var aggregate database.DeliveryRelease
 	_ = harness.db.First(&aggregate, current.ID).Error
-	if aggregate.Status != StatusRolledBack {
+	if aggregate.Status != StatusSucceeded {
 		t.Fatalf("release status = %s", aggregate.Status)
 	}
 	for _, runner := range []*fakeComposeRunner{healthyA, healthyB} {

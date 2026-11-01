@@ -16,24 +16,36 @@ const (
 	ScopeSwarm  ScopeKind = "swarm"
 )
 
+// DeploymentMode belongs to a node Project. CD describes how that Project is
+// deployed; global Continuous Delivery orchestrates those node deployments.
+type DeploymentMode string
+
+const (
+	DeploymentManual DeploymentMode = "manual"
+	DeploymentCD     DeploymentMode = "cd"
+)
+
 type Capability string
 
 const (
-	CapabilityView          Capability = "view"
-	CapabilityEdit          Capability = "edit"
-	CapabilityDeploy        Capability = "deploy"
-	CapabilityStart         Capability = "start"
-	CapabilityStop          Capability = "stop"
-	CapabilityRestart       Capability = "restart"
-	CapabilityUpdate        Capability = "update"
-	CapabilityDelete        Capability = "delete"
-	CapabilityServices      Capability = "services"
-	CapabilityLogs          Capability = "logs"
-	CapabilityNetworks      Capability = "networks"
-	CapabilityVolumes       Capability = "volumes"
-	CapabilityTakeover      Capability = "takeover"
-	CapabilityCleanup       Capability = "cleanup"
-	CapabilityShadowPreview Capability = "shadow_preview"
+	CapabilitySync            Capability = "sync"
+	CapabilityEditEnvironment Capability = "edit_environment"
+	CapabilityRollback        Capability = "rollback"
+	CapabilityView            Capability = "view"
+	CapabilityEdit            Capability = "edit"
+	CapabilityDeploy          Capability = "deploy"
+	CapabilityStart           Capability = "start"
+	CapabilityStop            Capability = "stop"
+	CapabilityRestart         Capability = "restart"
+	CapabilityUpdate          Capability = "update"
+	CapabilityDelete          Capability = "delete"
+	CapabilityServices        Capability = "services"
+	CapabilityLogs            Capability = "logs"
+	CapabilityNetworks        Capability = "networks"
+	CapabilityVolumes         Capability = "volumes"
+	CapabilityTakeover        Capability = "takeover"
+	CapabilityCleanup         Capability = "cleanup"
+	CapabilityShadowPreview   Capability = "shadow_preview"
 )
 
 type Scope struct {
@@ -50,22 +62,23 @@ type Ref struct {
 // Summary is the backend-neutral Project list model. Backend-specific detail
 // stays in its backend package and is never forced into this common shape.
 type Summary struct {
-	Ref                  Ref          `json:"ref"`
-	Backend              Backend      `json:"backend"`
-	Scope                Scope        `json:"scope"`
-	NodeID               string       `json:"node_id,omitempty"`
-	Name                 string       `json:"name"`
-	NativeName           string       `json:"native_name"`
-	DeliveryProjectName  string       `json:"delivery_project_name,omitempty"`
-	Managed              bool         `json:"managed"`
-	Source               string       `json:"source"`
-	Status               string       `json:"status"`
-	Capabilities         []Capability `json:"capabilities"`
-	ServiceCount         int          `json:"service_count"`
-	InstanceCount        int          `json:"instance_count"`
-	DeclaredServiceNames *[]string    `json:"declared_service_names,omitempty"`
-	CreatedAt            time.Time    `json:"created_at"`
-	UpdatedAt            time.Time    `json:"updated_at"`
+	DeploymentMode       DeploymentMode `json:"deployment_mode"`
+	Ref                  Ref            `json:"ref"`
+	Backend              Backend        `json:"backend"`
+	Scope                Scope          `json:"scope"`
+	NodeID               string         `json:"node_id,omitempty"`
+	Name                 string         `json:"name"`
+	NativeName           string         `json:"native_name"`
+	DeliveryProjectName  string         `json:"delivery_project_name,omitempty"`
+	Managed              bool           `json:"managed"`
+	Source               string         `json:"source"`
+	Status               string         `json:"status"`
+	Capabilities         []Capability   `json:"capabilities"`
+	ServiceCount         int            `json:"service_count"`
+	InstanceCount        int            `json:"instance_count"`
+	DeclaredServiceNames *[]string      `json:"declared_service_names,omitempty"`
+	CreatedAt            time.Time      `json:"created_at"`
+	UpdatedAt            time.Time      `json:"updated_at"`
 }
 
 func ComposeRef(nodeID, name string) Ref {
@@ -75,7 +88,7 @@ func ComposeRef(nodeID, name string) Ref {
 func ComposeSummary(nodeID, name, source, status string, managed bool) Summary {
 	ref := ComposeRef(nodeID, name)
 	return Summary{
-		Ref: ref, Backend: ref.Backend, Scope: ref.Scope, NodeID: nodeID,
+		Ref: ref, Backend: ref.Backend, Scope: ref.Scope, NodeID: nodeID, DeploymentMode: DeploymentManual,
 		Name: name, NativeName: name, Managed: managed, Source: source,
 		Status: status, Capabilities: ComposeCapabilities(managed),
 	}

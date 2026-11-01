@@ -232,6 +232,10 @@ function DeleteButton({ onClick, zh }: { onClick: () => void; zh: boolean }) {
 }
 
 interface EditorProps {
+  readOnly?: boolean
+  environmentPanel?: ReactNode
+  sourceFiles?: {path:string;content:string}[]
+
   nodeID: string
   compose: string
   environment: string
@@ -300,6 +304,7 @@ export function ProjectConfiguration(props: EditorProps) {
   const fail = (error: unknown) =>
     setNotice(error instanceof Error ? error.message : String(error))
   const set = (path: ConfigPath, value: unknown | typeof REMOVE) => {
+ if(props.readOnly)return
     try {
       onCompose(editConfig(compose, path, value))
       setNotice('')
@@ -314,11 +319,13 @@ export function ProjectConfiguration(props: EditorProps) {
     void changeWorkspace(() => {
       if (path[0] === 'services' && typeof path[1] === 'string') selectService(path[1])
       setFile(next)
-      setMode('source')
+      setMode(next === 'environment' ? 'environment' : 'source')
       setLine(next === 'compose' ? sourceLine(compose, path) : 1)
     })
   }
-  const source = file === 'compose' ? compose : environment
+  const [sourcePath,setSourcePath]=useState('')
+  const sourceFile=props.sourceFiles?.find(value=>value.path===sourcePath) ?? props.sourceFiles?.[0]
+  const source = file === 'compose' ? sourceFile?.content ?? compose : environment
   const masked =
     file === 'compose' ? maskCompose(source) : maskEnvironment(source)
   const hidden = !reveal && masked !== source
@@ -330,7 +337,7 @@ export function ProjectConfiguration(props: EditorProps) {
           theme={dark ? 'vs-dark' : 'light'}
           value={reveal ? source : masked}
           onChange={
-            readOnly || hidden || disabled
+            readOnly || hidden || disabled || (!!props.readOnly && (file === 'compose' || !props.environmentPanel))
               ? undefined
               : (value) => {
                   setReveal(true)
@@ -340,7 +347,7 @@ export function ProjectConfiguration(props: EditorProps) {
           }
           revealLine={line}
           options={{
-            readOnly: readOnly || hidden || disabled,
+            readOnly: readOnly || hidden || disabled || (!!props.readOnly && (file === 'compose' || !props.environmentPanel)),
             // Avoid Monaco's pending word-highlight cancellation on mode switches.
             occurrencesHighlight: 'off',
             automaticLayout: true,
@@ -403,10 +410,11 @@ export function ProjectConfiguration(props: EditorProps) {
       data-testid="project-configuration"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <Tabs value={mode} onValueChange={value => void changeWorkspace(() => setMode(value))}>
+        <Tabs value={mode} onValueChange={value => void changeWorkspace(() => {setMode(value);setFile(value==='environment'?'environment':'compose')})}>
           <TabsList>
             <TabsTrigger value="visual">{zh ? '可视化' : 'Visual'}</TabsTrigger>
             <TabsTrigger value="source">{zh ? '源码' : 'Compose'}</TabsTrigger>
+ <TabsTrigger value="environment">.env</TabsTrigger>
           </TabsList>
         </Tabs>
         <div className="flex items-center gap-2">
@@ -514,21 +522,10 @@ export function ProjectConfiguration(props: EditorProps) {
           </AlertDescription>
         </Alert>
       )}
-      {mode === 'source' ? (
+      {mode === 'environment' && props.environmentPanel ? props.environmentPanel : mode === 'source' || mode === 'environment' ? (
         <div className="space-y-2">
           <div className="flex items-center gap-1">
-            <Tabs
-              value={file}
-              onValueChange={(value) => {
-                setFile(value as typeof file)
-                setLine(1)
-              }}
-            >
-              <TabsList>
-                <TabsTrigger value="compose">compose.yml</TabsTrigger>
-                <TabsTrigger value="environment">.env</TabsTrigger>
-              </TabsList>
-            </Tabs>
+            {mode === 'source' && props.sourceFiles && <Choice label={zh?'源码文件':'Source file'} value={sourceFile?.path ?? ''} options={props.sourceFiles.map(value=>[value.path,value.path])} onChange={setSourcePath} />}
             <Tooltip>
               <TooltipTrigger render={
                 <Button
@@ -602,11 +599,12 @@ export function ProjectConfiguration(props: EditorProps) {
                 ))}
               </nav>
               <Button
+                hidden={props.readOnly}
                 variant="outline"
                 size="sm"
                 className="w-full"
                 onClick={() => void changeWorkspace(createService)}
-                disabled={disabled || !!problems.length}
+                disabled={disabled || props.readOnly || !!problems.length}
               >
                 <Plus />
                 {zh ? '添加服务' : 'Add service'}
@@ -614,7 +612,7 @@ export function ProjectConfiguration(props: EditorProps) {
             </div>
             <fieldset
               disabled={disabled || !!problems.length}
-              className="min-w-0 space-y-3"
+              className={props.readOnly ? 'min-w-0 space-y-3 [&_button:not([role=tab]):not([role=combobox])]:hidden' : 'min-w-0 space-y-3'}
             >
               {service ? (
                 <ServiceForm key={`${props.nodeID}:${service}`} context={ctx} tab={serviceTab} onTabChange={value => void changeWorkspace(() => setServiceTab(value))} />
@@ -622,7 +620,7 @@ export function ProjectConfiguration(props: EditorProps) {
                 <div className="space-y-3 py-10" data-testid="project-empty-services">
                   <h3 className="font-medium">{zh ? '先添加第一个服务' : 'Add your first service'}</h3>
                   <p className="max-w-lg text-sm text-muted-foreground">{zh ? '填写服务名称和镜像，再为这个服务配置端口、环境变量、网络和存储。' : 'Start with a name and image, then configure this service’s ports, environment, networks and storage.'}</p>
-                  <Button onClick={createService}><Plus />{zh ? '添加第一个服务' : 'Add first service'}</Button>
+                  <Button hidden={props.readOnly} onClick={createService}><Plus />{zh ? '添加第一个服务' : 'Add first service'}</Button>
                 </div>
               )}
             </fieldset>
@@ -672,7 +670,7 @@ function ConfigGroup({
         <h4 className="text-sm font-medium">{title}</h4>
         <span className="text-xs text-muted-foreground">{context.zh ? `已配置 ${count} 项` : `${count} configured fields`}</span>
       </div>
-      {children}
+      <fieldset disabled={context.readOnly} className="min-w-0 space-y-4">{children}</fieldset>
     </TabsContent>
   )
 }

@@ -1,0 +1,114 @@
+//go:build dockersmoke
+
+package api
+
+import (
+	"context"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/suma/suma/server/internal/audit"
+	"github.com/suma/suma/server/internal/compose"
+	"github.com/suma/suma/server/internal/credential"
+	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/deployment"
+	gitrepo "github.com/suma/suma/server/internal/git"
+	"github.com/suma/suma/server/internal/node"
+	"github.com/suma/suma/server/internal/projectcd"
+	"github.com/suma/suma/server/internal/secret"
+	"github.com/suma/suma/server/internal/task"
+	"gorm.io/gorm"
+)
+
+// Only Git fetch is controlled. Compose, health, node transport, volumes and
+// container IDs are verified against the fixture's disposable Docker engine.
+type projectCDSmokeGit struct{ root, commit string }
+
+func (g projectCDSmokeGit) TestConnection(context.Context, gitrepo.SyncRequest) (gitrepo.ConnectionResult, error) {
+	return gitrepo.ConnectionResult{CommitSHA: g.commit, RefChecked: true}, nil
+}
+func (g projectCDSmokeGit) Sync(context.Context, gitrepo.SyncRequest, io.Writer) (gitrepo.Revision, error) {
+	return gitrepo.Revision{CommitSHA: g.commit, WorktreePath: g.root}, nil
+}
+func (g projectCDSmokeGit) Verify(context.Context, string, string) error { return nil }
+func (g projectCDSmokeGit) Cleanup(uint) error                           { return nil }
+
+func projectCDTransportSmoke(t *testing.T, ctx context.Context, root, nodeID, transport string, db *gorm.DB, nodes *node.Service, current *compose.Service, tasks *task.Service, store *secret.Store) {
+	t.Helper()
+	name := "project-cd-" + transport + "-" + time.Now().UTC().Format("150405")
+	source := "services:\n  app:\n    image: alpine:3.24\n    command: [sh, -c, 'exec sleep 300']\n    environment:\n      CD_VALUE: ${CD_VALUE}\n    volumes:\n      - data:/data\n    healthcheck:\n      test: [CMD, 'true']\n      interval: 1s\nvolumes:\n  data: {}\n"
+	if _, err := current.Create(ctx, name, source, ""); err != nil {
+		t.Fatal(err)
+	}
+	worktree := filepath.Join(root, name+"-git")
+	if err := os.MkdirAll(worktree, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, "compose.yml"), []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	runner, err := compose.NewRunner("docker compose")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := projectcd.New(db, projectCDSmokeGit{root: worktree, commit: strings.Repeat("c", 40)}, gitrepo.NewCredentialService(db, store), credential.NewRegistryService(db, store), runner, tasks, audit.NewService(db), store, projectcd.Dependencies{Project: func(context.Context, string) (*compose.Service, error) { return current, nil }, Target: func(ctx context.Context, id string) (compose.Target, error) {
+		target, _, err := nodes.ComposeTarget(ctx, id)
+		return target, err
+	}})
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		config, err := service.Get(cleanup, nodeID, name)
+		if err == nil && config.Enabled {
+			operation, err := service.Detach(cleanup, nodeID, name, config.Revision, projectcd.Actor{Name: "Smoke cleanup"})
+			if err == nil {
+				_ = tasks.Wait(cleanup, operation.ID)
+			}
+		}
+		_ = current.ForceRemove(cleanup, name, false)
+	})
+	variable := "private-smoke-value"
+	config, err := service.Configure(ctx, nodeID, name, projectcd.ConfigureInput{Repository: gitrepo.Repository{CloneURL: "https://git.example.test/deployment.git", RefType: "branch", Ref: "main", ComposeFiles: []string{"compose.yml"}, Authentication: gitrepo.Authentication{Source: "none"}}, Environment: []deployment.EnvironmentVariable{{Name: "CD_VALUE", Value: &variable}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	join := func(operation database.Task, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := tasks.Wait(ctx, operation.ID); err != nil {
+			t.Fatal(err)
+		}
+		result, err := tasks.Get(ctx, operation.ID)
+		if err != nil || result.Status != task.StatusSuccess {
+			t.Fatalf("CD transport %s: %s (%v)", transport, result.Message, err)
+		}
+	}
+	checked, err := service.Check(ctx, nodeID, name, "manual", projectcd.Actor{Name: "Smoke"})
+	join(checked, err)
+	config, err = service.Get(ctx, nodeID, name)
+	if err != nil || config.Candidate == nil {
+		t.Fatal("missing checked candidate", err)
+	}
+	applied, err := service.Apply(ctx, nodeID, name, config.Candidate.ID, config.Revision, false, projectcd.Actor{Name: "Smoke"})
+	join(applied, err)
+	before, err := current.Services(ctx, name)
+	if err != nil || len(before) != 1 || before[0].State != "running" {
+		t.Fatal("CD did not apply to selected node", err)
+	}
+	config, err = service.Get(ctx, nodeID, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detached, err := service.Detach(ctx, nodeID, name, config.Revision, projectcd.Actor{Name: "Smoke"})
+	join(detached, err)
+	after, err := current.Services(ctx, name)
+	if err != nil || len(after) != 1 || after[0].ID != before[0].ID {
+		t.Fatal("manual conversion changed running containers", err)
+	}
+}

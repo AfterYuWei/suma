@@ -17,6 +17,9 @@ func annotateDeliveryProjectNames(ctx context.Context, deps Dependencies, nodeID
 	for _, row := range rows {
 		if !row.Managed && row.Backend == projectdomain.BackendCompose {
 			row.DeliveryProjectName = names[row.NativeName]
+			if row.DeliveryProjectName != "" {
+				row.DeploymentMode = projectdomain.DeploymentCD
+			}
 		}
 	}
 	return nil

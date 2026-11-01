@@ -11,9 +11,11 @@ import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { ErrorState } from '../components/ui/error-state'
 import { LoadingState } from '../components/ui/loading-state'
 import { CDOverview, ReleasePanel, type ReleaseOperation } from '../features/delivery/releases'
+import { DeliveryRecords } from '../features/delivery/records'
+import { FailedNodesDialog, RollbackDialog } from '../features/delivery/action-dialogs'
 import { CDSettings } from '../features/delivery/settings'
 import { DeliveryAutomationSwitch } from '../features/delivery/automation-switch'
-import type { CDConfiguration, CDDrift, DeliveryProject, DeliveryRelease } from '../features/delivery/types'
+import type { CDConfiguration, CDDrift, DeliveryProject, DeliveryRecord, DeliveryRelease } from '../features/delivery/types'
 import { hasActiveRelease, shortCommit } from '../features/delivery/types'
 import { api, ApiError } from '../lib/api'
 import { useI18n } from '../lib/i18n'
@@ -21,7 +23,7 @@ import { cn } from '../lib/utils'
 import { confirmDialog, promptDialog, promptWithCheckboxDialog } from '../stores/dialog'
 import { ResourceFrame } from './images'
 
-type View = 'Overview' | 'Releases' | 'Settings'
+type View = 'Overview' | 'Releases' | 'Records' | 'Settings'
 
 export function ContinuousDeliveryDetailPage() {
   const { projectName } = useParams({ from: '/continuous-delivery/$projectName' })
@@ -36,6 +38,8 @@ export function ContinuousDeliveryDetailPage() {
   const driftQuery = useQuery({ queryKey: ['delivery-drift', projectName], queryFn: () => api<CDDrift>(`/delivery-projects/${encodedName}/drift`), enabled: isGit, refetchInterval: 5_000 })
   const releasesQuery = useQuery({ queryKey: ['delivery-releases', projectName], queryFn: () => api<DeliveryRelease[]>(`/delivery-projects/${encodedName}/releases`), enabled: isGit, refetchInterval: 5_000 })
   const [view, setView] = useState<View>('Overview')
+  const [rollback, setRollback] = useState<{ release: DeliveryRelease; record?: DeliveryRecord } | null>(null)
+  const [failedAction, setFailedAction] = useState<{ release: DeliveryRelease; operation: 'retry-failed' | 'rollback-failed' } | null>(null)
   const [notice, setNotice] = useState<{ message: string; tone: 'success' | 'error' } | null>(null)
 
   useEffect(() => {
@@ -54,10 +58,12 @@ export function ContinuousDeliveryDetailPage() {
     onError: (error) => setNotice({ message: error.message, tone: 'error' }),
   })
   const releaseAction = useMutation({
-    mutationFn: ({ release, operation }: { release: DeliveryRelease; operation: ReleaseOperation }) => api(`/delivery-projects/${encodedName}/releases/${release.id}/${operation.endsWith('-failed') ? `remediations/${operation}` : operation}`, { method: 'POST' }),
+    mutationFn: ({ release, operation, recordID, nodeIDs }: { release: DeliveryRelease; operation: ReleaseOperation; recordID?: number; nodeIDs?: string[] }) => api(`/delivery-projects/${encodedName}/releases/${release.id}/${operation.endsWith('-failed') ? `remediations/${operation}` : operation}`, { method: 'POST', ...(operation === 'rollback' ? { body: JSON.stringify({ record_id: recordID, ...(nodeIDs ? { node_ids: nodeIDs } : {}) }) } : operation.endsWith('-failed') ? { body: JSON.stringify({ source_record_id: release.remediation.source_record_id }) } : {}) }),
     onSuccess: (_, variables) => {
       const queued = ['deploy', 'rollback', 'retry-failed', 'rollback-failed'].includes(variables.operation)
-      setNotice({ message: queued ? (zh ? '交付任务已启动。' : 'Delivery task started.') : variables.operation === 'approve' ? (zh ? 'Release 已批准。' : 'Release approved.') : (zh ? 'Release 已拒绝。' : 'Release rejected.'), tone: 'success' })
+      setNotice({ message: queued ? (zh ? '交付任务已启动。' : 'Delivery task started.') : (zh ? 'Release 已拒绝。' : 'Release rejected.'), tone: 'success' })
+      void client.invalidateQueries({ queryKey: ['delivery-records', projectName] })
+      void client.invalidateQueries({ queryKey: ['delivery-configuration', projectName] })
       if (queued) void client.invalidateQueries({ queryKey: ['tasks'] })
       void client.invalidateQueries({ queryKey: ['delivery-releases', projectName] })
       void client.invalidateQueries({ queryKey: ['delivery-drift', projectName] })
@@ -68,20 +74,10 @@ export function ContinuousDeliveryDetailPage() {
 
   const runReleaseAction = async (release: DeliveryRelease, operation: ReleaseOperation) => {
     let confirmed = false
-    if (operation === 'approve') confirmed = await confirmDialog({ title: zh ? `批准 Release #${release.id}？` : `Approve release #${release.id}?`, description: zh ? `批准 Commit ${shortCommit(release.commit_sha)} 进入可发布状态。此操作本身不会部署。` : `Mark commit ${shortCommit(release.commit_sha)} as ready to deploy. Approval does not deploy it.`, confirmLabel: zh ? '批准' : 'Approve' })
     if (operation === 'reject') confirmed = await confirmDialog({ title: zh ? `拒绝 Release #${release.id}？` : `Reject release #${release.id}?`, description: zh ? '该候选 Release 将不能再发布。' : 'This candidate release can no longer be deployed.', confirmLabel: zh ? '拒绝' : 'Reject', danger: true })
-    if (operation === 'deploy') confirmed = await confirmDialog({ title: zh ? `${release.status === 'failed' ? '重新发布全部节点' : '发布'} Release #${release.id}？` : `${release.status === 'failed' ? 'Redeploy all nodes for' : 'Deploy'} release #${release.id}?`, description: zh ? `将 Commit ${shortCommit(release.commit_sha)} 并行应用到 Release 快照中的全部目标节点，包括已成功的节点；失败时按保存的自动回滚策略处理。` : `Apply commit ${shortCommit(release.commit_sha)} to every node in the release target snapshot, including successful nodes. Failures follow the saved automatic rollback policy.`, confirmLabel: release.status === 'failed' ? (zh ? '重新发布全部节点' : 'Redeploy all nodes') : (zh ? '发布' : 'Deploy') })
-    if (operation === 'rollback') confirmed = await confirmDialog({ title: zh ? `回滚到 Release #${release.id}？` : `Restore release #${release.id}?`, description: zh ? '这会重新应用该版本，但不会回滚存储卷中的数据；自动交付会切换为手动。' : 'This reapplies the release without rolling back volume data; automatic delivery switches to manual.', confirmLabel: zh ? '回滚' : 'Restore', danger: true })
-    if (operation === 'retry-failed') {
-      const ids = release.remediation?.retry_failed_node_ids ?? []
-      const names = release.deployments?.filter((item) => ids.includes(item.node_id)).map((item) => item.node_name).join('、') || ids.join('、')
-      confirmed = await confirmDialog({ title: zh ? `重试 ${ids.length} 个失败节点？` : `Retry ${ids.length} failed nodes?`, description: zh ? `服务端将再次校验快照并只重试：${names}。自动回滚成功的节点也会重新尝试原 Release。` : `The server will revalidate the immutable snapshot and retry only: ${names}. Nodes recovered by auto rollback will retry the original release.`, confirmLabel: zh ? '重试失败节点' : 'Retry failed nodes' })
-    }
-    if (operation === 'rollback-failed') {
-      const ids = release.remediation?.rollback_failed_node_ids ?? []
-      const names = release.deployments?.filter((item) => ids.includes(item.node_id)).map((item) => item.node_name).join('、') || ids.join('、')
-      confirmed = await confirmDialog({ title: zh ? `回滚 ${ids.length} 个失败节点？` : `Rollback ${ids.length} failed nodes?`, description: zh ? `将仅处理：${names}。每个节点恢复到其部署前的 Release，各节点版本可能不同；不会创建新 Release。` : `Only these nodes are affected: ${names}. Each node restores its own pre-deployment release, which may differ; no new release is created.`, confirmLabel: zh ? '回滚失败节点' : 'Rollback failed nodes', danger: true })
-    }
+    if (operation === 'deploy') confirmed = await confirmDialog({ title: zh ? `${release.status === 'failed' ? '重新发布全部节点' : '发布'} Release #${release.id}？` : `${release.status === 'failed' ? 'Redeploy all nodes for' : 'Deploy'} release #${release.id}?`, description: zh ? `批准并立即发布 Commit ${shortCommit(release.commit_sha)}，使用设置页当前已保存的配置和目标节点，包含此前已成功的节点。` : `Approve and deploy commit ${shortCommit(release.commit_sha)} using the current saved settings and target nodes, including previously successful nodes.`, confirmLabel: release.status === 'failed' ? (zh ? '重新发布全部节点' : 'Redeploy all nodes') : (zh ? '发布' : 'Deploy') })
+    if (operation === 'rollback') { setRollback({ release }); return }
+    if (operation === 'retry-failed' || operation === 'rollback-failed') { setFailedAction({ release, operation }); return }
     if (confirmed) releaseAction.mutate({ release, operation })
   }
 
@@ -118,7 +114,7 @@ export function ContinuousDeliveryDetailPage() {
   const project = projectQuery.data
   const configuration = cdQuery.data
   const activeDelivery = hasActiveRelease(releasesQuery.data)
-  const tabs: View[] = isGit ? ['Overview', 'Releases', 'Settings'] : ['Settings']
+  const tabs: View[] = isGit ? ['Overview', 'Releases', 'Records', 'Settings'] : ['Settings']
   const actionPending = activeDelivery || sync.isPending || releaseAction.isPending
   const headerActions = <div className="flex flex-wrap items-center gap-2">
     <Badge variant="outline" className={cn(isGit ? 'border-transparent bg-primary/10 text-primary' : 'text-muted-foreground')}>{isGit ? modeLabel(configuration.reconcile_mode, zh) : (zh ? '待配置' : 'Setup')}</Badge>
@@ -148,7 +144,7 @@ export function ContinuousDeliveryDetailPage() {
           <Tabs value={view} onValueChange={(value) => setView(value as View)}>
             <TabsList>
               {tabs.map((name) => (
-                <TabsTrigger key={name} value={name}>{name === 'Overview' ? (zh ? '概览' : 'Overview') : name === 'Releases' ? (zh ? 'Release' : 'Releases') : (zh ? '设置' : 'Settings')}</TabsTrigger>
+                <TabsTrigger key={name} value={name}>{name === 'Overview' ? (zh ? '概览' : 'Overview') : name === 'Releases' ? (zh ? 'Release' : 'Releases') : name === 'Records' ? (zh ? '记录' : 'Records') : (zh ? '设置' : 'Settings')}</TabsTrigger>
               ))}
             </TabsList>
           </Tabs>
@@ -159,8 +155,11 @@ export function ContinuousDeliveryDetailPage() {
         </div>
         {view === 'Overview' && isGit && <CDOverview configuration={configuration} drift={driftQuery.data} releases={releasesQuery.data} error={(driftQuery.error || releasesQuery.error)?.message} zh={zh} />}
         {view === 'Releases' && isGit && (releasesQuery.isPending ? <LoadingState label={zh ? '正在加载 Release' : 'Loading releases'} /> : <ReleasePanel configuration={configuration} releases={releasesQuery.data} pendingReleaseID={releaseAction.isPending ? releaseAction.variables?.release.id : undefined} pendingOperation={releaseAction.isPending ? releaseAction.variables?.operation : undefined} zh={zh} onAction={(release, operation) => void runReleaseAction(release, operation)} />)}
+        {view === 'Records' && isGit && <DeliveryRecords key={projectName} projectName={projectName} releases={releasesQuery.data || []} busy={actionPending} canDeliver={configuration.reconcile_mode !== 'observe'} zh={zh} onRollback={record => { void (async () => { try { const release = releasesQuery.data?.find(item => item.id === record.release_id) || await api<DeliveryRelease>(`/delivery-projects/${encodedName}/releases/${record.release_id}`); setRollback({ release, record }) } catch (error) { setNotice({ tone: 'error', message: error instanceof Error ? error.message : String(error) }) } })() }} />}
         {view === 'Settings' && <CDSettings projectName={projectName} configuration={configuration} zh={zh} onSaved={(value) => { client.setQueryData(['delivery-configuration', projectName], value); void client.invalidateQueries({ queryKey: ['delivery-projects'] }); setNotice(null); if (value.configured && !value.webhook_secret) { setView('Overview'); setNotice({ message: zh ? '持续交付配置已保存。' : 'Continuous delivery configuration saved.', tone: 'success' }) } }} />}
       </div>
+    {rollback && <RollbackDialog key={`${rollback.release.id}-${rollback.record?.id || 0}`} projectName={projectName} release={rollback.release} initialRecord={rollback.record} zh={zh} onClose={() => setRollback(null)} onConfirm={(recordID, nodeIDs) => { releaseAction.mutate({ release: rollback.release, operation: 'rollback', recordID, nodeIDs }); setRollback(null) }} />}
+    {failedAction && <FailedNodesDialog release={failedAction.release} operation={failedAction.operation} zh={zh} onClose={() => setFailedAction(null)} onConfirm={() => { releaseAction.mutate(failedAction); setFailedAction(null) }} />}
     </ResourceFrame>
   </div>
 }

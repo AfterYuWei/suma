@@ -125,9 +125,6 @@ func TestServiceManualSyncDeployDriftAndIdempotency(t *testing.T) {
 	}
 
 	userID := uint(42)
-	if _, err := harness.service.Approve(context.Background(), harness.project.Name, releases[0].ID, Actor{UserID: &userID, Name: "operator"}); err != nil {
-		t.Fatal(err)
-	}
 	deployTask, err := harness.service.Deploy(context.Background(), harness.project.Name, releases[0].ID, Actor{UserID: &userID, Name: "operator"})
 	if err != nil {
 		t.Fatal(err)
@@ -173,35 +170,24 @@ func TestServiceManualSyncDeployDriftAndIdempotency(t *testing.T) {
 	}
 }
 
-func TestManualReleaseRequiresExplicitApprovalAndSupportsRejection(t *testing.T) {
-	harness := newCDHarness(t, ModeManual)
-	syncTask, err := harness.service.Sync(context.Background(), harness.project.Name, "manual", Actor{Name: "operator"})
+func TestManualReleasePublishesDirectlyAndSupportsRejection(t *testing.T) {
+	h := newCDHarness(t, ModeManual)
+	sync, err := h.service.Sync(context.Background(), h.project.Name, "manual", Actor{Name: "operator"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitTask(t, harness.db, syncTask.ID, task.StatusSuccess)
-	releases, err := harness.service.ListReleases(context.Background(), harness.project.Name)
+	waitTask(t, h.db, sync.ID, task.StatusSuccess)
+	releases, err := h.service.ListReleases(context.Background(), h.project.Name)
 	if err != nil || len(releases) != 1 {
-		t.Fatalf("ListReleases() = %#v, %v", releases, err)
+		t.Fatal(err)
 	}
 	release := releases[0]
-	if _, err := harness.service.Deploy(context.Background(), harness.project.Name, release.ID, Actor{Name: "operator"}); err == nil || !strings.Contains(err.Error(), StatusAwaitingApproval) {
-		t.Fatalf("Deploy(unapproved) error = %v", err)
+	rejected, err := h.service.Reject(context.Background(), h.project.Name, release.ID, Actor{Name: "reviewer"})
+	if err != nil || rejected.Status != StatusRejected {
+		t.Fatal(err)
 	}
-	if _, err := harness.service.Approve(context.Background(), harness.project.Name, release.ID, Actor{Name: "anonymous"}); err == nil || !strings.Contains(err.Error(), "authenticated") {
-		t.Fatalf("Approve(anonymous) error = %v", err)
-	}
-	userID := uint(7)
-	approved, err := harness.service.Approve(context.Background(), harness.project.Name, release.ID, Actor{UserID: &userID, Name: "reviewer"})
-	if err != nil || approved.Status != StatusApproved {
-		t.Fatalf("Approve() = %#v, %v", approved, err)
-	}
-	rejected, err := harness.service.Reject(context.Background(), harness.project.Name, release.ID, Actor{UserID: &userID, Name: "reviewer"})
-	if err != nil || rejected.Status != StatusRejected || !strings.Contains(rejected.FailureReason, "reviewer") {
-		t.Fatalf("Reject() = %#v, %v", rejected, err)
-	}
-	if _, err := harness.service.Deploy(context.Background(), harness.project.Name, release.ID, Actor{UserID: &userID, Name: "operator"}); err == nil || !strings.Contains(err.Error(), StatusRejected) {
-		t.Fatalf("Deploy(rejected) error = %v", err)
+	if _, err := h.service.Deploy(context.Background(), h.project.Name, release.ID, Actor{Name: "operator"}); err == nil {
+		t.Fatal("rejected release was deployed")
 	}
 }
 
@@ -217,9 +203,6 @@ func TestObserveModeBlocksApprovalAndDeployment(t *testing.T) {
 		t.Fatalf("ListReleases() = %#v, %v", releases, err)
 	}
 	userID := uint(7)
-	if _, err := harness.service.Approve(context.Background(), harness.project.Name, releases[0].ID, Actor{UserID: &userID, Name: "reviewer"}); err == nil || !strings.Contains(err.Error(), "observe") {
-		t.Fatalf("Approve(observe) error = %v", err)
-	}
 	if _, err := harness.service.Deploy(context.Background(), harness.project.Name, releases[0].ID, Actor{UserID: &userID, Name: "reviewer"}); err == nil || !strings.Contains(err.Error(), "observe") {
 		t.Fatalf("Deploy(observe) error = %v", err)
 	}
@@ -277,9 +260,6 @@ func TestMultiNodeDeploymentRecordsPartialFailurePerNode(t *testing.T) {
 		t.Fatalf("releases = %#v, %v", releases, err)
 	}
 	userID := uint(1)
-	if _, err := harness.service.Approve(context.Background(), harness.project.Name, releases[0].ID, Actor{UserID: &userID, Name: "operator"}); err != nil {
-		t.Fatal(err)
-	}
 	deployTask, err := harness.service.Deploy(context.Background(), harness.project.Name, releases[0].ID, Actor{UserID: &userID, Name: "operator"})
 	if err != nil {
 		t.Fatal(err)
@@ -313,7 +293,7 @@ func TestServiceRollbackRestoresPreviousSuccessfulRelease(t *testing.T) {
 		t.Fatal("second Git revision did not create a new release")
 	}
 
-	rollbackTask, err := harness.service.Rollback(context.Background(), harness.project.Name, first.ID, Actor{Name: "operator"})
+	rollbackTask, err := harness.service.Rollback(context.Background(), harness.project.Name, first.ID, *first.LatestRecordID, nil, Actor{Name: "operator"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,15 +302,18 @@ func TestServiceRollbackRestoresPreviousSuccessfulRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(releases) != 3 {
-		t.Fatalf("rollback should create an immutable release record, got %#v", releases)
+	if len(releases) != 2 {
+		t.Fatalf("rollback must reuse the selected Git release, got %#v", releases)
 	}
-	rolledBack := releases[0]
-	if rolledBack.Status != StatusRolledBack || rolledBack.TaskID != rollbackTask.ID || rolledBack.TriggerType != "rollback" || rolledBack.CommitSHA != first.CommitSHA || rolledBack.ID == first.ID {
+	rolledBack, err := harness.service.GetRelease(context.Background(), harness.project.Name, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rolledBack.Status != StatusSucceeded || rolledBack.TaskID != rollbackTask.ID || rolledBack.CommitSHA != first.CommitSHA || rolledBack.ID != first.ID {
 		t.Fatalf("rollback release = %#v", rolledBack)
 	}
 	specs := harness.runner.UpSpecs()
-	if len(specs) != 3 || specs[0].ForceRecreate || specs[1].ForceRecreate || !specs[2].ForceRecreate || specs[2].Files[0] != specs[0].Files[0] {
+	if len(specs) != 3 || specs[0].ForceRecreate || !specs[2].ForceRecreate || specs[2].Files[0] != specs[0].Files[0] {
 		t.Fatalf("rollback must recreate the selected Compose release: %#v", specs)
 	}
 	drift, err := harness.service.Drift(context.Background(), harness.project.Name)
@@ -441,10 +424,7 @@ func syncAndDeploy(t *testing.T, harness *cdHarness) database.DeliveryRelease {
 	}
 	release := releases[0]
 	userID := uint(42)
-	if _, err := harness.service.Approve(context.Background(), harness.project.Name, release.ID, Actor{UserID: &userID, Name: "operator"}); err != nil {
-		t.Fatal(err)
-	}
-	deployTask, err := harness.service.Deploy(context.Background(), harness.project.Name, release.ID, Actor{Name: "operator"})
+	deployTask, err := harness.service.Deploy(context.Background(), harness.project.Name, release.ID, Actor{UserID: &userID, Name: "operator"})
 	if err != nil {
 		t.Fatal(err)
 	}

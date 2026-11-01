@@ -47,6 +47,9 @@ func (s *Service) ManagedConfiguration(name string) (Project, error) {
 	}
 	project.Compose, project.Environment = snapshot[0], snapshot[1]
 	project.Revision = configurationRevision(project.Compose, project.Environment)
+	if err := s.decorateDeployment(context.Background(), &project); err != nil {
+		return Project{}, err
+	}
 	return project, nil
 }
 

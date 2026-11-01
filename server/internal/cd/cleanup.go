@@ -94,5 +94,65 @@ func (s *Service) CleanupImageReferences(ctx context.Context, nodeID string) ([]
 			return nil, fmt.Errorf("release protection reference is missing")
 		}
 	}
-	return result, nil
+	// Protect actual operation snapshots, including same-commit environment changes.
+	recordIDs := map[uint]bool{}
+	for _, state := range states {
+		if state.ActiveRecordID != nil {
+			recordIDs[*state.ActiveRecordID] = true
+		}
+	}
+	var records []database.DeliveryRecord
+	if err := s.db.WithContext(ctx).Find(&records).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range records {
+		switch r.Status {
+		case "pending", StatusValidating, StatusPulling, StatusDeploying, StatusVerifying, StatusRollingBack:
+			var nodes []string
+			if err := json.Unmarshal([]byte(r.NodeIDsJSON), &nodes); err != nil {
+				return nil, fmt.Errorf("unable to read record image protection")
+			}
+			for _, node := range nodes {
+				if node == nodeID {
+					recordIDs[r.ID] = true
+				}
+			}
+		}
+	}
+	activeRecords := map[uint]bool{}
+	for id := range recordIDs {
+		activeRecords[id] = true
+	}
+	var attempts []database.DeliveryDeploymentAttempt
+	if err := s.db.WithContext(ctx).Where("node_id = ?", nodeID).Find(&attempts).Error; err != nil {
+		return nil, err
+	}
+	for _, a := range attempts {
+		if a.RecordID != nil && activeRecords[*a.RecordID] && a.PreviousRecordID != nil {
+			recordIDs[*a.PreviousRecordID] = true
+		}
+	}
+	for _, r := range records {
+		if !recordIDs[r.ID] {
+			continue
+		}
+		delete(recordIDs, r.ID)
+		var refs []string
+		if err := json.Unmarshal([]byte(r.ImageReferences), &refs); err != nil {
+			return nil, fmt.Errorf("unable to read record image protection")
+		}
+		result = append(result, refs...)
+	}
+	if len(recordIDs) > 0 {
+		return nil, fmt.Errorf("record protection reference is missing")
+	}
+	seen := map[string]bool{}
+	unique := []string{}
+	for _, ref := range result {
+		if !seen[ref] {
+			seen[ref] = true
+			unique = append(unique, ref)
+		}
+	}
+	return unique, nil
 }

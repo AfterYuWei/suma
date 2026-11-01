@@ -32,6 +32,7 @@ import (
 	networkService "github.com/suma/suma/server/internal/network"
 	nodeService "github.com/suma/suma/server/internal/node"
 	"github.com/suma/suma/server/internal/notification"
+	"github.com/suma/suma/server/internal/projectcd"
 	"github.com/suma/suma/server/internal/projectlogs"
 	settingsService "github.com/suma/suma/server/internal/settings"
 	systemService "github.com/suma/suma/server/internal/system"
@@ -44,6 +45,7 @@ import (
 const sessionCookie = "suma_session"
 
 type Dependencies struct {
+	ProjectCD           *projectcd.Service
 	ContainerMonitoring *containermonitor.Service
 	Notifications       *notification.Service
 	ImageUpdates        *imageupdate.Service
@@ -113,6 +115,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	loginAttempts := newLoginLimiter()
 	setupAttempts := newLoginLimiter()
 	v1 := router.Group("/api/v1")
+	registerProjectCDRoutes(v1, deps)
 	registerMonitoringRoutes(v1, deps)
 	registerNotificationRoutes(v1, deps)
 	registerImageUpdateRoutes(v1, deps)
@@ -1376,6 +1379,49 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		success(c, drift)
 	})
+	delivery.GET("/:name/records", func(c *gin.Context) {
+		page, pageErr := strconv.Atoi(c.DefaultQuery("page", "1"))
+		size, sizeErr := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+		releaseID, releaseErr := strconv.ParseUint(c.DefaultQuery("release_id", "0"), 10, 64)
+		if pageErr != nil || sizeErr != nil || releaseErr != nil || page < 1 || size < 1 || size > 100 {
+			failure(c, http.StatusBadRequest, 17705, "Invalid record pagination")
+			return
+		}
+		rows, err := deps.CD.ListRecords(c.Request.Context(), c.Param("name"), cdService.RecordQuery{ReleaseID: uint(releaseID), Operation: c.Query("operation"), Status: c.Query("status"), Page: page, PageSize: size})
+		if err != nil {
+			failure(c, http.StatusNotFound, 17706, "Delivery records unavailable")
+			return
+		}
+		success(c, rows)
+	})
+	delivery.GET("/:name/records/:recordID", func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("recordID"), 10, 64)
+		if err != nil || id == 0 {
+			failure(c, http.StatusBadRequest, 17705, "Invalid record ID")
+			return
+		}
+		row, err := deps.CD.GetRecord(c.Request.Context(), c.Param("name"), uint(id))
+		if err != nil {
+			failure(c, http.StatusNotFound, 17706, "Delivery record not found")
+			return
+		}
+		success(c, row)
+	})
+	delivery.GET("/:name/records/:recordID/environment", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		id, err := strconv.ParseUint(c.Param("recordID"), 10, 64)
+		if err != nil || id == 0 {
+			failure(c, http.StatusBadRequest, 17705, "Invalid record ID")
+			return
+		}
+		values, err := deps.CD.RecordEnvironmentValues(c.Request.Context(), c.Param("name"), uint(id))
+		if err != nil {
+			failure(c, http.StatusNotFound, 17706, "Delivery record not found")
+			return
+		}
+		recordAudit(c, deps.Audit, "cd.record.environment.read", "delivery_project", c.Param("name"), "success")
+		success(c, values)
+	})
 	delivery.GET("/:name/releases", func(c *gin.Context) {
 		rows, err := deps.CD.ListReleases(c.Request.Context(), c.Param("name"))
 		if err != nil {
@@ -1410,19 +1456,6 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		c.JSON(http.StatusAccepted, envelope{Code: 0, Message: "success", Data: row})
 	})
-	delivery.POST("/:name/releases/:releaseID/approve", func(c *gin.Context) {
-		id, err := strconv.ParseUint(c.Param("releaseID"), 10, 64)
-		if err != nil {
-			failure(c, http.StatusBadRequest, 17705, "Invalid release ID")
-			return
-		}
-		row, err := deps.CD.Approve(c.Request.Context(), c.Param("name"), uint(id), requestActor(c))
-		if err != nil {
-			failure(c, http.StatusConflict, 17709, err.Error())
-			return
-		}
-		success(c, row)
-	})
 	delivery.POST("/:name/releases/:releaseID/reject", func(c *gin.Context) {
 		id, err := strconv.ParseUint(c.Param("releaseID"), 10, 64)
 		if err != nil {
@@ -1442,7 +1475,15 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			failure(c, http.StatusBadRequest, 17705, "Invalid release ID")
 			return
 		}
-		row, err := deps.CD.Rollback(c.Request.Context(), c.Param("name"), uint(id), requestActor(c))
+		var input struct {
+			RecordID uint     `json:"record_id"`
+			NodeIDs  []string `json:"node_ids"`
+		}
+		if c.ShouldBindJSON(&input) != nil || input.RecordID == 0 {
+			failure(c, http.StatusBadRequest, 17705, "A configuration record is required")
+			return
+		}
+		row, err := deps.CD.Rollback(c.Request.Context(), c.Param("name"), uint(id), input.RecordID, input.NodeIDs, requestActor(c))
 		if err != nil {
 			failure(c, http.StatusConflict, 17708, err.Error())
 			return
@@ -1455,7 +1496,14 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			failure(c, http.StatusBadRequest, 17705, "Invalid release ID")
 			return
 		}
-		row, err := deps.CD.RetryFailedNodes(c.Request.Context(), c.Param("name"), uint(id), requestActor(c))
+		var input struct {
+			SourceRecordID uint `json:"source_record_id"`
+		}
+		if c.ShouldBindJSON(&input) != nil || input.SourceRecordID == 0 {
+			failure(c, http.StatusBadRequest, 17705, "A failure record is required")
+			return
+		}
+		row, err := deps.CD.RetryFailedNodes(c.Request.Context(), c.Param("name"), uint(id), input.SourceRecordID, requestActor(c))
 		if err != nil {
 			failure(c, http.StatusConflict, 17716, err.Error())
 			return
@@ -1468,7 +1516,14 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			failure(c, http.StatusBadRequest, 17705, "Invalid release ID")
 			return
 		}
-		row, err := deps.CD.RollbackFailedNodes(c.Request.Context(), c.Param("name"), uint(id), requestActor(c))
+		var input struct {
+			SourceRecordID uint `json:"source_record_id"`
+		}
+		if c.ShouldBindJSON(&input) != nil || input.SourceRecordID == 0 {
+			failure(c, http.StatusBadRequest, 17705, "A failure record is required")
+			return
+		}
+		row, err := deps.CD.RollbackFailedNodes(c.Request.Context(), c.Param("name"), uint(id), input.SourceRecordID, requestActor(c))
 		if err != nil {
 			failure(c, http.StatusConflict, 17717, err.Error())
 			return

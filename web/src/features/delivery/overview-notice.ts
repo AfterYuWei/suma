@@ -20,7 +20,7 @@ export function deliveryOverviewNotice({ drift, latest, desiredCommit, error, zh
   // Use only the latest release for the current desired commit. Historical
   // failures must not override a newer successful deployment or a new Git ref.
   const currentFailure = latest && (!desiredCommit || latest.commit_sha === desiredCommit)
-    && (!drift?.active_release_id || latest.id >= drift.active_release_id)
+    && !(drift?.status === 'healthy' && drift.active_release_id && drift.active_release_id !== latest.id)
     && (failedStatuses.has(latest.status) || latest.status === 'rolled_back' && !!latest.failure_reason)
   if (currentFailure) {
     const nodeReasons = latest.deployments?.flatMap(node => {

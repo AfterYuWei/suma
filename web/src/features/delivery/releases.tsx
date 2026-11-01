@@ -12,15 +12,15 @@ import { Spinner } from '../../components/ui/spinner'
 import { InlineStatus } from '../../components/ui/inline-status'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui/table'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip'
-import { Check, CheckCircle2, ChevronDownIcon, GitCommitHorizontal, History, MoreHorizontal, RotateCcw, Rocket, TriangleAlert, X, XCircle } from 'lucide-react'
+import { Check, ChevronDownIcon, GitCommitHorizontal, History, MoreHorizontal, RotateCcw, Rocket, TriangleAlert, X, XCircle } from 'lucide-react'
 import { useId, type ReactNode } from 'react'
 import type { CDConfiguration, CDDrift, DeliveryRelease } from './types'
 import { hasActiveRelease, parseStringList, repositoryName, shortCommit } from './types'
 import { deliveryOverviewNotice, driftReason } from './overview-notice'
 
-const statusBadgeClass = (status: string) => ['succeeded', 'approved'].includes(status)
+const statusBadgeClass = (status: string) => status === 'succeeded'
   ? 'border-transparent bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-  : ['partial_failed', 'rolled_back', 'awaiting_approval', 'rolling_back'].includes(status)
+  : ['ready', 'approved', 'partial_failed', 'rolled_back', 'awaiting_approval', 'rolling_back'].includes(status)
     ? 'border-transparent bg-amber-500/15 text-amber-600 dark:text-amber-400'
     : ['failed', 'rollback_failed', 'rejected'].includes(status)
       ? 'border-transparent bg-red-500/15 text-red-600 dark:text-red-400'
@@ -49,7 +49,7 @@ export function CDOverview({ configuration, drift, releases, error, zh }: { conf
   const { formatDateTime } = useDateTime()
 
   const noticeDescriptionID = useId()
-  const latest = releases?.[0]
+  const latest = releases?.find(release => release.commit_sha === configuration.desired_commit) || releases?.[0]
   const repository = configuration.repository
   const notice = deliveryOverviewNotice({ drift, latest, desiredCommit: configuration.desired_commit, error, zh })
   const nodePagination = useListPagination(drift?.nodes ?? [])
@@ -111,7 +111,7 @@ export function CDOverview({ configuration, drift, releases, error, zh }: { conf
   </div>
 }
 
-export type ReleaseOperation = 'approve' | 'reject' | 'deploy' | 'rollback' | 'retry-failed' | 'rollback-failed'
+export type ReleaseOperation = 'reject' | 'deploy' | 'rollback' | 'retry-failed' | 'rollback-failed'
 
 export function ReleasePanel({ configuration, releases, pendingReleaseID, pendingOperation, zh, onAction }: { configuration: CDConfiguration; releases?: DeliveryRelease[]; pendingReleaseID?: number; pendingOperation?: ReleaseOperation; zh: boolean; onAction: (release: DeliveryRelease, action: ReleaseOperation) => void }) {
   const pagination = useListPagination(releases ?? [])
@@ -146,17 +146,15 @@ function ReleaseActions({ configuration, release, busy, pendingOperation, zh, on
   const retryCount = release.remediation?.retry_failed_node_ids?.length ?? 0
   const rollbackCount = release.remediation?.rollback_failed_node_ids?.length ?? 0
   type Action = { operation: ReleaseOperation; label: string; description: string; icon: ReactNode; danger?: boolean }
-  const deploy: Action = { operation: 'deploy', label: release.status === 'failed' ? (zh ? '重新发布全部节点' : 'Redeploy all nodes') : (zh ? '发布' : 'Deploy'), description: zh ? '将此版本应用到快照中的全部目标节点' : 'Apply this release to every node in its target snapshot', icon: <Rocket /> }
-  const primary: Action | undefined = canDeliver && release.status === 'awaiting_approval'
-    ? { operation: 'approve', label: zh ? '批准' : 'Approve', description: zh ? '批准后仍需手动发布' : 'Approval still requires a separate deployment', icon: <CheckCircle2 /> }
-    : retryCount > 0
-      ? { operation: 'retry-failed', label: zh ? `重试失败节点（${retryCount}）` : `Retry failed (${retryCount})`, description: zh ? '仅重新尝试服务端确认可重试的失败节点' : 'Retry only the failed nodes eligible for remediation', icon: <RotateCcw /> }
-      : canDeliver && ['approved', 'failed'].includes(release.status) ? deploy : undefined
+  const deploy: Action = { operation: 'deploy', label: release.status === 'failed' ? (zh ? '重新发布全部节点' : 'Redeploy all nodes') : (zh ? '发布' : 'Deploy'), description: zh ? '使用当前设置发布此 Commit' : 'Deploy this commit using current settings', icon: <Rocket /> }
+  const primary: Action | undefined = canDeliver && retryCount > 0
+      ? { operation: 'retry-failed', label: zh ? `重试（${retryCount}）` : `Retry (${retryCount})`, description: zh ? '仅重新尝试服务端确认可重试的失败节点' : 'Retry only the failed nodes eligible for remediation', icon: <RotateCcw /> }
+      : canDeliver && ['ready', 'awaiting_approval', 'approved', 'failed', 'succeeded', 'partial_failed', 'interrupted'].includes(release.status) ? deploy : undefined
   const secondary: Action[] = []
-  if (primary?.operation === 'retry-failed' && canDeliver && ['approved', 'failed'].includes(release.status)) secondary.push(deploy)
-  if (rollbackCount > 0) secondary.push({ operation: 'rollback-failed', label: zh ? `回滚失败节点（${rollbackCount}）` : `Roll back failed (${rollbackCount})`, description: zh ? '仅将失败节点恢复到各自部署前的版本' : 'Restore failed nodes to their own previous releases', icon: <RotateCcw />, danger: true })
-  if (canDeliver && ['succeeded', 'rolled_back'].includes(release.status) && configuration.active_release_id !== release.id) secondary.push({ operation: 'rollback', label: zh ? '回滚到此版本' : 'Restore this release', description: zh ? '重新应用此版本，自动交付将切换为手动' : 'Reapply this release and switch automatic delivery to manual', icon: <RotateCcw />, danger: true })
-  if (['awaiting_approval', 'approved'].includes(release.status)) secondary.push({ operation: 'reject', label: zh ? '拒绝此版本' : 'Reject this release', description: zh ? '拒绝后此候选版本不能再发布' : 'This candidate can no longer be deployed once rejected', icon: <XCircle />, danger: true })
+  if (primary?.operation === 'retry-failed' && canDeliver && ['ready', 'awaiting_approval', 'approved', 'failed', 'succeeded', 'partial_failed', 'interrupted'].includes(release.status)) secondary.push(deploy)
+  if (canDeliver && rollbackCount > 0) secondary.push({ operation: 'rollback-failed', label: zh ? `回滚失败节点（${rollbackCount}）` : `Roll back failed (${rollbackCount})`, description: zh ? '仅将失败节点恢复到各自部署前的版本' : 'Restore failed nodes to their own previous releases', icon: <RotateCcw />, danger: true })
+  if (canDeliver && release.status !== 'rejected' && release.latest_record_id !== undefined) secondary.push({ operation: 'rollback', label: zh ? '回滚' : 'Roll back', description: zh ? '重新应用此版本，自动交付将切换为手动' : 'Reapply this release and switch automatic delivery to manual', icon: <RotateCcw />, danger: true })
+  if (['ready', 'awaiting_approval', 'approved'].includes(release.status)) secondary.push({ operation: 'reject', label: zh ? '拒绝此版本' : 'Reject this release', description: zh ? '拒绝后此候选版本不能再发布' : 'This candidate can no longer be deployed once rejected', icon: <XCircle />, danger: true })
   if (!primary && !secondary.length) return null
   return <div className="ml-auto flex shrink-0 items-center gap-1 py-1.5" role="group" aria-label={zh ? `Release #${release.id} 操作` : `Release #${release.id} actions`}>
     {primary && <Button size="sm" className="bg-black text-white hover:bg-neutral-800 dark:border-white/15" disabled={busy} title={busy ? (zh ? '交付操作进行中，请稍候' : 'A delivery operation is in progress') : primary.description} onClick={() => onAction(release, primary.operation)}>{pendingOperation === primary.operation ? <Spinner /> : primary.icon}{primary.label}</Button>}
@@ -182,7 +180,7 @@ function ReleaseApproval({ release, zh }: { release: DeliveryRelease; zh: boolea
   const rejected = release.status === 'rejected'
   if (!rejected && !release.approved_by) return null
   const actor = rejected ? rejectionActor(release) : release.approved_by_name
-  const label = rejected ? (zh ? '已拒绝' : 'Rejected') : (zh ? '已批准' : 'Approved')
+  const label = rejected ? (zh ? '已拒绝' : 'Rejected') : (zh ? '确认人' : 'Confirmed by')
   return <span role="status" className={`inline-flex min-w-0 max-w-full items-center gap-1 text-xs ${rejected ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
     {rejected ? <X className="size-3.5 shrink-0" aria-hidden="true" /> : <Check className="size-3.5 shrink-0" aria-hidden="true" />}
     <span className="min-w-0 [overflow-wrap:anywhere]"><span className="sr-only">{label}: </span>{actor || (zh ? '未知用户' : 'Unknown user')}</span>
@@ -201,7 +199,7 @@ function ReleaseDetails({ release, zh }: { release: DeliveryRelease; zh: boolean
     {release.failure_reason && !rejectionActor(release) && <Alert variant="destructive"><TriangleAlert /><AlertDescription>{release.failure_reason}</AlertDescription></Alert>}
     <DetailList items={[
       ['Commit SHA', release.commit_sha],
-      [zh ? '配置 Hash' : 'Config hash', release.config_hash],
+      [zh ? '同步配置 Hash' : 'Sync config hash', release.config_hash],
       [zh ? '触发者' : 'Triggered by', release.trigger_actor || triggerLabel(release.trigger_type, zh)],
       [zh ? '任务 ID' : 'Task ID', release.task_id || '—'],
       [zh ? 'Compose 文件' : 'Compose files', files.join(', ') || '—'],
@@ -258,8 +256,8 @@ function ReleaseDetails({ release, zh }: { release: DeliveryRelease; zh: boolean
   </div>
 }
 
-function ReleaseStatus({ status, zh }: { status: string; zh: boolean }) { return <Badge className={statusBadgeClass(status)}>{statusLabel(status, zh)}</Badge> }
+export function ReleaseStatus({ status, zh }: { status: string; zh: boolean }) { return <Badge className={statusBadgeClass(status)}>{statusLabel(status, zh)}</Badge> }
 
 function modeLabel(value: string, zh: boolean) { if (value === 'auto') return zh ? '自动发布' : 'Automatic'; if (value === 'observe') return zh ? '仅观察' : 'Observe only'; return zh ? '手动发布' : 'Manual' }
-function statusLabel(value: string, zh: boolean) { if (!zh) return value.replaceAll('_', ' '); const labels: Record<string, string> = { validating: '校验中', awaiting_approval: '等待批准', approved: '已批准', rejected: '已拒绝', pulling: '拉取镜像', deploying: '部署中', verifying: '健康检查', succeeded: '成功', partial_failed: '部分失败', failed: '失败', rolling_back: '回滚中', rolled_back: '已回滚', rollback_failed: '回滚失败' }; return labels[value] || value }
+function statusLabel(value: string, zh: boolean) { if (!zh) return value.replaceAll('_', ' '); const labels: Record<string, string> = { pending: '排队中', interrupted: '已中断', validating: '校验中', ready: '待发布', awaiting_approval: '待发布', approved: '待发布', rejected: '已拒绝', pulling: '拉取镜像', deploying: '部署中', verifying: '健康检查', succeeded: '成功', partial_failed: '部分失败', failed: '失败', rolling_back: '回滚中', rolled_back: '已回滚', rollback_failed: '回滚失败' }; return labels[value] || value }
 function triggerLabel(value: string, zh: boolean) { if (!zh) return value.replaceAll('_', ' '); const labels: Record<string, string> = { webhook: 'Webhook', poll: '定时轮询', manual: '手动同步', rollback: '回滚', startup_reconcile: '启动对账' }; return labels[value] || value }
