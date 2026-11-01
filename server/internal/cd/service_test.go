@@ -284,6 +284,7 @@ func TestMultiNodeDeploymentRecordsPartialFailurePerNode(t *testing.T) {
 func TestServiceRollbackRestoresPreviousSuccessfulRelease(t *testing.T) {
 	harness := newCDHarness(t, ModeManual)
 	first := syncAndDeploy(t, harness)
+	firstRendered := harness.runner.rendered
 
 	secondWorktree := makeWorktree(t, "example/web:2")
 	harness.git.SetRevision(gitrepo.Revision{CommitSHA: strings.Repeat("b", 40), CommitAuthor: "Developer", CommitMessage: "second release", WorktreePath: secondWorktree})
@@ -293,6 +294,8 @@ func TestServiceRollbackRestoresPreviousSuccessfulRelease(t *testing.T) {
 		t.Fatal("second Git revision did not create a new release")
 	}
 
+	// The runner must render the selected old worktree, not the latest revision.
+	harness.runner.SetRendered(firstRendered)
 	rollbackTask, err := harness.service.Rollback(context.Background(), harness.project.Name, first.ID, *first.LatestRecordID, nil, Actor{Name: "operator"})
 	if err != nil {
 		t.Fatal(err)

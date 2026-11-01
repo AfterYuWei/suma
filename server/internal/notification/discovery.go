@@ -203,9 +203,9 @@ func (s *Service) telegram(ctx context.Context, a *Adapter, c Channel, m Secrets
 		}
 		for _, u := range updates {
 			in := Incoming{ID: strconv.FormatInt(u.ID, 10), ChannelID: c.ID}
-			if callback := u.Callback; callback != nil {
+			if callback := u.Callback; callback != nil && len(c.Config.ApproverIDs) > 0 && strings.HasPrefix(callback.Data, "publish:") {
 				var actionErr error
-				if callback.Message == nil || callback.From.Bot || callback.From.ID == 0 || !strings.HasPrefix(callback.Data, "publish:") {
+				if callback.Message == nil || callback.From.Bot || callback.From.ID == 0 {
 					actionErr = ErrInvalid
 				} else {
 					_, actionErr = s.HandleProjectAction(ctx, ProjectActionInput{ChannelID: c.ID, ChatID: strconv.FormatInt(callback.Message.Chat.ID, 10), UserID: strconv.FormatInt(callback.From.ID, 10), Name: callback.From.Name, Token: strings.TrimPrefix(callback.Data, "publish:"), Generation: generation})

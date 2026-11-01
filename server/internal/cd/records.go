@@ -488,7 +488,7 @@ func (s *Service) executeRecord(ctx context.Context, p database.DeliveryProject,
 	for _, nodeID := range r.NodeIDs {
 		node := nodeID
 		var deployment database.DeliveryReleaseDeployment
-		if err := s.db.WithContext(ctx).Where("release_id = ? AND node_id = ?", release.ID, node).FirstOrCreate(&deployment, database.DeliveryReleaseDeployment{ReleaseID: release.ID, NodeID: node, NodeName: node, Status: task.StatusPending}).Error; err != nil {
+		if err := s.db.WithContext(ctx).Where("release_id = ? AND node_id = ?", release.ID, node).Attrs(database.DeliveryReleaseDeployment{ReleaseID: release.ID, NodeID: node, NodeName: node, Status: task.StatusPending}).FirstOrCreate(&deployment).Error; err != nil {
 			return err
 		}
 		var n database.Node

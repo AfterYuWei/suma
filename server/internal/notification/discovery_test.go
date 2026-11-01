@@ -76,9 +76,9 @@ func TestTelegramPollingStoresMetadataAndCursorWithoutCommandsOrCallbacks(t *tes
 				}
 				updates++
 				if updates == 1 {
-					return response(200, `{"ok":true,"result":[{"update_id":1,"message":{"from":{"id":42,"first_name":"Admin"},"chat":{"id":100,"type":"private"},"text":"/bind PRIVATE-BIND-CODE"}},{"update_id":1,"message":{"from":{"id":42},"chat":{"id":100,"type":"private"},"text":"duplicate"}},{"update_id":2,"message":{"from":{"id":42,"first_name":"Admin"},"chat":{"id":-200,"type":"group","title":"Operations"},"text":"/approve PRIVATE-APPROVAL-TOKEN"}},{"update_id":3,"callback_query":{"id":"legacy","data":"approve:PRIVATE-CALLBACK-TOKEN"}},{"update_id":4,"message":{"from":{"id":99,"is_bot":true},"chat":{"id":100,"type":"private"}}},{"update_id":5,"message":{"from":{"id":0},"chat":{"id":0,"type":"private"}}}]}`), nil
+					return response(200, `{"ok":true,"result":[{"update_id":1,"message":{"from":{"id":42,"first_name":"Admin"},"chat":{"id":100,"type":"private"},"text":"/bind PRIVATE-BIND-CODE"}},{"update_id":1,"message":{"from":{"id":42},"chat":{"id":100,"type":"private"},"text":"duplicate"}},{"update_id":2,"message":{"from":{"id":42,"first_name":"Admin"},"chat":{"id":-200,"type":"group","title":"Operations"},"text":"/approve PRIVATE-APPROVAL-TOKEN"}},{"update_id":3,"callback_query":{"id":"legacy","data":"approve:PRIVATE-CALLBACK-TOKEN"}},{"update_id":4,"message":{"from":{"id":99,"is_bot":true},"chat":{"id":100,"type":"private"}}},{"update_id":5,"message":{"from":{"id":0},"chat":{"id":0,"type":"private"}}},{"update_id":6,"callback_query":{"id":"disabled-publish","data":"publish:PRIVATE-CALLBACK-TOKEN","from":{"id":42},"message":{"chat":{"id":100}}}}]}`), nil
 				}
-				if request.Offset != 6 {
+				if request.Offset != 7 {
 					t.Fatal("cursor did not advance past ignored updates", request.Offset)
 				}
 				cancel()
@@ -108,7 +108,7 @@ func TestTelegramPollingStoresMetadataAndCursorWithoutCommandsOrCallbacks(t *tes
 		t.Fatal("discovery persisted message content")
 	}
 	var cursor database.Setting
-	if err := db.First(&cursor, "key = ?", "notification.cursor."+hash("123:private-token")).Error; err != nil || cursor.Value != "6" {
+	if err := db.First(&cursor, "key = ?", "notification.cursor."+hash("123:private-token")).Error; err != nil || cursor.Value != "7" {
 		t.Fatal("polling cursor was not persisted", cursor, err)
 	}
 	for _, model := range []any{&database.Task{}, &database.AuditLog{}} {

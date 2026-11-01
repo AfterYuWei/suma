@@ -26,19 +26,20 @@ func TestDeliveryProjectDisplayNamePreservesNodeAndNativeIdentity(t *testing.T) 
 		if err := annotateDeliveryProjectNames(context.Background(), deps, nodeID, &row); err != nil {
 			t.Fatal(err)
 		}
-		if nodeID == "local" && row.DeliveryProjectName != "eizhu_admin" {
-			t.Fatalf("missing CD display name: %#v", row)
+		if nodeID == "local" && (row.DeliveryProjectName != "eizhu_admin" || row.DeploymentMode != projectdomain.DeploymentCD) {
+			t.Fatalf("missing CD display name or deployment mode: %#v", row)
 		}
-		if nodeID == "other" && row.DeliveryProjectName != "" {
+		if nodeID == "other" && (row.DeliveryProjectName != "" || row.DeploymentMode != projectdomain.DeploymentManual) {
 			t.Fatalf("cross-node CD alias: %#v", row)
 		}
 		row.DeliveryProjectName = ""
+		row.DeploymentMode = before.DeploymentMode
 		if !reflect.DeepEqual(row, before) {
 			t.Fatal("display mapping changed native identity, capabilities or runtime state")
 		}
 	}
 	managed := projectdomain.ComposeSummary("local", "suma-cd-99", "managed", "running", true)
-	if err := annotateDeliveryProjectNames(context.Background(), deps, "local", &managed); err != nil || managed.DeliveryProjectName != "" {
+	if err := annotateDeliveryProjectNames(context.Background(), deps, "local", &managed); err != nil || managed.DeliveryProjectName != "" || managed.DeploymentMode != projectdomain.DeploymentManual {
 		t.Fatal("a managed project was relabelled as CD")
 	}
 }

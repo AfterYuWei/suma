@@ -83,30 +83,42 @@ func TestPlatformChecksOldContainersAndPull(t *testing.T) {
 	if task := awaitCheck(t, s, row); task.Status != "success" {
 		t.Fatal(task)
 	}
-	view, err := s.View(context.Background(), "local", "shop")
-	if err != nil {
-		t.Fatal(err)
+	viewReference := func() Result {
+		t.Helper()
+		view, err := s.View(context.Background(), "local", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, result := range view.Results {
+			if len(result.Containers) == 1 && result.Containers[0].ContainerID == "container" {
+				return result
+			}
+		}
+		t.Fatal("missing running container image reference")
+		return Result{}
 	}
-	if len(view.Results) != 1 || !view.Results[0].PullRequired || !view.Results[0].RecreateRequired || calls.Load() != 2 {
-		t.Fatalf("initial: %+v calls=%d", view, calls.Load())
+	result := viewReference()
+	if !result.PullRequired || !result.RecreateRequired || calls.Load() != 2 {
+		t.Fatalf("initial: %+v calls=%d", result, calls.Load())
+	}
+	projectView, err := s.View(context.Background(), "local", "shop")
+	if err != nil || len(projectView.Results) != 1 || projectView.Results[0].Status != "unchecked" {
+		t.Fatalf("global check leaked into project scope: %+v, %v", projectView, err)
 	}
 	r.mu.Lock()
 	r.inventory.Images[0].Tags = nil
 	r.inventory.Images = append(r.inventory.Images, LocalImage{ID: "new", Tags: []string{"example/app:latest"}, Platform: Platform{OS: "linux", Architecture: "arm64", Variant: "v8"}})
 	r.mu.Unlock()
-	view, err = s.View(context.Background(), "local", "shop")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if view.Results[0].PullRequired || !view.Results[0].RecreateRequired {
-		t.Fatalf("pulled but container old: %+v", view)
+	result = viewReference()
+	if result.PullRequired || !result.RecreateRequired {
+		t.Fatalf("pulled but container old: %+v", result)
 	}
 	r.mu.Lock()
 	r.inventory.Containers[0].ImageID = "new"
 	r.mu.Unlock()
-	view, _ = s.View(context.Background(), "local", "shop")
-	if view.Results[0].Status != "unchecked" {
-		t.Fatalf("old result reused: %+v", view)
+	result = viewReference()
+	if result.Status != "unchecked" {
+		t.Fatalf("old result reused: %+v", result)
 	}
 }
 func TestPartialErrorsPinnedAndNoTag(t *testing.T) {

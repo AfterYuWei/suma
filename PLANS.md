@@ -4,6 +4,8 @@ This file records the completed MVP implementation. Every checked phase was veri
 
 ## Current work
 
+- CI 回归修复（2026-11-01）：修正交付节点记录复用时把默认状态／名称误作查询条件导致的唯一键冲突；Telegram 仅处理已启用的项目发布回调，忽略旧审批和未启用回调并推进游标。同步部署模式、隐式本地节点、回滚渲染替身、迁移编号及镜像检测作用域的测试预期。独立 PostgreSQL schema 的数据库、通知完整包，API 定向回归，以及新旧 Telegram 回调路由／授权的 race 检测通过。本机 CD 全包原 CI 错误已消除，另有漂移计时及两个自动回滚等待超限；镜像包另有候选替换用例在 schema 清理时发生 SQLSTATE 40P01，单独复验仍失败。Linux 完整 Go／Web／race／浏览器门禁由 GitHub `engineering-check` 执行，结果见修复提交的 Checks；不修改已发布迁移，不跳过测试。本机无 Docker，独立真实 Docker 验收仍待完成。
+
 - [ ] 项目 CD 单节点交付模式（2026-11-01）：项目详情增加 CD；所有项目配置统一可视化／源码／.env；CD 模式 Git 配置只读、本地变量加密，支持固定候选应用、轮询／Webhook、成功快照回滚及保留当前生效配置切回手动。`projectcd` 与批量多节点 `cd` 共用 `deployment.DeployNode` 单节点交付业务流程；新增 `0008_project_cd.sql`，既有数据不转换。实现及使用说明：`doc/project-cd.md`。已通过 Web lint／typecheck／build（仅既有警告）、192 项 Web 单元测试、188 项主浏览器回归、136 项项目服务回归及补充后的 12 项 CD 专项复验，覆盖中英文／深浅主题／390px 与 1440px、只读可视化标签切换、变量隐藏、固定快照应用、切回手动和并发配置冲突保留草稿；无需数据库的共享执行／来源安全／变量／导出／漂移定向 Go 测试、Linux 完整构建及服务／HTTP／升级／Docker 冒烟测试编译通过。完整 Go gate 在本机因既有 monitor 仅支持 Linux、测试 PostgreSQL 无法创建隔离 schema 而失败；数据库服务／HTTP／升级和 Unix／TCP／Agent 真实 Docker 验收仍待可用环境，本项保持未勾选。
 
 - [x] 项目列表快速查看日志（2026-11-01）：每行提供项目聚合日志快捷按钮，按需加载现有查看器，以 Dialog 展示实时日志、筛选、搜索与下载；支持托管、CD 部署和外部项目，保留列表筛选与展开、冻结动态排序并恢复按钮焦点，关闭／换节点／离页释放连接及请求。验证：修改文件 lint、Web typecheck／生产构建、diff 检查及 11 项受控 API Edge 定向浏览器场景通过，覆盖中英文深浅主题 × 390／1440px、键盘打开／关闭与焦点恢复、连接释放、停止的外部项目／空项目、筛选与展开保留、排序冻结、节点隔离及未完成日志源／历史请求取消；桌面／手机截图已核对。按局部前端入口接入执行定向验证，使用说明同步至 `doc/project-list.md`，未部署。

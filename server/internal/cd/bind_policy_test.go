@@ -81,8 +81,11 @@ func TestServiceHostBindPolicyAcrossNodeTransports(t *testing.T) {
 			}
 			if test.want == "" {
 				release := syncAndDeploy(t, h)
-				if release.Status != StatusSucceeded || len(release.Deployments) != len(test.transports) {
+				if release.Status != StatusSucceeded || len(release.Deployments) != max(1, len(test.transports)) {
 					t.Fatalf("deployment result = %#v", release)
+				}
+				if len(test.transports) == 0 && release.Deployments[0].NodeID != "local" {
+					t.Fatalf("implicit deployment did not target the local node: %#v", release.Deployments)
 				}
 				assertCallSubsequence(t, h.runner.Calls(), []string{"validate", "render", "pull", "up", "ps"})
 				return
