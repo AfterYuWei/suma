@@ -114,7 +114,7 @@ export function ComposeDetailPage() {
       ),
     enabled: backend === 'compose'
   })
-  const [view, setView] = useState<View>('Files')
+  const [view, setView] = useState<View>(initialOperation.view === 'cd' ? 'CD' : 'Files')
   const [gitOpsDirty,setGitOpsDirty]=useState(false)
   const gitops = useProjectCD(nodeID, projectName, !!query.data?.managed && !query.data?.delivery_project_name && (view === 'CD' || query.data?.deployment_mode === 'cd'))
   const gitOpsEnvironment = useProjectCDEnvironment(nodeID, projectName, gitops.configuration.data, view)

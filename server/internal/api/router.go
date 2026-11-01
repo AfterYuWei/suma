@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -962,6 +963,28 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		success(c, gin.H{"id": id})
 	})
 
+	v1.GET("/delivery-records", requireAuth(deps.Auth), func(c *gin.Context) {
+		page, pageErr := strconv.Atoi(c.DefaultQuery("page", "1"))
+		size, sizeErr := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+		source, operation, status := c.Query("source"), c.Query("operation"), c.Query("status")
+		if pageErr != nil || sizeErr != nil || page < 1 || page > 1_000_000 || size < 1 || size > 100 || len(c.Query("search")) > 256 ||
+			(source != "" && source != "continuous_delivery" && source != "project_cd") ||
+			!slices.Contains([]string{"", "check", "deploy", "retry", "manual_rollback", "auto_rollback", "rollback_failed", "start", "stop", "restart", "detach"}, operation) ||
+			!slices.Contains([]string{"", "pending", "running", "validating", "pulling", "deploying", "verifying", "succeeded", "failed", "partial_failed", "interrupted", "rolling_back", "rolled_back", "rollback_failed", "canceled"}, status) {
+			failure(c, http.StatusBadRequest, 17705, "Invalid delivery record filters or pagination")
+			return
+		}
+		if deps.CD == nil {
+			failure(c, http.StatusServiceUnavailable, 17706, "Delivery records unavailable")
+			return
+		}
+		rows, err := deps.CD.ListHistory(c.Request.Context(), cdService.HistoryQuery{Source: source, Operation: operation, Status: status, Search: c.Query("search"), Page: page, PageSize: size})
+		if err != nil {
+			failure(c, http.StatusInternalServerError, 17706, "Delivery records unavailable")
+			return
+		}
+		success(c, rows)
+	})
 	delivery := v1.Group("/delivery-projects", requireAuth(deps.Auth))
 	testGitConnection := func(c *gin.Context) {
 		c.Header("Cache-Control", "no-store")

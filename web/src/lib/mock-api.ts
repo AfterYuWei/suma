@@ -11,7 +11,7 @@ import type { User } from '../features/auth/types'
 import type { Project, ProjectSummary, ProjectTakeoverDraft, ShadowAssessment, ShadowPreviewSession, ShadowPreviewStatus } from '../features/compose/types'
 import type { ContainerDetail, ContainerDiagnostics, ContainerMetrics, ContainerSummary } from '../features/containers/types'
 import { containerCreateRequest, type ContainerCreateDraft, type CreateContainerRequest } from '../features/containers/create'
-import type { CDConfiguration, CDConfigureInput, CDDrift, DeliveryProject, DeliveryRecord, DeliveryRelease, GitCredential } from '../features/delivery/types'
+import type { CDConfiguration, CDConfigureInput, CDDrift, DeliveryProject, DeliveryRecord, DeliveryRelease, DeliveryHistoryRecord, GitCredential } from '../features/delivery/types'
 import type { DockerNode, NodeGroup } from './nodes'
 import { ApiError, type DemoCredentials, type DemoStream } from './api'
 
@@ -385,6 +385,18 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     return clone(settings) as T
   }
 
+  if (pathname === '/delivery-records' && method === 'GET') {
+    const history: DeliveryHistoryRecord[] = []
+    for (const [name, records] of deliveryRecords) for (const record of records) history.push({id:`continuous_delivery:${name}:${record.id}`,source:'continuous_delivery',record_id:record.id,project_id:record.project_id,project_name:name,release_id:record.release_id,node_exists:false,node_ids:record.node_ids,operation:record.operation,status:record.status,actor_name:record.actor_name,task_id:record.task_id||'',source_record_id:record.source_record_id,commit_sha:record.commit_sha,config_hash:record.config_hash,failure_reason:record.failure_reason||'',created_at:record.created_at,finished_at:record.finished_at})
+    for (const [scope, records] of projectCDRecords) {
+      const slash=scope.indexOf('/'),nodeID=scope.slice(0,slash),name=scope.slice(slash+1),node=nodes.find(row=>row.id===nodeID)
+      for (const record of records) history.push({id:`project_cd:${scope}:${record.id}`,source:'project_cd',record_id:record.id,project_id:0,project_name:name,node_id:nodeID,node_name:node?.name||nodeID,node_exists:!!node,node_ids:[nodeID],operation:record.operation==='apply'?'deploy':record.operation==='rollback'?'manual_rollback':record.operation,status:record.status,actor_name:record.actor,task_id:record.task_id,commit_sha:record.commit_sha,config_hash:record.config_hash,failure_reason:record.failure_reason,created_at:record.created_at})
+    }
+    const search=(url.searchParams.get('search')||'').toLowerCase()
+    const filtered=history.filter(row=>(!url.searchParams.has('source')||row.source===url.searchParams.get('source'))&&(!url.searchParams.has('operation')||row.operation===url.searchParams.get('operation'))&&(!url.searchParams.has('status')||row.status===url.searchParams.get('status'))&&(!search||[row.project_name,row.node_name||'',row.node_id||''].some(value=>value.toLowerCase().includes(search)))).sort((a,b)=>b.created_at.localeCompare(a.created_at)||a.id.localeCompare(b.id))
+    const page=Number(url.searchParams.get('page')||1),pageSize=Number(url.searchParams.get('page_size')||20)
+    return clone({items:filtered.slice((page-1)*pageSize,page*pageSize),total:filtered.length,page,page_size:pageSize}) as T
+  }
   if (pathname === '/delivery-projects' && method === 'GET') return clone(deliveryProjects) as T
   if (pathname === '/delivery-projects' && method === 'POST') {
     const name = String(body.name || '')

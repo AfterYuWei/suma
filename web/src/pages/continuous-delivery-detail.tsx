@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate, useParams } from '@tanstack/react-router'
+import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { ChevronLeft, MoreHorizontal, RefreshCw, Trash2, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Badge } from '../components/ui/badge'
@@ -37,7 +37,8 @@ export function ContinuousDeliveryDetailPage() {
   const isGit = cdQuery.data?.configured === true
   const driftQuery = useQuery({ queryKey: ['delivery-drift', projectName], queryFn: () => api<CDDrift>(`/delivery-projects/${encodedName}/drift`), enabled: isGit, refetchInterval: 5_000 })
   const releasesQuery = useQuery({ queryKey: ['delivery-releases', projectName], queryFn: () => api<DeliveryRelease[]>(`/delivery-projects/${encodedName}/releases`), enabled: isGit, refetchInterval: 5_000 })
-  const [view, setView] = useState<View>('Overview')
+  const initialView = useSearch({from:'/continuous-delivery/$projectName'})
+  const [view, setView] = useState<View>(initialView.view === 'records' ? 'Records' : 'Overview')
   const [rollback, setRollback] = useState<{ release: DeliveryRelease; record?: DeliveryRecord } | null>(null)
   const [failedAction, setFailedAction] = useState<{ release: DeliveryRelease; operation: 'retry-failed' | 'rollback-failed' } | null>(null)
   const [notice, setNotice] = useState<{ message: string; tone: 'success' | 'error' } | null>(null)

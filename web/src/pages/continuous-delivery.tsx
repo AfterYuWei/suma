@@ -1,6 +1,8 @@
+import {Tabs, TabsList, TabsTrigger} from '../components/ui/tabs'
+import {DeliveryHistory} from '../features/delivery/history'
 import { useDateTime } from '../lib/time-zone'
 import { useQuery } from '@tanstack/react-query'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import { GitPullRequest, Plus } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { ErrorState } from '../components/ui/error-state'
@@ -22,16 +24,19 @@ export function ContinuousDeliveryPage() {
   const { formatDateTime } = useDateTime()
 
   const navigate = useNavigate()
+  const {view} = useSearch({from: '/continuous-delivery'})
+  const records = view === 'records'
   const { language } = useI18n()
   const zh = language === 'zh-CN'
-  const query = useQuery({ queryKey: ['delivery-projects'], queryFn: () => api<DeliveryProject[]>('/delivery-projects') })
+  const query = useQuery({ queryKey: ['delivery-projects'], queryFn: () => api<DeliveryProject[]>('/delivery-projects'), enabled: !records })
   const rows = query.data ?? []
   const pagination = useListPagination(rows)
   const synchronized = rows.filter((project) => deliveryState(project) === 'synchronized').length
   const pending = rows.filter((project) => deliveryState(project) === 'pending').length
   const setup = rows.length - synchronized - pending
-  return <ResourceFrame title={zh ? '持续交付' : 'Continuous Delivery'} detail={zh ? `${rows.length} 个交付项目` : `${rows.length} delivery projects`} action={<div className="flex flex-wrap items-center gap-2"><StatusBadge tone="success">{synchronized} {zh ? '已同步' : 'synced'}</StatusBadge><StatusBadge tone="warning">{pending} {zh ? '待对账' : 'pending'}</StatusBadge><StatusBadge tone="outline">{setup} {zh ? '待配置' : 'setup'}</StatusBadge><Button onClick={() => void navigate({ to: '/continuous-delivery/new/project' })}><Plus data-icon="inline-start" />{zh ? '新建项目' : 'New project'}</Button></div>}>
-    {query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载持续交付项目' : 'Loading delivery projects'} /> : query.isError ? <ErrorState description={query.error.message} /> : rows.length === 0 ? <div className="flex w-full flex-col items-center gap-1.5 rounded-lg bg-surface py-12 text-center"><GitPullRequest className="size-6 text-muted-foreground" /><p className="text-sm font-medium">{zh ? '还没有持续交付项目' : 'No delivery projects yet'}</p><p className="max-w-md text-xs text-muted-foreground">{zh ? '直接在这里创建项目并连接 Git 仓库。' : 'Create a project here and connect its Git repository.'}</p></div> : (
+  return <ResourceFrame title={zh ? '持续交付' : 'Continuous Delivery'} detail={records ? (zh ? '批量交付与节点项目 CD 的统一记录' : 'Batch delivery and node project CD history') : zh ? `${rows.length} 个交付项目` : `${rows.length} delivery projects`} action={<div className="flex flex-wrap items-center gap-2">{!records && <><StatusBadge tone="success">{synchronized} {zh ? '已同步' : 'synced'}</StatusBadge><StatusBadge tone="warning">{pending} {zh ? '待对账' : 'pending'}</StatusBadge><StatusBadge tone="outline">{setup} {zh ? '待配置' : 'setup'}</StatusBadge></>}<Button onClick={() => void navigate({ to: '/continuous-delivery/new/project' })}><Plus data-icon="inline-start" />{zh ? '新建项目' : 'New project'}</Button></div>}>
+    <Tabs value={records ? 'records' : 'projects'} onValueChange={value => void navigate({to:'/continuous-delivery',search:{view:value === 'records' ? 'records' : undefined},replace:true})}><TabsList><TabsTrigger value="projects">{zh ? '项目' : 'Projects'}</TabsTrigger><TabsTrigger value="records">{zh ? '记录' : 'Records'}</TabsTrigger></TabsList></Tabs>
+    {records ? <DeliveryHistory zh={zh}/> : query.isPending ? <LoadingState compact rows={7} label={zh ? '正在加载持续交付项目' : 'Loading delivery projects'} /> : query.isError ? <ErrorState description={query.error.message} /> : rows.length === 0 ? <div className="flex w-full flex-col items-center gap-1.5 rounded-lg bg-surface py-12 text-center"><GitPullRequest className="size-6 text-muted-foreground" /><p className="text-sm font-medium">{zh ? '还没有持续交付项目' : 'No delivery projects yet'}</p><p className="max-w-md text-xs text-muted-foreground">{zh ? '直接在这里创建项目并连接 Git 仓库。' : 'Create a project here and connect its Git repository.'}</p></div> : (
       <><ListShell><Table>
         <TableHeader>
           <TableRow>

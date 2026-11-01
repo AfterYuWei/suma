@@ -450,4 +450,6 @@ Git 来源接口前缀：`/api/v1/nodes/:nodeID/projects/compose/:name/gitops`�
 
 配置 PUT 支持 `reconcile_mode: observe|manual|auto`、`auto_rollback`、`automation_enabled` 和 `webhook_secret`（留空保留）。节点由路径固定，不提供目标节点切换；`environment` 与配置 .env 是同一份加密本地覆盖变量。观察模式不允许应用／回滚；首次成功前自动触发仅检查，自动模式在首次确认后可自动应用。失败自动回滚使用最近成功快照，独立保存 `auto_rollback` 记录并通过 `source_record_id` 关联失败记录，恢复后改为手动策略。
 
+全局 `GET /api/v1/delivery-records` 汇总批量和节点项目 CD 的既有操作记录，支持 `source=continuous_delivery|project_cd`、`operation`、`status`、`search`、`page`、`page_size`（1–100），返回 `{items,total,page,page_size}`。单节点 apply／rollback 分别映射为 deploy／manual_rollback；记录以带来源前缀的 `id` 区分，同时保留 `record_id`、项目、节点、任务、Commit、结果及来源记录 ID，不返回凭据或加密快照。分页和时间排序在两个来源合并后执行，不复制业务记录或创建 Release。
+
 配置响应只返回本地变量名和已保存标记；明文值仅由显式读取接口返回并审计。首次关联返回一次性 `webhook_secret`，后续读取不返回。详见 `doc/project-cd.md`。

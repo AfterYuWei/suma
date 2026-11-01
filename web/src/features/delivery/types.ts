@@ -286,6 +286,36 @@ export interface DeliveryRecordPage {
 }
 
 export function recordOperationLabel(operation: string, zh: boolean) {
-  const labels: Record<string, [string, string]> = { deploy: ['发布', 'Deploy'], retry: ['重试', 'Retry'], manual_rollback: ['回滚', 'Roll back'], auto_rollback: ['自动回滚', 'Automatic rollback'], rollback_failed: ['失败节点回滚', 'Roll back failed nodes'] }
+  const labels: Record<string, [string, string]> = { check: ['检查', 'Check'], deploy: ['发布', 'Deploy'], retry: ['重试', 'Retry'], manual_rollback: ['回滚', 'Roll back'], auto_rollback: ['自动回滚', 'Automatic rollback'], rollback_failed: ['失败节点回滚', 'Roll back failed nodes'], start: ['启动', 'Start'], stop: ['停止', 'Stop'], restart: ['重启', 'Restart'], detach: ['切回手动', 'Return to manual'] }
   return labels[operation]?.[zh ? 0 : 1] || operation
+}
+
+export interface DeliveryHistoryRecord {
+  id: string
+  source: 'continuous_delivery' | 'project_cd'
+  record_id: number
+  project_name: string
+  project_id: number
+  release_id?: number
+  node_id?: string
+  node_name?: string
+  node_exists: boolean
+  node_ids: string[]
+  operation: string
+  status: string
+  actor_name: string
+  task_id: string
+  source_record_id?: number
+  commit_sha: string
+  config_hash: string
+  failure_reason: string
+  created_at: string
+  finished_at?: string
+}
+
+export interface DeliveryHistoryPage {
+  items: DeliveryHistoryRecord[]
+  total: number
+  page: number
+  page_size: number
 }

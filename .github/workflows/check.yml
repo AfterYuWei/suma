@@ -41,7 +41,7 @@ jobs:
         working-directory: web
       - run: npx playwright test e2e/notifications.spec.ts e2e/feishu-channel.spec.ts e2e/operations.spec.ts
         working-directory: web
-      - run: npx playwright test -c playwright.project-services.config.ts project-gitops.spec.ts
+      - run: npx playwright test -c playwright.project-services.config.ts project-gitops.spec.ts delivery-history.spec.ts
         working-directory: web
   project-docker-smoke:
     runs-on: ubuntu-latest
