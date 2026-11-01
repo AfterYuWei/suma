@@ -649,7 +649,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
       const row = projects.find((item) => item.name === name) ?? projects[0]
       const configurationKey = `${nodeID}/${name}`
       const detail = projectConfigurations.get(configurationKey) ?? { ...projectDetail(row), revision: 'demo-config-0' }
-      const cd=projectCDConfigurations.get(configurationKey) ?? {configured:false,enabled:false,revision:0,repository:{clone_url:'',ref_type:'branch',ref:'main',compose_files:['compose.yml'],environment_file:'',authentication:{source:'none'}},environment:[],registry_credential_ids:[],deployment_timeout:120,sync_interval_seconds:300,automation_enabled:false,initial_application_required:true,webhook_enabled:false} satisfies ProjectCDConfiguration
+      const cd=projectCDConfigurations.get(configurationKey) ?? {configured:false,enabled:false,revision:0,repository:{clone_url:'',ref_type:'branch',ref:'main',compose_files:['compose.yml'],environment_file:'',authentication:{source:'none'}},environment:[],registry_credential_ids:[],deployment_timeout:120,sync_interval_seconds:300,automation_enabled:false,reconcile_mode:'manual',auto_rollback:false,initial_application_required:true,webhook_enabled:false} satisfies ProjectCDConfiguration
       const records=projectCDRecords.get(configurationKey) ?? []
       if(rest.startsWith('/gitops')){
         const action=rest.slice('/gitops'.length)

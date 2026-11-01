@@ -19,6 +19,7 @@ func registerProjectCDRoutes(v1 *gin.RouterGroup, deps Dependencies) {
 	}
 	routes := v1.Group("/nodes/:nodeID/projects/compose/:name/gitops", requireAuth(deps.Auth))
 	routes.Use(func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
 		if _, err := deps.Nodes.Get(c.Request.Context(), c.Param("nodeID")); err != nil {
 			failure(c, 404, 20901, "Node not found")
 			c.Abort()

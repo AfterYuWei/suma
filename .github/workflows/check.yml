@@ -35,9 +35,43 @@ jobs:
       - run: npm ci
         working-directory: web
       - run: make check
-      - run: go test -race ./internal/notification ./internal/database ./internal/app ./internal/compose ./internal/api
+      - run: go test -race ./internal/notification ./internal/database ./internal/app ./internal/compose ./internal/projectcd ./internal/api
         working-directory: server
       - run: npx playwright install --with-deps chromium
         working-directory: web
       - run: npx playwright test e2e/notifications.spec.ts e2e/feishu-channel.spec.ts e2e/operations.spec.ts
         working-directory: web
+      - run: npx playwright test -c playwright.project-services.config.ts project-gitops.spec.ts
+        working-directory: web
+  project-docker-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18.6
+        env:
+          POSTGRES_USER: suma_test
+          POSTGRES_PASSWORD: isolated-ci-only
+          POSTGRES_DB: suma_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U suma_test -d suma_test"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      SUMA_TEST_DATABASE_DSN: postgres://suma_test:isolated-ci-only@127.0.0.1:5432/suma_test?sslmode=disable
+      SUMA_AGENT_SMOKE_IMAGE: suma-agent:project-cd-smoke
+      GIN_MODE: release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - name: Prepare disposable Docker fixtures
+        run: |
+          docker pull docker:27-dind
+          docker pull alpine:3.24
+          docker build -f Dockerfile.agent -t "$SUMA_AGENT_SMOKE_IMAGE" .
+      - name: Verify project CD over Unix, TCP and Agent
+        # The disposable daemon owns its Unix socket; production is never used.
+        run: sudo --preserve-env=SUMA_TEST_DATABASE_DSN,SUMA_AGENT_SMOKE_IMAGE,GIN_MODE env "PATH=$PATH" "GOMODCACHE=$(go env GOMODCACHE)" bash doc/project-configuration-smoke.sh

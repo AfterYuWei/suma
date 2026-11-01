@@ -55,7 +55,8 @@ func projectCDTransportSmoke(t *testing.T, ctx context.Context, root, nodeID, tr
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := projectcd.New(db, projectCDSmokeGit{root: worktree, commit: strings.Repeat("c", 40)}, gitrepo.NewCredentialService(db, store), credential.NewRegistryService(db, store), runner, tasks, audit.NewService(db), store, projectcd.Dependencies{Project: func(context.Context, string) (*compose.Service, error) { return current, nil }, Target: func(ctx context.Context, id string) (compose.Target, error) {
+	git := &projectCDSmokeGit{root: worktree, commit: strings.Repeat("c", 40)}
+	service := projectcd.New(db, git, gitrepo.NewCredentialService(db, store), credential.NewRegistryService(db, store), runner, tasks, audit.NewService(db), store, projectcd.Dependencies{Project: func(context.Context, string) (*compose.Service, error) { return current, nil }, Target: func(ctx context.Context, id string) (compose.Target, error) {
 		target, _, err := nodes.ComposeTarget(ctx, id)
 		return target, err
 	}})
@@ -72,7 +73,8 @@ func projectCDTransportSmoke(t *testing.T, ctx context.Context, root, nodeID, tr
 		_ = current.ForceRemove(cleanup, name, false)
 	})
 	variable := "private-smoke-value"
-	config, err := service.Configure(ctx, nodeID, name, projectcd.ConfigureInput{Repository: gitrepo.Repository{CloneURL: "https://git.example.test/deployment.git", RefType: "branch", Ref: "main", ComposeFiles: []string{"compose.yml"}, Authentication: gitrepo.Authentication{Source: "none"}}, Environment: []deployment.EnvironmentVariable{{Name: "CD_VALUE", Value: &variable}}})
+	enabled := true
+	config, err := service.Configure(ctx, nodeID, name, projectcd.ConfigureInput{Repository: gitrepo.Repository{CloneURL: "https://git.example.test/deployment.git", RefType: "branch", Ref: "main", ComposeFiles: []string{"compose.yml"}, Authentication: gitrepo.Authentication{Source: "none"}}, Environment: []deployment.EnvironmentVariable{{Name: "CD_VALUE", Value: &variable}}, ReconcileMode: "auto", AutoRollback: true, AutomationEnabled: &enabled, DeploymentTimeout: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,10 +103,34 @@ func projectCDTransportSmoke(t *testing.T, ctx context.Context, root, nodeID, tr
 	if err != nil || len(before) != 1 || before[0].State != "running" {
 		t.Fatal("CD did not apply to selected node", err)
 	}
-	config, err = service.Get(ctx, nodeID, name)
+	failedWorktree := filepath.Join(root, name+"-unhealthy-git")
+	if err := os.MkdirAll(failedWorktree, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(failedWorktree, "compose.yml"), []byte(strings.Replace(source, "test: [CMD, 'true']", "test: [CMD, 'false']", 1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git.root, git.commit = failedWorktree, strings.Repeat("d", 40)
+	failed, err := service.Check(ctx, nodeID, name, "poll", projectcd.Actor{Name: "Smoke"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := tasks.Wait(ctx, failed.ID); err != nil {
+		t.Fatal(err)
+	}
+	failedTask, err := tasks.Get(ctx, failed.ID)
+	if err != nil || failedTask.Status != task.StatusFailed {
+		t.Fatal("unhealthy delivery was not retained as failed", err)
+	}
+	config, err = service.Get(ctx, nodeID, name)
+	if err != nil || config.ReconcileMode != "manual" || config.Applied == nil || config.Applied.Operation != "auto_rollback" || config.Applied.CommitSHA != strings.Repeat("c", 40) {
+		t.Fatal("automatic recovery did not restore the prior successful snapshot", err)
+	}
+	restored, err := current.Services(ctx, name)
+	if err != nil || len(restored) != 1 || restored[0].State != "running" || restored[0].ID == before[0].ID {
+		t.Fatal("automatic recovery did not recreate the container", err)
+	}
+	before = restored
 	detached, err := service.Detach(ctx, nodeID, name, config.Revision, projectcd.Actor{Name: "Smoke"})
 	join(detached, err)
 	after, err := current.Services(ctx, name)

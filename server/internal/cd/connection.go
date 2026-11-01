@@ -62,7 +62,7 @@ func (s *Service) TestConnection(ctx context.Context, name string, input Connect
 	if err != nil {
 		return gitrepo.ConnectionResult{}, fmt.Errorf("load Git credential: %w", err)
 	}
-	if err := validateCredentialTransport(input.Repository.CloneURL, material.AuthType); err != nil {
+	if err := gitrepo.ValidateCredentialTransport(input.Repository.CloneURL, material.AuthType); err != nil {
 		return gitrepo.ConnectionResult{}, err
 	}
 	if s.git == nil {

@@ -16,6 +16,8 @@ type ProjectCD struct {
 	RegistryCredentialIDsJSON  string     `json:"-"`
 	DeploymentTimeout          int        `json:"deployment_timeout"`
 	AutomationEnabled          bool       `json:"automation_enabled"`
+	ReconcileMode              string     `gorm:"default:manual" json:"reconcile_mode"`
+	AutoRollback               bool       `json:"auto_rollback"`
 	InitialApplicationRequired bool       `json:"initial_application_required"`
 	SyncIntervalSeconds        int        `json:"sync_interval_seconds"`
 	WebhookEnabled             bool       `json:"webhook_enabled"`
@@ -32,6 +34,7 @@ type ProjectCD struct {
 type ProjectCDRecord struct {
 	ID                 uint       `gorm:"primaryKey" json:"id"`
 	ProjectCDID        uint       `gorm:"index;not null" json:"project_cd_id"`
+	SourceRecordID     *uint      `json:"source_record_id,omitempty"`
 	Operation          string     `json:"operation"`
 	Trigger            string     `json:"trigger"`
 	Status             string     `json:"status"`

@@ -118,4 +118,4 @@ Delivery operations append `DeliveryRecord` rows while retaining the Git Release
 
 ### 项目 CD 与持续交付
 
-`projectcd` 是节点项目的单节点 CD 部署模式，GitOps 负责其 Git 来源与同步；`cd` 管理全局批量多节点交付。两者调用 `deployment.DeployNode` 共享镜像拉取、Compose 应用和健康确认，并共用来源校验、配置指纹、环境变量与 Webhook 解析。各自保留配置和操作证据，项目 CD 不创建全局 Release。普通项目以 `deployment_mode=manual|cd` 表达部署模式，仍使用 `backend=compose`。说明见 `doc/project-cd.md`。
+`projectcd` 是节点项目的单节点 CD 部署模式，GitOps 负责其 Git 来源与同步；`cd` 管理全局批量多节点交付。两者调用 `deployment.DeployNode` 共享镜像拉取、Compose 应用和健康确认，并共用来源校验、配置指纹、环境变量与 Webhook 解析。各自保留配置和操作证据，项目 CD 不创建全局 Release。前端共用 CD 设置分区和变量表单，单节点隐藏目标选择；观察／手动／自动及失败自动回滚策略分别保存在各自聚合，自动恢复保留独立记录。项目详情的 CD 与 .env 共用一份项目级变量草稿和版本。普通项目以 `deployment_mode=manual|cd` 表达部署模式，仍使用 `backend=compose`。说明见 `doc/project-cd.md`。

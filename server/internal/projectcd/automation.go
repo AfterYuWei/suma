@@ -67,7 +67,7 @@ func (s *Service) Stop() {
 }
 func (s *Service) reconcile(ctx context.Context) error {
 	var rows []database.ProjectCD
-	if err := s.db.WithContext(ctx).Where("enabled = true AND automation_enabled = true AND initial_application_required = false").Find(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("enabled = true AND automation_enabled = true").Find(&rows).Error; err != nil {
 		return err
 	}
 	for _, row := range rows {
@@ -99,7 +99,7 @@ func (s *Service) Webhook(ctx context.Context, hook string, headers http.Header,
 	if err := deployment.VerifyWebhook(format, secret, headers, body); err != nil {
 		return false, err
 	}
-	if !row.AutomationEnabled || row.InitialApplicationRequired {
+	if !row.AutomationEnabled {
 		return true, nil
 	}
 	event, err := deployment.ParseWebhook(format, headers, body)

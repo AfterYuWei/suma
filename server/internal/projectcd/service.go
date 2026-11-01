@@ -28,6 +28,7 @@ import (
 
 var ErrConflict = errors.New("project CD configuration changed; check the project again")
 var ErrPaused = errors.New("project CD automatic synchronization is paused")
+var errDeploymentFailed = errors.New("single-node delivery failed; inspect task and Docker state before retrying (private diagnostic hidden)")
 
 type Actor struct {
 	UserID   *uint
@@ -64,6 +65,10 @@ type ConfigureInput struct {
 	DeploymentTimeout     int                              `json:"deployment_timeout"`
 	SyncIntervalSeconds   int                              `json:"sync_interval_seconds"`
 	WebhookEnabled        bool                             `json:"webhook_enabled"`
+	WebhookSecret         string                           `json:"webhook_secret"`
+	ReconcileMode         string                           `json:"reconcile_mode"`
+	AutoRollback          bool                             `json:"auto_rollback"`
+	AutomationEnabled     *bool                            `json:"automation_enabled"`
 	ExpectedRevision      uint64                           `json:"expected_revision"`
 	ReviewedEnvironment   bool                             `json:"reviewed_environment"`
 }
@@ -77,6 +82,8 @@ type Configuration struct {
 	DeploymentTimeout          int                              `json:"deployment_timeout"`
 	SyncIntervalSeconds        int                              `json:"sync_interval_seconds"`
 	AutomationEnabled          bool                             `json:"automation_enabled"`
+	ReconcileMode              string                           `json:"reconcile_mode"`
+	AutoRollback               bool                             `json:"auto_rollback"`
 	InitialApplicationRequired bool                             `json:"initial_application_required"`
 	WebhookEnabled             bool                             `json:"webhook_enabled"`
 	WebhookID                  string                           `json:"webhook_id,omitempty"`
@@ -106,6 +113,7 @@ type snapshot struct {
 	CredentialCiphertext  []byte
 	RuntimeIdentity       string
 	Rendered              string
+	AutoRollback          bool
 }
 
 func (s *Service) row(ctx context.Context, node, name string) (database.ProjectCD, error) {
@@ -123,7 +131,7 @@ func (s *Service) Get(ctx context.Context, node, name string) (Configuration, er
 		if _, lookupErr := project.ManagedConfiguration(name); lookupErr != nil {
 			return Configuration{}, lookupErr
 		}
-		return Configuration{Repository: gitrepo.Repository{RefType: "branch", Ref: "main", ComposeFiles: []string{"compose.yml"}, Authentication: gitrepo.Authentication{Source: "none"}}, Environment: []deployment.EnvironmentVariable{}, RegistryCredentialIDs: []uint{}, DeploymentTimeout: 120, SyncIntervalSeconds: 300, InitialApplicationRequired: true}, nil
+		return Configuration{Repository: gitrepo.Repository{RefType: "branch", Ref: "main", ComposeFiles: []string{"compose.yml"}, Authentication: gitrepo.Authentication{Source: "none"}}, Environment: []deployment.EnvironmentVariable{}, RegistryCredentialIDs: []uint{}, ReconcileMode: "manual", DeploymentTimeout: 120, SyncIntervalSeconds: 300, InitialApplicationRequired: true}, nil
 	}
 	if err != nil {
 		return Configuration{}, err
@@ -141,6 +149,7 @@ func (s *Service) Get(ctx context.Context, node, name string) (Configuration, er
 		return Configuration{}, err
 	}
 	result := Configuration{Configured: true, Enabled: row.Enabled, Revision: row.Revision, Repository: repo, Environment: env, RegistryCredentialIDs: ids, DeploymentTimeout: row.DeploymentTimeout, SyncIntervalSeconds: row.SyncIntervalSeconds, AutomationEnabled: row.AutomationEnabled, InitialApplicationRequired: row.InitialApplicationRequired, WebhookEnabled: row.WebhookEnabled, WebhookID: row.WebhookID}
+	result.ReconcileMode, result.AutoRollback = row.ReconcileMode, row.AutoRollback
 	if row.CandidateRecordID != nil {
 		record, err := s.record(ctx, row, *row.CandidateRecordID)
 		if err != nil {
@@ -170,9 +179,16 @@ func (s *Service) credential(ctx context.Context, node string, repo gitrepo.Repo
 			return gitrepo.CredentialMaterial{}, nil, err
 		}
 		value, err := s.credentials.Material(ctx, *repo.Authentication.CredentialID)
+		if err == nil {
+			err = gitrepo.ValidateCredentialTransport(repo.CloneURL, value.AuthType)
+		}
 		return value, nil, err
 	case gitrepo.CredentialSourceProject:
-		return s.credentials.InlineMaterial(current, repo.Authentication.Credential)
+		value, encrypted, err := s.credentials.InlineMaterial(current, repo.Authentication.Credential)
+		if err == nil {
+			err = gitrepo.ValidateCredentialTransport(repo.CloneURL, value.AuthType)
+		}
+		return value, encrypted, err
 	default:
 		return gitrepo.CredentialMaterial{}, nil, errors.New("invalid Git credential source")
 	}
@@ -227,6 +243,15 @@ func (s *Service) Configure(ctx context.Context, node, name string, input Config
 	}
 	if input.ExpectedRevision != row.Revision {
 		return Configuration{}, ErrConflict
+	}
+	if input.ReconcileMode == "" {
+		input.ReconcileMode = row.ReconcileMode
+		if input.ReconcileMode == "" {
+			input.ReconcileMode = "manual"
+		}
+	}
+	if input.ReconcileMode != "observe" && input.ReconcileMode != "manual" && input.ReconcileMode != "auto" {
+		return Configuration{}, errors.New("reconcile mode must be observe, manual, or auto")
 	}
 	activating := fresh || !row.Enabled
 	if activating && ordinary.Environment != "" && !input.ReviewedEnvironment {
@@ -314,9 +339,42 @@ func (s *Service) Configure(ctx context.Context, node, name string, input Config
 	row.FailedFingerprint = ""
 	if sourceChanged {
 		row.InitialApplicationRequired = true
-		row.AutomationEnabled = false
 	}
-	if err := s.db.WithContext(ctx).Save(&row).Error; err != nil {
+	row.ReconcileMode, row.AutoRollback = input.ReconcileMode, input.AutoRollback
+	if input.AutomationEnabled != nil {
+		row.AutomationEnabled = *input.AutomationEnabled
+	}
+	if input.WebhookSecret != "" {
+		row.WebhookSecret, err = s.secrets.Encrypt(input.WebhookSecret)
+		if err != nil {
+			return Configuration{}, err
+		}
+		revealed = ""
+	}
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if input.Repository.Authentication.SaveToCenter {
+			if input.Repository.Authentication.Source != gitrepo.CredentialSourceProject || input.Repository.Authentication.Credential == nil {
+				return errors.New("a project credential is required before saving to the authentication center")
+			}
+			// InlineMaterial has already merged preserved private fields. Save that
+			// complete material, and only grant the route's fixed project node.
+			credential := *input.Repository.Authentication.Credential
+			credential.Secret, credential.PrivateKey, credential.Passphrase = material.Secret, material.PrivateKey, material.Passphrase
+			credential.KnownHosts, credential.CustomCA = material.KnownHosts, material.CustomCA
+			credential.AuthorizedNodeIDs = []string{node}
+			created, err := s.credentials.CreateWithDB(ctx, tx, credential)
+			if err != nil {
+				return err
+			}
+			repository.Authentication = gitrepo.Authentication{Source: gitrepo.CredentialSourceCenter, CredentialID: &created.ID}
+			raw, err := json.Marshal(repository)
+			if err != nil {
+				return err
+			}
+			row.RepositoryJSON, row.GitCredentialID, row.CredentialCiphertext = string(raw), &created.ID, nil
+		}
+		return tx.WithContext(ctx).Save(&row).Error
+	}); err != nil {
 		return Configuration{}, err
 	}
 	result, err := s.Get(ctx, node, name)
@@ -349,7 +407,7 @@ func (s *Service) SetEnvironment(ctx context.Context, node, name string, revisio
 	if !current.Enabled {
 		return current, errors.New("project CD mode is not enabled")
 	}
-	return s.Configure(ctx, node, name, ConfigureInput{Repository: current.Repository, Environment: variables, RegistryCredentialIDs: current.RegistryCredentialIDs, DeploymentTimeout: current.DeploymentTimeout, SyncIntervalSeconds: current.SyncIntervalSeconds, WebhookEnabled: current.WebhookEnabled, ExpectedRevision: revision})
+	return s.Configure(ctx, node, name, ConfigureInput{Repository: current.Repository, Environment: variables, RegistryCredentialIDs: current.RegistryCredentialIDs, DeploymentTimeout: current.DeploymentTimeout, SyncIntervalSeconds: current.SyncIntervalSeconds, WebhookEnabled: current.WebhookEnabled, ReconcileMode: current.ReconcileMode, AutoRollback: current.AutoRollback, ExpectedRevision: revision})
 }
 func (s *Service) SetAutomation(ctx context.Context, node, name string, enabled bool, revision uint64) (Configuration, error) {
 	project, err := s.deps.Project(ctx, node)
@@ -368,8 +426,8 @@ func (s *Service) SetAutomation(ctx context.Context, node, name string, enabled 
 	if row.Revision != revision {
 		return Configuration{}, ErrConflict
 	}
-	if !row.Enabled || enabled && row.InitialApplicationRequired {
-		return Configuration{}, errors.New("confirm the first application before enabling automation")
+	if !row.Enabled {
+		return Configuration{}, errors.New("project CD mode is not enabled")
 	}
 	if err := s.db.WithContext(ctx).Model(&row).Updates(map[string]any{"automation_enabled": enabled, "revision": row.Revision + 1}).Error; err != nil {
 		return Configuration{}, err
@@ -596,6 +654,7 @@ func (s *Service) Check(ctx context.Context, node, name, trigger string, actor A
 			return err
 		}
 		value := snapshot{Repository: repository, Worktree: revision.WorktreePath, Environment: spec.Environment, RegistryCredentialIDs: ids, DeploymentTimeout: row.DeploymentTimeout, GitCredentialID: row.GitCredentialID, CredentialCiphertext: row.CredentialCiphertext, RuntimeIdentity: target.RuntimeIdentity, Rendered: rendered}
+		value.AutoRollback = row.AutoRollback
 		cipher, err := s.encrypt(value)
 		if err != nil {
 			return err
@@ -610,7 +669,7 @@ func (s *Service) Check(ctx context.Context, node, name, trigger string, actor A
 		if err := s.db.WithContext(ctx).Model(&row).Update("candidate_record_id", record.ID).Error; err != nil {
 			return err
 		}
-		if trigger != "manual" && row.AutomationEnabled && !row.InitialApplicationRequired {
+		if row.ReconcileMode == "auto" && row.AutomationEnabled && !row.InitialApplicationRequired {
 			if row.FailedFingerprint == record.CommitSHA+record.ConfigHash {
 				report(100, "Previous application failed; manual retry required")
 				return nil
@@ -626,10 +685,11 @@ func (s *Service) Check(ctx context.Context, node, name, trigger string, actor A
 				}
 			}
 			apply := database.ProjectCDRecord{ProjectCDID: row.ID, Operation: "apply", Trigger: trigger, Status: "running", TaskID: record.TaskID, Actor: actor.Name, Revision: row.Revision, CommitSHA: record.CommitSHA, CommitMessage: record.CommitMessage, ConfigHash: record.ConfigHash, SnapshotCiphertext: record.SnapshotCiphertext}
+			apply.SourceRecordID = &record.ID
 			if err := s.db.WithContext(ctx).Create(&apply).Error; err != nil {
 				return err
 			}
-			applyErr := s.apply(ctx, row, &apply, false, report)
+			applyErr := s.applyWithRollback(ctx, row, &apply, report)
 			finished := time.Now().UTC()
 			status := "succeeded"
 			reason := ""
@@ -659,6 +719,9 @@ func (s *Service) Apply(ctx context.Context, node, name string, id uint, revisio
 	if row.Revision != revision {
 		return database.Task{}, ErrConflict
 	}
+	if row.ReconcileMode == "observe" {
+		return database.Task{}, errors.New("observe mode does not allow delivery operations")
+	}
 	source, err := s.record(ctx, row, id)
 	if err != nil {
 		return database.Task{}, err
@@ -678,7 +741,7 @@ func (s *Service) Apply(ctx context.Context, node, name string, id uint, revisio
 			return ErrConflict
 		}
 		if rollback {
-			if err := s.db.WithContext(ctx).Model(&current).Update("automation_enabled", false).Error; err != nil {
+			if err := s.db.WithContext(ctx).Model(&current).Update("reconcile_mode", "manual").Error; err != nil {
 				return err
 			}
 		}
@@ -686,10 +749,14 @@ func (s *Service) Apply(ctx context.Context, node, name string, id uint, revisio
 		record.CommitMessage = source.CommitMessage
 		record.ConfigHash = source.ConfigHash
 		record.SnapshotCiphertext = source.SnapshotCiphertext
+		record.SourceRecordID = &source.ID
 		if err := s.db.WithContext(ctx).Save(record).Error; err != nil {
 			return err
 		}
-		return s.apply(ctx, current, record, rollback, report)
+		if rollback {
+			return s.apply(ctx, current, record, true, report)
+		}
+		return s.applyWithRollback(ctx, current, record, report)
 	})
 }
 func (s *Service) apply(ctx context.Context, row database.ProjectCD, record *database.ProjectCDRecord, force bool, report task.Reporter) (result error) {
@@ -772,7 +839,7 @@ func (s *Service) apply(ctx context.Context, row database.ProjectCD, record *dat
 		return nil
 	})
 	if err != nil {
-		return errors.New("single-node delivery failed; inspect task and Docker state before retrying (private diagnostic hidden)")
+		return errDeploymentFailed
 	}
 	// Commit the successful evidence and active pointer together. A restart
 	// cannot leave an interrupted record presented as the last successful apply.

@@ -44,7 +44,7 @@ func TestProjectCDHTTPModeIsolationAndMaskedEnvironment(t *testing.T) {
 	}})
 	registerProjectCDRoutes(h.router.Group("/api/v1"), Dependencies{ProjectCD: service, Nodes: nodes, Auth: auth.NewService(h.db, time.Hour), Audit: audit.NewService(h.db)})
 	path := "/api/v1/nodes/local/projects/compose/single/gitops"
-	input := `{"repository":{"clone_url":"https://git.example.test/app.git","ref_type":"branch","ref":"main","compose_files":["compose.yml"],"authentication":{"source":"none"}},"environment":[{"name":"API_TOKEN","value":"private-http-value"}]}`
+	input := `{"reconcile_mode":"observe","auto_rollback":true,"repository":{"clone_url":"https://git.example.test/app.git","ref_type":"branch","ref":"main","compose_files":["compose.yml"],"authentication":{"source":"none"}},"environment":[{"name":"API_TOKEN","value":"private-http-value"}]}`
 	saved := h.request(http.MethodPut, path, []byte(input))
 	if saved.Code != 200 {
 		t.Fatal(saved.Code, saved.Body.String())
@@ -61,7 +61,7 @@ func TestProjectCDHTTPModeIsolationAndMaskedEnvironment(t *testing.T) {
 		t.Fatal("old route bypassed CD ownership", old.Code)
 	}
 	values := h.request(http.MethodGet, path+"/environment/values", nil)
-	if values.Code != 200 || !strings.Contains(values.Body.String(), "private-http-value") {
+	if values.Code != 200 || values.Header().Get("Cache-Control") != "no-store" || !strings.Contains(values.Body.String(), "private-http-value") {
 		t.Fatal("explicit reveal failed")
 	}
 	var response struct {
@@ -72,9 +72,17 @@ func TestProjectCDHTTPModeIsolationAndMaskedEnvironment(t *testing.T) {
 	if err := json.Unmarshal(saved.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	auto := h.request(http.MethodPut, path+"/automation", []byte(`{"enabled":true,"expected_revision":1}`))
-	if auto.Code != 422 {
-		t.Fatal("first application gate bypassed", auto.Code)
+	variables := h.request(http.MethodPut, path+"/environment", []byte(`{"environment":[{"name":"API_TOKEN","value":"updated-private-value"}],"expected_revision":1}`))
+	if variables.Code != 200 || !strings.Contains(variables.Body.String(), `"reconcile_mode":"observe"`) || !strings.Contains(variables.Body.String(), `"auto_rollback":true`) || strings.Contains(variables.Body.String(), "updated-private-value") {
+		t.Fatal("environment update changed delivery policy or revealed values", variables.Code)
+	}
+	invalid := h.request(http.MethodPut, path, []byte(strings.Replace(input, `"reconcile_mode":"observe"`, `"expected_revision":2,"reconcile_mode":"invalid"`, 1)))
+	if invalid.Code != 422 {
+		t.Fatal("invalid delivery policy accepted", invalid.Code)
+	}
+	auto := h.request(http.MethodPut, path+"/automation", []byte(`{"enabled":true,"expected_revision":2}`))
+	if auto.Code != 200 || !strings.Contains(auto.Body.String(), `"initial_application_required":true`) {
+		t.Fatal("trigger settings removed the first manual application gate", auto.Code)
 	}
 	h.cookie = nil
 	if result := h.request(http.MethodGet, path, nil); result.Code != 401 {

@@ -198,3 +198,18 @@ func repositoryPath(value string) string {
 	}
 	return strings.TrimSuffix(strings.TrimPrefix(parsed.Path, "/"), ".git")
 }
+
+// ValidateCredentialTransport is shared by batch and node project settings.
+func ValidateCredentialTransport(cloneURL, authType string) error {
+	transport, err := CloneTransport(cloneURL)
+	if err != nil {
+		return err
+	}
+	if transport == "ssh" && authType != AuthSSHKey && authType != AuthNone {
+		return errors.New("SSH repositories require an SSH credential")
+	}
+	if transport == "https" && authType == AuthSSHKey {
+		return errors.New("HTTPS repositories require an HTTP credential")
+	}
+	return nil
+}

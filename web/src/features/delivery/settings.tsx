@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Copy, Plus, Save, Trash2 } from 'lucide-react'
-import { Children, cloneElement, isValidElement, type FormEvent, type ReactElement, type ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react'
+import { Children, cloneElement, isValidElement, type ComponentProps, type Dispatch, type FormEvent, type ReactElement, type ReactNode, type SetStateAction, useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '../../components/ui/alert'
 import { Button } from '../../components/ui/button'
 import { Card, CardContent } from '../../components/ui/card'
@@ -16,7 +16,7 @@ import { Textarea } from '../../components/ui/textarea'
 import { useListPagination } from '../../components/ui/use-list-pagination'
 import { api } from '../../lib/api'
 import { cn } from '../../lib/utils'
-import { choiceDialog } from '../../stores/dialog'
+import {prepareCDSettingsInput} from './settings-input'
 import { nodesForFilteredSelection, type DockerNode } from '../../lib/nodes'
 import { useUIStore } from '../../stores/ui'
 import { GitConnectionTest } from './connection-test'
@@ -66,7 +66,6 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
   onDirtyChange?: (dirty: boolean) => void
 }) {
   const initial = normalizedCDConfiguration(configuration)
-  const automationID = useId()
   const [draft, setDraft] = useState<CDConfigureInput>(() => toDraft(initial))
   const [composeFiles, setComposeFiles] = useState<string[]>(initial.repository.compose_files.length ? initial.repository.compose_files : ['compose.yml'])
   const [notice, setNotice] = useState('')
@@ -77,11 +76,8 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
   const [environmentError, setEnvironmentError] = useState('')
   const environmentRequest = useRef<AbortController | null>(null)
   const [revealedWebhookSecret, setRevealedWebhookSecret] = useState('')
-  const [secretCopied, setSecretCopied] = useState(false)
   const configurationSignature = useRef(JSON.stringify(toDraft(initial)))
   const initialFiles = useRef(JSON.stringify(composeFiles))
-  const nodes = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes') })
-  const registries = useQuery({ queryKey: ['registry-credentials'], queryFn: () => api<{ id: number; name: string; server_address: string; authorized_node_ids: string[] }[]>('/credentials/registries') })
 
   const resetDraft = useCallback((configuration: CDConfiguration) => {
     const value = normalizedCDConfiguration(configuration)
@@ -142,7 +138,7 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
     mutationFn: (input: CDConfigureInput) => creation ? creation.submit(input) : api<CDConfiguration>(`/delivery-projects/${encodeURIComponent(projectName)}/configuration`, { method: 'PUT', body: JSON.stringify(input) }),
     onSuccess: (value) => {
       resetDraft(value)
-      if (value.webhook_secret) setRevealedWebhookSecret(value.webhook_secret)
+      setRevealedWebhookSecret(value.webhook_secret || '')
       setNotice(creation ? (zh ? '交付项目已创建，配置已保存。' : 'Delivery project created and configured.') : (zh ? '持续交付配置已保存。' : 'Continuous delivery configuration saved.'))
       onSaved(value)
     },
@@ -155,10 +151,6 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
     onDirtyChange?.(!creation?.created && (!!creation?.name || draftSignature !== configurationSignature.current || filesSignature !== initialFiles.current))
   }, [creation?.name, creation?.created, draftSignature, filesSignature, onDirtyChange])
 
-  const updateRepository = <K extends keyof CDConfigureInput['repository']>(key: K, value: CDConfigureInput['repository'][K]) => {
-    setDraft((current) => ({ ...current, repository: { ...current.repository, [key]: value } }))
-  }
-
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (save.isPending || creation?.created) return
@@ -170,32 +162,12 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
       setNotice(zh ? '请至少选择一个目标节点。' : 'Select at least one target node.')
       return
     }
-    const files = composeFiles.map((file) => file.trim())
-    if (!files.length || files.some((file) => !file)) {
-      setNotice(zh ? '请填写所有 Compose 文件路径。' : 'Complete every Compose file path.')
-      return
+    try {
+      const input = await prepareCDSettingsInput(draft, composeFiles, zh, !!creation)
+      if (input) save.mutate(input)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error))
     }
-    const variables = draft.environment ?? []
-    if (variables.length > 100 || variables.some(variable => !/^[A-Za-z_][A-Za-z0-9_]{0,255}$/.test(variable.name)) || new Set(variables.map(variable => variable.name)).size !== variables.length) {
-      setNotice(zh ? '环境变量名称须为字母、数字或下划线，不能以数字开头或重复，最多 100 项。' : 'Use unique variable names with letters, numbers and underscores, starting with a letter or underscore; at most 100 variables.')
-      return
-    }
-    let authentication = draft.repository.authentication
-    if (authentication.source === 'project' && authentication.credential) {
-      const material = authentication.credential
-      const summary = authentication.summary
-      const changed = !!(material.secret || material.private_key || material.passphrase || material.known_hosts || material.custom_ca || !summary || material.name !== summary.name || material.auth_type !== summary.auth_type || material.username !== (summary.username || ''))
-      if (changed) {
-        const choice = creation ? (authentication.save_to_center ? 'center' : 'project') : await choiceDialog({ title: zh ? '保存项目认证凭据' : 'Save project credential', description: zh ? '该凭据可以仅由当前项目使用，也可以保存到认证中心供其他功能选择。' : 'Keep this credential private to the current project, or save it to the Authentication Center for reuse.', choices: [{ value: 'project', label: zh ? '仅保存到此项目' : 'Only this project' }, { value: 'center', label: zh ? '保存到认证中心并使用' : 'Save to center and use', primary: true }] })
-        if (!choice) return
-        authentication = { ...authentication, save_to_center: choice === 'center', credential: choice === 'center' ? { ...material, authorized_node_ids: draft.node_ids } : material }
-      } else {
-        authentication = { source: 'project' }
-      }
-    } else if (authentication.source === 'project') {
-      authentication = { source: 'project' }
-    }
-    save.mutate({ ...draft, environment: variables.map(variable => variable.has_value || variable.value !== undefined ? variable : { ...variable, value: '' }), repository: { ...draft.repository, authentication, compose_files: files } })
   }
 
   const webhookURL = configuration.webhook_id
@@ -215,6 +187,73 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
       </Field>
     </SettingsSection>}
 
+    <CDSettingsFields projectName={projectName} configuration={configuration} draft={draft} setDraft={setDraft} composeFiles={composeFiles} setComposeFiles={setComposeFiles} zh={zh} creating={!!creation} created={!!creation?.created} webhookURL={webhookURL} environmentValues={{environmentValues, showEnvironment, environmentLoading, environmentError, toggleEnvironment}} />
+    </fieldset>
+
+    <CDWebhookSecretNotice secret={revealedWebhookSecret} webhookURL={creation?.created ? webhookURL : undefined} zh={zh}/>
+
+    <div className="flex flex-wrap items-center gap-3">
+      {notice && <p role={save.isError ? 'alert' : 'status'} className={cn('text-sm', save.isError ? 'text-destructive' : 'text-muted-foreground')}>{notice}</p>}
+      {creation?.created ? <Button type="button" onClick={creation.onDone}>{zh ? '打开交付项目' : 'Open delivery project'}</Button> : <>
+        {creation && <Button type="button" variant="outline" className="ml-auto" disabled={save.isPending} onClick={creation.onCancel}>{zh ? '取消' : 'Cancel'}</Button>}
+        <Button type="submit" disabled={save.isPending || (creation && (!creation.name.trim() || !draft.node_ids.length))} className={!creation && !notice ? 'ml-auto' : ''}>{save.isPending && <Spinner />}<Save data-icon="inline-end" />{creation ? (zh ? '创建交付项目' : 'Create delivery project') : !configuration.configured ? (zh ? '连接并保存' : 'Connect and save') : (zh ? '保存 CD 配置' : 'Save CD settings')}</Button>
+      </>}
+    </div>
+  </form>
+}
+
+export function CDWebhookSecretNotice({secret, webhookURL, zh}: {secret: string; webhookURL?: string; zh: boolean}) {
+  const [copied, setCopied] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => {setCopied(false); setError('')}, [secret])
+  if (!secret) return null
+  return <Alert>
+    <AlertTitle>{zh ? '请保存 Webhook Secret' : 'Save the webhook secret'}</AlertTitle>
+    <AlertDescription>{zh ? '离开此页后不会再次显示。' : 'It will not be shown again after leaving this page.'}
+      {webhookURL && <div className="mt-2"><Field label="Webhook URL"><Input readOnly value={webhookURL}/></Field></div>}
+      <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <Input readOnly type="password" aria-label="Webhook Secret" value={secret}/>
+        <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={async () => {try {await navigator.clipboard.writeText(secret); setCopied(true)} catch {setError(zh ? '无法复制，请检查剪贴板权限。' : 'Cannot copy; check clipboard permissions.')}}}><Copy/>{copied ? (zh ? '已复制' : 'Copied') : (zh ? '复制 Secret' : 'Copy secret')}</Button>
+      </div>
+      {error && <p role="alert" className="mt-2 text-destructive">{error}</p>}
+    </AlertDescription>
+  </Alert>
+}
+
+type EnvironmentValues = Omit<ComponentProps<typeof EnvironmentFields>, 'variables' | 'onChange' | 'zh'>
+
+export function CDEnvironmentSettings({variables, onChange, zh, values, children}: Pick<ComponentProps<typeof EnvironmentFields>, 'variables' | 'onChange' | 'zh'> & {values: EnvironmentValues; children?: ReactNode}) {
+  return (
+<SettingsSection title={zh ? '手动环境变量' : 'Manual environment variables'} description={zh ? '用于 Compose 的 ${VARIABLE} 插值，覆盖环境变量文件中的同名值。容器需要的变量请在 Compose 的 environment 中引用。' : 'Used for ${VARIABLE} interpolation, overriding matching values in the environment file. Reference them in Compose environment to pass them to containers.'}>
+      <p className="text-xs text-muted-foreground">{zh ? '值会加密保存，默认隐藏。点击“显示变量值”可查看并编辑已保存的值；未修改时保留，清空输入框保存为空值，删除行后保存即可移除。修改后请重新同步并发布。' : 'Values are encrypted and hidden by default. Show variable values to view and edit saved values. Unchanged values are kept; clear an input to save an empty value, or remove a row to delete it. Sync and deploy again after changes.'}</p>
+      <EnvironmentFields variables={variables} onChange={onChange} zh={zh} {...values} />
+      {children}
+    </SettingsSection>
+  )
+}
+
+export function CDSettingsFields({projectName, configuration, draft, setDraft, composeFiles, setComposeFiles, zh, creating = false, created = false, fixedNodeID, connectionEndpoint, webhookURL, environmentValues}: {
+  projectName: string
+  configuration: Pick<CDConfiguration, 'webhook_id' | 'webhook_secret'>
+  draft: CDConfigureInput
+  setDraft: Dispatch<SetStateAction<CDConfigureInput>>
+  composeFiles: string[]
+  setComposeFiles: Dispatch<SetStateAction<string[]>>
+  zh: boolean
+  creating?: boolean
+  created?: boolean
+  fixedNodeID?: string
+  connectionEndpoint?: string
+  webhookURL: string
+  environmentValues: EnvironmentValues
+}) {
+  const automationID = useId()
+  const nodes = useQuery({queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes'), enabled: !fixedNodeID})
+  const registries = useQuery({queryKey: ['registry-credentials'], queryFn: () => api<{id: number; name: string; server_address: string; authorized_node_ids: string[]}[]>('/credentials/registries')})
+  const updateRepository = <K extends keyof CDConfigureInput['repository']>(key: K, value: CDConfigureInput['repository'][K]) => {
+    setDraft(current => ({...current, repository: {...current.repository, [key]: value}}))
+  }
+  return <>
     <SettingsSection title={zh ? 'Git 仓库' : 'Git repository'} description={zh ? '支持任意标准 HTTPS 或 SSH Git 仓库，不区分代码托管平台。' : 'Works with any standard HTTPS or SSH Git repository without a hosting-provider setting.'}>
       <Field label="Git Clone URL" hint={zh ? '支持 HTTPS、ssh:// 或 git@host:path；认证信息请使用下方凭据，不要写入 URL。' : 'Supports HTTPS, ssh://, or git@host:path. Use a credential below instead of embedding secrets in the URL.'}>
         <Input required value={draft.repository.clone_url} onChange={(event) => updateRepository('clone_url', event.target.value)} placeholder="https://git.example.com/team/deploy.git" />
@@ -251,20 +290,17 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
       <Field label={zh ? '环境变量文件（仓库根目录相对路径）' : 'Environment file (relative to repository root)'} hint={zh ? '可选，用于 Compose 中的 ${VARIABLE} 插值。' : 'Optional. Used for ${VARIABLE} interpolation in Compose files.'}><Input value={draft.repository.environment_file} onChange={(event) => updateRepository('environment_file', event.target.value)} placeholder="env/production.env" /></Field>
     </SettingsSection>
 
-    <SettingsSection title={zh ? '手动环境变量' : 'Manual environment variables'} description={zh ? '用于 Compose 的 ${VARIABLE} 插值，覆盖环境变量文件中的同名值。容器需要的变量请在 Compose 的 environment 中引用。' : 'Used for ${VARIABLE} interpolation, overriding matching values in the environment file. Reference them in Compose environment to pass them to containers.'}>
-      <p className="text-xs text-muted-foreground">{zh ? '值会加密保存，默认隐藏。点击“显示变量值”可查看并编辑已保存的值；未修改时保留，清空输入框保存为空值，删除行后保存即可移除。修改后请重新同步并发布。' : 'Values are encrypted and hidden by default. Show variable values to view and edit saved values. Unchanged values are kept; clear an input to save an empty value, or remove a row to delete it. Sync and deploy again after changes.'}</p>
-      <EnvironmentFields variables={draft.environment ?? []} onChange={environment=>setDraft(current=>({...current,environment}))} zh={zh} environmentValues={environmentValues} showEnvironment={showEnvironment} environmentLoading={environmentLoading} environmentError={environmentError} toggleEnvironment={toggleEnvironment} />
-    </SettingsSection>
+    <CDEnvironmentSettings variables={draft.environment ?? []} onChange={environment=>setDraft(current=>({...current,environment}))} zh={zh} values={environmentValues} />
 
     <SettingsSection title={zh ? 'Git 认证' : 'Git authentication'} description={zh ? '凭据独立加密保存，可用于任何兼容的 HTTPS 或 SSH 仓库；公开仓库可以不选择。' : 'Credentials are encrypted separately and work with any compatible HTTPS or SSH repository. Public repositories need none.'}>
-      <CredentialSelector zh={zh} nodeIDs={draft.node_ids} value={draft.repository.authentication} onChange={(value) => updateRepository('authentication', value)} creating={!!creation} />
-      <GitConnectionTest repository={draft.repository} nodeIDs={draft.node_ids} projectName={projectName} creating={!!creation} zh={zh} />
+      <CredentialSelector zh={zh} nodeIDs={draft.node_ids} value={draft.repository.authentication} onChange={(value) => updateRepository('authentication', value)} creating={creating} />
+      <GitConnectionTest repository={draft.repository} nodeIDs={draft.node_ids} projectName={projectName} creating={creating} zh={zh} endpoint={connectionEndpoint} />
     </SettingsSection>
 
-    <SettingsSection title={zh ? '目标节点' : 'Target nodes'} description={zh ? '每次发布使用当前选中节点；回滚默认使用所选配置快照的节点。' : 'Publishing uses the currently selected nodes; rollback defaults to the selected configuration snapshot’s nodes.'}>
+    {!fixedNodeID && <SettingsSection title={zh ? '目标节点' : 'Target nodes'} description={zh ? '每次发布使用当前选中节点；回滚默认使用所选配置快照的节点。' : 'Publishing uses the currently selected nodes; rollback defaults to the selected configuration snapshot’s nodes.'}>
       {nodes.isError && <p role="alert" className="text-xs text-destructive">{nodes.error.message}</p>}
       <TargetSelector nodes={nodes.data || []} value={draft.node_ids} zh={zh} onChange={(node_ids) => setDraft((current) => ({ ...current, node_ids }))} />
-    </SettingsSection>
+    </SettingsSection>}
 
     <SettingsSection title={zh ? '镜像仓库凭据' : 'Registry credentials'} description={zh ? '为发布显式选择凭据；只显示已授权给全部目标节点的凭据。' : 'Explicitly select credentials for deployment. Only credentials granted to every target are available.'}>
       <RegistryCredentialSelector rows={(registries.data || []).filter((row) => draft.node_ids.every((id) => row.authorized_node_ids.includes(id)))} value={draft.registry_credential_ids} zh={zh} onChange={(registry_credential_ids) => setDraft((current) => ({ ...current, registry_credential_ids }))} />
@@ -306,43 +342,23 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
         <span className="text-sm">{zh ? '启用仓库 Webhook' : 'Enable repository webhook'}</span>
       </label>
       {draft.webhook_enabled && <Card size="sm" className="w-full"><CardContent className="flex flex-col gap-4">
-        {webhookURL && !creation?.created && <Field label="Webhook URL"><Input readOnly value={webhookURL} /></Field>}
+        {webhookURL && !created && <Field label="Webhook URL"><Input readOnly value={webhookURL} /></Field>}
         <Field label={zh ? 'Webhook Secret' : 'Webhook secret'} hint={configuration.webhook_id && !configuration.webhook_secret ? (zh ? '留空以保留已保存的 Secret；输入新值可轮换。' : 'Leave empty to keep the stored secret, or enter a new value to rotate it.') : (zh ? '留空时 SUMA 会生成随机 Secret，并只显示一次。' : 'Leave empty and SUMA generates a random secret that is shown once.')}>
           <Input type="password" autoComplete="new-password" value={draft.webhook_secret} onChange={(event) => setDraft((current) => ({ ...current, webhook_secret: event.target.value }))} placeholder={configuration.webhook_id ? '••••••••••••••••' : (zh ? '自动生成' : 'Generate automatically')} />
         </Field>
         <p className="text-xs text-muted-foreground">{zh ? '支持 GitHub、GitLab 原生 Push Webhook，也支持 Authorization: Bearer <secret> 的通用 JSON Webhook。' : 'Accepts native GitHub and GitLab push webhooks plus a generic JSON webhook using Authorization: Bearer <secret>.'}</p>
       </CardContent></Card>}
     </SettingsSection>
-    </fieldset>
-
-    {revealedWebhookSecret && <Alert>
-      <AlertTitle>{zh ? '请保存 Webhook Secret' : 'Save the webhook secret'}</AlertTitle>
-      <AlertDescription>{zh ? '离开此页后不会再次显示。' : 'It will not be shown again after leaving this page.'}
-        {creation?.created && webhookURL && <div className="mt-2"><Field label="Webhook URL"><Input readOnly value={webhookURL} /></Field></div>}
-        <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
-          <Input readOnly type="password" aria-label="Webhook Secret" value={revealedWebhookSecret} />
-          <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={async () => { try { await navigator.clipboard.writeText(revealedWebhookSecret); setSecretCopied(true) } catch { setNotice(zh ? '无法复制，请检查剪贴板权限。' : 'Cannot copy; check clipboard permissions.') } }}><Copy />{secretCopied ? (zh ? '已复制' : 'Copied') : (zh ? '复制 Secret' : 'Copy secret')}</Button>
-        </div>
-      </AlertDescription>
-    </Alert>}
-
-    <div className="flex flex-wrap items-center gap-3">
-      {notice && <p role={save.isError ? 'alert' : 'status'} className={cn('text-sm', save.isError ? 'text-destructive' : 'text-muted-foreground')}>{notice}</p>}
-      {creation?.created ? <Button type="button" onClick={creation.onDone}>{zh ? '打开交付项目' : 'Open delivery project'}</Button> : <>
-        {creation && <Button type="button" variant="outline" className="ml-auto" disabled={save.isPending} onClick={creation.onCancel}>{zh ? '取消' : 'Cancel'}</Button>}
-        <Button type="submit" disabled={save.isPending || (creation && (!creation.name.trim() || !draft.node_ids.length))} className={!creation && !notice ? 'ml-auto' : ''}>{save.isPending && <Spinner />}<Save data-icon="inline-end" />{creation ? (zh ? '创建交付项目' : 'Create delivery project') : !configuration.configured ? (zh ? '连接并保存' : 'Connect and save') : (zh ? '保存 CD 配置' : 'Save CD settings')}</Button>
-      </>}
-    </div>
-  </form>
+  </>
 }
 
-function SettingsSection({ title, description, children }: { title: string; description: string; children: ReactNode }) {
-  return <section className="section-surface grid w-full gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
-    <header className="flex flex-col gap-0.5">
+export function SettingsSection({ title, description, children }: { title: string; description: string; children: ReactNode }) {
+  return <section className="section-surface grid w-full min-w-0 gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+    <header className="flex min-w-0 flex-col gap-0.5">
       <h3 className="text-sm font-semibold">{title}</h3>
       <p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">{description}</p>
     </header>
-    <div className="flex flex-col gap-4">{children}</div>
+    <div className="flex min-w-0 flex-col gap-4">{children}</div>
   </section>
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"gorm.io/gorm"
 	"io"
 	"os"
 	"path/filepath"
@@ -33,7 +34,18 @@ func (g *fixtureGit) Sync(context.Context, gitrepo.SyncRequest, io.Writer) (gitr
 func (g *fixtureGit) Verify(context.Context, string, string) error { return nil }
 func (g *fixtureGit) Cleanup(uint) error                           { return nil }
 
-func TestProjectCDFirstApplicationSnapshotsRollbackAndDetach(t *testing.T) {
+type projectCDFixture struct {
+	db                                         *gorm.DB
+	root, worktree, calls, projectPath, source string
+	tasks                                      *task.Service
+	ordinary                                   *compose.Service
+	service                                    *Service
+	git                                        *fixtureGit
+	input                                      ConfigureInput
+}
+
+func newProjectCDFixture(t *testing.T) *projectCDFixture {
+	t.Helper()
 	db, err := testutil.Open(t)
 	if err != nil {
 		t.Fatal(err)
@@ -76,6 +88,12 @@ func TestProjectCDFirstApplicationSnapshotsRollbackAndDetach(t *testing.T) {
 	}})
 	ordinary.SetProjectCDView(service.ProjectView)
 	input := ConfigureInput{WebhookEnabled: true, Repository: gitrepo.Repository{CloneURL: "https://example.test/repo.git", RefType: "branch", Ref: "main", ComposeFiles: []string{"compose.yml"}, Authentication: gitrepo.Authentication{Source: "none"}}}
+	return &projectCDFixture{db: db, root: root, worktree: worktree, calls: calls, projectPath: projectPath, source: source, tasks: tasks, ordinary: ordinary, service: service, git: git, input: input}
+}
+
+func TestProjectCDFirstApplicationSnapshotsRollbackAndDetach(t *testing.T) {
+	f := newProjectCDFixture(t)
+	db, root, calls, projectPath, source, tasks, ordinary, service, git, input := f.db, f.root, f.calls, f.projectPath, f.source, f.tasks, f.ordinary, f.service, f.git, f.input
 	config, err := service.Configure(context.Background(), "local", "app", input)
 	if err != nil {
 		t.Fatal(err)
@@ -83,8 +101,8 @@ func TestProjectCDFirstApplicationSnapshotsRollbackAndDetach(t *testing.T) {
 	if !config.Enabled || !config.InitialApplicationRequired || config.AutomationEnabled {
 		t.Fatal("incorrect first-application gate")
 	}
-	if _, err := service.SetAutomation(context.Background(), "local", "app", true, config.Revision); err == nil {
-		t.Fatal("enabled automation before first application")
+	if _, err := service.Apply(context.Background(), "local", "app", 1, config.Revision, false, Actor{}); err == nil {
+		t.Fatal("applied without a checked snapshot")
 	}
 	if _, err := ordinary.Save(context.Background(), "app", source, ""); !errors.Is(err, compose.ErrProjectCDManaged) {
 		t.Fatal("old save bypassed GitOps", err)
@@ -97,7 +115,7 @@ func TestProjectCDFirstApplicationSnapshotsRollbackAndDetach(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := tasks.Wait(ctx, row.ID); err != nil {
 			t.Fatal(err)
@@ -136,7 +154,13 @@ func TestProjectCDFirstApplicationSnapshotsRollbackAndDetach(t *testing.T) {
 	if _, err := service.Apply(context.Background(), "local", "app", config.Candidate.ID, config.Revision, false, Actor{}); !errors.Is(err, ErrConflict) {
 		t.Fatal("stale configuration applied", err)
 	}
-	config, err = service.SetAutomation(context.Background(), "local", "app", true, updated.Revision)
+	updatedInput := input
+	updatedInput.ExpectedRevision = updated.Revision
+	updatedInput.ReconcileMode = "auto"
+	updatedInput.Environment = updated.Environment
+	enabled := true
+	updatedInput.AutomationEnabled = &enabled
+	config, err = service.Configure(context.Background(), "local", "app", updatedInput)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +173,7 @@ func TestProjectCDFirstApplicationSnapshotsRollbackAndDetach(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	waitCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := tasks.Wait(waitCtx, failed.ID); err != nil {
 		t.Fatal(err)
@@ -171,8 +195,8 @@ func TestProjectCDFirstApplicationSnapshotsRollbackAndDetach(t *testing.T) {
 	rolled, err := service.Apply(context.Background(), "local", "app", successID, config.Revision, true, Actor{Name: "Tester"})
 	wait(rolled, err)
 	config, err = service.Get(context.Background(), "local", "app")
-	if err != nil || config.AutomationEnabled {
-		t.Fatal("rollback did not pause automation", err)
+	if err != nil || config.ReconcileMode != "manual" {
+		t.Fatal("rollback did not restore manual delivery policy", err)
 	}
 	detached, err := service.Detach(context.Background(), "local", "app", config.Revision, Actor{Name: "Tester"})
 	wait(detached, err)

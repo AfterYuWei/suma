@@ -344,7 +344,7 @@ func (s *Service) Configure(ctx context.Context, name string, input ConfigureInp
 		if err := s.db.WithContext(ctx).First(&centerCredential, *authentication.CredentialID).Error; err != nil {
 			return Configuration{}, errors.New("Git credential not found")
 		}
-		if err := validateCredentialTransport(input.Repository.CloneURL, centerCredential.AuthType); err != nil {
+		if err := gitrepo.ValidateCredentialTransport(input.Repository.CloneURL, centerCredential.AuthType); err != nil {
 			return Configuration{}, err
 		}
 		if err := s.credentials.AuthorizedForNodes(ctx, centerCredential.ID, nodeIDs); err != nil {
@@ -358,14 +358,14 @@ func (s *Service) Configure(ctx context.Context, name string, input ConfigureInp
 			return Configuration{}, errors.New("a new project credential is required before saving it to the authentication center")
 		}
 		if authentication.Credential != nil {
-			if err := validateCredentialTransport(input.Repository.CloneURL, authentication.Credential.AuthType); err != nil {
+			if err := gitrepo.ValidateCredentialTransport(input.Repository.CloneURL, authentication.Credential.AuthType); err != nil {
 				return Configuration{}, err
 			}
 		} else {
 			if err := s.db.WithContext(ctx).Where("project_id = ?", current.ID).First(&projectCredential).Error; err != nil {
 				return Configuration{}, errors.New("project credential is required")
 			}
-			if err := validateCredentialTransport(input.Repository.CloneURL, projectCredential.AuthType); err != nil {
+			if err := gitrepo.ValidateCredentialTransport(input.Repository.CloneURL, projectCredential.AuthType); err != nil {
 				return Configuration{}, err
 			}
 		}
@@ -465,20 +465,6 @@ func (s *Service) Configure(ctx context.Context, name string, input ConfigureInp
 	configuration, err := s.GetConfiguration(ctx, name)
 	configuration.WebhookSecret = generatedSecret
 	return configuration, err
-}
-
-func validateCredentialTransport(cloneURL, authType string) error {
-	transport, err := gitrepo.CloneTransport(cloneURL)
-	if err != nil {
-		return err
-	}
-	if transport == "ssh" && authType != gitrepo.AuthSSHKey && authType != gitrepo.AuthNone {
-		return errors.New("SSH repositories require an SSH credential")
-	}
-	if transport == "https" && authType == gitrepo.AuthSSHKey {
-		return errors.New("HTTPS repositories require an HTTP credential")
-	}
-	return nil
 }
 
 func (s *Service) GetConfiguration(ctx context.Context, name string) (Configuration, error) {

@@ -1,3 +1,4 @@
+import {useProjectCDEnvironment, useProjectCDDraftGuard} from '../features/project-cd/environment'
 import {useProjectCD} from '../features/project-cd/queries'
 import { ProjectCD, ProjectCDEnvironment } from '../features/project-cd/project-cd'
 import { ProjectImageUpdates } from '../features/image-updates/project-updates'
@@ -116,6 +117,8 @@ export function ComposeDetailPage() {
   const [view, setView] = useState<View>('Files')
   const [gitOpsDirty,setGitOpsDirty]=useState(false)
   const gitops = useProjectCD(nodeID, projectName, !!query.data?.managed && !query.data?.delivery_project_name && (view === 'CD' || query.data?.deployment_mode === 'cd'))
+  const gitOpsEnvironment = useProjectCDEnvironment(nodeID, projectName, gitops.configuration.data, view)
+  useProjectCDDraftGuard(gitOpsDirty || gitOpsEnvironment.dirty, zh)
   const [compose, setCompose] = useState('')
   const [environment, setEnvironment] = useState('')
   const [notice, setNotice] = useState<{ message: string; tone: 'success' | 'error' | 'pending' } | null>(null)
@@ -770,7 +773,7 @@ export function ComposeDetailPage() {
                 onPendingChange={setPendingConfiguration}
                 readOnly={project.deployment_mode === 'cd'}
                 sourceFiles={project.deployment_mode === 'cd' ? gitops.preview.data?.files : undefined}
-                environmentPanel={project.deployment_mode === 'cd' && gitops.configuration.data ? <ProjectCDEnvironment onDirtyChange={setGitOpsDirty} key={`${nodeID}/${projectName}`} nodeID={nodeID} projectName={projectName} configuration={gitops.configuration.data} repositoryEnvironment={gitops.preview.data?.repository_environment ?? ''} zh={zh} /> : undefined}
+                environmentPanel={project.deployment_mode === 'cd' && gitops.configuration.data ? <ProjectCDEnvironment environment={gitOpsEnvironment} key={`${nodeID}/${projectName}`} repositoryEnvironment={gitops.preview.data?.repository_environment ?? ''} zh={zh} /> : undefined}
                 compose={project.deployment_mode === 'cd' ? gitops.preview.data?.compose ?? compose : compose}
                 environment={environment}
                 onCompose={(value) => {
@@ -826,7 +829,7 @@ export function ComposeDetailPage() {
             />
           </>)}
           {view === 'Logs' && <ProjectLogs key={`${nodeID}/${projectName}`} nodeID={nodeID} projectName={projectName} />}
-          {view === 'CD' && (project.delivery_project_name ? <p className="text-sm">{zh?'此项目由全局持续交付管理。':'This project is managed by global Continuous Delivery.'}<Button variant="link" onClick={()=>void navigate({to:'/continuous-delivery/$projectName',params:{projectName:project.delivery_project_name!}})}>{zh?'打开持续交付':'Open Continuous Delivery'}</Button></p> : !project.managed ? <p className="text-sm text-muted-foreground">{zh?'请先接管此项目，再关联 Git 仓库。':'Take over this project before connecting a Git repository.'}</p> : gitops.configuration.data ? <ProjectCD onDirtyChange={setGitOpsDirty} nodeID={nodeID} projectName={projectName} configuration={gitops.configuration.data} initialEnvironment={project.environment} baselineCompose={project.compose} zh={zh}/> : gitops.configuration.isError ? <ErrorState description={gitops.configuration.error.message}/> : <LoadingState label={zh?'正在加载 CD 配置':'Loading CD settings'}/>)}
+          {view === 'CD' && (project.delivery_project_name ? <p className="text-sm">{zh?'此项目由全局持续交付管理。':'This project is managed by global Continuous Delivery.'}<Button variant="link" onClick={()=>void navigate({to:'/continuous-delivery/$projectName',params:{projectName:project.delivery_project_name!}})}>{zh?'打开持续交付':'Open Continuous Delivery'}</Button></p> : !project.managed ? <p className="text-sm text-muted-foreground">{zh?'请先接管此项目，再关联 Git 仓库。':'Take over this project before connecting a Git repository.'}</p> : gitops.configuration.data ? <ProjectCD environment={gitOpsEnvironment} onDirtyChange={setGitOpsDirty} nodeID={nodeID} projectName={projectName} configuration={gitops.configuration.data} initialEnvironment={project.environment} baselineCompose={project.compose} zh={zh}/> : gitops.configuration.isError ? <ErrorState description={gitops.configuration.error.message}/> : <LoadingState label={zh?'正在加载 CD 配置':'Loading CD settings'}/>)}
 
         </div>
       </ResourceFrame>
