@@ -17,7 +17,7 @@ export interface ComposeTaskLog {
 }
 
 export type ComposeOutputLog = Omit<ComposeTaskLog, 'id' | 'created_at'> & {
-  id: number | 'live'
+  id: number | `live-${string}`
   created_at?: string
 }
 
@@ -77,19 +77,29 @@ export function parseComposeResource(message: string): ComposeResourceProgress |
 
 export function composeOutputLogs(task: ComposeTask | undefined, logs: ComposeTaskLog[]): ComposeOutputLog[] {
   const output = compactTaskLogs(logs)
-  const current = parseComposeResource(task?.message ?? '')
-  // Repeated counters only update Task.message on the server. Overlay that
-  // frame in the output without fabricating a historical log or timestamp.
-  if (task?.status !== 'running' || current?.kind !== 'layer' || (current.stage !== 'downloading' && current.stage !== 'extracting')) return output
-  const index = output.findIndex(log => {
-    const row = parseComposeResource(log.message)
-    return row?.kind === 'layer' && row.name === current.name
-  })
-  const previous = index >= 0 ? parseComposeResource(output[index].message) : undefined
-  // Independent polling may deliver logs from a newer stage or byte count.
-  if (previous && (previous.stage !== current.stage || bytes(previous.detail.split(' / ')[0]) > bytes(current.detail.split(' / ')[0]))) return output
-  if (output[index]?.message === task.message) return output
-  return [...output.filter((_, rowIndex) => rowIndex !== index), { id: 'live', level: 'info', message: task.message }]
+  if (task?.status !== 'running') return output
+  // The live message carries one counter frame per active layer. Overlay every
+  // frame without fabricating a historical log or timestamp.
+  const frames = task.message.split('\n').map(message => ({ message, row: parseComposeResource(message) }))
+    .filter((frame): frame is { message: string; row: ComposeResourceProgress } => !!frame.row && frame.row.kind === 'layer' && (frame.row.stage === 'downloading' || frame.row.stage === 'extracting'))
+  if (!frames.length) return output
+  let rows = [...output]
+  const live: ComposeOutputLog[] = []
+  for (const frame of frames) {
+    const index = rows.findIndex(log => {
+      const row = parseComposeResource(log.message)
+      return row?.kind === 'layer' && row.name === frame.row.name
+    })
+    if (index >= 0) {
+      const previous = parseComposeResource(rows[index].message)!
+      // Independent polling may deliver logs from a newer stage or byte count.
+      if (previous.stage !== frame.row.stage || bytes(previous.detail.split(' / ')[0]) > bytes(frame.row.detail.split(' / ')[0])) continue
+      if (rows[index].message === frame.message) continue
+      rows = rows.filter((_, rowIndex) => rowIndex !== index)
+    }
+    live.push({ id: `live-${frame.row.name}`, level: 'info', message: frame.message })
+  }
+  return live.length ? [...rows, ...live] : rows
 }
 
 export function composeProgress(action: string, task: ComposeTask | undefined, logs: ComposeTaskLog[]) {
@@ -102,14 +112,16 @@ export function composeProgress(action: string, task: ComposeTask | undefined, l
     const row = parseComposeResource(message)
     if (row) resources.set(`${row.kind}:${row.name}`, row)
   }
-  if (task?.message.trim() === 'Images ready; recreating Compose services') recreating = true
-  const current = parseComposeResource(task?.message ?? '')
-  if (current) {
-    const key = `${current.kind}:${current.name}`
+  if (task?.message.split('\n').some(line => line.trim() === 'Images ready; recreating Compose services')) recreating = true
+  // The current message carries one live frame per active layer, which is not
+  // persisted to TaskLog for every redraw. Never use task.progress as bytes.
+  for (const row of task?.message.split('\n').map(parseComposeResource) ?? []) {
+    if (!row) continue
+    const key = `${row.kind}:${row.name}`
     const previous = resources.get(key)
     // Status and logs are polled independently. A slower task response must
     // not overwrite a newer lifecycle transition already present in the log.
-    if (!previous || previous.stage === current.stage) resources.set(key, current)
+    if (!previous || previous.stage === row.stage) resources.set(key, row)
   }
   const success = task?.status === 'success'
   const phase = action === 'update' ? (recreating ? 'recreate' : 'pull') : action === 'pull' ? 'pull' : 'execute'

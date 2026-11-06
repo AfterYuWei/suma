@@ -12,13 +12,31 @@ describe('Compose live output', () => {
       const message = `abcdef123456 Downloading ${counter}/10MB`
       const output = composeOutputLogs(task({ message }), history)
       expect(output).toHaveLength(3)
-      expect(output.at(-1)).toEqual({ id: 'live', level: 'info', message })
+      expect(output.at(-1)).toEqual({ id: 'live-abcdef123456', level: 'info', message })
       expect(output.map(row => row.message)).not.toContain(history[1].message)
     }
     expect(history).toEqual(original)
     expect(composeOutputLogs(task({ message: 'abcdef123456 Extracting 8MB' }), [])).toEqual([
-      { id: 'live', level: 'info', message: 'abcdef123456 Extracting 8MB' },
+      { id: 'live-abcdef123456', level: 'info', message: 'abcdef123456 Extracting 8MB' },
     ])
+  })
+
+  it('overlays every active layer counter carried by the multi-line live message', () => {
+    const history = logs('api Pulling', 'abcdef123456 Downloading 1MB/10MB', 'fedcba654321 Extracting 1MB/20MB')
+    const output = composeOutputLogs(task({ message: 'abcdef123456 Downloading 5MB/10MB\nfedcba654321 Extracting 4MB/20MB' }), history)
+    expect(output.map(row => row.message)).toEqual([
+      'api Pulling',
+      'abcdef123456 Downloading 5MB/10MB',
+      'fedcba654321 Extracting 4MB/20MB',
+    ])
+    expect(output.map(row => row.id)).toEqual([0, 'live-abcdef123456', 'live-fedcba654321'])
+  })
+
+  it('skips frames that a newer historical stage already passed', () => {
+    const history = logs('abcdef123456 Downloading 1MB/10MB', 'fedcba654321 Download complete')
+    const output = composeOutputLogs(task({ message: 'abcdef123456 Downloading 5MB/10MB\nfedcba654321 Extracting 4MB/20MB' }), history)
+    expect(output.map(row => row.message)).toEqual(['fedcba654321 Download complete', 'abcdef123456 Downloading 5MB/10MB'])
+    expect(output.map(row => row.id)).toEqual([1, 'live-abcdef123456'])
   })
 
   it('retains newer historical stages and counters when task polling lags', () => {
@@ -26,6 +44,10 @@ describe('Compose live output', () => {
       const history = logs(newer)
       expect(composeOutputLogs(task({ message: 'abcdef123456 Downloading 8MB/10MB' }), history)).toEqual(history)
     }
+    const history = logs('abcdef123456 Downloading 9MB/10MB', 'fedcba654321 Downloading 2MB/20MB')
+    const output = composeOutputLogs(task({ message: 'abcdef123456 Downloading 8MB/10MB\nfedcba654321 Downloading 5MB/20MB' }), history)
+    expect(output.map(row => row.message)).toEqual(['abcdef123456 Downloading 9MB/10MB', 'fedcba654321 Downloading 5MB/20MB'])
+    expect(output.map(row => row.id)).toEqual([0, 'live-fedcba654321'])
   })
 
   it('does not duplicate persisted frames or display terminal tasks as live', () => {
@@ -72,6 +94,14 @@ describe('Compose resource progress', () => {
     expect(result.images[0].state).toBe('complete')
     expect(result.layers.map(row => row.name)).toEqual(['abcdef123456', 'fedcba654321'])
     expect(result.layers[0].percent).toBe(80)
+  })
+
+  it('updates every layer row from the multi-line live message', () => {
+    const result = composeProgress('update', task({ message: 'abcdef123456 Downloading 8MB/10MB\nfedcba654321 Extracting 4MB/20MB' }), logs('abcdef123456 Downloading 1MB/10MB', 'fedcba654321 Extracting 1MB/20MB'))
+    expect(result.layers.map(row => [row.name, row.stage, row.percent])).toEqual([
+      ['abcdef123456', 'downloading', 80],
+      ['fedcba654321', 'extracting', 20],
+    ])
   })
 
   it('never treats the output-based overall percentage as proof that pulling has finished', () => {

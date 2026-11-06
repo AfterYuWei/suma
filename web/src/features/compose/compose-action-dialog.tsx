@@ -156,8 +156,8 @@ function LiveOutput({ logs, task, taskID, zh }: { logs: ComposeTaskLog[]; task?:
 
 function OutputLines({ logs, taskID, formatTime, zh }: { logs: ComposeOutputLog[]; taskID?: string; formatTime: (date: string) => string; zh: boolean }) {
   const latest = logs.at(-1)
-  const latestHistory = logs.at(latest?.id === 'live' ? -2 : -1)
-  const { viewportRef, onScroll } = useLogAutoScroll<HTMLDivElement>(`${latestHistory?.id}:${latest?.message}`, taskID)
+  const lastHistoryID = logs.reduce<number | undefined>((id, log) => typeof log.id === 'number' ? log.id : id, undefined)
+  const { viewportRef, onScroll } = useLogAutoScroll<HTMLDivElement>(`${lastHistoryID}:${latest?.message}`, taskID)
   return <div ref={viewportRef} onScroll={onScroll} data-testid="compose-output-viewport" className="min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-lg bg-muted/40 p-3">
     {logs.length === 0 ? <p className="text-xs text-muted-foreground">{zh ? '暂无输出' : 'No output yet'}</p> : <div className="grid grid-cols-[max-content_minmax(0,1fr)] items-baseline gap-x-3 gap-y-2 font-mono text-xs leading-relaxed">{logs.map(log => <div key={log.id} className="contents"><span className="text-[11px] text-muted-foreground tabular-nums">{log.created_at ? formatTime(log.created_at) : zh ? '实时' : 'Live'}</span><span className={cn('min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]', log.level === 'error' && 'text-destructive')}>{log.message}</span></div>)}</div>}
   </div>

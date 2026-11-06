@@ -418,6 +418,50 @@ func TestReportWriterDoesNotPersistRepeatedLayerCounters(t *testing.T) {
 	if len(updates) != 3 || !updates[0].persisted || updates[1].persisted || !updates[2].persisted {
 		t.Fatalf("updates = %#v", updates)
 	}
+	if updates[1].message != "6ae69a20f383 Downloading 8.389MB" {
+		t.Fatalf("live counter update = %#v", updates[1])
+	}
+}
+
+func TestReportWriterLiveSnapshotCarriesEveryActiveLayer(t *testing.T) {
+	type update struct {
+		message   string
+		persisted bool
+	}
+	var updates []update
+	writer := newReportWriter(
+		func(_ int, message string) { updates = append(updates, update{message: message, persisted: true}) },
+		func(_ int, message string) { updates = append(updates, update{message: message}) },
+		5,
+		95,
+	)
+
+	_, _ = writer.Write([]byte(
+		"aaaaaaaaaaaa Downloading 1MB/10MB\r" +
+			"bbbbbbbbbbbb Downloading 2MB/20MB\r" +
+			"aaaaaaaaaaaa Downloading 5MB/10MB\r" +
+			"bbbbbbbbbbbb Extracting 1MB/20MB\r" +
+			"aaaaaaaaaaaa Download complete\r" +
+			"bbbbbbbbbbbb Extracting 9MB/20MB\r"))
+
+	for index, want := range []struct {
+		message   string
+		persisted bool
+	}{
+		{"aaaaaaaaaaaa Downloading 1MB/10MB", true},
+		{"bbbbbbbbbbbb Downloading 2MB/20MB", true},
+		{"aaaaaaaaaaaa Downloading 5MB/10MB\nbbbbbbbbbbbb Downloading 2MB/20MB", false},
+		{"bbbbbbbbbbbb Extracting 1MB/20MB", true},
+		{"aaaaaaaaaaaa Download complete", true},
+		{"bbbbbbbbbbbb Extracting 9MB/20MB", false},
+	} {
+		if len(updates) <= index {
+			t.Fatalf("missing update %d: %#v", index, updates)
+		}
+		if updates[index].message != want.message || updates[index].persisted != want.persisted {
+			t.Fatalf("update %d = %#v, want %#v", index, updates[index], want)
+		}
+	}
 }
 
 func waitForTaskCompletion(t *testing.T, db *gorm.DB, id string) {

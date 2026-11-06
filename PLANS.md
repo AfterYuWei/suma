@@ -4,6 +4,8 @@ This file records the completed MVP implementation. Every checked phase was veri
 
 ## Current work
 
+- [ ] Compose 拉取逐层实时进度（2026-11-06）：`reportWriter` 为每个镜像层保留最新计数行，重复计数刷新时把所有仍在下载／解压的层合并为多行任务消息实时上报，不再只覆盖最后一行；前端按行解析任务消息，实时输出为每个活跃层叠加独立“实时”行，镜像层详情同步刷新各层比例，历史行仍保留更新的阶段或更大字节数。验证：`TestReportWriterLiveSnapshotCarriesEveryActiveLayer` 等报告器单测、compose／task 包非数据库测试、`action-progress.test.ts` 13 项（含多层叠加与轮询滞后保护）、Web lint／typecheck／生产构建、`go vet` 及 Linux amd64 全量构建通过；单帧消息行为与既有 e2e 断言兼容。本机环境限制未完成：测试 PostgreSQL 不可用（`SUMA_DATABASE_DSN` 未设置，数据库集成回归未跑）、Playwright 浏览器下载被环境阻断（compose-progress 专项浏览器回归待正常环境复跑）、无 Docker 真实拉取冒烟未执行。
+
 - 项目 CD 记录统一入口（2026-11-01）：持续交付首页增加“项目／记录”，通过只读查询汇总批量 DeliveryRecord 与节点 ProjectCDRecord，保留来源、原 ID、节点、任务和失败证据；按来源／操作／状态／项目或节点筛选，统一时间排序和服务端分页。既有成功部署记录升级后直接显示，记录仍由原业务聚合管理，不新增表或 Release。记录可进入任务日志，节点项目入口自动切换原节点并打开 CD；批量入口打开原项目记录。已通过隔离 PostgreSQL 服务及 HTTP 回归，覆盖 ID 冲突、合并分页、历史节点／同名项目、搜索、过滤边界、认证及敏感快照隔离；60 项定向浏览器回归（含 13 项统一记录专项）、192 项 Web 单测、Web lint／typecheck／build、API race 和 Linux 构建通过，截图已核对。完整浏览器采用主站与项目服务套件；Linux Go 全门禁、专项浏览器及既有隔离 Docker 冒烟由 CI 复核，结果见对应提交 Checks。
 
 - 项目 CD 设置与交付策略统一（2026-11-01）：删除顶部“项目 CD · 单节点交付”说明块；与持续交付共用仓库、版本／文件、变量、Git 认证、镜像凭据、交付策略及 Webhook 分区，只隐藏目标节点，窄屏长选项正常截断。CD 与配置 .env 共用项目级变量草稿、显式读取缓冲和版本，切换标签不丢变量；两个入口保存同一份加密覆盖变量，409 保留草稿。按用户确认补齐观察／手动／自动和失败自动回滚，首次仍要求人工确认，自动恢复独立留证并切换手动策略；共享 Git 认证传输校验，支持凭据保存至认证中心及 Webhook Secret 轮换。新增不可回写旧迁移的 `0009_project_cd_policy.sql`，保留既有自动应用语义及历史快照。已通过 PostgreSQL 项目 CD／数据库完整包、API／Git 认证定向回归、192 项 Web 单测、188 项主站及 142 项项目服务完整浏览器回归，补充 9 项中英文／深浅主题／390 与 1440px 菜单几何和分区一致性复验，截图已核对；Linux 构建和 Docker 冒烟测试编译通过。GitHub `engineering-check` 增加项目 CD race、专项浏览器回归，以及在临时独立 Engine 上执行 Unix／mTLS TCP／Agent 的真实项目 CD 应用、失败自动恢复和不重建切回手动冒烟，结果见对应提交 Checks。本机没有 Docker，不把编译或替代执行器当作真实运行验收。

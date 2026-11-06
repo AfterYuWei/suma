@@ -820,6 +820,8 @@ type reportWriter struct {
 	progress    int
 	maximum     int
 	layerStages map[string]string
+	layerLines  map[string]string
+	layerOrder  []string
 }
 
 var composeOutputPercentage = regexp.MustCompile(`([0-9]{1,3})%`)
@@ -857,6 +859,31 @@ func (w *reportWriter) Flush() {
 	w.reportLine(line)
 }
 
+func (w *reportWriter) trackLayer(layer, stage, line string) {
+	if w.layerLines == nil {
+		w.layerLines = map[string]string{}
+		w.layerStages = map[string]string{}
+	}
+	if _, seen := w.layerLines[layer]; !seen {
+		w.layerOrder = append(w.layerOrder, layer)
+	}
+	w.layerLines[layer] = line
+	w.layerStages[layer] = stage
+}
+
+// liveLayerSnapshot joins the latest counter line of every layer still
+// downloading or extracting, in first-seen order, so the task's live message
+// carries each layer's progress at once instead of only the most recent redraw.
+func (w *reportWriter) liveLayerSnapshot() string {
+	lines := make([]string, 0, len(w.layerOrder))
+	for _, layer := range w.layerOrder {
+		if w.layerStages[layer] == "Downloading" || w.layerStages[layer] == "Extracting" {
+			lines = append(lines, w.layerLines[layer])
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (w *reportWriter) reportLine(line string) {
 	if line == "" {
 		return
@@ -879,13 +906,15 @@ func (w *reportWriter) reportLine(line string) {
 	}
 	if repeatedCounter {
 		// Compose redraws byte counters for these stages many times per
-		// second. Keep the task's live message current without turning
-		// every redraw into a permanent TaskLog row or fake progress.
-		w.update(w.progress, line)
+		// second. Keep the task's live message current with every active
+		// layer's latest counter without turning each redraw into a
+		// permanent TaskLog row or fake progress.
+		w.trackLayer(layer, stage, line)
+		w.update(w.progress, w.liveLayerSnapshot())
 		return
 	}
 	if layer != "" {
-		w.layerStages[layer] = stage
+		w.trackLayer(layer, stage, line)
 	}
 	w.report(w.progress, line)
 }
