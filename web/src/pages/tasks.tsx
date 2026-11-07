@@ -1,7 +1,9 @@
 import { useDateTime } from '../lib/time-zone'
 import { Fragment, useState } from 'react'
-import { Link, useLocation } from '@tanstack/react-router'
+import { Link, useLocation, useNavigate, useSearch } from '@tanstack/react-router'
 import { CleanupNodeSheet } from '../features/cleanup/storage-cleanup'
+import { RecordsTab } from '../features/task-center/records-tab'
+import { SchedulesTab } from '../features/task-center/schedules-tab'
 import type { DockerNode } from '../lib/nodes'
 import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
@@ -26,32 +28,67 @@ interface Log { id: number; level: string; message: string; created_at: string }
 
 const taskTone = (status: string) => status === 'success' ? 'success' : status === 'failed' ? 'critical' : status === 'running' ? 'warning' : 'neutral'
 
-export function TasksPage() {
-  const { formatDateTime } = useDateTime()
+type CenterTab = 'tasks' | 'schedules' | 'records'
 
-  const nodeID = useUIStore((state) => state.currentNodeID)
+// TasksPage is the Task Center: live executions, unified schedules and the
+// durable record history, sharing one module surface.
+export function TasksPage() {
   const { t, language } = useI18n()
   const zh = language === 'zh-CN'
-  const [expandedID, setExpandedID] = useState<string | null>(null)
+  const navigate = useNavigate()
+  const search = useSearch({ from: '/tasks' }) as { tab?: CenterTab }
+  const tab: CenterTab = search.tab === 'schedules' || search.tab === 'records' ? search.tab : 'tasks'
+  const setTab = (next: CenterTab) => void navigate({ to: '/tasks', search: next === 'tasks' ? {} : { tab: next }, replace: true })
+  const nodeID = useUIStore((state) => state.currentNodeID)
   const [scope, setScope] = useState<'current' | 'control_plane' | 'all'>('current')
-  const query = useQuery({ queryKey: ['tasks', scope, nodeID], queryFn: () => api<Task[]>(scope === 'current' ? nodePath(nodeID, '/tasks') : `/tasks?scope=${scope}`), refetchInterval: 2_000 })
-  const pagination = useListPagination(query.data ?? [], scope)
   const [cleanupOpen, setCleanupOpen] = useState(false)
   const nodes = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes') })
   const currentNode = nodes.data?.find(node => node.id === nodeID)
-  const linkedTaskID = useLocation({ select: (location) => location.hash })
 
   return (
     <ResourceFrame
       title={t('tasks')}
-      detail={zh ? '长时间运行的 Docker 与 Compose 操作' : 'Long-running Docker and Compose operations'}
+      detail={zh ? '任务执行、定时计划与历史记录的统一中心' : 'One center for task runs, schedules and record history'}
       action={(
-        <div className="flex flex-wrap items-center gap-2"><Tabs value={scope} onValueChange={(value) => { setScope(value as typeof scope); setExpandedID(null) }}><TabsList><TabsTrigger value="current">{zh ? '当前节点' : 'Current node'}</TabsTrigger><TabsTrigger value="control_plane">{zh ? '控制平面' : 'Control plane'}</TabsTrigger><TabsTrigger value="all">{zh ? '全部' : 'All'}</TabsTrigger></TabsList></Tabs><Button variant="outline" disabled={!currentNode} onClick={() => setCleanupOpen(true)}>
-            {zh ? '存储清理' : 'Storage cleanup'}
-          </Button></div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Tabs value={tab} onValueChange={(value) => setTab(value as CenterTab)}>
+            <TabsList>
+              <TabsTrigger value="tasks">{zh ? '任务' : 'Tasks'}</TabsTrigger>
+              <TabsTrigger value="schedules">{zh ? '定时任务' : 'Schedules'}</TabsTrigger>
+              <TabsTrigger value="records">{zh ? '任务记录' : 'Records'}</TabsTrigger>
+            </TabsList>
+          </Tabs>
+          {tab === 'tasks' && (
+            <>
+              <Tabs value={scope} onValueChange={(value) => setScope(value as typeof scope)}><TabsList><TabsTrigger value="current">{zh ? '当前节点' : 'Current node'}</TabsTrigger><TabsTrigger value="control_plane">{zh ? '控制平面' : 'Control plane'}</TabsTrigger><TabsTrigger value="all">{zh ? '全部' : 'All'}</TabsTrigger></TabsList></Tabs>
+              <Button variant="outline" disabled={!currentNode} onClick={() => setCleanupOpen(true)}>
+                {zh ? '存储清理' : 'Storage cleanup'}
+              </Button>
+            </>
+          )}
+        </div>
       )}
     >
       {cleanupOpen && currentNode && <CleanupNodeSheet key={nodeID} node={currentNode} open initialTab="preview" onOpenChange={setCleanupOpen} />}
+      {tab === 'tasks' && <RunsTab scope={scope} />}
+      {tab === 'schedules' && <SchedulesTab />}
+      {tab === 'records' && <RecordsTab />}
+    </ResourceFrame>
+  )
+}
+
+function RunsTab({ scope }: { scope: 'current' | 'control_plane' | 'all' }) {
+  const { formatDateTime } = useDateTime()
+  const { language } = useI18n()
+  const zh = language === 'zh-CN'
+  const nodeID = useUIStore((state) => state.currentNodeID)
+  const [expandedID, setExpandedID] = useState<string | null>(null)
+  const query = useQuery({ queryKey: ['tasks', scope, nodeID], queryFn: () => api<Task[]>(scope === 'current' ? nodePath(nodeID, '/tasks') : `/tasks?scope=${scope}`), refetchInterval: 2_000 })
+  const pagination = useListPagination(query.data ?? [], scope)
+  const linkedTaskID = useLocation({ select: (location) => location.hash })
+
+  return (
+    <>
       {linkedTaskID && <LinkedTask key={linkedTaskID} id={linkedTaskID} zh={zh} />}
       {query.isPending
         ? <LoadingState label={zh ? '正在加载任务' : 'Loading tasks'} />
@@ -100,7 +137,7 @@ export function TasksPage() {
               </TableBody>
             </Table></ListShell><ListPagination {...pagination} zh={zh} /></>
           )}
-    </ResourceFrame>
+    </>
   )
 }
 
@@ -112,7 +149,7 @@ function LinkedTask({ id, zh }: { id: string; zh: boolean }) {
   })
   const task = query.data
   return <section aria-label={zh ? '关联任务' : 'Linked task'} className="section-surface mb-4 space-y-3">
-    <div className="flex items-center justify-between gap-3"><p className="text-xs text-muted-foreground">{zh ? '关联任务' : 'Linked task'}</p><Button size="sm" variant="ghost" nativeButton={false} render={<Link to="/tasks" hash="" />}>{zh ? '关闭任务详情' : 'Close task details'}</Button></div>
+    <div className="flex items-center justify-between gap-3"><p className="text-xs text-muted-foreground">{zh ? '关联任务' : 'Linked task'}</p><Button size="sm" variant="ghost" nativeButton={false} render={<Link to="/tasks" search={{}} hash="" />}>{zh ? '关闭任务详情' : 'Close task details'}</Button></div>
     {query.isPending ? <LoadingState compact label={zh ? '正在加载任务' : 'Loading task'} /> : query.isError ? <p role="alert" className="text-sm text-destructive">{zh ? '无法加载关联任务' : 'Unable to load linked task'}</p> : task && <>
       <div className="flex flex-wrap items-center gap-3"><h2 className="min-w-0 break-words text-sm font-medium">{task.name}</h2><StatusBadge tone={taskTone(task.status)}>{task.status}</StatusBadge></div>
       <p className="break-all text-xs text-muted-foreground">{task.scope === 'node' ? task.node_name || task.node_id : zh ? '控制平面' : 'Control plane'} · {task.id}</p>

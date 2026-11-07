@@ -425,6 +425,8 @@ type Task struct {
 	Status     string     `gorm:"size:16;not null;index" json:"status"`
 	Progress   int        `gorm:"not null;default:0" json:"progress"`
 	Message    string     `json:"message"`
+	Params     JSONB      `gorm:"type:jsonb" json:"params,omitempty"`
+	Result     JSONB      `gorm:"type:jsonb" json:"result,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
 	StartedAt  *time.Time `json:"started_at,omitempty"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`

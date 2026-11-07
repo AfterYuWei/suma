@@ -156,7 +156,7 @@ var Catalog = []CatalogEntry{
 	{"auth.login", "security", "登录成功", "Login succeeded"}, {"auth.new_ip", "security", "新的登录 IP", "New login IP"}, {"auth.login_failed", "security", "连续登录失败", "Repeated login failures"}, {"account.changed", "security", "账户安全变更", "Account security changed"}, {"credential.changed", "security", "凭证变更", "Credential changed"},
 	{"node.offline", "nodes", "节点离线", "Node offline"}, {"node.recovered", "nodes", "节点恢复", "Node recovered"}, {"node.changed", "nodes", "节点配置变更", "Node changed"}, {"agent.error", "nodes", "Agent 连接异常", "Agent connection error"}, {"tls.expiring", "nodes", "TLS 证书临近到期", "TLS certificate expiring"},
 	{"container.exited", "containers", "容器异常退出", "Container exited unexpectedly"}, {"container.oom", "containers", "容器 OOM", "Container OOM"}, {"container.unhealthy", "containers", "健康检查失败", "Container unhealthy"}, {"container.recovered", "containers", "容器恢复", "Container recovered"}, {"container.restart_loop", "containers", "容器频繁重启", "Container restart loop"}, {"project.completed", "containers", "项目操作结果", "Project operation completed"},
-	{"image.pull_failed", "images", "镜像拉取失败", "Image pull failed"},
+	{"image.pull_failed", "images", "镜像拉取失败", "Image pull failed"}, {"image.available", "images", "发现镜像更新", "Image update available"}, {"image.updated", "images", "镜像更新完成", "Image update completed"}, {"image.check_failed", "images", "镜像检查失败", "Image check failed"},
 	{"cd.awaiting_approval", "delivery", "Release 待审核", "Release awaiting approval"}, {"cd.completed", "delivery", "发布或回滚结果", "Deployment or rollback completed"}, {"cd.drift", "delivery", "发布状态漂移", "Deployment drift"},
 	{"cleanup.completed", "cleanup", "存储清理结果", "Storage cleanup result"}, {"cleanup.skipped", "cleanup", "清理被跳过", "Cleanup skipped"}, {"task.failed", "tasks", "任务失败", "Task failed"}, {"task.canceled", "tasks", "任务取消", "Task canceled"},
 	{"notification.failed", "notifications", "渠道发送失败", "Channel delivery failed"},
@@ -167,7 +167,7 @@ var Catalog = []CatalogEntry{
 var Presets = map[string][]string{
 	"security":  {"auth.login", "auth.new_ip", "auth.login_failed", "account.changed", "credential.changed", "tls.expiring"},
 	"important": {"node.offline", "node.recovered", "agent.error", "container.exited", "container.oom", "container.unhealthy", "container.recovered", "container.restart_loop", "task.failed", "notification.failed"},
-	"images":    {"image.pull_failed"},
+	"images":    {"image.pull_failed", "image.available", "image.updated", "image.check_failed"},
 	"delivery":  {"cd.awaiting_approval", "cd.completed", "cd.drift"},
 	"cleanup":   {"cleanup.completed", "cleanup.skipped"},
 }

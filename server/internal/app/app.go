@@ -26,16 +26,19 @@ import (
 	"github.com/suma/suma/server/internal/event"
 	gitService "github.com/suma/suma/server/internal/git"
 	imageService "github.com/suma/suma/server/internal/image"
+	"github.com/suma/suma/server/internal/imageupdate"
 	monitorService "github.com/suma/suma/server/internal/monitor"
 	networkService "github.com/suma/suma/server/internal/network"
 	nodeService "github.com/suma/suma/server/internal/node"
 	"github.com/suma/suma/server/internal/notification"
 	"github.com/suma/suma/server/internal/projectcd"
 	"github.com/suma/suma/server/internal/projectlogs"
+	"github.com/suma/suma/server/internal/registry"
 	"github.com/suma/suma/server/internal/secret"
 	settingsService "github.com/suma/suma/server/internal/settings"
 	systemService "github.com/suma/suma/server/internal/system"
 	"github.com/suma/suma/server/internal/task"
+	"github.com/suma/suma/server/internal/taskcenter"
 	volumeService "github.com/suma/suma/server/internal/volume"
 )
 
@@ -45,6 +48,7 @@ type App struct {
 	notifications       *notification.Service
 	projectLogs         *projectlogs.Service
 	cleanup             *cleanup.Service
+	taskCenter          *taskcenter.Service
 	logger              *slog.Logger
 	server              *http.Server
 	engine              docker.Engine
@@ -107,6 +111,44 @@ func New(logger *slog.Logger) (*App, error) {
 	gitCredentials := gitService.NewCredentialService(db, secretStore)
 	registryCredentials := credentialService.NewRegistryService(db, secretStore)
 	compose.SetRegistryCredentials(registryCredentials)
+	taskCenterKinds := taskcenter.NewRegistry()
+	taskCenter := taskcenter.New(db, taskCenterKinds, taskcenter.Dependencies{
+		OnError: func(err error) { logger.Warn("task center scheduler failed", "error", err) },
+		NodeName: func(ctx context.Context, nodeID string) (string, error) {
+			view, err := nodes.Get(ctx, nodeID)
+			if err != nil {
+				return "", err
+			}
+			return view.Name, nil
+		},
+	})
+	imageUpdates := imageupdate.NewService(db, taskService, imageupdate.Dependencies{
+		Audit: auditService,
+		Node: func(ctx context.Context, id string) (imageupdate.Node, error) {
+			view, err := nodes.Get(ctx, id)
+			if err != nil {
+				return imageupdate.Node{}, err
+			}
+			return imageupdate.Node{ID: view.ID, Name: view.Name, Enabled: view.Enabled}, nil
+		},
+		Runtime: func(ctx context.Context, id string) (imageupdate.Runtime, error) { return nodes.Runtime(ctx, id) },
+		Resolver: registry.Adapter{},
+		Credentials: registryCredentials,
+		Compose: func(ctx context.Context, id string) (*composeService.Service, error) {
+			target, view, err := nodes.ComposeTarget(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			return compose.ForNode(id, view.Name, runner.ForTarget(target), engine, view.ConnectionType == nodeService.ConnectionUnix), nil
+		},
+		OnError: func(err error) { logger.Warn("image update service", "error", err) },
+	})
+	if err := taskCenterKinds.Register(imageUpdates.Kind()); err != nil {
+		return nil, fmt.Errorf("register image update kind: %w", err)
+	}
+	compose.SetScheduleRemoval(func(ctx context.Context, nodeID, subject string) error {
+		return taskCenter.DeleteSchedules(ctx, imageupdate.KindImageUpdate, nodeID, subject)
+	})
 	continuousDelivery := cdService.NewService(db, gitClient, gitCredentials, runner, taskService, auditService, secretStore)
 	continuousDelivery.SetTargetResolver(nodes)
 	continuousDelivery.SetRegistryCredentials(registryCredentials)
@@ -185,6 +227,7 @@ func New(logger *slog.Logger) (*App, error) {
 		logger.Info("SUMA initialization key", "setup_token", setupToken, "expires_at", setupExpires.UTC().Format(time.RFC3339))
 	}
 	notifications := notification.NewService(db, secretStore, notification.Dependencies{OnError: func(err error) { logger.Warn("notification service", "error", err) }})
+	imageUpdates.SetEventSink(notifications.Emit)
 	auditService.SetSink(auditNotifications(db, notifications.Emit))
 	continuousDelivery.SetEventSink(notifications.Emit)
 	taskService.SetEventSink(func(e event.Event) {
@@ -229,9 +272,10 @@ func New(logger *slog.Logger) (*App, error) {
 	continuousDelivery.Start()
 	projectCD.Start()
 	cleanupService.Start()
+	taskCenter.Start()
 	recoveryContext, recoveryCancel := context.WithCancel(context.Background())
 	fileService := containerfiles.NewService(db, secretStore)
-	application := &App{projectCD: projectCD, containerMonitoring: containerMonitoring, notifications: notifications, projectLogs: projectLogs, cleanup: cleanupService, logger: logger, engine: engine, nodes: nodes, agents: agents, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{ProjectCD: projectCD, ContainerMonitoring: containerMonitoring, Notifications: notifications, ProjectLogs: projectLogs, Cleanup: cleanupService, Engine: engine, Containers: engine, Files: fileService, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: applicationSettings, Monitor: monitorService.NewService(engine, cfg.DataRoot), System: systemService.NewService(engine, taskService), Nodes: nodes, Agents: agents, AgentPublicURL: cfg.AgentPublicURL, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
+	application := &App{projectCD: projectCD, containerMonitoring: containerMonitoring, notifications: notifications, projectLogs: projectLogs, cleanup: cleanupService, taskCenter: taskCenter, logger: logger, engine: engine, nodes: nodes, agents: agents, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{ProjectCD: projectCD, ContainerMonitoring: containerMonitoring, Notifications: notifications, ProjectLogs: projectLogs, Cleanup: cleanupService, Engine: engine, Containers: engine, Files: fileService, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: applicationSettings, Monitor: monitorService.NewService(engine, cfg.DataRoot), System: systemService.NewService(engine, taskService), Nodes: nodes, TaskCenter: taskCenter, TaskCenterKinds: taskCenterKinds, ImageUpdates: imageUpdates, Agents: agents, AgentPublicURL: cfg.AgentPublicURL, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
 	application.recoveryWG.Add(1)
 	go func() {
 		defer application.recoveryWG.Done()
@@ -306,6 +350,9 @@ func (a *App) Shutdown(ctx context.Context) error {
 	}
 	if a.cleanup != nil {
 		a.cleanup.Stop()
+	}
+	if a.taskCenter != nil {
+		a.taskCenter.Stop()
 	}
 	if a.recoveryCancel != nil {
 		a.recoveryCancel()

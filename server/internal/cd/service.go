@@ -537,14 +537,17 @@ func (s *Service) Sync(ctx context.Context, name, trigger string, actor Actor) (
 	if !s.reserve(project.ID) {
 		return database.Task{}, errors.New("a reconciliation is already queued for this project")
 	}
-	row, err := s.tasks.StartWithID("cd.sync", "Sync "+name, func(ctx context.Context, taskID string, report task.Reporter) error {
+	row, err := s.tasks.StartDefinition(context.Background(), task.Definition{
+		Type: "cd.sync", Name: "Sync " + name,
+		Params: map[string]any{"project": name, "trigger": trigger},
+	}, func(ctx context.Context, taskID string, report task.Reporter) (any, error) {
 		defer s.releaseReservation(project.ID)
 		lock := s.projectLock(project.ID)
 		lock.Lock()
 		defer lock.Unlock()
 		err := s.syncLocked(ctx, project.ID, taskID, trigger, actor, report)
 		s.recordFinal(actor, "cd.sync", name, taskID, nil, err)
-		return err
+		return nil, err
 	})
 	if err != nil {
 		s.releaseReservation(project.ID)

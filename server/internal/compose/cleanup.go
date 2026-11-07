@@ -40,17 +40,21 @@ func (s *Service) CleanupExternalProject(ctx context.Context, name, confirmation
 	if s.tasks == nil {
 		return database.Task{}, errors.New("Task service is unavailable")
 	}
-	return s.tasks.StartForNode(s.effectiveNodeID(), s.effectiveNodeName(), "project.cleanup", "Clean "+name, func(taskCtx context.Context, report task.Reporter) error {
+	return s.tasks.StartDefinition(ctx, task.Definition{
+		Type: "project.cleanup", Name: "Clean " + name,
+		NodeID: s.effectiveNodeID(), NodeName: s.effectiveNodeName(),
+		Params: map[string]any{"project": name, "remove_volumes": removeVolumes},
+	}, func(taskCtx context.Context, _ string, report task.Reporter) (any, error) {
 		unlock := s.lockProject(name)
 		defer unlock()
 
 		current, err := s.findProject(taskCtx, name)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if current.CanManage {
-			return fmt.Errorf("Project became managed before cleanup started")
+			return nil, fmt.Errorf("Project became managed before cleanup started")
 		}
-		return cleaner.CleanupComposeProject(taskCtx, name, removeVolumes, report)
+		return nil, cleaner.CleanupComposeProject(taskCtx, name, removeVolumes, report)
 	})
 }

@@ -65,30 +65,38 @@ func (s *Service) PullForNode(nodeID, nodeName, reference string) (database.Task
 	return s.PullForNodeWithRegistry(nodeID, nodeName, reference, "", "", "", false)
 }
 func (s *Service) PullForNodeWithRegistry(nodeID, nodeName, reference, server, username, secret string, token bool) (database.Task, error) {
-	return s.tasks.StartWithIDForNode(nodeID, nodeName, "image.pull", "Pull "+reference, func(ctx context.Context, taskID string, report task.Reporter) error {
+	return s.tasks.StartDefinition(context.Background(), task.Definition{
+		Type: "image.pull", Name: "Pull " + reference,
+		NodeID: nodeID, NodeName: nodeName,
+		Params: map[string]any{"reference": reference, "registry": server},
+	}, func(ctx context.Context, taskID string, report task.Reporter) (any, error) {
 		var stream io.ReadCloser
 		var err error
 		if server != "" {
 			authenticated, ok := s.adapter.(AuthenticatedAdapter)
 			if !ok {
-				return fmt.Errorf("Docker adapter does not support registry authentication")
+				return nil, fmt.Errorf("Docker adapter does not support registry authentication")
 			}
 			stream, err = authenticated.PullImageAuthenticated(ctx, reference, server, username, secret, token)
 		} else {
 			stream, err = s.adapter.PullImage(ctx, reference)
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 		defer stream.Close()
 		scanner := bufio.NewScanner(stream)
 		progress := 1
+		digest := ""
 		layers := map[string]*pullLayer{}
 		for scanner.Scan() {
 			var event struct {
 				Status         string `json:"status"`
 				ID             string `json:"id"`
 				Error          string `json:"error"`
+				Aux            struct {
+					ID string `json:"ID"`
+				} `json:"aux"`
 				ProgressDetail struct {
 					Current int64 `json:"current"`
 					Total   int64 `json:"total"`
@@ -97,9 +105,12 @@ func (s *Service) PullForNodeWithRegistry(nodeID, nodeName, reference, server, u
 			if json.Unmarshal(scanner.Bytes(), &event) != nil {
 				continue
 			}
+			if event.Aux.ID != "" {
+				digest = event.Aux.ID
+			}
 			if event.Error != "" {
 				markIncompleteLayers(s.tasks, taskID, layers, "Failed", false)
-				return fmt.Errorf("%s", event.Error)
+				return nil, fmt.Errorf("%s", event.Error)
 			}
 			previousLayerStatus := ""
 			if event.ID != "" && isLayerStatus(event.Status) {
@@ -125,15 +136,15 @@ func (s *Service) PullForNodeWithRegistry(nodeID, nodeName, reference, server, u
 		}
 		if ctx.Err() != nil {
 			markIncompleteLayers(s.tasks, taskID, layers, "Canceled", false)
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
 		if err := scanner.Err(); err != nil {
 			markIncompleteLayers(s.tasks, taskID, layers, "Failed", false)
-			return err
+			return nil, err
 		}
 		markIncompleteLayers(s.tasks, taskID, layers, "Pull complete", true)
 		report(100, "Pull complete")
-		return nil
+		return map[string]any{"reference": reference, "digest": digest}, nil
 	})
 }
 

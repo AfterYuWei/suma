@@ -329,14 +329,17 @@ func (s *Service) startRecordOperation(ctx context.Context, name string, release
 	}); err != nil {
 		return OperationResult{}, err
 	}
-	row, err := s.tasks.StartWithIDControlPlane(recordAction(operation), "Deliver "+name, func(runCtx context.Context, taskID string, report task.Reporter) (runErr error) {
+	row, err := s.tasks.StartDefinition(context.Background(), task.Definition{
+		Type: recordAction(operation), Name: "Deliver " + name,
+		Params: map[string]any{"project": name, "operation": operation, "record_id": record.ID, "release_id": release.ID},
+	}, func(runCtx context.Context, taskID string, report task.Reporter) (_ any, runErr error) {
 		defer s.releaseReservation(project.ID)
 		lock := s.projectLock(project.ID)
 		lock.Lock()
 		defer lock.Unlock()
 		runErr = s.executeRecord(runCtx, project, release, record, taskID, report, true)
 		s.recordFinal(actor, recordAction(operation), name, taskID, &release.ID, runErr)
-		return runErr
+		return nil, runErr
 	})
 	if err != nil {
 		return OperationResult{}, errors.Join(err, s.finishRecord(context.Background(), release, record, StatusFailed, err.Error(), ""))
@@ -523,10 +526,14 @@ func (s *Service) executeRecord(ctx context.Context, p database.DeliveryProject,
 		if err := s.db.WithContext(ctx).Create(&attempt).Error; err != nil {
 			return err
 		}
-		child, err := s.tasks.StartWithIDForNode(node, deployment.NodeName, "cd.deploy.node", "Deliver "+p.Name+" to "+deployment.NodeName, func(childCtx context.Context, childID string, childReport task.Reporter) error {
+		child, err := s.tasks.StartDefinition(context.Background(), task.Definition{
+			Type: "cd.deploy.node", Name: "Deliver " + p.Name + " to " + deployment.NodeName,
+			NodeID: node, NodeName: deployment.NodeName,
+			Params: map[string]any{"project": p.Name, "operation": r.Operation, "deployment_id": deployment.ID},
+		}, func(childCtx context.Context, childID string, childReport task.Reporter) (any, error) {
 			_, nodeErr := s.executeRecordNode(childCtx, p, nodeRelease, nodeRecord, deployment, attempt, previous, childID, childReport)
 			s.recordNodeFinal(Actor{UserID: r.ActorID, Name: r.ActorName, IP: r.ActorIP}, recordAction(r.Operation)+".node", p.Name, node, deployment.NodeName, childID, release.ID, nodeErr)
-			return nodeErr
+			return nil, nodeErr
 		})
 		if err != nil {
 			if finishErr := s.finishAttempt(ctx, attempt.ID, StatusFailed, err.Error(), ""); finishErr != nil {

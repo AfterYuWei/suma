@@ -556,28 +556,32 @@ func (s *Service) submit(ctx context.Context, node, name, operation, trigger str
 		release()
 		return database.Task{}, err
 	}
-	result, err := s.tasks.StartWithIDForNode(node, target.NodeName, "project.cd."+operation, operation+" "+name, func(ctx context.Context, id string, report task.Reporter) (workErr error) {
+	result, err := s.tasks.StartDefinition(context.Background(), task.Definition{
+		Type: "project.cd." + operation, Name: operation + " " + name,
+		NodeID: node, NodeName: target.NodeName,
+		Params: map[string]any{"project": name, "operation": operation, "trigger": trigger, "revision": row.Revision},
+	}, func(ctx context.Context, id string, report task.Reporter) (_ any, workErr error) {
 		defer release()
 		current, err := s.row(ctx, node, name)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if !current.Enabled || current.Revision != row.Revision {
-			return ErrConflict
+			return nil, ErrConflict
 		}
 		if trigger != "manual" && !current.AutomationEnabled {
-			return ErrPaused
+			return nil, ErrPaused
 		}
 		currentTarget, err := s.deps.Target(ctx, node)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if currentTarget.RuntimeIdentity != target.RuntimeIdentity {
-			return errors.New("node runtime changed")
+			return nil, errors.New("node runtime changed")
 		}
 		record := database.ProjectCDRecord{ProjectCDID: row.ID, Operation: operation, Trigger: trigger, Status: "running", TaskID: id, Actor: actor.Name, Revision: row.Revision}
 		if err := s.db.WithContext(ctx).Create(&record).Error; err != nil {
-			return err
+			return nil, err
 		}
 		workErr = work(ctx, &record, current, report)
 		now := time.Now().UTC()
@@ -589,14 +593,14 @@ func (s *Service) submit(ctx context.Context, node, name, operation, trigger str
 		}
 		finishCtx := context.WithoutCancel(ctx)
 		if err := s.db.WithContext(finishCtx).Model(&record).Updates(map[string]any{"status": status, "failure_reason": reason, "finished_at": now}).Error; err != nil {
-			return errors.Join(workErr, err)
+			return nil, errors.Join(workErr, err)
 		}
 		if s.audit != nil {
 			if err := s.audit.RecordLinkedForNode(finishCtx, node, target.NodeName, actor.UserID, "project.cd."+operation, "project", name, actor.IP, status, id, nil); err != nil {
-				return errors.Join(workErr, err)
+				return nil, errors.Join(workErr, err)
 			}
 		}
-		return workErr
+		return nil, workErr
 	})
 	if err != nil {
 		release()

@@ -430,11 +430,15 @@ func (s *Service) startLocked(ctx context.Context, node Node, preview Preview, a
 	}
 	s.active[node.ID] = run.ID
 	s.wg.Add(1)
-	row, err := s.tasks.StartWithIDForNode(node.ID, node.Name, "system.cleanup", "Docker storage cleanup", func(ctx context.Context, taskID string, report task.Reporter) error {
+	row, err := s.tasks.StartDefinition(context.Background(), task.Definition{
+		Type: "system.cleanup", Name: "Docker storage cleanup",
+		NodeID: node.ID, NodeName: node.Name,
+		Params: map[string]any{"trigger": run.Trigger, "policy_version": run.PolicyVersion},
+	}, func(ctx context.Context, taskID string, report task.Reporter) (any, error) {
 		defer s.wg.Done()
 		defer func() { s.mu.Lock(); delete(s.active, node.ID); s.mu.Unlock() }()
 		run.TaskID = taskID
-		return s.execute(ctx, node, preview, run, actor, report)
+		return nil, s.execute(ctx, node, preview, run, actor, report)
 	})
 	if err != nil {
 		delete(s.active, node.ID)

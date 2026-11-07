@@ -44,7 +44,7 @@ const containerCreateRoute = createRoute({ getParentRoute: () => rootRoute, path
 const imagesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/images', component: ImagesPage })
 const networksRoute = createRoute({ getParentRoute: () => rootRoute, path: '/networks', component: NetworksPage })
 const volumesRoute = createRoute({ getParentRoute: () => rootRoute, path: '/volumes', component: VolumesPage })
-const tasksRoute = createRoute({ getParentRoute: () => rootRoute, path: '/tasks', component: TasksPage })
+const tasksRoute = createRoute({ getParentRoute: () => rootRoute, path: '/tasks', component: TasksPage, validateSearch: (search: Record<string, unknown>): { tab?: string } => ({ tab: typeof search.tab === 'string' && ['schedules', 'records'].includes(search.tab) ? search.tab : undefined }) })
 const auditRoute = createRoute({ getParentRoute: () => rootRoute, path: '/audit-logs', component: AuditLogsPage })
 const projectsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/projects', component: ComposePage })
 const projectCreateRoute = createRoute({ getParentRoute: () => rootRoute, path: '/projects/new', component: deferred(ProjectCreatePage) })

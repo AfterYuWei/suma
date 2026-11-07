@@ -28,6 +28,8 @@ import (
 	"github.com/suma/suma/server/internal/docker"
 	gitService "github.com/suma/suma/server/internal/git"
 	imageService "github.com/suma/suma/server/internal/image"
+	"github.com/suma/suma/server/internal/imageupdate"
+	"github.com/suma/suma/server/internal/taskcenter"
 	monitorService "github.com/suma/suma/server/internal/monitor"
 	networkService "github.com/suma/suma/server/internal/network"
 	nodeService "github.com/suma/suma/server/internal/node"
@@ -68,6 +70,9 @@ type Dependencies struct {
 	Monitor             *monitorService.Service
 	System              *systemService.Service
 	Nodes               *nodeService.Service
+	TaskCenter          *taskcenter.Service
+	TaskCenterKinds     *taskcenter.Registry
+	ImageUpdates        *imageupdate.Service
 	Agents              *agenthub.Hub
 	AgentPublicURL      string
 	CookieSecure        bool
@@ -118,6 +123,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	registerMonitoringRoutes(v1, deps)
 	registerNotificationRoutes(v1, deps)
 	registerProjectLogRoutes(router, v1, deps)
+	registerTaskCenterRoutes(v1, deps)
 
 	v1.GET("/auth/status", func(c *gin.Context) {
 		needsSetup, err := deps.Auth.NeedsSetup(c.Request.Context())

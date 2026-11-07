@@ -52,7 +52,7 @@ func TestProjectCDUpgradePreservesPreviousSchema(t *testing.T) {
 	}
 	snapshot := func() string {
 		var result string
-		if err := conn.QueryRow("SELECT jsonb_build_object('users',(SELECT jsonb_agg(t) FROM users t),'nodes',(SELECT jsonb_agg(t) FROM nodes t),'credentials',(SELECT jsonb_agg(t) FROM git_credentials t),'settings',(SELECT jsonb_agg(t) FROM settings t),'tasks',(SELECT jsonb_agg(t) FROM tasks t),'audit',(SELECT jsonb_agg(t) FROM audit_logs t),'projects',(SELECT jsonb_agg(t) FROM delivery_projects t),'releases',(SELECT jsonb_agg(t) FROM delivery_releases t),'records',(SELECT jsonb_agg(t) FROM delivery_records t),'notifications',(SELECT jsonb_agg(t) FROM notification_deliveries t),'channels',(SELECT jsonb_agg(t) FROM notification_channels t))::text").Scan(&result); err != nil {
+		if err := conn.QueryRow("SELECT jsonb_build_object('users',(SELECT jsonb_agg(t) FROM users t),'nodes',(SELECT jsonb_agg(t) FROM nodes t),'credentials',(SELECT jsonb_agg(t) FROM git_credentials t),'settings',(SELECT jsonb_agg(t) FROM settings t),'tasks',(SELECT jsonb_agg(to_jsonb(t) - 'params' - 'result') FROM tasks t),'audit',(SELECT jsonb_agg(t) FROM audit_logs t),'projects',(SELECT jsonb_agg(t) FROM delivery_projects t),'releases',(SELECT jsonb_agg(t) FROM delivery_releases t),'records',(SELECT jsonb_agg(t) FROM delivery_records t),'notifications',(SELECT jsonb_agg(t) FROM notification_deliveries t),'channels',(SELECT jsonb_agg(t) FROM notification_channels t))::text").Scan(&result); err != nil {
 			t.Fatal(err)
 		}
 		return result

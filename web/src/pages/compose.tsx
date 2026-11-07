@@ -2,7 +2,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import { useContainerWorkspace } from '../features/containers/use-container-workspace'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { ChevronDown, ChevronRight, Download, Eye, Logs, MoreHorizontal, Pencil, Play, Plus, PowerOff, RefreshCw, Search, Square, Trash2, X } from 'lucide-react'
+import { ArrowUpCircle, ChevronDown, ChevronRight, Download, Eye, Logs, MoreHorizontal, Pencil, Play, Plus, PowerOff, RefreshCw, Search, Square, Trash2, X } from 'lucide-react'
 import { Fragment, lazy, Suspense, type MouseEventHandler, type ReactElement, type ReactNode, useRef, useState } from 'react'
 import { InlineStatus } from '../components/ui/inline-status'
 import { Button } from '../components/ui/button'
@@ -19,8 +19,11 @@ import { TooltipHint } from '../components/ui/tooltip-hint'
 import { ProjectServices, ProjectResourceSummary } from '../components/docker/project-services'
 import { ContainerWorkspaceDialog } from '../components/docker/container-workspace-dialog'
 import { confirmExternalProjectCleanup } from '../features/compose/external-project-cleanup'
+import { ImageUpdateSettingsDialog } from '../features/task-center/image-update-settings'
+import { useImageUpdates } from '../features/task-center/queries'
 import { confirmManagedProjectRemoval } from '../features/compose/managed-project-removal'
 import { TakeoverWarningDialog } from '../features/compose/takeover-warning-dialog'
+import type { DockerNode } from '../lib/nodes'
 import type { ProjectCapability, ProjectSummary } from '../features/compose/types'
 import { projectDisplayName } from '../features/compose/types'
 import { aggregate, defaultProjectView, groupServices, projectStatus, selectProjects, type ProjectView } from '../features/compose/observation'
@@ -58,6 +61,11 @@ function ComposeNodePage({ nodeID }: { nodeID: string }) {
   const logOpener = useRef<HTMLElement | null>(null)
   const [feedback, setFeedback] = useState<ProjectFeedback | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [updatesProject, setUpdatesProject] = useState<string | null>(null)
+  const nodes = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes') })
+  const currentNode = nodes.data?.find(node => node.id === nodeID)
+  const imageUpdates = useImageUpdates(nodeID)
+  const updateCounts = new Map((imageUpdates.data ?? []).map(row => [row.project, (row.last_result?.services ?? []).filter(service => service.status === 'update_available').length]))
   const [serviceOverlay, setServiceOverlay] = useState(false)
   const { t, language } = useI18n(), zh = language === 'zh-CN'
   const workspace = useContainerWorkspace(nodeID, zh)
@@ -137,10 +145,10 @@ function ComposeNodePage({ nodeID }: { nodeID: string }) {
               <Checkbox disabled={!row.managed} checked={selected.has(row.name)} onCheckedChange={value => toggleRow(row.name, value === true)} aria-label={projectDisplayName(row)} />
               <Button variant="ghost" size="icon-xs" aria-expanded={open} aria-label={`${zh ? '展开服务' : 'Expand services'} · ${projectDisplayName(row)}`} onClick={() => toggleExpanded(row.name)}><ChevronRight className={`transition-transform ${open ? 'rotate-90' : ''}`} /></Button>
             </div>
-            <div className="min-w-0"><div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1"><TooltipHint content={row.delivery_project_name && row.delivery_project_name !== row.name ? `${zh ? 'Compose 项目名' : 'Compose project name'}: ${row.name}` : undefined}><Link to="/projects/$backend/$projectName" params={{ backend: row.backend, projectName: row.name }} className="max-w-full truncate text-sm font-medium hover:underline">{projectDisplayName(row)}</Link></TooltipHint><StatusBadge tone={row.managed ? 'outline' : 'neutral'}>{row.delivery_project_name || row.deployment_mode === 'cd' ? 'CD' : row.managed ? zh ? '托管' : 'Managed' : zh ? '外部' : 'External'}</StatusBadge></div><p className="mt-1 text-xs text-muted-foreground">{serviceCount} {zh ? '服务' : 'services'}{row.managed && !row.declared_service_names && ` · ${zh ? '声明不可用' : 'Declarations unavailable'}`}</p></div>
+            <div className="min-w-0"><div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1"><TooltipHint content={row.delivery_project_name && row.delivery_project_name !== row.name ? `${zh ? 'Compose 项目名' : 'Compose project name'}: ${row.name}` : undefined}><Link to="/projects/$backend/$projectName" params={{ backend: row.backend, projectName: row.name }} className="max-w-full truncate text-sm font-medium hover:underline">{projectDisplayName(row)}</Link></TooltipHint><StatusBadge tone={row.managed ? 'outline' : 'neutral'}>{row.delivery_project_name || row.deployment_mode === 'cd' ? 'CD' : row.managed ? zh ? '托管' : 'Managed' : zh ? '外部' : 'External'}</StatusBadge>{(() => { const count = updateCounts.get(row.name) ?? 0; return count > 0 ? <button type="button" className="inline-flex items-center gap-1 rounded-full bg-warning/15 px-2 py-0.5 text-xs font-medium text-warning hover:bg-warning/25" onClick={event => { event.stopPropagation(); setUpdatesProject(row.name) }}><ArrowUpCircle className="size-3" />{zh ? `${count} 个服务可更新` : `${count} update${count > 1 ? 's' : ''}`}</button> : null })()}</div><p className="mt-1 text-xs text-muted-foreground">{serviceCount} {zh ? '服务' : 'services'}{row.managed && !row.declared_service_names && ` · ${zh ? '声明不可用' : 'Declarations unavailable'}`}</p></div>
             <div className="col-start-2 flex flex-col items-start gap-1 lg:col-start-auto lg:row-start-auto"><StatusBadge tone={status === 'running' ? 'success' : status === 'degraded' ? 'warning' : 'neutral'}>{statusLabel(status, zh)}</StatusBadge><span className="text-xs text-muted-foreground">{available ? `${entry.summary.running}/${entry.summary.total}` : '—'} {zh ? '容器运行中' : 'containers running'}{entry.summary.abnormal > 0 && <span className="ml-2 text-destructive">{entry.summary.abnormal} {zh ? '异常' : 'abnormal'}</span>}{available && entry.summary.unknown > 0 && <span className="ml-2">{entry.summary.unknown} {zh ? '健康未知' : 'health unknown'}</span>}</span></div>
             <div className="col-start-3 row-start-2 lg:col-start-auto lg:row-start-auto"><ProjectResourceSummary summary={entry.summary} zh={zh} /></div>
-            <div className="col-start-3 row-start-1 lg:col-start-auto lg:row-start-auto"><ProjectActions row={{ ...row, status }} zh={zh} onLogs={opener => { logOpener.current = opener; setLogProject(row) }} onTakeover={() => setTakeoverName(row.name)} onFeedback={setFeedback} onMenuChange={setMenuOpen} /></div>
+            <div className="col-start-3 row-start-1 lg:col-start-auto lg:row-start-auto"><ProjectActions row={{ ...row, status }} zh={zh} onLogs={opener => { logOpener.current = opener; setLogProject(row) }} onTakeover={() => setTakeoverName(row.name)} onFeedback={setFeedback} onMenuChange={setMenuOpen} updateCount={row.managed ? updateCounts.get(row.name) ?? 0 : 0} onUpdates={() => setUpdatesProject(row.name)} /></div>
           </div>{open && <div className="p-3 lg:ml-[4.25rem]"><ProjectServices key={`${nodeID}/${row.name}`} nodeID={nodeID} projectName={row.name} rows={entry.containers} declared={row.declared_service_names ?? []} declarationUnavailable={row.managed && !row.declared_service_names} loading={containers.isPending} error={!available && !containers.isPending ? zh ? '运行信息暂不可用' : 'Runtime information unavailable' : undefined} observation={observation} onOverlayChange={setServiceOverlay} zh={zh} onOpenContainer={(row, tab, opener) => void workspace.open(row, tab, opener)} /></div>}</Fragment>
         })}</div>
         {visible.length > pagination.pageSize && <ListPagination {...pagination} zh={zh} />}
@@ -154,6 +162,7 @@ function ComposeNodePage({ nodeID }: { nodeID: string }) {
     </Dialog>
     <ContainerWorkspaceDialog workspace={workspace} rows={observedRows} available={available} zh={zh} />
     <TakeoverWarningDialog open={!!takeoverName} projectName={takeoverName} zh={zh} onOpenChange={open => { if (!open) setTakeoverName('') }} onContinue={() => { const name = takeoverName; setTakeoverName(''); void navigate({ to: '/projects/$backend/$projectName/takeover', params: { backend: 'compose', projectName: name } }) }} />
+      {updatesProject && currentNode && <ImageUpdateSettingsDialog node={currentNode} project={{ name: updatesProject }} open onOpenChange={open => { if (!open) setUpdatesProject(null) }} />}
   </ResourceFrame>
 }
 function actionLabel(action: string, zh: boolean) {
@@ -173,7 +182,7 @@ function projectFeedbackView(feedback: ProjectFeedback | null, task: ProjectTask
   return { error: true, pending: false, message: zh ? `${feedback.projectName} ${operation}失败：${task.message || task.status}` : `${operation} failed for ${feedback.projectName}: ${task.message || task.status}` }
 }
 
-function ProjectActions({ row, zh, onLogs, onTakeover, onFeedback, onMenuChange }: { row: ProjectSummary; zh: boolean; onLogs: (opener: HTMLElement) => void; onTakeover: () => void; onFeedback: (feedback: ProjectFeedback) => void; onMenuChange: (open: boolean) => void }) {
+function ProjectActions({ row, zh, onLogs, onTakeover, onFeedback, onMenuChange, updateCount, onUpdates }: { row: ProjectSummary; zh: boolean; onLogs: (opener: HTMLElement) => void; onTakeover: () => void; onFeedback: (feedback: ProjectFeedback) => void; onMenuChange: (open: boolean) => void; updateCount: number; onUpdates: () => void }) {
   const nodeID = useUIStore((state) => state.currentNodeID)
   const client = useQueryClient()
   const action = useMutation({ mutationFn: (name: string) => api<ProjectTask>(nodePath(nodeID, `/projects/compose/${encodeURIComponent(row.name)}/actions/${name}`), { method: 'POST' }), onMutate: (name) => onFeedback({ kind: 'pending', projectName: row.name, action: name }), onSuccess: (task, name) => { onFeedback({ kind: 'task', projectName: row.name, action: name, taskID: task.id }); void client.invalidateQueries({ queryKey: ['projects', nodeID] }); void client.invalidateQueries({ queryKey: ['tasks', 'current', nodeID] }) }, onError: (error, name) => onFeedback({ kind: 'error', projectName: row.name, action: name, message: error.message }) })
@@ -216,7 +225,7 @@ function ProjectActions({ row, zh, onLogs, onTakeover, onFeedback, onMenuChange 
     <ActionIcon label={row.managed && row.deployment_mode !== 'cd' ? (zh ? '编辑项目' : 'Edit Project') : (zh ? '查看项目' : 'View Project')}><Link to="/projects/$backend/$projectName" params={{ backend: row.backend, projectName: row.name }}>{row.managed ? <Pencil /> : <Eye />}</Link></ActionIcon>
     {row.managed && supported(primaryAction === 'stop' ? 'stop' : primaryAction === 'start' ? 'start' : 'deploy') && <ActionIcon label={actionLabel(primaryAction, zh)} disabled={busy} onClick={() => void run(primaryAction)}>{action.isPending ? <Spinner /> : primaryAction === 'stop' ? <Square /> : <Play />}</ActionIcon>}
     <DropdownMenu onOpenChange={onMenuChange}><DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" disabled={busy} aria-label={zh ? '更多项目操作' : 'More project actions'}><MoreHorizontal /></Button>} /><DropdownMenuContent align="end">
-      {row.managed ? <>{supported('restart') && <DropdownMenuItem onClick={() => void run('restart')}><RefreshCw />{actionLabel('restart', zh)}</DropdownMenuItem>}{supported('deploy') && <DropdownMenuItem variant="destructive" onClick={() => void run('down')}><PowerOff />Down</DropdownMenuItem>}{supported('delete') && <DropdownMenuItem variant="destructive" onClick={() => void removeProject()}><Trash2 />{zh ? '删除项目' : 'Remove Project'}</DropdownMenuItem>}</> : <>{supported('takeover') && <DropdownMenuItem onClick={onTakeover}><Download />{zh ? '接管项目' : 'Take over Project'}</DropdownMenuItem>}{supported('cleanup') && <DropdownMenuItem variant="destructive" onClick={() => void cleanupProject()}><Trash2 />{zh ? '删除并清理项目' : 'Delete and clean Project'}</DropdownMenuItem>}</>}
+      {row.managed ? <>{supported('restart') && <DropdownMenuItem onClick={onUpdates}>{updateCount > 0 ? <ArrowUpCircle /> : <RefreshCw />}{zh ? '镜像更新设置' : 'Image update settings'}{updateCount > 0 && <span className="ml-auto text-xs text-warning">{updateCount}</span>}</DropdownMenuItem>}{supported('restart') && <DropdownMenuItem onClick={() => void run('restart')}><RefreshCw />{actionLabel('restart', zh)}</DropdownMenuItem>}{supported('deploy') && <DropdownMenuItem variant="destructive" onClick={() => void run('down')}><PowerOff />Down</DropdownMenuItem>}{supported('delete') && <DropdownMenuItem variant="destructive" onClick={() => void removeProject()}><Trash2 />{zh ? '删除项目' : 'Remove Project'}</DropdownMenuItem>}</> : <>{supported('takeover') && <DropdownMenuItem onClick={onTakeover}><Download />{zh ? '接管项目' : 'Take over Project'}</DropdownMenuItem>}{supported('cleanup') && <DropdownMenuItem variant="destructive" onClick={() => void cleanupProject()}><Trash2 />{zh ? '删除并清理项目' : 'Delete and clean Project'}</DropdownMenuItem>}</>}
     </DropdownMenuContent></DropdownMenu>
   </div>
 }

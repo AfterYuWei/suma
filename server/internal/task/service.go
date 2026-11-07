@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -24,6 +25,9 @@ const (
 	StatusSuccess     = "success"
 	StatusFailed      = "failed"
 	StatusCanceled    = "canceled"
+
+	paramsLimit = 8192
+	resultLimit = 65536
 )
 
 var ErrNotExecuted = errors.New("operation was not executed")
@@ -38,6 +42,28 @@ type Event struct {
 type Reporter func(progress int, message string)
 type Work func(context.Context, Reporter) error
 type IdentifiedWork func(context.Context, string, Reporter) error
+
+// RecordedWork is the preferred work signature: it returns a structured
+// result that the engine stores on the task row as JSON output.
+type RecordedWork func(context.Context, string, Reporter) (any, error)
+
+// Definition describes a task launched with its input parameters recorded.
+// A non-empty NodeID selects node scope, an empty one the control plane.
+type Definition struct {
+	Type     string
+	Name     string
+	NodeID   string
+	NodeName string
+	Params   any
+}
+
+type recordedWork func(context.Context, string, Reporter) (any, error)
+
+func recorded(work IdentifiedWork) recordedWork {
+	return func(ctx context.Context, id string, report Reporter) (any, error) {
+		return nil, work(ctx, id, report)
+	}
+}
 type Service struct {
 	db          *gorm.DB
 	sink        domainEvent.Sink
@@ -58,6 +84,7 @@ func (s *Service) RecoverInterrupted(ctx context.Context) error {
 	}).Error
 }
 
+// Start launches a task without recorded parameters. Prefer StartDefinition.
 func (s *Service) Start(taskType, name string, work Work) (database.Task, error) {
 	if defaultNodeTaskType(taskType) {
 		return s.StartForNode("local", "Local", taskType, name, work)
@@ -65,23 +92,45 @@ func (s *Service) Start(taskType, name string, work Work) (database.Task, error)
 	return s.StartControlPlane(taskType, name, work)
 }
 
+// StartControlPlane launches a control-plane task without recorded parameters.
 func (s *Service) StartControlPlane(taskType, name string, work Work) (database.Task, error) {
 	return s.StartWithIDControlPlane(taskType, name, func(ctx context.Context, _ string, report Reporter) error {
 		return work(ctx, report)
 	})
 }
 
+// StartForNode launches a node task without recorded parameters.
 func (s *Service) StartForNode(nodeID, nodeName, taskType, name string, work Work) (database.Task, error) {
 	return s.StartWithIDForNode(nodeID, nodeName, taskType, name, func(ctx context.Context, _ string, report Reporter) error {
 		return work(ctx, report)
 	})
 }
 
+// StartWithID launches a task without recorded parameters.
 func (s *Service) StartWithID(taskType, name string, work IdentifiedWork) (database.Task, error) {
 	if defaultNodeTaskType(taskType) {
 		return s.StartWithIDForNode("local", "Local", taskType, name, work)
 	}
 	return s.StartWithIDControlPlane(taskType, name, work)
+}
+
+// StartDefinition launches a task with its input parameters recorded on the
+// task row; a structured work result is stored on completion. Task Center
+// kinds and new call sites should use this entry point.
+func (s *Service) StartDefinition(ctx context.Context, def Definition, work RecordedWork) (database.Task, error) {
+	scope := ScopeControlPlane
+	if def.NodeID != "" {
+		scope = ScopeNode
+	}
+	params := database.JSONB(nil)
+	if def.Params != nil {
+		raw, err := json.Marshal(def.Params)
+		if err != nil {
+			return database.Task{}, fmt.Errorf("encode task parameters: %w", err)
+		}
+		params = database.JSONB(redact.Bounded(string(raw), paramsLimit))
+	}
+	return s.startWithID(ctx, scope, def.NodeID, def.NodeName, def.Type, def.Name, params, recordedWork(work))
 }
 
 func defaultNodeTaskType(taskType string) bool {
@@ -94,32 +143,32 @@ func defaultNodeTaskType(taskType string) bool {
 }
 
 func (s *Service) StartWithIDControlPlane(taskType, name string, work IdentifiedWork) (database.Task, error) {
-	return s.startWithID(ScopeControlPlane, "", "", taskType, name, work)
+	return s.startWithID(context.Background(), ScopeControlPlane, "", "", taskType, name, nil, recorded(work))
 }
 
 func (s *Service) StartWithIDForNode(nodeID, nodeName, taskType, name string, work IdentifiedWork) (database.Task, error) {
-	return s.startWithID(ScopeNode, nodeID, nodeName, taskType, name, work)
+	return s.startWithID(context.Background(), ScopeNode, nodeID, nodeName, taskType, name, nil, recorded(work))
 }
 
-func (s *Service) startWithID(scope, nodeID, nodeName, taskType, name string, work IdentifiedWork) (database.Task, error) {
+func (s *Service) startWithID(ctx context.Context, scope, nodeID, nodeName, taskType, name string, params database.JSONB, work recordedWork) (database.Task, error) {
 	id, err := randomID()
 	if err != nil {
 		return database.Task{}, err
 	}
-	row := database.Task{ID: id, Scope: scope, NodeID: nodeID, NodeName: nodeName, Type: taskType, Name: name, Status: StatusPending}
-	if err := s.db.Create(&row).Error; err != nil {
+	row := database.Task{ID: id, Scope: scope, NodeID: nodeID, NodeName: nodeName, Type: taskType, Name: name, Status: StatusPending, Params: params}
+	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
 		return row, err
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	runCtx, cancel := context.WithCancel(context.Background())
 	s.mu.Lock()
 	s.cancels[id] = cancel
 	s.done[id] = make(chan struct{})
 	s.mu.Unlock()
-	go s.run(ctx, row, func(ctx context.Context, report Reporter) error { return work(ctx, id, report) })
+	go s.run(runCtx, row, work)
 	return row, nil
 }
 
-func (s *Service) run(ctx context.Context, row database.Task, work Work) {
+func (s *Service) run(ctx context.Context, row database.Task, work recordedWork) {
 	defer func() {
 		s.mu.Lock()
 		if cancel := s.cancels[row.ID]; cancel != nil {
@@ -141,12 +190,12 @@ func (s *Service) run(ctx context.Context, row database.Task, work Work) {
 	reporter := func(progress int, message string) {
 		_ = s.updateProgress(ctx, row.ID, progress, message, true)
 	}
-	err := work(ctx, reporter)
+	result, workErr := work(ctx, row.ID, reporter)
 	status, message := StatusSuccess, "Completed"
-	if err != nil {
-		status, message = StatusFailed, err.Error()
+	if workErr != nil {
+		status, message = StatusFailed, workErr.Error()
 	}
-	if errors.Is(err, ErrNotExecuted) {
+	if errors.Is(workErr, ErrNotExecuted) {
 		status = StatusCanceled
 	}
 	if ctx.Err() != nil {
@@ -158,13 +207,19 @@ func (s *Service) run(ctx context.Context, row database.Task, work Work) {
 	if status != StatusSuccess {
 		progress = 0
 	}
+	resultJSON := database.JSONB(nil)
+	if result != nil {
+		if raw, mErr := json.Marshal(result); mErr == nil {
+			resultJSON = database.JSONB(redact.Bounded(string(raw), resultLimit))
+		}
+	}
 	// A caller observing a terminal status must also be able to read its result
 	// log. Persist both before publishing completion or emitting domain events.
 	persistErr := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&database.TaskLog{TaskID: row.ID, Level: map[bool]string{true: "info", false: "error"}[status == StatusSuccess], Message: message}).Error; err != nil {
 			return err
 		}
-		return tx.Model(&database.Task{}).Where("id = ?", row.ID).Updates(map[string]any{"status": status, "progress": progress, "message": message, "finished_at": finished}).Error
+		return tx.Model(&database.Task{}).Where("id = ?", row.ID).Updates(map[string]any{"status": status, "progress": progress, "message": message, "result": resultJSON, "finished_at": finished}).Error
 	})
 	if persistErr != nil {
 		s.publish(row.ID, Event{Type: "status", Status: StatusFailed, Message: "Unable to persist task result; inspect actual state before retrying", Time: finished})
@@ -230,6 +285,39 @@ func (s *Service) list(ctx context.Context, scope, nodeID string) ([]database.Ta
 		query = query.Where("node_id = ?", nodeID)
 	}
 	return rows, query.Find(&rows).Error
+}
+
+// ListRecords serves the Task Center records view: filterable, paged history.
+// Empty scope means every scope, status filters exactly, typePrefix matches a
+// task-type prefix. limit<=0 defaults to 50 (capped at 200); offset paginates.
+func (s *Service) ListRecords(ctx context.Context, scope, nodeID, status, typePrefix string, limit, offset int) ([]database.Task, int64, error) {
+	query := s.db.WithContext(ctx).Model(&database.Task{})
+	if scope != "" {
+		query = query.Where("scope = ?", scope)
+	}
+	if nodeID != "" {
+		query = query.Where("node_id = ?", nodeID)
+	}
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
+	if typePrefix != "" {
+		query = query.Where("type LIKE ?", typePrefix+"%")
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	limit = min(limit, 200)
+	if offset < 0 {
+		offset = 0
+	}
+	var rows []database.Task
+	err := query.Order("created_at DESC").Limit(limit).Offset(offset).Find(&rows).Error
+	return rows, total, err
 }
 
 func (s *Service) Get(ctx context.Context, id string) (database.Task, error) {
