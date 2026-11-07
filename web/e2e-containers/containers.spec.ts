@@ -50,7 +50,6 @@ async function setup(page: Page, language = 'en-US', theme = 'dark') {
     else if (path.startsWith('/monitoring')) data=monitoring(path,route.request().method(),JSON.parse(route.request().postData()??'{}'),new URL(route.request().url()))
     else if (path === '/node-groups') data = []
     else if (path === '/notifications/inbox') data = { unread: 0, events: [] }
-    else if (path.endsWith('/image-updates')) data = { results: [] }
     else if (path.endsWith('/containers/runtime')) data = state.metadata
     else if (/\/containers\/[^/]+\/runtime$/.test(path)) {
       const id = path.split('/').at(-2)!, row = state.rows.find(r => r.id === id)!, meta = state.metadata.find(r => r.id === id)!

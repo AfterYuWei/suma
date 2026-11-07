@@ -19,7 +19,6 @@ var incidentRecoveries = map[string][]string{
 	"node.recovered":         {"node.offline", "agent.error"},
 	"container.recovered":    {"container.unhealthy"},
 	"container.running":      {"container.exited", "container.oom", "container.restart_loop", "container.unhealthy"},
-	"image.check_recovered":  {"image.check_failed"},
 	"cd.recovered":           {"cd.drift"},
 	"notification.recovered": {"notification.failed"},
 	"tls.recovered":          {"tls.expiring"},
@@ -38,12 +37,6 @@ func incidentFamily(e event.Event) string {
 			return ""
 		}
 		resource = []string{"container", e.NodeID, e.ResourceID}
-	case "image.check_failed", "image.check_recovered":
-		if e.Title == "" {
-			return ""
-		}
-		// A tag can change local image IDs without ending a registry outage.
-		resource = []string{"image", e.NodeID, e.Title}
 	case "cd.drift", "cd.recovered":
 		if e.ResourceID == "" {
 			return ""

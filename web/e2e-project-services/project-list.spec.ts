@@ -33,7 +33,6 @@ async function setup(page: Page, language = 'en-US', theme = 'dark') {
   else if (path === '/settings') data = { 'general.timezone': 'Asia/Shanghai' }
   else if (path === '/nodes') data = ['local', 'edge'].map(id => ({ id, name: id, enabled: true, connection_type: 'unix', status: 'online', group_ids: [] }))
   else if (path === '/notifications/inbox') data = { items: [], unread: 0 }
-  else if (path.endsWith('/image-updates/projects')) data = []
   else if (path.endsWith('/projects')) data = projects
   else if (path.endsWith('/projects/compose/alpha')) data = { ...projects.find(project => project.name === 'alpha'), compose: 'services:\n  web:\n    image: app:v1\n  worker:\n    image: worker:v1\n', environment: '', metadata: { origin: 'created' } }
   else if (path.endsWith('/log-sources')) data = rows.filter(row => row.labels['com.docker.compose.project'] === path.split('/').at(-2) && row.labels['com.docker.compose.oneoff'] !== 'True').map(row => ({ container_id: row.id, container_name: row.name, service: 'web', instance: 1, state: row.state, one_off: false, orphan: false }))
@@ -113,8 +112,6 @@ for (const language of ['en-US', 'zh-CN']) for (const theme of ['dark', 'light']
   await dialog.getByRole('button', { name: 'Close', exact: true }).click()
   await expect.poll(() => state.closed.length === state.sockets.length).toBe(true)
   await expect(services.getByRole('button', { name: `${zh ? '容器操作' : 'Container actions'} · alpha-web-a`, exact: true })).toBeFocused()
-  expect(state.calls.some(path => path.endsWith('/image-updates/projects'))).toBe(true)
-  expect(state.calls.filter(path => path.includes('/image-updates')).every(path => path.endsWith('/image-updates/projects'))).toBe(true)
   expect(state.calls.some(path => path.endsWith('/services'))).toBe(false)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await page.screenshot({ path: `/tmp/suma-project-list-${language}-${theme}-${width}.png`, fullPage: true })

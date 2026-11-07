@@ -63,4 +63,4 @@ npm run build:demo
 npx playwright test e2e/notifications.spec.ts e2e/feishu-channel.spec.ts e2e/operations.spec.ts
 ```
 
-在项目根目录运行 `bash doc/operations-smoke.sh`，通过一次性 Docker Engine 验证 Unix、mTLS TCP 和 HTTPS/WSS Agent 的 Project 配置、镜像更新、聚合日志和真实异常退出通知。测试服务的通知发送使用受控替身。若同一宿主机上另有运行中的 SUMA 实例，其原有监控与订阅仍可能通知烟测临时容器的退出；本次恢复后的实例产生了两条此类新事件，历史事件没有重发。脚本需要已缓存的 `docker:27-dind`、`alpine:3.24` 和 `suma-agent:env-only-smoke` 镜像及上述测试数据库配置。
+在项目根目录运行 `bash doc/operations-smoke.sh`，通过一次性 Docker Engine 验证 Unix、mTLS TCP 和 HTTPS/WSS Agent 的 Project 配置、HTTP 镜像拉取、聚合日志和真实异常退出通知。测试服务的通知发送使用受控替身。若同一宿主机上另有运行中的 SUMA 实例，其原有监控与订阅仍可能通知烟测临时容器的退出；本次恢复后的实例产生了两条此类新事件，历史事件没有重发。脚本需要已缓存的 `docker:27-dind`、`alpine:3.24` 和 `suma-agent:env-only-smoke` 镜像及上述测试数据库配置。

@@ -149,12 +149,6 @@ func present(e event.Event, language string) Presentation {
 		if strings.Contains(e.Message, "stably") {
 			p.Title = t("容器运行已稳定", "Container running stably")
 		}
-	case "image.available":
-		p.Title = t("镜像有更新", "Image update available")
-	case "image.recreate_required":
-		p.Title = t("容器待重建", "Container recreation needed")
-	case "image.check_recovered":
-		p.Title, p.Status = t("镜像检查已恢复", "Image check recovered"), "recovered"
 	case "cd.awaiting_approval":
 		p.Title, p.Status = t("发布待审核", "Release awaiting approval"), "pending"
 		if commit := releaseCommit.FindString(e.Message); commit != "" {
@@ -265,14 +259,12 @@ func present(e event.Event, language string) Presentation {
 	// Old/demo events sometimes used an event label where a resource name
 	// belongs. Recognize both languages before falling back to the identifier.
 	for _, label := range map[string][]string{
-		"container.oom":           {"容器内存不足", "Container out of memory"},
-		"container.unhealthy":     {"容器健康检查失败", "Container health check failed"},
-		"container.restart_loop":  {"容器频繁重启", "Container restarting repeatedly"},
-		"container.recovered":     {"容器已恢复", "Container recovered"},
-		"image.available":         {"镜像有更新", "Image update available"},
-		"image.recreate_required": {"容器待重建", "Container recreation needed"},
-		"notification.failed":     {"通知发送失败", "Notification delivery failed"},
-		"notification.recovered":  {"通知发送已恢复", "Notification delivery recovered"},
+		"container.oom":          {"容器内存不足", "Container out of memory"},
+		"container.unhealthy":    {"容器健康检查失败", "Container health check failed"},
+		"container.restart_loop": {"容器频繁重启", "Container restarting repeatedly"},
+		"container.recovered":    {"容器已恢复", "Container recovered"},
+		"notification.failed":    {"通知发送失败", "Notification delivery failed"},
+		"notification.recovered": {"通知发送已恢复", "Notification delivery recovered"},
 	}[e.Type] {
 		if p.Subject == label {
 			p.Subject = ""
@@ -299,7 +291,7 @@ func present(e event.Event, language string) Presentation {
 	if p.Title == "" {
 		p.Title = t("系统通知", "System notification")
 	}
-	if p.Summary == "" && (failed || e.Type == "image.check_failed" || e.Type == "agent.error" || e.Type == "cd.drift") {
+	if p.Summary == "" && (failed || e.Type == "agent.error" || e.Type == "cd.drift") {
 		p.Summary = conciseReason(e.Message, en)
 	}
 	return p

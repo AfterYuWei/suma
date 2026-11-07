@@ -23,7 +23,7 @@ func TestPostgresBaselineAndReopen(t *testing.T) {
 			t.Errorf("missing table for %T", model)
 		}
 	}
-	for _, name := range []string{"ai_runs", "ai_operations", "ai_audits", "ai_conversations", "ai_messages", "a_iplan_steps", "ai_plan_steps", "ai_interactions", "ai_checkpoints", "ai_tool_calls", "ai_workflow_events", "ai_compose_drafts", "notification_bindings", "notification_actions", "notification_chat_streams"} {
+	for _, name := range []string{"ai_runs", "ai_operations", "ai_audits", "ai_conversations", "ai_messages", "a_iplan_steps", "ai_plan_steps", "ai_interactions", "ai_checkpoints", "ai_tool_calls", "ai_workflow_events", "ai_compose_drafts", "notification_bindings", "notification_actions", "notification_chat_streams", "image_update_policies", "image_update_registry_credentials", "project_image_updates", "project_image_candidates", "project_image_actions"} {
 		if db.Migrator().HasTable(name) {
 			t.Errorf("removed feature table still exists: %s", name)
 		}

@@ -26,14 +26,12 @@ import (
 	"github.com/suma/suma/server/internal/event"
 	gitService "github.com/suma/suma/server/internal/git"
 	imageService "github.com/suma/suma/server/internal/image"
-	"github.com/suma/suma/server/internal/imageupdate"
 	monitorService "github.com/suma/suma/server/internal/monitor"
 	networkService "github.com/suma/suma/server/internal/network"
 	nodeService "github.com/suma/suma/server/internal/node"
 	"github.com/suma/suma/server/internal/notification"
 	"github.com/suma/suma/server/internal/projectcd"
 	"github.com/suma/suma/server/internal/projectlogs"
-	"github.com/suma/suma/server/internal/registry"
 	"github.com/suma/suma/server/internal/secret"
 	settingsService "github.com/suma/suma/server/internal/settings"
 	systemService "github.com/suma/suma/server/internal/system"
@@ -45,7 +43,6 @@ type App struct {
 	projectCD           *projectcd.Service
 	containerMonitoring *containermonitor.Service
 	notifications       *notification.Service
-	imageUpdates        *imageupdate.Service
 	projectLogs         *projectlogs.Service
 	cleanup             *cleanup.Service
 	logger              *slog.Logger
@@ -149,8 +146,8 @@ func New(logger *slog.Logger) (*App, error) {
 			if err != nil {
 				return cleanup.Node{}, err
 			}
-			current, err := imageUpdateNode(nodes, db)(ctx, id)
-			return cleanup.Node{ID: view.ID, Name: view.Name, Enabled: view.Enabled, RuntimeKey: current.RuntimeKey}, err
+			current, err := nodeRuntimeKey(nodes, db)(ctx, id)
+			return cleanup.Node{ID: view.ID, Name: view.Name, Enabled: view.Enabled, RuntimeKey: current}, err
 		},
 		Runtime: func(ctx context.Context, id string) (cleanup.Runtime, error) { return nodes.Runtime(ctx, id) },
 		Timezone: func(ctx context.Context) string {
@@ -193,9 +190,6 @@ func New(logger *slog.Logger) (*App, error) {
 	taskService.SetEventSink(func(e event.Event) {
 		var row database.Task
 		if db.First(&row, "id = ?", e.TaskID).Error == nil {
-			if row.Type == "image.updates.check" {
-				return
-			}
 			if strings.HasPrefix(row.Type, "compose.") {
 				e.Type = "project.completed"
 			}
@@ -207,38 +201,6 @@ func New(logger *slog.Logger) (*App, error) {
 			notifications.Emit(e)
 		}
 	})
-	imageUpdates := imageupdate.NewService(db, taskService, auditService, imageupdate.Dependencies{
-		Emit: notifications.Emit,
-		Node: imageUpdateNode(nodes, db),
-		Runtime: func(ctx context.Context, id string) (imageupdate.Runtime, error) {
-			adapter, err := nodes.Runtime(ctx, id)
-			if err != nil {
-				return nil, err
-			}
-			return imageUpdateRuntime{adapter: adapter, db: db}, nil
-		},
-		Resolver: registry.Adapter{}, Credentials: registryCredentials,
-		Compose: func(ctx context.Context, id string) (*composeService.Service, error) {
-			return imageUpdateCompose(ctx, nodes, compose, runner, id)
-		},
-		Projects: func(ctx context.Context, id string) ([]composeService.Project, error) {
-			svc, err := imageUpdateCompose(ctx, nodes, compose, runner, id)
-			if err != nil {
-				return nil, err
-			}
-			return svc.List(ctx)
-		},
-		Nodes: func(ctx context.Context) ([]string, error) {
-			rows, err := nodes.List(ctx)
-			ids := []string{}
-			for _, row := range rows {
-				ids = append(ids, row.ID)
-			}
-			return ids, err
-		},
-		OnError: func(err error) { logger.Warn("project image update", "error", err) },
-	})
-	notifications.SetProjectUpdates(imageUpdates)
 	containerMonitoring, err := containermonitor.New(db, taskService, containermonitor.Dependencies{
 		Nodes: func(ctx context.Context) ([]containermonitor.Node, error) {
 			views, err := nodes.List(ctx)
@@ -247,11 +209,11 @@ func New(logger *slog.Logger) (*App, error) {
 			}
 			out := make([]containermonitor.Node, 0, len(views))
 			for _, view := range views {
-				current, err := imageUpdateNode(nodes, db)(ctx, view.ID)
+				current, err := nodeRuntimeKey(nodes, db)(ctx, view.ID)
 				if err != nil {
 					continue
 				}
-				out = append(out, containermonitor.Node{ID: view.ID, Name: view.Name, EngineID: view.EngineID, Enabled: view.Enabled, Agent: view.ConnectionType == nodeService.ConnectionAgent, RuntimeKey: current.RuntimeKey})
+				out = append(out, containermonitor.Node{ID: view.ID, Name: view.Name, EngineID: view.EngineID, Enabled: view.Enabled, Agent: view.ConnectionType == nodeService.ConnectionAgent, RuntimeKey: current})
 			}
 			return out, nil
 		},
@@ -262,7 +224,6 @@ func New(logger *slog.Logger) (*App, error) {
 	}
 	containerMonitoring.Start()
 	notifications.Start()
-	imageUpdates.Start()
 	projectLogs := projectLogsService(nodes, compose, runner, db)
 	nodes.Start()
 	continuousDelivery.Start()
@@ -270,7 +231,7 @@ func New(logger *slog.Logger) (*App, error) {
 	cleanupService.Start()
 	recoveryContext, recoveryCancel := context.WithCancel(context.Background())
 	fileService := containerfiles.NewService(db, secretStore)
-	application := &App{projectCD: projectCD, containerMonitoring: containerMonitoring, notifications: notifications, imageUpdates: imageUpdates, projectLogs: projectLogs, cleanup: cleanupService, logger: logger, engine: engine, nodes: nodes, agents: agents, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{ProjectCD: projectCD, ContainerMonitoring: containerMonitoring, Notifications: notifications, ImageUpdates: imageUpdates, ProjectLogs: projectLogs, Cleanup: cleanupService, Engine: engine, Containers: engine, Files: fileService, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: applicationSettings, Monitor: monitorService.NewService(engine, cfg.DataRoot), System: systemService.NewService(engine, taskService), Nodes: nodes, Agents: agents, AgentPublicURL: cfg.AgentPublicURL, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
+	application := &App{projectCD: projectCD, containerMonitoring: containerMonitoring, notifications: notifications, projectLogs: projectLogs, cleanup: cleanupService, logger: logger, engine: engine, nodes: nodes, agents: agents, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{ProjectCD: projectCD, ContainerMonitoring: containerMonitoring, Notifications: notifications, ProjectLogs: projectLogs, Cleanup: cleanupService, Engine: engine, Containers: engine, Files: fileService, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: applicationSettings, Monitor: monitorService.NewService(engine, cfg.DataRoot), System: systemService.NewService(engine, taskService), Nodes: nodes, Agents: agents, AgentPublicURL: cfg.AgentPublicURL, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
 	application.recoveryWG.Add(1)
 	go func() {
 		defer application.recoveryWG.Done()
@@ -342,9 +303,6 @@ func (a *App) Shutdown(ctx context.Context) error {
 	}
 	if a.projectLogs != nil {
 		a.projectLogs.Stop()
-	}
-	if a.imageUpdates != nil {
-		a.imageUpdates.Stop()
 	}
 	if a.cleanup != nil {
 		a.cleanup.Stop()

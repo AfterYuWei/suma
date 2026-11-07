@@ -9,8 +9,7 @@ const titles: Record<string, [string, string]> = {
  'agent.error':['Agent 连接异常','Agent connection failed'], 'tls.expiring':['TLS 证书即将到期','TLS certificate expiring'], 'tls.recovered':['TLS 证书已更新','TLS certificate renewed'],
  'container.exited':['容器异常退出','Container exited unexpectedly'], 'container.oom':['容器内存不足','Container out of memory'], 'container.unhealthy':['容器健康检查失败','Container health check failed'],
  'container.restart_loop':['容器频繁重启','Container restarting repeatedly'], 'container.recovered':['容器已恢复','Container recovered'],
- 'image.available':['镜像有更新','Image update available'], 'image.recreate_required':['容器待重建','Container recreation needed'], 'image.check_failed':['镜像检查失败','Image check failed'],
- 'image.pull_failed':['镜像拉取失败','Image pull failed'], 'image.check_recovered':['镜像检查已恢复','Image check recovered'],
+ 'image.pull_failed':['镜像拉取失败','Image pull failed'],
  'cd.awaiting_approval':['发布待审核','Release awaiting approval'], 'cd.completed':['发布完成','Deployment completed'], 'cd.drift':['发布状态不一致','Deployment drift detected'], 'cd.recovered':['发布状态已恢复','Deployment recovered'],
  'project.completed':['项目操作完成','Project operation completed'], 'cleanup.completed':['清理完成','Cleanup completed'], 'cleanup.skipped':['清理已跳过','Cleanup skipped'],
  'task.failed':['任务失败','Task failed'], 'task.canceled':['任务已取消','Task canceled'], 'notification.failed':['通知发送失败','Notification delivery failed'], 'notification.recovered':['通知发送已恢复','Notification delivery recovered'],
@@ -38,7 +37,7 @@ export function presentNotification(event: Event, language: string): Notificatio
  const en = language === 'en-US', t = (zh: string, english: string) => en ? english : zh
  const failed = event.severity === 'error' || event.severity === 'critical'
  const result = { title: titles[event.type]?.[en ? 1 : 0] || '',subject:'',summary:'',status:event.severity === 'critical' ? 'critical' : failed ? 'error' : event.severity === 'warning' ? 'warning' : 'info' }
- if (event.type.endsWith('.recovered') || event.type === 'image.check_recovered') result.status = 'recovered'
+ if (event.type.endsWith('.recovered')) result.status = 'recovered'
  if (['auth.login','cd.completed','project.completed','cleanup.completed'].includes(event.type) && !failed) result.status = 'success'
  if (event.type === 'agent.error' && event.title.toLowerCase().includes('incompatible')) result.title = t('Agent 版本不兼容','Agent version incompatible')
  if (event.type === 'tls.expiring' && /^.{4}-.{2}-/.test(event.message)) result.summary = t('到期：','Expires: ')+event.message.slice(0,10)
@@ -70,14 +69,14 @@ export function presentNotification(event: Event, language: string): Notificatio
  else if (event.type.startsWith('notification.') && !event.title.includes('Channel delivery failed')) result.subject=event.title
  else if (event.type === 'credential.changed') result.subject=compactResource(event.resource_id || '')
  else if ((event.type.startsWith('auth.') || event.type === 'account.changed') && event.actor_id != null) result.subject=t(`用户 #${event.actor_id}`,`User #${event.actor_id}`)
- const aliases: Record<string,string[]> = { 'container.oom':['容器 OOM','Container OOM'],'container.unhealthy':['健康检查失败','Container unhealthy'],'container.restart_loop':['Container restart loop'],'image.available':['发现镜像更新'],'image.recreate_required':['镜像更新后需重建','Container recreation required'],'notification.failed':['渠道发送失败','Channel delivery failed'],'notification.recovered':['渠道发送恢复','Channel delivery recovered'],'cd.completed':['发布或回滚结果','Deployment or rollback completed'] }
+ const aliases: Record<string,string[]> = { 'container.oom':['容器 OOM','Container OOM'],'container.unhealthy':['健康检查失败','Container unhealthy'],'container.restart_loop':['Container restart loop'],'notification.failed':['渠道发送失败','Channel delivery failed'],'notification.recovered':['渠道发送恢复','Channel delivery recovered'],'cd.completed':['发布或回滚结果','Deployment or rollback completed'] }
  if(result.subject===result.title || titles[event.type]?.includes(result.subject) || aliases[event.type]?.includes(result.subject))result.subject=''
  if (!result.subject && /^(container|image|notification)\./.test(event.type)) result.subject=compactResource(event.resource_id || '')
  if (result.subject === result.title || result.subject === event.node_name && !/^(container|image)\./.test(event.type)) result.subject=''
  result.subject=short(result.subject,80)
  if(!result.title) {result.title=short(event.title,100);result.summary=short(event.message,100)}
  if(!result.title)result.title=t('系统通知','System notification')
- if(!result.summary && (failed || ['image.check_failed','agent.error','cd.drift'].includes(event.type)))result.summary=conciseReason(event.message,en)
+ if(!result.summary && (failed || ['agent.error','cd.drift'].includes(event.type)))result.summary=conciseReason(event.message,en)
  return result
 }
 export function defaultNotificationText(event: Event, language: string, timestamp: string) {
@@ -156,9 +155,9 @@ export function notificationTimestamp(time: string, timezone: string) {
 }
 export function templateExample(type: string, language: string): NotificationEvent {
  const recovered=type.includes('recover'), container=type.startsWith('container.'), cd=type.startsWith('cd.'), notification=type.startsWith('notification.'), node=/^(node|agent|tls)\./.test(type)
- const title=container?'redis':cd?'gateway':notification?'Operations':node?'Production':type.startsWith('image.')?'nginx:stable':type.startsWith('task.') || type==='project.completed'?'Pull image':titles[type]?.[language==='en-US'?1:0] || 'SUMA'
- const message=type==='container.recovered'?'Container has been running stably for at least two minutes':type==='auth.new_ip' || type==='auth.login'?'Login completed from 203.0.113.10':type==='auth.login_failed'?'Repeated authentication failures from 203.0.113.10':type==='container.exited'?'die exit=137':type==='image.check_failed'?'unavailable authentication_required':type==='tls.expiring'?'2026-11-01T00:00:00Z':type==='cd.awaiting_approval'?'Release aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa is ready for approval':type==='container.oom'?'oom exit=':''
- const info=recovered || type.endsWith('completed') || ['auth.login','account.changed','credential.changed','node.changed','image.available','image.recreate_required'].includes(type)
+ const title=container?'redis':cd?'gateway':notification?'Operations':node?'Production':type.startsWith('task.') || type==='project.completed'?'Pull image':titles[type]?.[language==='en-US'?1:0] || 'SUMA'
+ const message=type==='container.recovered'?'Container has been running stably for at least two minutes':type==='auth.new_ip' || type==='auth.login'?'Login completed from 203.0.113.10':type==='auth.login_failed'?'Repeated authentication failures from 203.0.113.10':type==='container.exited'?'die exit=137':type==='tls.expiring'?'2026-11-01T00:00:00Z':type==='cd.awaiting_approval'?'Release aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa is ready for approval':type==='container.oom'?'oom exit=':''
+ const info=recovered || type.endsWith('completed') || ['auth.login','account.changed','credential.changed','node.changed'].includes(type)
  const warning=['auth.new_ip','tls.expiring','container.exited','container.unhealthy','container.restart_loop','cd.awaiting_approval','cd.drift','cleanup.skipped','task.canceled'].includes(type)
  return {id:'example',type,severity:type==='auth.login_failed'?'critical':info?'info':warning?'warning':'error',time:'2026-10-11T04:00:00Z',node_id:'local',node_name:'Production',resource_id:container?'container-example':notification?'channel-example':cd?'gateway':'',title,project:container?'homelab':cd?'gateway':'',message,task_id:'',read:false}
 }

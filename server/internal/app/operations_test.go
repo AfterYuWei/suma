@@ -27,7 +27,7 @@ func TestOperationRuntimeFingerprint(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer nodes.Close()
-	identity := imageUpdateNode(nodes, db)
+	identity := nodeRuntimeKey(nodes, db)
 	initial, err := identity(ctx, "local")
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +36,7 @@ func TestOperationRuntimeFingerprint(t *testing.T) {
 		t.Fatal(err)
 	}
 	probed, _ := identity(ctx, "local")
-	if initial.RuntimeKey != probed.RuntimeKey {
+	if initial != probed {
 		t.Fatal("routine probe invalidated observations")
 	}
 	cid := uint(42)
@@ -45,12 +45,12 @@ func TestOperationRuntimeFingerprint(t *testing.T) {
 	before, _ := identity(ctx, "local")
 	db.Model(&database.DockerTLSCredential{}).Where("id = ?", cid).UpdateColumn("updated_at", time.Now().Add(time.Minute))
 	rotated, _ := identity(ctx, "local")
-	if before.RuntimeKey == rotated.RuntimeKey {
+	if before == rotated {
 		t.Fatal("TLS material rotation reused observations")
 	}
 	db.Model(&database.Node{}).Where("id = ?", "local").UpdateColumn("agent_connected_at", time.Now())
 	reconnected, _ := identity(ctx, "local")
-	if rotated.RuntimeKey == reconnected.RuntimeKey {
+	if rotated == reconnected {
 		t.Fatal("Agent reconnection reused observations")
 	}
 }

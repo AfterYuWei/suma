@@ -192,7 +192,7 @@ func (a *Adapter) Send(ctx context.Context, c Channel, m Secrets, message Messag
 			if rich {
 				body["parse_mode"] = "HTML"
 			}
-			if i == len(parts)-1 && (message.URL != "" || message.PublishToken != "") {
+			if i == len(parts)-1 && message.URL != "" {
 				body["reply_markup"] = telegramButtons(message)
 			}
 			result, err := a.request(ctx, "POST", "https://api.telegram.org/bot"+m.Token+"/sendMessage", body, "", false, m)
@@ -206,7 +206,7 @@ func (a *Adapter) Send(ctx context.Context, c Channel, m Secrets, message Messag
 			if sent.ID == 0 {
 				return "", errors.New("Telegram returned no message receipt")
 			}
-			if receipt == "" || message.PublishToken != "" {
+			if receipt == "" {
 				receipt = strconv.FormatInt(sent.ID, 10)
 			}
 		}

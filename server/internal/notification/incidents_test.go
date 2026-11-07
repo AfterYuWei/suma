@@ -202,19 +202,9 @@ func TestStableContainerRecoveryDoesNotEndFreshFaultOrUnhealthyRecoveryEndCrash(
 	}
 }
 
-func TestImageReferenceAndChannelRecipientIncidentIsolation(t *testing.T) {
+func TestChannelRecipientIncidentIsolation(t *testing.T) {
 	s, db, _, now := fixture(t)
 	ctx := context.Background()
-	// Identity must use the full reference, before display-title truncation.
-	prefix := ""
-	for i := 0; i < 270; i++ {
-		prefix += "a"
-	}
-	for _, tag := range []string{"first", "second"} {
-		if err := s.Ingest(ctx, event.Event{Type: "image.check_failed", NodeID: "node", ResourceID: "same-image", Title: prefix + tag}); err != nil {
-			t.Fatal(err)
-		}
-	}
 	c := channel(t, s)
 	for _, target := range []string{"first-chat", "second-chat"} {
 		if err := s.Ingest(ctx, event.Event{Type: "notification.failed", ResourceID: c.ID, DedupeKey: deliveryIncidentKey(c, target)}); err != nil {
@@ -226,7 +216,7 @@ func TestImageReferenceAndChannelRecipientIncidentIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	var count int64
-	if err := db.Model(&database.NotificationEvent{}).Where("incident_key <> '' AND resolved_at IS NULL").Count(&count).Error; err != nil || count != 3 {
-		t.Fatal("a successful recipient resolved an unrelated recipient/reference", count, err)
+	if err := db.Model(&database.NotificationEvent{}).Where("incident_key <> '' AND resolved_at IS NULL").Count(&count).Error; err != nil || count != 1 {
+		t.Fatal("a successful recipient resolved an unrelated recipient", count, err)
 	}
 }

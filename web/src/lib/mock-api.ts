@@ -535,7 +535,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
       if (size === 'small') return clone(metrics) as T
       return clone({ ...metrics, container_network_rx_bytes: node.container_network_rx_bytes, container_network_tx_bytes: node.container_network_tx_bytes, container_block_read_bytes: node.container_block_read_bytes, container_block_write_bytes: node.container_block_write_bytes, longest_container_uptime_seconds: node.longest_container_uptime_seconds, containers: size === 'large' ? node.containers : node.containers.map(({ id, name, image, state, available, cpu_percent, memory_bytes }) => ({ id, name, image, state, available, cpu_percent, memory_bytes })) }) as T
     }
-    const operation = operationsDemo(nodeID, suffix, method, body, url, images, containers)
+    const operation = operationsDemo(suffix, url)
     if (operation.handled) return clone(operation.value) as T
     if (suffix === '/tasks') return clone(tasks.filter((item) => item.scope === 'node' && item.node_id === nodeID)) as T
     if (/^\/tasks\/[^/]+\/logs$/.test(suffix)) return clone([{ id: 1, level: 'info', message: 'Task accepted by SUMA task service', created_at: earlier }, { id: 2, level: 'info', message: 'Docker operation completed successfully', created_at: now }]) as T

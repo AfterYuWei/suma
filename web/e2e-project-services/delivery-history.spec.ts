@@ -38,7 +38,6 @@ async function setup(page:Page,language='en-US',theme='dark',many=false){
   else if(path==='/delivery-projects/batch-app/records')data={items:[],total:0,page:1,page_size:20,counts:{}}
   else if(path.endsWith('/gitops'))data={configured:true,enabled:true,revision:1,repository:{clone_url:'https://git.example.test/app.git',ref_type:'branch',ref:'main',compose_files:['compose.yml'],environment_file:'',authentication:{source:'none'}},environment:[],registry_credential_ids:[],deployment_timeout:120,sync_interval_seconds:300,automation_enabled:false,reconcile_mode:'manual',auto_rollback:false,initial_application_required:true,webhook_enabled:false}
   else if(path.endsWith('/gitops/records'))data={items:[],total:0}
-  else if(path.endsWith('/image-updates'))data={results:[]}
   return route.fulfill({json:{code:0,message:'',data}})
  })
  await page.goto('/continuous-delivery?view=records')

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -109,7 +108,7 @@ func (s *Service) startDiscoveryLocked(c Channel) {
 			if s.deps.FeishuConnect != nil {
 				s.deps.FeishuConnect(ctx, c, m, status, incoming)
 			} else {
-				s.feishu(ctx, c, m, status, incoming, observed, generation)
+				s.feishu(ctx, c, m, status, incoming, observed)
 			}
 			return
 		}
@@ -118,7 +117,7 @@ func (s *Service) startDiscoveryLocked(c Channel) {
 			return
 		}
 		if c.Provider == "telegram" {
-			s.telegram(ctx, a, c, m, incoming, generation)
+			s.telegram(ctx, a, c, m, incoming)
 		}
 	}()
 }
@@ -147,23 +146,12 @@ type tgMessage struct {
 	From tgUser `json:"from"`
 	Chat tgChat `json:"chat"`
 }
-type tgCallback struct {
-	ID      string     `json:"id"`
-	From    tgUser     `json:"from"`
-	Message *tgMessage `json:"message"`
-	Data    string     `json:"data"`
-}
 type tgUpdate struct {
-	Callback *tgCallback `json:"callback_query"`
-	ID       int64       `json:"update_id"`
-	Message  *tgMessage  `json:"message"`
+	ID      int64      `json:"update_id"`
+	Message *tgMessage `json:"message"`
 }
 
-func (s *Service) telegram(ctx context.Context, a *Adapter, c Channel, m Secrets, incoming func(Incoming) error, generations ...string) {
-	generation := s.connectionGeneration(c.ID)
-	if len(generations) > 0 {
-		generation = generations[0]
-	}
+func (s *Service) telegram(ctx context.Context, a *Adapter, c Channel, m Secrets, incoming func(Incoming) error) {
 	cursorKey := "notification.cursor." + hash(m.Token)
 	var saved database.Setting
 	_ = s.db.WithContext(ctx).First(&saved, "key = ?", cursorKey).Error
@@ -203,16 +191,6 @@ func (s *Service) telegram(ctx context.Context, a *Adapter, c Channel, m Secrets
 		}
 		for _, u := range updates {
 			in := Incoming{ID: strconv.FormatInt(u.ID, 10), ChannelID: c.ID}
-			if callback := u.Callback; callback != nil && len(c.Config.ApproverIDs) > 0 && strings.HasPrefix(callback.Data, "publish:") {
-				var actionErr error
-				if callback.Message == nil || callback.From.Bot || callback.From.ID == 0 {
-					actionErr = ErrInvalid
-				} else {
-					_, actionErr = s.HandleProjectAction(ctx, ProjectActionInput{ChannelID: c.ID, ChatID: strconv.FormatInt(callback.Message.Chat.ID, 10), UserID: strconv.FormatInt(callback.From.ID, 10), Name: callback.From.Name, Token: strings.TrimPrefix(callback.Data, "publish:"), Generation: generation})
-				}
-				_, err := a.request(ctx, "POST", "https://api.telegram.org/bot"+m.Token+"/answerCallbackQuery", map[string]any{"callback_query_id": callback.ID, "text": callbackMessage(c.Config.Language, actionErr), "show_alert": actionErr != nil}, "", false, m)
-				s.error(err)
-			}
 			if u.Message != nil && c.Config.AutoDiscover {
 				if !u.Message.From.Bot && u.Message.From.ID != 0 && u.Message.Chat.ID != 0 {
 					in.UserID = strconv.FormatInt(u.Message.From.ID, 10)
@@ -251,11 +229,7 @@ func (quietSDKLogger) Error(context.Context, ...interface{}) {}
 func (s *Service) discoveryError(id, message string) {
 	s.error(s.db.Model(&database.NotificationChannel{}).Where("id = ?", id).UpdateColumn("last_error", message).Error)
 }
-func (s *Service) feishu(ctx context.Context, c Channel, m Secrets, status func(ConnectionStatus), incoming func(Incoming) error, observed *feishuMessageObservation, generations ...string) {
-	generation := s.connectionGeneration(c.ID)
-	if len(generations) > 0 {
-		generation = generations[0]
-	}
+func (s *Service) feishu(ctx context.Context, c Channel, m Secrets, status func(ConnectionStatus), incoming func(Incoming) error, observed *feishuMessageObservation) {
 	// A bounded queue keeps Feishu callbacks below the three-second response deadline.
 	var botID atomic.Value
 	botID.Store("")
@@ -304,10 +278,7 @@ func (s *Service) feishu(ctx context.Context, c Channel, m Secrets, status func(
 		default:
 			return errors.New("SUMA incoming queue is busy")
 		}
-	}, func(result string) { observed.record(result, "") }, func(ctx context.Context, in ProjectActionInput) (string, error) {
-		in.Generation = generation
-		return s.HandleProjectAction(ctx, in)
-	})
+	}, func(result string) { observed.record(result, "") })
 	for ctx.Err() == nil {
 		client := larkws.NewClient(c.Config.AppID, m.Token, larkws.WithEventHandler(handler), larkws.WithLogger(quietSDKLogger{}), larkws.WithLogLevel(larkcore.LogLevelError), larkws.WithHttpClient(outbound.Client(false)))
 		client.SetOnReady(func() { status(ConnectionStatus{State: "connected"}) })
@@ -334,9 +305,6 @@ func telegramUpdateTypes(c Channel) []string {
 	types := []string{}
 	if c.Config.AutoDiscover {
 		types = append(types, "message")
-	}
-	if len(c.Config.ApproverIDs) > 0 {
-		types = append(types, "callback_query")
 	}
 	return types
 }

@@ -1,6 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
 import type { ContainerSummary } from '../src/features/containers/types'
-import type { ImageUpdateResult } from '../src/features/image-updates/types'
 
 const created = '2026-10-06T04:43:40Z'
 const container = (name: string, index: number, overrides: Partial<ContainerSummary> = {}): ContainerSummary => ({
@@ -29,13 +28,12 @@ async function openContainerAction(page: Page, name: string, action: string) {
 
 async function setup(page: Page, options: {
   language?: string; theme?: string; rows?: ContainerSummary[]; declared?: string[];
-  managed?: boolean; error?: 'services' | 'image-updates'
+  managed?: boolean; error?: 'services'
 } = {}) {
   const language = options.language ?? 'en-US'
   const theme = options.theme ?? 'dark'
   const rows = options.rows ?? containers
   const declared = options.declared ?? ['mysql', 'postgres', 'redis']
-  const writes: { path: string; body: Record<string, unknown> }[] = []
   await page.addInitScript(({ language, theme }) => {
     localStorage.setItem('suma-language', language)
     localStorage.setItem('suma-theme', theme)
@@ -46,7 +44,6 @@ async function setup(page: Page, options: {
     const request = route.request()
     const url = new URL(request.url())
     const path = url.pathname.replace('/api/v1', '')
-    if (request.method() !== 'GET') writes.push({ path, body: request.postDataJSON() ?? {} })
     const edge = path.startsWith('/nodes/edge-hk/')
     const nodeRows = edge ? [container('edge-only', 99)] : rows
     const project = {
@@ -56,13 +53,6 @@ async function setup(page: Page, options: {
       declared_service_names: edge ? ['edge-only'] : declared,
       compose: 'services:\n' + (edge ? ['edge-only'] : declared).map(name => `  ${name}: {image: ${name}:latest}\n`).join(''), environment: '', metadata: { origin: 'created', last_deployed_at: created }
     }
-    const updates: ImageUpdateResult[] = nodeRows.map((row, index) => ({
-      reference: row.image.startsWith('docker.io/') ? row.image : `docker.io/library/${row.image}`, registry: 'docker.io',
-      platform: { os: 'linux', architecture: 'amd64' }, local_image_id: `sha256:${row.id}`,
-      status: index === 0 ? 'update_available' : 'current', stale: false, pull_required: index === 0, recreate_required: index === 0,
-      checked_at: created, remote_manifest_digest: `sha256:${'ab'.repeat(32)}`,
-      containers: [{ container_id: row.id, container_name: row.name, service: row.labels['com.docker.compose.service'], project: 'database', delivery_project: index === 0 ? 'database-delivery' : undefined, state: row.state, image_id: `sha256:${row.id}`, reference: row.image }]
-    }))
     let data: unknown = []
     if (path === '/auth/status') data = { needs_setup: false }
     else if (path === '/auth/session') data = { id: 1, username: 'admin', nickname: 'Admin', has_avatar: false }
@@ -78,20 +68,13 @@ async function setup(page: Page, options: {
     else if (path.endsWith('/projects/compose/database')) data = project
     else if (path.endsWith('/containers/runtime')) data = nodeRows.map(row => ({ id: row.id, state: row.state, health_status: 'none', restart_count: 0, memory_limit_bytes: 0 }))
     else if (path.endsWith('/containers/metrics')) data = nodeRows.filter(row => row.state === 'running').map(row => ({ id: row.id, available: true, sampled_at: new Date().toISOString(), cpu_percent: row.cpu_percent, memory_bytes: row.memory_bytes, uptime_seconds: row.uptime_seconds }))
-    else if (path.endsWith('/image-updates')) {
-      if (options.error === 'image-updates') return route.fulfill({ status: 503, json: { code: 1, message: 'Image checks unavailable', data: null } })
-      data = { results: updates }
-    } else if (path.endsWith('/image-updates/projects/database/policy')) data = { project: 'database', version: 0, mode: 'inherit', cron: '0 */6 * * *', timezone: 'UTC' }
-    else if (path.endsWith('/image-updates/policy')) data = { enabled: false, interval_hours: 6, registry_credentials: {} }
-    else if (path.endsWith('/image-updates/check')) data = { id: 'check-task', status: 'success', progress: 100, message: 'Checked project images' }
-    else if (path.endsWith('/tasks/check-task')) data = { id: 'check-task', status: 'success', progress: 100, message: 'Checked project images' }
     else if (path.endsWith('/projects/compose/database/validate')) data = { valid: true }
     return route.fulfill({ json: { code: 0, message: '', data } })
   })
   await page.goto('/projects/compose/database')
   const zh = language === 'zh-CN'
   await page.getByRole('tab', { name: zh ? '服务' : 'Services', exact: true }).click()
-  return { zh, writes, list: page.getByRole('region', { name: zh ? '项目服务' : 'Project services', exact: true }) }
+  return { zh, list: page.getByRole('region', { name: zh ? '项目服务' : 'Project services', exact: true }) }
 }
 
 for (const language of ['en-US', 'zh-CN']) for (const theme of ['dark', 'light']) for (const width of [390, 1440]) {
@@ -99,9 +82,8 @@ for (const language of ['en-US', 'zh-CN']) for (const theme of ['dark', 'light']
     await page.setViewportSize({ width, height: 900 })
     const errors: string[] = []
     page.on('pageerror', error => errors.push(error.message))
-    const { zh, list, writes } = await setup(page, { language, theme })
+    const { zh, list } = await setup(page, { language, theme })
     const mysql = list.getByTestId('service-group').filter({ hasText: 'mysql' })
-    await expect(mysql).toContainText(zh ? '有更新' : 'Update available')
     await expect(mysql.getByRole('link', { name: 'database-mysql-1', exact: true })).toBeVisible()
     await expect(mysql.getByRole('link', { name: 'database-mysql-1', exact: true })).toHaveAttribute('href', `/containers/${containers[0].id}`)
     await expect(mysql.getByText(zh ? 'CPU 合计' : 'Total CPU', { exact: true })).toBeVisible()
@@ -111,16 +93,6 @@ for (const language of ['en-US', 'zh-CN']) for (const theme of ['dark', 'light']
     await expect(page.getByRole('button', { name: zh ? '校验' : 'Validate', exact: true })).toHaveCount(0)
     await expect(page.getByRole('button', { name: zh ? '拉取并重建' : 'Pull & recreate', exact: true })).toHaveCount(1)
     await expect(page.getByRole('navigation', { name: zh ? '列表分页' : 'List pagination', exact: true })).toHaveCount(0)
-    const details = mysql.getByRole('button', { name: `${zh ? '镜像更新详情' : 'Image update details'} · mysql`, exact: true })
-    await details.focus()
-    await page.keyboard.press('Enter')
-    const imageDetails = page.getByRole('dialog', { name: `${zh ? '镜像更新详情' : 'Image update details'} · mysql`, exact: true })
-    await expect(imageDetails).toBeVisible()
-    await expect(imageDetails.getByRole('link', { name: 'database-mysql-1', exact: true })).toHaveAttribute('href', `/containers/${containers[0].id}`)
-    await expect(imageDetails.getByRole('link', { name: /database-delivery/ })).toHaveAttribute('href', '/continuous-delivery/database-delivery')
-    const date = await page.evaluate(({ language, created }) => new Intl.DateTimeFormat(language, { timeZone: 'Asia/Shanghai', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(new Date(created)), { language, created })
-    await expect(imageDetails).toContainText(date)
-    await page.keyboard.press('Escape'); await expect(details).toBeFocused()
     await mysql.getByRole('button', { name: zh ? '查看完整端口映射' : 'View full port mappings', exact: true }).click()
     const portDetails = page.getByRole('dialog', { name: zh ? '完整端口映射' : 'Full port mappings', exact: true })
     await expect(portDetails.getByText('[::]:3306:3306/tcp', { exact: true })).toBeVisible()
@@ -133,12 +105,6 @@ for (const language of ['en-US', 'zh-CN']) for (const theme of ['dark', 'light']
     await page.locator('main > div').first().evaluate(element => { element.scrollTop = 0 })
     await page.evaluate(() => window.scrollTo(0, 0))
     await page.screenshot({ path: `/tmp/suma-project-services-${language}-${theme}-${width}.png`, fullPage: true })
-    await list.getByRole('button', { name: zh ? '检查镜像更新' : 'Check image updates', exact: true }).click()
-    const dialog = page.getByRole('dialog', { name: zh ? '检查镜像更新' : 'Check image updates', exact: true })
-    await dialog.getByRole('button', { name: zh ? '开始检测' : 'Start check', exact: true }).click()
-    await expect(dialog).toContainText('Checked project images')
-    expect(writes.find(row => row.path.endsWith('/image-updates/check'))?.body.project_name).toBe('database')
-    await dialog.getByRole('button', { name: zh ? '关闭' : 'Close', exact: true }).first().click()
     await page.getByRole('tab', { name: zh ? '配置' : 'Configuration', exact: true }).click()
     await expect(page.getByRole('button', { name: zh ? '校验' : 'Validate', exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: zh ? '保存' : 'Save', exact: true })).toBeVisible()
@@ -186,13 +152,10 @@ test('external projects preserve container navigation and takeover', async ({ pa
   await expect(list.getByRole('link', { name: 'database-postgres-1', exact: true })).toBeVisible()
 })
 
-for (const error of ['services', 'image-updates'] as const) {
-  test(`${error} failure is visible`, async ({ page }) => {
-    const { list } = await setup(page, { error })
-    await expect(list).toContainText(error === 'services' ? 'Engine unavailable' : 'Image checks unavailable')
-    if (error === 'image-updates') await expect(list.getByRole('button', { name: /Service details mysql/ })).toBeVisible()
-  })
-}
+test('services failure is visible', async ({ page }) => {
+  const { list } = await setup(page, { error: 'services' })
+  await expect(list).toContainText('Engine unavailable')
+})
 
 test('changing project routes releases the old container Dialog and its stream', async ({ page }) => {
   let opened = 0, closed = 0

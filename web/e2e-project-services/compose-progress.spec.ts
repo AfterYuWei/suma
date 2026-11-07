@@ -32,8 +32,6 @@ async function setup(page: Page, language = 'en-US', theme = 'dark', width = 144
       declared_service_names: ['api', 'database'], services: 2, containers: 2,
       compose: 'services:\n  api: {image: nginx:alpine}\n  database: {image: postgres:18}\n', environment: '',
     }
-    else if (path.endsWith('/image-updates/policy')) data = { enabled: false, interval_hours: 6, registry_credentials: {} }
-    else if (path.endsWith('/image-updates')) data = { results: [] }
     else if (path.endsWith('/tasks/progress-task/logs')) data = state.logs
     else if (path.endsWith('/tasks/progress-task/cancel')) { state.task.status = 'canceled'; state.task.message = 'Canceled'; data = {} }
     else if (path.endsWith('/tasks/progress-task')) data = state.task

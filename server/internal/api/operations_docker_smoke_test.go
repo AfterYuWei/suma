@@ -31,10 +31,8 @@ import (
 	"github.com/suma/suma/server/internal/compose"
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/docker"
-	"github.com/suma/suma/server/internal/imageupdate"
 	"github.com/suma/suma/server/internal/node"
 	"github.com/suma/suma/server/internal/projectlogs"
-	"github.com/suma/suma/server/internal/registry"
 	"github.com/suma/suma/server/internal/task"
 	"gorm.io/gorm"
 )
@@ -111,15 +109,10 @@ func operationsTransportSmoke(t *testing.T, ctx context.Context, root, unixHost,
 		}
 		t.Fatal("fixture task timeout")
 	}
-	updates := imageupdate.NewService(db, tasks, audit.NewService(db), imageupdate.Dependencies{Node: func(ctx context.Context, id string) (imageupdate.Node, error) {
-		view, err := nodes.Get(ctx, id)
-		return imageupdate.Node{ID: id, Name: view.Name, Enabled: view.Enabled, Available: true, RuntimeKey: transport}, err
-	}, Runtime: func(ctx context.Context, id string) (imageupdate.Runtime, error) { return nodes.Runtime(ctx, id) }, Resolver: registry.Adapter{Transport: trusted}})
-	defer updates.Stop()
 	logs := projectlogs.NewService(projectlogs.Dependencies{Runtime: func(ctx context.Context, id string) (projectlogs.Runtime, error) { return nodes.Runtime(ctx, id) }, Exists: func(ctx context.Context, id, n string) error { _, err := current.Get(ctx, n); return err }})
 	logs.ReconcileInterval = 100 * time.Millisecond
 	defer logs.Stop()
-	handler := NewRouter(Dependencies{Engine: &fakeEngine{}, Nodes: nodes, Auth: authentication, Audit: audit.NewService(db), Tasks: tasks, ImageUpdates: updates, ProjectLogs: logs})
+	handler := NewRouter(Dependencies{Engine: &fakeEngine{}, Nodes: nodes, Auth: authentication, Audit: audit.NewService(db), Tasks: tasks, ProjectLogs: logs})
 	h := projectHTTPHarness{router: handler, cookie: cookie, db: db}
 	prefix := "/api/v1/nodes/" + nodeID
 	pull := func() {
@@ -170,43 +163,13 @@ func operationsTransportSmoke(t *testing.T, ctx context.Context, root, unixHost,
 	}
 	publish("one")
 	pull()
-	old, err := adapter.InspectImage(ctx, ref.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
 	web := start("web", "1", false, false, false)
 	start("web", "2", false, false, false)
 	start("api", "1", false, false, true)
 	start("tty", "1", true, false, false)
 	start("job", "1", false, true, true)
-	check := func(expected string, pullRequired bool) {
-		body, _ := json.Marshal(map[string]string{"project_name": project})
-		r := h.request(http.MethodPost, prefix+"/image-updates/check", body)
-		if r.Code != 202 {
-			t.Fatalf("check HTTP %d %s", r.Code, r.Body)
-		}
-		var taskData struct {
-			Data database.Task `json:"data"`
-		}
-		_ = json.Unmarshal(r.Body.Bytes(), &taskData)
-		awaitTask(taskData.Data)
-		view, err := updates.View(ctx, nodeID, project)
-		if err != nil || len(view.Results) != 1 || view.Results[0].Status != expected || view.Results[0].PullRequired != pullRequired {
-			t.Fatalf("update result: %+v %v", view, err)
-		}
-	}
-	check("current", false)
 	publish("two")
-	check("update_available", true)
 	pull()
-	newImage, err := adapter.InspectImage(ctx, ref.Name())
-	if err != nil || old.ID == newImage.ID {
-		t.Fatal("same tag did not change config ID")
-	}
-	view, err := updates.View(ctx, nodeID, project)
-	if err != nil || view.Results[0].PullRequired || !view.Results[0].RecreateRequired {
-		t.Fatalf("pending recreate: %+v %v", view, err)
-	}
 	time.Sleep(300 * time.Millisecond)
 	history, err := logs.History(ctx, nodeID, project, projectlogs.Query{Tail: 200, Since: time.Now().Add(-time.Minute).Format(time.RFC3339Nano), Until: time.Now().Add(time.Second).Format(time.RFC3339Nano)})
 	if err != nil || len(history.Sources) != 4 || len(history.Entries) == 0 || len(history.Errors) != 0 {
@@ -256,5 +219,5 @@ func operationsTransportSmoke(t *testing.T, ctx context.Context, root, unixHost,
 		}
 	}
 	_ = ws.Close()
-	t.Log("verified HTTPS same-tag metadata, authenticated pull, pending rebuild, retained stdout/stderr/TTY, global tail, external-project WebSocket and rebuild following")
+	t.Log("verified HTTPS fixture pull over Unix/mTLS TCP/WSS Agent, authenticated re-pull of a republished tag, retained stdout/stderr/TTY, global tail, external-project WebSocket and rebuild following")
 }

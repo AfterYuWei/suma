@@ -33,7 +33,6 @@ async function setup(page:Page,language='en-US',theme='dark',gitops=true){
   else if(path.endsWith('/gitops/detach')){mode=false;config={...config,enabled:false,automation_enabled:false};data={id:'detach-task'}}
   else if(path.endsWith('/gitops/automation')){config={...config,automation_enabled:body.enabled===true};data=config}
   else if(path.includes('/tasks/'))data={status:'success',message:'Completed',progress:100}
-  else if(path.endsWith('/image-updates'))data={results:[]}
   return route.fulfill({json:{code:0,message:'',data}})
  })
  await page.goto('/projects/compose/app')

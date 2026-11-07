@@ -46,7 +46,7 @@ func (o *feishuMessageObservation) status(state ConnectionStatus) ConnectionStat
 }
 
 func needsConnection(c Channel) bool {
-	return c.Enabled && (c.Provider == "feishu_app" || c.Provider == "telegram" && (c.Config.AutoDiscover || len(c.Config.ApproverIDs) > 0))
+	return c.Enabled && (c.Provider == "feishu_app" || c.Provider == "telegram" && c.Config.AutoDiscover)
 }
 
 func (s *Service) Connection(ctx context.Context, id string) (ConnectionStatus, error) {

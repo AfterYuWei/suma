@@ -1,9 +1,7 @@
 import {useProjectCDEnvironment, useProjectCDDraftGuard} from '../features/project-cd/environment'
 import {useProjectCD} from '../features/project-cd/queries'
 import { ProjectCD, ProjectCDEnvironment } from '../features/project-cd/project-cd'
-import { ProjectImageUpdates } from '../features/image-updates/project-updates'
 import { useContainerWorkspace } from '../features/containers/use-container-workspace'
-import { useImageUpdates } from '../features/image-updates/hooks'
 import { useProjectObservation } from '../features/compose/use-project-observation'
 import { ContainerWorkspaceDialog } from '../components/docker/container-workspace-dialog'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -102,7 +100,6 @@ export function ComposeDetailPage() {
   const { t, language } = useI18n()
   const zh = language === 'zh-CN'
   const nodeID = useUIStore((state) => state.currentNodeID)
-  const imageUpdates = useImageUpdates(nodeID, projectName)
   const query = useQuery({
     queryKey: ['project', nodeID, backend, projectName],
     queryFn: () =>
@@ -812,19 +809,16 @@ export function ComposeDetailPage() {
           )}
 
           {view === 'Services' && (<>
-            {project?.managed && !project.delivery_project_name && project.deployment_mode !== 'cd' && <ProjectImageUpdates nodeID={nodeID} projectName={projectName} details={false} />}
               <ProjectServices
               key={`${nodeID}/${projectName}`}
               nodeID={nodeID}
               projectName={projectName}
               rows={services.data}
-              updates={imageUpdates.data?.results || []}
               declared={project.managed ? project.declared_service_names ?? configKeys(project.compose, ['services']) : []}
               observation={observation}
               onOpenContainer={(row, tab, opener) => void workspace.open(row, tab, opener)}
               loading={services.isPending}
               error={services.error?.message}
-              updateError={imageUpdates.error?.message}
               zh={zh}
             />
           </>)}

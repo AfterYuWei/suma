@@ -117,7 +117,7 @@ func observeNotifications(ctx context.Context, nodes *nodeService.Service, db *g
 				// Persisted fault evidence makes recovery work across control-plane restarts.
 				notify.Emit(event.Event{Type: "node.recovered", Severity: "info", NodeID: view.ID, NodeName: view.Name, Title: view.Name, Message: "Docker node recovered"})
 			}
-			node, err := imageUpdateNode(nodes, db)(ctx, view.ID)
+			key, err := nodeRuntimeKey(nodes, db)(ctx, view.ID)
 			if err != nil {
 				if existing, ok := watchers[view.ID]; ok {
 					delete(stableSince, existing.key)
@@ -130,9 +130,9 @@ func observeNotifications(ctx context.Context, nodes *nodeService.Service, db *g
 				if e == nil {
 					current, e := runtime.NotificationStates(checkCtx)
 					if e == nil {
-						previous := containerStates[node.RuntimeKey]
+						previous := containerStates[key]
 						next := map[string]docker.NotificationState{}
-						stableSince[node.RuntimeKey] = observeContainerRecovery(view.ID, view.Name, current, previous, stableSince[node.RuntimeKey], time.Now(), notify.Emit)
+						stableSince[key] = observeContainerRecovery(view.ID, view.Name, current, previous, stableSince[key], time.Now(), notify.Emit)
 						for _, state := range current {
 							next[state.ID] = state
 							old, known := previous[state.ID]
@@ -150,19 +150,19 @@ func observeNotifications(ctx context.Context, nodes *nodeService.Service, db *g
 								notify.Emit(event.Event{Type: "container.restart_loop", Severity: "warning", NodeID: view.ID, NodeName: view.Name, ResourceType: "container", ResourceID: state.ID, Project: state.Project, Title: state.Name, Message: "State reconciliation: at least five automatic restarts since the previous observation"})
 							}
 						}
-						containerStates[node.RuntimeKey] = next
+						containerStates[key] = next
 					} else {
-						delete(stableSince, node.RuntimeKey)
+						delete(stableSince, key)
 					}
 				} else {
-					delete(stableSince, node.RuntimeKey)
+					delete(stableSince, key)
 				}
 				cancel()
 			} else {
-				delete(stableSince, node.RuntimeKey)
+				delete(stableSince, key)
 			}
 			existing, ok := watchers[view.ID]
-			if ok && existing.key == node.RuntimeKey && view.Enabled {
+			if ok && existing.key == key && view.Enabled {
 				continue
 			}
 			if ok {
@@ -175,7 +175,7 @@ func observeNotifications(ctx context.Context, nodes *nodeService.Service, db *g
 				continue
 			}
 			runCtx, cancel := context.WithCancel(ctx)
-			watchers[view.ID] = watcher{key: node.RuntimeKey, cancel: cancel}
+			watchers[view.ID] = watcher{key: key, cancel: cancel}
 			id, name := view.ID, view.Name
 			wg.Add(1)
 			go func() {

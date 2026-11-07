@@ -114,26 +114,6 @@ func (s *RegistryService) Update(ctx context.Context, id uint, input RegistryInp
 	}
 	updates := map[string]any{"name": input.Name, "server_address": input.ServerAddress, "auth_type": input.AuthType, "username": input.Username, "secret_ciphertext": ciphertext, "fingerprint": secret.Fingerprint(input.ServerAddress, input.AuthType, input.Username, input.Secret)}
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var refs []database.ImageUpdateRegistryCredential
-		if err := tx.Where("credential_id = ?", id).Find(&refs).Error; err != nil {
-			return err
-		}
-		for _, ref := range refs {
-			if !registryAddressesEqual(ref.Registry, input.ServerAddress) {
-				return errors.New("credential registry is used by an image detection policy")
-			}
-			if input.AuthorizedNodeIDs != nil {
-				found := false
-				for _, nodeID := range input.AuthorizedNodeIDs {
-					if nodeID == ref.NodeID {
-						found = true
-					}
-				}
-				if !found {
-					return errors.New("node grant is used by an image detection policy")
-				}
-			}
-		}
 		if err := tx.Model(&row).Updates(updates).Error; err != nil {
 			return err
 		}
@@ -156,13 +136,6 @@ func (s *RegistryService) Delete(ctx context.Context, id uint) error {
 		return errors.New("credential is used by a GitOps project")
 	}
 
-	var used int64
-	if err := s.db.WithContext(ctx).Model(&database.ImageUpdateRegistryCredential{}).Where("credential_id = ?", id).Count(&used).Error; err != nil {
-		return err
-	}
-	if used > 0 {
-		return errors.New("credential is used by an image detection policy")
-	}
 	var count int64
 	if err := s.db.WithContext(ctx).Model(&database.DeliveryProjectRegistryCredential{}).Where("credential_id = ?", id).Count(&count).Error; err != nil {
 		return err
@@ -260,8 +233,4 @@ func validateRegistry(input RegistryInput, requireSecret bool) error {
 		return errors.New("authentication type must be basic or token")
 	}
 	return nil
-}
-
-func registryAddressesEqual(a, b string) bool {
-	return canonicalRegistry(a) == canonicalRegistry(b)
 }

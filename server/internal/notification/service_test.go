@@ -61,7 +61,7 @@ func channel(t *testing.T, s *Service) Channel {
 }
 func rule(t *testing.T, s *Service, c Channel, mode string) Rule {
 	t.Helper()
-	r, err := s.SaveRule(context.Background(), "", RuleInput{Name: "test", Config: RuleConfig{Events: []string{"container.oom", "image.available", "cd.awaiting_approval", "node.recovered"}}})
+	r, err := s.SaveRule(context.Background(), "", RuleInput{Name: "test", Config: RuleConfig{Events: []string{"container.oom", "tls.expiring", "cd.awaiting_approval", "node.recovered"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

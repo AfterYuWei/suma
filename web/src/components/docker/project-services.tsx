@@ -5,8 +5,6 @@ import type { ContainerSummary } from '../../features/containers/types'
 import { fullPortLabel, portLabel } from '../../features/containers/ports'
 import { aggregate, groupServices, isOneOff, serviceName, type Aggregate, type ProjectObservation } from '../../features/compose/observation'
 import { effectiveHealth, isAbnormal, sizeLabel } from '../../features/containers/observation'
-import { ImageUpdateCheck, ImageUpdateDetails, UpdateStatus } from '../../features/image-updates/image-updates'
-import type { ImageUpdateResult } from '../../features/image-updates/types'
 import { Button } from '../ui/button'
 import { Card } from '../ui/card'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible'
@@ -44,9 +42,9 @@ function ContainerActions({ row, zh, onOpenContainer, onOpenChange }: {
     </DropdownMenuContent>
   </DropdownMenu>
 }
-export function ProjectServices({ nodeID, projectName, rows, updates = [], declared, loading, error, updateError, zh, observation = emptyObservation, showUpdates = true, declarationUnavailable = false, onOpenContainer, onOverlayChange }: {
-  nodeID: string; projectName: string; rows?: ContainerSummary[]; updates?: ImageUpdateResult[]; declared: string[]; loading: boolean; error?: string; updateError?: string; zh: boolean;
-  observation?: ProjectObservation; showUpdates?: boolean; declarationUnavailable?: boolean;
+export function ProjectServices({ nodeID, projectName, rows, declared, loading, error, zh, observation = emptyObservation, declarationUnavailable = false, onOpenContainer, onOverlayChange }: {
+  nodeID: string; projectName: string; rows?: ContainerSummary[]; declared: string[]; loading: boolean; error?: string; zh: boolean;
+  observation?: ProjectObservation; declarationUnavailable?: boolean;
   onOpenContainer: (row: ContainerSummary, tab: 'logs' | 'files' | 'terminal', opener?: HTMLElement) => void;
   onOverlayChange?: (open: boolean) => void;
 }) {
@@ -54,16 +52,14 @@ export function ProjectServices({ nodeID, projectName, rows, updates = [], decla
   const [diagnostic, setDiagnostic] = useState<ContainerSummary | null>(null)
   const [diagnosticRows, setDiagnosticRows] = useState<ContainerSummary[]>([])
   const [portRows, setPortRows] = useState<ContainerSummary[] | null>(null)
-  const [imageDetails, setImageDetails] = useState<{ name: string; rows: ImageUpdateResult[] } | null>(null)
   const [containerMenuOpen, setContainerMenuOpen] = useState(false)
-  const overlayOpen = !!diagnostic || !!portRows || !!imageDetails || containerMenuOpen
+  const overlayOpen = !!diagnostic || !!portRows || containerMenuOpen
   useEffect(() => { onOverlayChange?.(overlayOpen); return () => onOverlayChange?.(false) }, [overlayOpen, onOverlayChange])
   const containers = rows ?? []
   const groups = groupServices(containers, declared)
   const oneOff = containers.filter(isOneOff)
   const pagination = useListPagination(groups, `${nodeID}/${projectName}`)
   const summary = aggregate(containers, observation)
-  const matchingUpdates = (rows: ContainerSummary[]) => updates.filter(update => update.containers.some(container => rows.some(row => row.id === container.container_id)))
   const ports = (rows: ContainerSummary[]) => {
     const values = [...new Map(rows.flatMap(row => row.ports).map(port => [portLabel(port), port])).values()]
     return values.length ? <Button variant="ghost" size="sm" className="group h-auto min-w-0 max-w-full justify-start gap-1 p-0 text-left font-mono text-xs" onClick={() => setPortRows(rows)} aria-label={zh ? '查看完整端口映射' : 'View full port mappings'}><ContainerPortTag port={values[0]} className="text-[11px] font-normal" />{values.length > 1 && <span className="shrink-0 text-[11px] text-muted-foreground">+{values.length - 1}</span>}</Button> : <span className="text-xs text-muted-foreground">—</span>
@@ -72,32 +68,29 @@ export function ProjectServices({ nodeID, projectName, rows, updates = [], decla
     {!compact && <ProjectResourceSummary summary={aggregate([row], observation)} zh={zh} inline />}
     <div className="min-w-0"><p className="mb-1 text-xs text-muted-foreground">{zh ? '端口' : 'Ports'}</p>{ports([row])}</div>
   </div>
-  const updateStatus = (name: string, rows: ImageUpdateResult[]) => showUpdates && (rows.length ? <Button variant="ghost" size="sm" className="h-auto max-w-full justify-start p-0" aria-label={`${zh ? '镜像更新详情' : 'Image update details'} · ${name}`} onClick={() => setImageDetails({ name, rows })}><UpdateStatus rows={rows} zh={zh} /></Button> : <UpdateStatus rows={rows} zh={zh} />)
   const health = (row: ContainerSummary) => {
     const meta = observation.runtime.get(row.id), abnormal = isAbnormal(row, meta)
     const reason = meta?.oom_killed ? 'OOM' : meta?.state_error ? (zh ? '运行错误' : 'Runtime error') : meta?.exit_code ? `${zh ? '退出码' : 'Exit'} ${meta.exit_code}` : row.state === 'restarting' ? stateLabel(row.state, zh) : healthLabel(effectiveHealth(row, meta), zh)
     return <Button variant="ghost" size="sm" className={`h-auto max-w-full justify-end whitespace-normal p-0 text-right text-xs ${abnormal ? 'text-destructive' : 'text-muted-foreground'}`} onClick={() => { setDiagnosticRows([row]); setDiagnostic(row) }} aria-label={`${zh ? '运行诊断' : 'Runtime diagnostics'} · ${row.name}`}>{reason}</Button>
   }
   const instance = (row: ContainerSummary, compact = false, showImage = false) => {
-    const imageRows = matchingUpdates([row])
     return <div key={row.id} className={`grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-md bg-background/50 px-3 py-2.5 transition-colors hover:bg-background/70 ${compact ? '@min-[36rem]/services:grid-cols-[minmax(0,1fr)_8rem_auto]' : '@min-[36rem]/services:grid-cols-[minmax(0,1fr)_18rem_auto]'}`} data-testid="service-instance">
       <div className="min-w-0 space-y-1">
         <div className="flex min-w-0 items-start gap-1.5"><Box className="mt-0.5 size-3 shrink-0 text-muted-foreground" /><Link to="/containers/$containerId" params={{ containerId: row.id }} className="break-all text-xs hover:underline">{row.name}</Link></div>
         {!compact && <div className="flex flex-wrap items-center gap-x-2 gap-y-1"><StatusBadge tone={row.state === 'running' ? 'success' : row.state === 'dead' ? 'critical' : 'neutral'}>{stateLabel(row.state, zh)}</StatusBadge>{health(row)}</div>}
-        {showImage && <><TooltipHint content={`${row.image}${row.image_id ? `\nImage ID · ${row.image_id}` : ''}`}><p className="truncate font-mono text-xs text-muted-foreground">{row.image}</p></TooltipHint>{updateStatus(row.name, imageRows)}</>}
+        {showImage && <TooltipHint content={`${row.image}${row.image_id ? `\nImage ID · ${row.image_id}` : ''}`}><p className="truncate font-mono text-xs text-muted-foreground">{row.image}</p></TooltipHint>}
       </div>
       {resources(row, compact)}
       <div className="col-start-2 row-start-1 justify-self-end @min-[36rem]/services:col-start-3"><ContainerActions row={row} zh={zh} onOpenContainer={onOpenContainer} onOpenChange={setContainerMenuOpen} /></div>
     </div>
   }
   return <section className="@container/services flex w-full min-w-0 flex-col gap-3" aria-label={zh ? '项目服务' : 'Project services'}>
-    <div className="flex flex-wrap items-center justify-between gap-2"><div className="flex flex-wrap items-center gap-2"><h3 className="text-sm font-medium">{zh ? '服务' : 'Services'}</h3>{!loading && !error && <span className="text-xs text-muted-foreground">{groups.length} · {summary.running}/{summary.total} {zh ? '容器运行中' : 'containers running'}</span>}</div>{showUpdates && <ImageUpdateCheck nodeID={nodeID} target={{ project_name: projectName }} />}</div>
+    <div className="flex flex-wrap items-center justify-between gap-2"><div className="flex flex-wrap items-center gap-2"><h3 className="text-sm font-medium">{zh ? '服务' : 'Services'}</h3>{!loading && !error && <span className="text-xs text-muted-foreground">{groups.length} · {summary.running}/{summary.total} {zh ? '容器运行中' : 'containers running'}</span>}</div></div>
     {declarationUnavailable && <p className="text-xs text-muted-foreground">{zh ? '服务声明信息不可用，仅展示已发现的服务。' : 'Service declarations unavailable; showing discovered services.'}</p>}
-    {showUpdates && updateError && <p role="alert" className="text-xs text-destructive">{updateError}</p>}
     {loading ? <LoadingState compact label={zh ? '正在加载项目服务' : 'Loading project services'} /> : error ? <ErrorState description={error} /> : <>
       {!groups.length && !oneOff.length && <p className="py-4 text-sm text-muted-foreground">{zh ? '项目尚未创建容器。' : 'No containers have been created.'}</p>}
       <div className="flex min-w-0 flex-col gap-3">{pagination.items.map(group => {
-        const stats = aggregate(group.containers, observation), single = group.containers.length === 1, imageRows = matchingUpdates(group.containers)
+        const stats = aggregate(group.containers, observation), single = group.containers.length === 1
         return <Collapsible key={group.name} open={expanded.has(group.name)} onOpenChange={open => setExpanded(old => { const next = new Set(old); if (open) next.add(group.name); else next.delete(group.name); return next })}>
           <Card size="sm" className="min-w-0 p-3" data-testid="service-group">
             <div className="grid min-w-0 items-start gap-3 @min-[36rem]/services:grid-cols-[minmax(0,1fr)_13rem]">
@@ -108,7 +101,6 @@ export function ProjectServices({ nodeID, projectName, rows, updates = [], decla
                   {single ? health(group.containers[0]) : stats.total > 0 && <Button variant="ghost" size="sm" onClick={() => { setDiagnosticRows(group.containers); setDiagnostic(group.containers.find(row => isAbnormal(row, observation.runtime.get(row.id))) ?? group.containers[0]) }} className={`h-auto max-w-full justify-start whitespace-normal p-0 text-left text-xs ${stats.abnormal ? 'text-destructive' : 'text-muted-foreground'}`}>{stats.abnormal ? `${stats.abnormal} ${zh ? '异常' : 'abnormal'}${stats.unknown ? ` · ${stats.unknown} ${zh ? '未知' : 'unknown'}` : ''}` : stats.unknown ? `${stats.unknown} ${zh ? '健康未知' : 'health unknown'}` : group.containers.every(row => effectiveHealth(row, observation.runtime.get(row.id)) === 'none') ? healthLabel('none', zh) : `${zh ? '健康检查' : 'Health checks'} ${group.containers.filter(row => effectiveHealth(row, observation.runtime.get(row.id)) === 'healthy').length}/${stats.running}`}</Button>}
                 </div>
                 {group.images.length > 0 && <TooltipHint content={group.images.join('\n')}><p className="flex min-w-0 items-center gap-1 font-mono text-xs text-muted-foreground"><span className="truncate">{group.images[0].replace(/^docker\.io\/(library\/)?/, '')}</span>{group.images.length > 1 && <span className="shrink-0">+{group.images.length - 1} {zh ? '版本' : 'versions'}</span>}</p></TooltipHint>}
-                {updateStatus(group.name, imageRows)}
               </div>
               <div className="w-full max-w-56 @min-[36rem]/services:max-w-none"><ProjectResourceSummary summary={stats} zh={zh} inline aggregated /></div>
             </div>
@@ -122,6 +114,5 @@ export function ProjectServices({ nodeID, projectName, rows, updates = [], decla
     </>}
     <Dialog open={!!diagnostic} onOpenChange={open => { if (!open) setDiagnostic(null) }}><DialogContent className="max-h-[85dvh] overflow-auto sm:max-w-xl"><DialogHeader><DialogTitle className="break-all">{zh ? '运行诊断' : 'Runtime diagnostics'} · {diagnostic?.name}</DialogTitle></DialogHeader>{diagnosticRows.length > 1 && <DropdownMenu><DropdownMenuTrigger render={<Button variant="secondary" className="max-w-full truncate">{diagnostic?.name}</Button>} /><DropdownMenuContent className="max-h-64 overflow-auto">{diagnosticRows.map(row => <DropdownMenuItem key={row.id} onClick={() => setDiagnostic(row)}>{row.name}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>}{diagnostic && <DiagnosticsContent key={diagnostic.id} nodeID={nodeID} containerID={diagnostic.id} zh={zh} />}</DialogContent></Dialog>
     <Dialog open={!!portRows} onOpenChange={open => { if (!open) setPortRows(null) }}><DialogContent className="max-h-[85dvh] overflow-auto sm:max-w-xl"><DialogHeader><DialogTitle>{zh ? '完整端口映射' : 'Full port mappings'}</DialogTitle></DialogHeader>{portRows?.map(row => <div key={row.id} className="space-y-1"><p className="break-all text-xs text-muted-foreground">{row.name}</p>{row.ports.map((port, index) => <p key={index} className="break-all font-mono text-xs">{fullPortLabel(port)}</p>)}</div>)}</DialogContent></Dialog>
-    <Dialog open={!!imageDetails} onOpenChange={open => { if (!open) setImageDetails(null) }}><DialogContent className="max-h-[85dvh] overflow-auto sm:max-w-xl"><DialogHeader><DialogTitle className="break-all">{zh ? '镜像更新详情' : 'Image update details'} · {imageDetails?.name}</DialogTitle></DialogHeader>{imageDetails && <ImageUpdateDetails rows={imageDetails.rows} zh={zh} />}</DialogContent></Dialog>
   </section>
 }

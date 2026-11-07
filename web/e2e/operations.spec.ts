@@ -3,16 +3,6 @@ import { expect, test, type Page } from '@playwright/test'
 async function setup(page: Page, language = 'en-US', theme = 'dark') {
  await page.addInitScript(({ language, theme }) => { sessionStorage.setItem('suma-demo-session', '1'); localStorage.setItem('suma-language', language); localStorage.setItem('suma-theme', theme); localStorage.setItem('suma-node', 'local') }, { language, theme })
 }
-test('image detection and per-node schedule', async ({ page }) => {
- await setup(page); await page.goto('/images')
- await page.getByRole('button', { name: 'Check image updates', exact: true }).first().click()
- const dialog = page.getByRole('dialog', { name: 'Check image updates', exact: true }); await dialog.getByRole('button', { name: 'Start check', exact: true }).click()
- await expect(dialog.getByText('100%', { exact: false })).toBeVisible(); await dialog.getByRole('button', { name: 'Close', exact: true }).first().click()
- await expect(page.getByText('Update available', { exact: true }).first()).toBeVisible()
- await page.getByRole('tab', { name: 'Image updates', exact: true }).click(); await expect(page).toHaveURL('/images#image-updates'); const enabled = page.getByRole('switch', { name: 'Enable scheduled checks', exact: true }); await expect(enabled).not.toBeChecked(); await enabled.click()
- await page.getByRole('combobox', { name: 'Check interval', exact: true }).click(); await page.getByRole('option', { name: 'Every 1 hours', exact: true }).click()
- await page.getByRole('button', { name: 'Save policy', exact: true }).click(); await expect(page.getByText('Saved', { exact: true })).toBeVisible(); await expect(enabled).toBeChecked(); await expect(page.getByText('Next check:', { exact: false })).toBeVisible()
-})
 test('aggregate logs preserve pause, filters, historical range and export', async ({ page }) => {
  await setup(page); await page.goto('/projects/compose/gateway-prod'); await page.getByRole('tab', { name: 'Logs', exact: true }).click()
  const lines = page.getByTestId('project-log-lines'); await expect(lines).toContainText('request'); await expect(lines).toContainText('gateway-prod-web-1'); await expect(lines).toContainText('gateway-prod-api-1')
