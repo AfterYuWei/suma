@@ -1,0 +1,46 @@
+# CNB 云原生开发环境配置（单容器模式）。
+# 开发环境定义见 .ide/Dockerfile：Go 1.26 + Node 26 + PostgreSQL 18 + code-server。
+# 文档：https://docs.cnb.cool/zh/workspaces/custom-dev-env.html
+$:
+  vscode:
+    - docker:
+        # 自定义开发环境；image 为构建失败时的回退镜像
+        build: .ide/Dockerfile
+        image: cnbcool/default-dev-env:latest
+      services:
+        - vscode
+        - docker
+      stages:
+        - name: 启动 PostgreSQL 18
+          script: |
+            service postgresql start || pg_ctlcluster 18 main start
+            until pg_isready -q; do sleep 1; done
+            su postgres -c "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='suma'\"" | grep -q 1 \
+              || su postgres -c "psql -v ON_ERROR_STOP=1 -c \"CREATE ROLE suma SUPERUSER LOGIN PASSWORD 'suma'\""
+            su postgres -c "psql -tAc \"SELECT 1 FROM pg_database WHERE datname='suma'\"" | grep -q 1 \
+              || su postgres -c "createdb -O suma suma"
+        - name: 生成本地配置
+          script: |
+            if [ ! -f .env.local ]; then
+              umask 077
+              printf '%s\n' \
+                "SUMA_DATABASE_DSN='postgres://suma:suma@127.0.0.1:5432/suma?sslmode=disable'" \
+                "SUMA_TEST_DATABASE_DSN='postgres://suma:suma@127.0.0.1:5432/suma?sslmode=disable'" \
+                > .env.local
+              echo "已生成 .env.local（本地开发与测试数据库配置）"
+            fi
+        - name: 安装前端依赖
+          script: |
+            cd web
+            [ -d node_modules ] || npm ci
+        - name: 预下载 Go 模块
+          script: |
+            cd server
+            GOCACHE=/tmp/suma-go-cache go mod download
+        - name: 环境就绪
+          script: |
+            echo "SUMA 云原生开发环境（单容器模式）就绪。"
+            echo "  make dev     同时启动前后端开发服务"
+            echo "  make check   前端 lint/typecheck/build + 后端 go test/build"
+            echo "  make build   构建前端生产资源与后端二进制"
+            echo "数据库配置见 .env.local；PostgreSQL 18 运行在容器内 127.0.0.1:5432。"
