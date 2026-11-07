@@ -88,7 +88,7 @@ func (s *Service) Update(ctx context.Context, id uint, input ScheduleInput, expe
 		}
 	}
 	changes := ScheduleInput{Name: input.Name, Params: input.Params, Cron: input.Cron, Timezone: input.Timezone, Enabled: input.Enabled}
-	built := database.TaskCenterSchedule{Params: row.Params, Cron: row.Cron, Timezone: row.Timezone, Enabled: row.Enabled}
+	built := database.TaskCenterSchedule{Name: row.Name, Params: row.Params, Cron: row.Cron, Timezone: row.Timezone, Enabled: row.Enabled}
 	if changes.Name != "" {
 		built.Name = changes.Name
 	}

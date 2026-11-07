@@ -2,13 +2,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
 import type { KindInfo, ImageUpdateProjectStatus, Schedule, ScheduleInput, ScheduleRun, TaskRecord } from './types'
 
-const list = <T,>(path: string) => async () => (await api<{ items: T[]; total: number }>(path)).items
-
 export const useTaskKinds = () => useQuery({ queryKey: ['task-kinds'], queryFn: () => api<KindInfo[]>('/task-center/kinds'), staleTime: 60_000 })
 
 export const useSchedules = (kind?: string) => useQuery({
   queryKey: ['task-schedules', kind ?? 'all'],
-  queryFn: list<Schedule>(`/task-center/schedules${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`),
+  queryFn: () => api<Schedule[]>(`/task-center/schedules${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`),
   refetchInterval: 10_000,
 })
 
@@ -24,6 +22,7 @@ export const useScheduleRuns = (id: number | undefined) => useQuery({
   enabled: id != null,
   refetchInterval: 5_000,
 })
+
 
 export interface RecordFilters { scope: 'all' | 'control_plane' | 'node'; status: string; type: string; nodeID?: string; limit?: number }
 
