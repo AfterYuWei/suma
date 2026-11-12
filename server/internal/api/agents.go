@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -85,6 +86,32 @@ func registerAgentRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps Dependenc
 		}
 		recordAudit(c, deps.Audit, "agent.revoke", "node", view.ID, "success")
 		success(c, gin.H{"node_id": view.ID})
+	})
+	v1.POST("/nodes/:nodeID/agent/replace-engine", requireAuth(deps.Auth), func(c *gin.Context) {
+		publicURL, ok := agentPublicURL(c, deps)
+		if !ok {
+			failure(c, http.StatusServiceUnavailable, 20501, "Open SUMA over HTTPS or set SUMA_AGENT_PUBLIC_URL to a valid reachable HTTPS origin before pairing Agents")
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2048)
+		var input node.AgentEngineReplacementInput
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, http.StatusBadRequest, 20513, "Invalid Docker Engine replacement")
+			return
+		}
+		view, err := deps.Nodes.Get(c.Request.Context(), c.Param("nodeID"))
+		if err != nil {
+			failure(c, http.StatusNotFound, 20504, "Node not found")
+			return
+		}
+		value, err := deps.Nodes.IssueAgentEnrollment(c.Request.Context(), node.AgentEnrollmentInput{NodeID: view.ID, Name: view.Name, Replacement: &input})
+		if err != nil {
+			failure(c, http.StatusUnprocessableEntity, 20514, err.Error())
+			return
+		}
+		c.Header("Cache-Control", "no-store")
+		recordAudit(c, deps.Audit, "agent.engine.replace", "node", fmt.Sprintf("%s (%s): %s -> %s", view.Name, view.ID, input.PreviousEngineID, input.EngineID), "success")
+		c.JSON(http.StatusCreated, envelope{Code: 0, Message: "success", Data: gin.H{"node_id": value.NodeID, "token": value.Token, "expires_at": value.ExpiresAt, "public_url": publicURL}})
 	})
 	registerAgentTransport(router, v1, deps)
 }

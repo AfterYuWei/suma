@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/suma/suma/server/internal/testutil"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/docker"
 	"github.com/suma/suma/server/internal/secret"
+	"gorm.io/gorm"
 )
 
 func agentTestService(t *testing.T) *Service {
@@ -271,5 +273,157 @@ func TestReissueConnectedAgentRequiresNewTokenOnReconnect(t *testing.T) {
 	}
 	if err := service.AuthenticateAgent(ctx, issued.NodeID, oldCredential, agentwire.ProtocolVersion); err == nil {
 		t.Fatal("replaced credential was accepted")
+	}
+}
+
+func TestAgentEngineReplacementPreservesNodeData(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		t.Run(fmt.Sprintf("enabled=%t", enabled), func(t *testing.T) {
+			service := agentTestService(t)
+			ctx := context.Background()
+			issued, err := service.IssueAgentEnrollment(ctx, AgentEnrollmentInput{Name: "HuaWeiCloud"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, oldCredential, err := service.ClaimAgentEnrollment(ctx, issued.Token, agentwire.ProtocolVersion)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := service.db.Model(&database.Node{}).Where("id = ?", issued.NodeID).Updates(map[string]any{"engine_id": "old-engine", "engine_version": "old-version", "enabled": enabled, "status": "offline", "agent_connected_at": time.Now(), "agent_version": "old-agent", "allowed_bind_roots_json": `["/srv/data"]`}).Error; err != nil {
+				t.Fatal(err)
+			}
+			before, err := service.Get(ctx, issued.NodeID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, row := range []any{
+				&database.DeliveryProject{ID: 71, NodeID: issued.NodeID, Name: "retained-project", DeploymentName: "retained-project", EnvironmentCiphertext: []byte("encrypted-environment")},
+				&database.DeliveryProjectNode{ProjectID: 71, NodeID: issued.NodeID},
+				&database.GitCredential{ID: 81, Name: "retained-git", AuthType: "token", SecretCiphertext: []byte("encrypted-secret")},
+				&database.GitCredentialNode{CredentialID: 81, NodeID: issued.NodeID},
+				&database.NodeGroup{ID: 91, Name: "retained-group"},
+				&database.NodeGroupNode{GroupID: 91, NodeID: issued.NodeID},
+				&database.Task{ID: "retained-task", NodeID: issued.NodeID, Name: "retained-task", Type: "compose.up", Status: "success"},
+				&database.AuditLog{NodeID: issued.NodeID, NodeName: before.Name, Action: "compose.up", ResourceName: "retained-project", Result: "success"},
+				&database.MonitoringInstance{ID: strings.Repeat("a", 64), NodeID: issued.NodeID, EngineID: "old-engine", ContainerID: strings.Repeat("b", 64), Name: "old-container", FirstSeen: time.Now(), LastSeen: time.Now()},
+			} {
+				if err := service.db.Create(row).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Compare persisted rows, including ciphertext and original Engine history.
+			snapshots := map[string]string{}
+			for _, table := range []string{"delivery_projects", "delivery_project_nodes", "git_credentials", "git_credential_nodes", "node_group_nodes", "tasks", "audit_logs", "monitoring_instances"} {
+				var snapshot string
+				if err := service.db.Raw("SELECT jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text)::text FROM " + table + " t").Scan(&snapshot).Error; err != nil {
+					t.Fatal(err)
+				}
+				snapshots[table] = snapshot
+			}
+			replacement := &AgentEngineReplacementInput{PreviousEngineID: "old-engine", EngineID: "new-engine", Confirmation: before.Name}
+			reissued, err := service.IssueAgentEnrollment(ctx, AgentEnrollmentInput{NodeID: before.ID, Name: before.Name, Replacement: replacement})
+			if err != nil {
+				t.Fatal(err)
+			}
+			service.recordProbe(before.ID, time.Now(), docker.Info{ID: "old-engine", ServerVersion: "old-version"}, nil)
+			after, err := service.Get(ctx, before.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after.ID != before.ID || after.Name != before.Name || !after.CreatedAt.Equal(before.CreatedAt) || after.Enabled != enabled || after.EngineID != "new-engine" || after.Status != "offline" || after.EngineVersion != "" || after.AgentConnectedAt != nil || after.AgentVersion != "" {
+				t.Fatalf("unexpected replacement node: %+v", after)
+			}
+			var saved database.Node
+			if err := service.db.First(&saved, "id = ?", before.ID).Error; err != nil || saved.AllowedBindRootsJSON != `["/srv/data"]` {
+				t.Fatalf("node settings changed: %v", err)
+			}
+			for table, before := range snapshots {
+				var after string
+				if err := service.db.Raw("SELECT jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text)::text FROM " + table + " t").Scan(&after).Error; err != nil || after != before {
+					t.Fatalf("retained table %s changed: %v", table, err)
+				}
+			}
+			if err := service.AuthenticateAgent(ctx, before.ID, oldCredential, agentwire.ProtocolVersion); err == nil {
+				t.Fatal("replacement retained old Agent credential")
+			}
+			if _, _, err := service.ClaimAgentEnrollment(ctx, issued.Token, agentwire.ProtocolVersion); err == nil {
+				t.Fatal("replacement retained old token")
+			}
+			id, credential, err := service.ClaimAgentEnrollment(ctx, reissued.Token, agentwire.ProtocolVersion)
+			if err != nil || id != before.ID {
+				t.Fatalf("replacement pairing lost node identity: %s %v", id, err)
+			}
+			if err := service.AuthenticateAgent(ctx, id, credential, agentwire.ProtocolVersion); err != nil {
+				t.Fatal(err)
+			}
+			if err := service.CancelAgentEnrollment(ctx, id); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.Get(ctx, id); err != nil {
+				t.Fatal("cancel removed an existing replacement node")
+			}
+		})
+	}
+}
+
+func TestAgentEngineReplacementRejectsUnconfirmedChanges(t *testing.T) {
+	service := agentTestService(t)
+	ctx := context.Background()
+	issued, err := service.IssueAgentEnrollment(ctx, AgentEnrollmentInput{Name: "HuaWeiCloud"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, credential, err := service.ClaimAgentEnrollment(ctx, issued.Token, agentwire.ProtocolVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.db.Model(&database.Node{}).Where("id = ?", issued.NodeID).Update("engine_id", "old-engine").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := service.db.Model(&database.Node{}).Where("id = ?", "local").Update("engine_id", "registered-engine").Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []AgentEngineReplacementInput{
+		{PreviousEngineID: "old-engine", EngineID: "new-engine", Confirmation: "wrong-name"},
+		{PreviousEngineID: "stale-engine", EngineID: "new-engine", Confirmation: "HuaWeiCloud"},
+		{PreviousEngineID: "old-engine", EngineID: "old-engine", Confirmation: "HuaWeiCloud"},
+		{PreviousEngineID: "old-engine", EngineID: "registered-engine", Confirmation: "HuaWeiCloud"},
+		{PreviousEngineID: "old-engine", EngineID: "", Confirmation: "HuaWeiCloud"},
+		{PreviousEngineID: "old-engine", EngineID: "bad\nengine", Confirmation: "HuaWeiCloud"},
+		{PreviousEngineID: "old-engine", EngineID: strings.Repeat("x", 129), Confirmation: "HuaWeiCloud"},
+	} {
+		if _, err := service.IssueAgentEnrollment(ctx, AgentEnrollmentInput{NodeID: issued.NodeID, Name: "HuaWeiCloud", Replacement: &input}); err == nil {
+			t.Fatalf("unconfirmed replacement accepted: %+v", input)
+		}
+	}
+	if _, err := service.IssueAgentEnrollment(ctx, AgentEnrollmentInput{NodeID: "local", Name: "Local", Replacement: &AgentEngineReplacementInput{PreviousEngineID: "registered-engine", EngineID: "new-engine", Confirmation: "Local"}}); err == nil {
+		t.Fatal("direct node accepted Agent Engine replacement")
+	}
+	if err := service.AuthenticateAgent(ctx, issued.NodeID, credential, agentwire.ProtocolVersion); err != nil {
+		t.Fatalf("rejected change revoked original credential: %v", err)
+	}
+	view, err := service.Get(ctx, issued.NodeID)
+	if err != nil || view.EngineID != "old-engine" {
+		t.Fatalf("rejected change modified node: %+v %v", view, err)
+	}
+
+	// A pairing write failure must roll back both the identity change and revocation.
+	if err := service.db.Callback().Create().Before("gorm:create").Register("test:fail_replacement_enrollment", func(tx *gorm.DB) {
+		if tx.Statement.Table == "agent_enrollments" {
+			tx.AddError(errors.New("test enrollment write failed"))
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { service.db.Callback().Create().Remove("test:fail_replacement_enrollment") })
+	if _, err := service.IssueAgentEnrollment(ctx, AgentEnrollmentInput{NodeID: issued.NodeID, Name: "HuaWeiCloud", Replacement: &AgentEngineReplacementInput{PreviousEngineID: "old-engine", EngineID: "new-engine", Confirmation: "HuaWeiCloud"}}); err == nil {
+		t.Fatal("failed enrollment write accepted")
+	}
+	view, err = service.Get(ctx, issued.NodeID)
+	if err != nil || view.EngineID != "old-engine" {
+		t.Fatalf("failed replacement was not rolled back: %+v %v", view, err)
+	}
+	if err := service.AuthenticateAgent(ctx, issued.NodeID, credential, agentwire.ProtocolVersion); err != nil {
+		t.Fatalf("failed replacement revoked original credential: %v", err)
 	}
 }

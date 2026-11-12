@@ -233,6 +233,25 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     return clone(nodeGroups[index]) as T
   }
   if (pathname === '/nodes' && method === 'GET') return clone(nodes) as T
+  const agentEngineReplacementMatch = pathname.match(/^\/nodes\/([^/]+)\/agent\/replace-engine$/)
+  if (agentEngineReplacementMatch && method === 'POST') {
+    const node = nodes.find((item) => item.id === agentEngineReplacementMatch[1])
+    if (!node) throw new ApiError('Docker node not found', 20504, 404)
+    if (node.connection_type !== 'agent' || !node.engine_id || body.confirmation !== node.name || body.previous_engine_id !== node.engine_id || typeof body.engine_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$/.test(body.engine_id) || body.engine_id === node.engine_id) throw new ApiError('Confirm the node name and a different Docker Engine ID', 20514, 422)
+    if (nodes.some((item) => item.id !== node.id && item.engine_id === body.engine_id)) throw new ApiError('Docker Engine is already registered', 20514, 422)
+    const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString()
+    node.engine_id = body.engine_id
+    node.engine_version = undefined
+    node.agent_version = undefined
+    node.agent_connected_at = undefined
+    node.last_checked_at = undefined
+    node.last_latency_ms = 0
+    node.status = 'offline'
+    node.last_error = ''
+    node.updated_at = new Date().toISOString()
+    node.agent_enrollment = { node_id: node.id, expires_at: expiresAt }
+    return clone({ node_id: node.id, token: 'c'.repeat(64), expires_at: expiresAt, public_url: 'https://suma.example.com' }) as T
+  }
   if (pathname === '/agent-enrollments' && method === 'POST') {
     const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString()
     const existing = nodes.find((item) => item.id === body.node_id)

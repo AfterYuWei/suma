@@ -134,6 +134,25 @@ func TestRealDockerAgentInPlaceComposeReconnectAndRevoke(t *testing.T) {
 	if err != nil || newNode.EngineID == "" || !newNode.Enabled {
 		t.Fatalf("new Agent node did not activate: %+v, %v", newNode, err)
 	}
+	// Emulate a migrated node with a stale Engine binding, then re-pair the
+	// real Agent against the explicitly confirmed real Docker Engine.
+	if err := db.Model(&database.Node{}).Where("id = ?", newNode.ID).Update("engine_id", "previous-host-engine").Error; err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := nodes.IssueAgentEnrollment(ctx, node.AgentEnrollmentInput{NodeID: newNode.ID, Name: newNode.Name, Replacement: &node.AgentEngineReplacementInput{PreviousEngineID: "previous-host-engine", EngineID: newNode.EngineID, Confirmation: newNode.Name}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(environmentFile, []byte("SUMA_AGENT_TOKEN="+replacement.Token+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	docker("rm", "-f", name)
+	startAgent()
+	await(newNode.ID, "online")
+	replaced, err := nodes.Get(ctx, newNode.ID)
+	if err != nil || replaced.ID != newNode.ID || replaced.EngineID != newNode.EngineID || !replaced.CreatedAt.Equal(newNode.CreatedAt) {
+		t.Fatalf("Engine replacement changed node identity: %+v %v", replaced, err)
+	}
 	if err := nodes.Delete(ctx, issued.NodeID); err != nil {
 		t.Fatal(err)
 	}

@@ -748,6 +748,10 @@ func (s *Service) connect(ctx context.Context, row database.Node) (*docker.Adapt
 		_ = client.Close()
 		return nil, docker.Info{}, 0, err
 	}
+	if row.ConnectionType == ConnectionAgent && info.ID != row.EngineID {
+		_ = client.Close()
+		return nil, docker.Info{}, 0, errors.New("Agent Docker Engine ID does not match the node")
+	}
 	return client, info, time.Since(started).Milliseconds(), nil
 }
 
@@ -777,7 +781,12 @@ func (s *Service) recordProbe(id string, started time.Time, info docker.Info, pr
 	} else {
 		updates["status"], updates["last_error"], updates["engine_id"], updates["engine_version"] = "online", "", info.ID, info.ServerVersion
 	}
-	_ = s.db.Model(&database.Node{}).Where("id = ? AND NOT (connection_type = ? AND status = ?)", id, ConnectionAgent, "incompatible").UpdateColumns(updates).Error
+	query := s.db.Model(&database.Node{}).Where("id = ? AND NOT (connection_type = ? AND status = ?)", id, ConnectionAgent, "incompatible")
+	if probeErr == nil {
+		// A probe started before replacement must not restore the old identity.
+		query = query.Where("connection_type <> ? OR engine_id = ?", ConnectionAgent, info.ID)
+	}
+	_ = query.UpdateColumns(updates).Error
 }
 
 func (s *Service) invalidate(id string) {

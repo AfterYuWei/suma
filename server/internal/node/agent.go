@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -19,10 +20,19 @@ import (
 )
 
 type AgentEnrollmentInput struct {
-	Name     string `json:"name"`
-	NodeID   string `json:"node_id,omitempty"`
-	GroupIDs []uint `json:"group_ids,omitempty"`
+	Name        string                       `json:"name"`
+	NodeID      string                       `json:"node_id,omitempty"`
+	GroupIDs    []uint                       `json:"group_ids,omitempty"`
+	Replacement *AgentEngineReplacementInput `json:"-"`
 }
+
+type AgentEngineReplacementInput struct {
+	PreviousEngineID string `json:"previous_engine_id"`
+	EngineID         string `json:"engine_id"`
+	Confirmation     string `json:"confirmation"`
+}
+
+var validEngineID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$`)
 
 type AgentEnrollmentView struct {
 	NodeID     string     `json:"node_id"`
@@ -62,6 +72,14 @@ func (s *Service) IssueAgentEnrollment(ctx context.Context, input AgentEnrollmen
 	if s.agents == nil {
 		return AgentEnrollmentView{}, errors.New("Agent hub is unavailable")
 	}
+	if input.Replacement != nil {
+		if input.NodeID == "" || !validEngineID.MatchString(input.Replacement.EngineID) {
+			return AgentEnrollmentView{}, errors.New("a valid replacement Docker Engine ID and existing Agent node are required")
+		}
+		// Serialize replacement with activation and direct-node Engine updates.
+		s.engineMu.Lock()
+		defer s.engineMu.Unlock()
+	}
 	name := strings.TrimSpace(input.Name)
 	if name == "" || len(name) > 128 {
 		return AgentEnrollmentView{}, errors.New("node name is required and must not exceed 128 characters")
@@ -84,6 +102,20 @@ func (s *Service) IssueAgentEnrollment(ctx context.Context, input AgentEnrollmen
 		row, err := s.row(ctx, nodeID)
 		if err != nil {
 			return AgentEnrollmentView{}, err
+		}
+		if replacement := input.Replacement; replacement != nil {
+			if row.ConnectionType != ConnectionAgent || row.EngineID == "" {
+				return AgentEnrollmentView{}, errors.New("only an existing paired Agent node can replace its Docker Engine")
+			}
+			if replacement.Confirmation != row.Name || replacement.PreviousEngineID != row.EngineID {
+				return AgentEnrollmentView{}, errors.New("node name or previous Docker Engine ID does not match; refresh the node and confirm again")
+			}
+			if replacement.EngineID == row.EngineID {
+				return AgentEnrollmentView{}, errors.New("replacement Docker Engine ID must differ from the current Engine ID")
+			}
+			if err := s.ensureUniqueEngine(ctx, nodeID, replacement.EngineID); err != nil {
+				return AgentEnrollmentView{}, err
+			}
 		}
 		if row.EngineID == "" && row.ConnectionType != ConnectionAgent {
 			if _, err := s.Test(ctx, nodeID); err != nil {
@@ -108,6 +140,20 @@ func (s *Service) IssueAgentEnrollment(ctx context.Context, input AgentEnrollmen
 				return err
 			}
 		} else {
+			if replacement := input.Replacement; replacement != nil {
+				// Register only the explicitly confirmed Engine. The Agent must
+				// still pass Ping/Info and the normal identity check to go online.
+				updated := tx.Model(&database.Node{}).Where("id = ? AND connection_type = ? AND engine_id = ? AND name = ?", nodeID, ConnectionAgent, replacement.PreviousEngineID, replacement.Confirmation).Updates(map[string]any{
+					"engine_id": replacement.EngineID, "engine_version": "", "status": "offline", "last_error": "",
+					"last_checked_at": nil, "last_latency_ms": 0, "agent_version": "", "agent_connected_at": nil,
+				})
+				if updated.Error != nil {
+					return updated.Error
+				}
+				if updated.RowsAffected != 1 {
+					return errors.New("Docker node changed; refresh the node and confirm again")
+				}
+			}
 			if err := tx.Where("node_id = ?", nodeID).Delete(&database.AgentEnrollment{}).Error; err != nil {
 				return err
 			}
@@ -132,6 +178,9 @@ func (s *Service) IssueAgentEnrollment(ctx context.Context, input AgentEnrollmen
 		return AgentEnrollmentView{}, err
 	}
 	s.agents.Disconnect(nodeID)
+	if input.Replacement != nil {
+		s.invalidate(nodeID)
+	}
 	return AgentEnrollmentView{NodeID: nodeID, Token: secret, ExpiresAt: expires}, nil
 }
 
