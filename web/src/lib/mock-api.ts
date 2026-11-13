@@ -7,6 +7,9 @@ import { operationsDemo, demoProjectLogStream } from './mock-operations'
 import type { LogEvent } from '../features/project-logs/types'
 import { composeProblems, configKeys, configValue } from '../features/compose/document'
 import { createMockCleanup } from './mock-cleanup'
+import { createMockTaskCenter } from './mock-task-center'
+import { configuration as cleanupConfiguration, type Policy as CleanupPolicy } from '../features/cleanup/types'
+import type { TaskRecord } from '../features/task-center/types'
 import type { User } from '../features/auth/types'
 import type { Project, ProjectSummary, ProjectTakeoverDraft, ShadowAssessment, ShadowPreviewSession, ShadowPreviewStatus } from '../features/compose/types'
 import type { ContainerDetail, ContainerDiagnostics, ContainerMetrics, ContainerSummary } from '../features/containers/types'
@@ -108,7 +111,7 @@ const volumes = [
   { name: 'old-cache', driver: 'local', mountpoint: '/var/lib/docker/volumes/old-cache/_data', created_at: earlier, used_by: [], size: 94_371_840 },
 ]
 
-const tasks = [
+const tasks: TaskRecord[] = [
   { id: 'task-release-184', scope: 'control_plane', type: 'delivery', name: 'Deploy gateway-prod release #184', status: 'success', progress: 100, message: 'Health gate passed on 2 nodes', created_at: '2026-08-29T08:14:00.000Z' },
   { id: 'task-pull-183', scope: 'node', node_id: 'local', node_name: 'homelab-01', type: 'image_pull', name: 'Pull ghcr.io/afteryuwei/gateway:1.8.2', status: 'success', progress: 100, message: 'Image pulled', created_at: '2026-08-29T07:52:00.000Z' },
   { id: 'task-prune-182', scope: 'node', node_id: 'local', node_name: 'homelab-01', type: 'system_prune', name: 'Docker system prune', status: 'success', progress: 100, message: 'Reclaimed 768 MB', created_at: '2026-08-28T22:30:00.000Z' },
@@ -136,6 +139,7 @@ const cdConfiguration = (name: string): CDConfiguration => ({ configured: true, 
 const releases: DeliveryRelease[] = [
   { id: 184, project_id: 1, repository_url: 'https://github.com/example/gateway.git', git_ref: 'main', commit_sha: '7a31f0c87aa1', commit_message: 'feat: expose fleet overview', commit_author: 'Demo Maintainer', config_hash: 'cfg-184', image_references: JSON.stringify(['ghcr.io/afteryuwei/gateway:1.8.2']), task_id: 'task-release-184', status: 'succeeded', trigger_type: 'webhook', trigger_actor: 'github', previous_release_id: 183, compose_files: JSON.stringify(['compose.yml']), approved_by: 1, approved_by_name: user.username, approved_at: earlier, started_at: earlier, finished_at: now, health_summary: '2/2 targets healthy', created_at: earlier, updated_at: now, remediation: { retry_failed_node_ids: [], rollback_failed_node_ids: [] }, deployments: [{ id: 1, node_id: 'local', node_name: 'homelab-01', status: 'succeeded', health_summary: 'healthy', started_at: earlier, finished_at: now, attempts: [{ id: 1, deployment_id: 1, operation: 'deploy', target_release_id: 184, status: 'succeeded', health_summary: 'healthy', started_at: earlier, finished_at: now, created_at: earlier }] }, { id: 2, node_id: 'edge-hk', node_name: 'edge-hk', status: 'succeeded', health_summary: 'healthy', started_at: earlier, finished_at: now }] },
   { id: 183, project_id: 1, repository_url: 'https://github.com/example/gateway.git', git_ref: 'main', commit_sha: 'a81d3e90d4c2', commit_message: 'fix: retain proxy headers', commit_author: 'Demo Maintainer', config_hash: 'cfg-183', image_references: JSON.stringify(['ghcr.io/afteryuwei/gateway:1.8.1']), status: 'succeeded', trigger_type: 'manual', trigger_actor: 'admin', compose_files: JSON.stringify(['compose.yml']), started_at: earlier, finished_at: earlier, health_summary: '2/2 targets healthy', created_at: earlier, updated_at: earlier, remediation: { retry_failed_node_ids: [], rollback_failed_node_ids: [] } },
+  { id: 181, project_id: 2, repository_url: 'https://github.com/example/media-stack.git', git_ref: 'stable', commit_sha: 'f4c9a82e10d2', commit_message: 'Demo media deployment', commit_author: 'Demo Maintainer', config_hash: 'cfg-181', image_references: JSON.stringify(['ghcr.io/immich-app/immich-server:v1.138.0']), status: 'succeeded', trigger_type: 'manual', trigger_actor: 'admin', compose_files: JSON.stringify(['compose.yml']), started_at: earlier, finished_at: earlier, health_summary: 'Demo media services healthy', created_at: earlier, updated_at: earlier, remediation: { retry_failed_node_ids: [], rollback_failed_node_ids: [] } },
 ]
 
 const gitCredentials: GitCredential[] = [{ id: 1, name: 'GitHub Demo', auth_type: 'http_token', username: 'suma-demo', fingerprint: 'sha256:3c92…7ab1', created_at: earlier, updated_at: now, last_used_at: now, used_by: 2, authorized_node_ids: ['local', 'edge-hk', 'nas-prod'] }]
@@ -153,6 +157,113 @@ const authenticated = () => typeof sessionStorage !== 'undefined' && sessionStor
 const requireSession = () => { if (!authenticated()) throw new ApiError('请先登录演示环境', 40101, 401) }
 const wait = () => new Promise((resolve) => setTimeout(resolve, 90))
 const nodeContainers = (id: string) => containerSets[id] ?? containerSets.local
+
+function completedDemoTask(input: Pick<TaskRecord, 'type' | 'name' | 'node_id' | 'params' | 'result' | 'parent_task_id'>): TaskRecord {
+  const at = new Date().toISOString()
+  const task: TaskRecord = { ...input, id: crypto.randomUUID(), scope: input.node_id ? 'node' : 'control_plane', node_name: nodes.find(node => node.id === input.node_id)?.name, status: 'success', progress: 100, message: 'Demo operation completed', created_at: at, started_at: at, finished_at: at }
+  tasks.unshift(task)
+  return task
+}
+
+function taskReference(task: TaskRecord | undefined, field: 'record_id' | 'release_id'): number | undefined {
+  for (const value of [task?.result, task?.params]) {
+    if (!value || typeof value !== 'object') continue
+    if (field === 'record_id' && 'record_id' in value && typeof value.record_id === 'number') return value.record_id
+    if (field === 'release_id' && 'release_id' in value && typeof value.release_id === 'number') return value.release_id
+  }
+}
+
+function matchesTaskEvidence(row: DeliveryHistoryRecord, taskID: string) {
+  if (row.task_id === taskID) return true
+  const task = tasks.find(task => task.id === taskID)
+  const source = task?.type.startsWith('project.cd.') ? 'project_cd' : task?.type.startsWith('cd.') ? 'continuous_delivery' : undefined
+  return row.source === source && row.record_id === taskReference(task, 'record_id')
+}
+
+const taskCenter = createMockTaskCenter({
+  nodes, tasks,
+  validateImage(nodeID, name, params) {
+    const project = projects.find(project => project.name === name)
+    if (!project || params.auto_apply === true && !project.managed) throw new ApiError('A managed project is required for updates', 22007, 400)
+    if (Object.keys(params).some(key => !['project', 'services', 'auto_apply', 'allow_docker_socket'].includes(key)) || params.auto_apply !== undefined && typeof params.auto_apply !== 'boolean' || params.allow_docker_socket !== undefined && typeof params.allow_docker_socket !== 'boolean') throw new ApiError('Invalid image update parameters', 22007, 400)
+    if (params.services !== undefined && (!Array.isArray(params.services) || params.services.some(value => typeof value !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(value)) || new Set(params.services).size !== params.services.length)) throw new ApiError('Invalid service selection', 22007, 400)
+    const configuration = projectConfigurations.get(`${nodeID}/${name}`) ?? projectDetail(project)
+    if (params.auto_apply && configuration.compose.includes('/var/run/docker.sock') && params.allow_docker_socket !== true) throw new ApiError('Docker socket mount requires explicit confirmation', 22007, 400)
+  },
+  change(next, input) {
+    if (next.kind === 'cd.sync') {
+      const configuration = deliveryConfigurations.get(next.subject), project = deliveryProjects.find(project => project.name === next.subject)
+      if (!configuration || !project) throw new ApiError('Delivery project not found', 22005, 404)
+      Object.assign(configuration, { automation_enabled: next.enabled, sync_interval_seconds: next.interval_seconds, automation_version: next.version })
+      Object.assign(project, { automation_enabled: next.enabled, automation_version: next.version })
+    } else if (next.kind === 'project.cd.check') {
+      const configuration = projectCDConfigurations.get(`${next.node_id}/${next.subject}`)
+      if (!configuration?.enabled) throw new ApiError('Project CD is not configured', 22005, 404)
+      Object.assign(configuration, { automation_enabled: next.enabled, sync_interval_seconds: next.interval_seconds, revision: configuration.revision + 1 })
+    } else if (next.kind === 'system.cleanup' && next.node_id) {
+      const policy = mockCleanup.policy(next.node_id), parts = next.cron.split(/\s+/)
+      if (parts.length !== 5 || parts[2] !== '*' || parts[3] !== '*' || !/^\d+$/.test(parts[0]) || !/^\d+$/.test(parts[1]) || parts[4] !== '*' && !/^[0-6]$/.test(parts[4])) throw new ApiError('Cleanup supports daily or weekly schedules', 22001, 400)
+      mockCleanup.savePolicy(next.node_id, { ...cleanupConfiguration(policy), version: policy.version, enabled: next.enabled && next.timer_enabled, schedule: { frequency: parts[4] === '*' ? 'daily' : 'weekly', weekday: parts[4] === '*' ? 0 : Number(parts[4]), hour: Number(parts[1]), minute: Number(parts[0]), timezone: next.timezone }, confirmation_name: input.confirmation_name, authorize: input.authorize })
+    }
+  },
+  run(kind, nodeID, params, taskID) {
+    const name = String(params.project)
+    if (kind === 'image.update' && nodeID) {
+      const selected = Array.isArray(params.services) ? params.services : []
+      const projectCD = projectCDConfigurations.get(`${nodeID}/${name}`)
+      const services = nodeContainers(nodeID).filter(row => row.labels['com.docker.compose.project'] === name && (!selected.length || selected.includes(row.labels['com.docker.compose.service']))).map(row => ({ service: row.labels['com.docker.compose.service'], reference: row.image, status: projectCD?.enabled ? 'blocked' : 'update_available', reason_code: projectCD?.enabled ? 'managed_by_cd' : undefined, replicas: 1, remote_manifest_digest: `sha256:${'d'.repeat(64)}` }))
+      const updated = params.auto_apply ? services.filter(row => row.status === 'update_available').map(row => row.service) : []
+      const childID = updated.length ? crypto.randomUUID() : undefined
+      if (childID) tasks.unshift({ id: childID, parent_task_id: taskID, type: 'compose.update', name: `Recreate ${name}`, scope: 'node', node_id: nodeID, node_name: nodes.find(node => node.id === nodeID)?.name, status: 'success', progress: 100, message: 'Demo services recreated', params: { project: name }, result: { updated }, created_at: new Date().toISOString(), finished_at: new Date().toISOString() })
+      return { project: name, mode: params.auto_apply ? 'auto' : 'check', services, updated, update_task_id: childID, finished_at: new Date().toISOString() }
+    }
+    if (kind === 'cd.sync') {
+      const project = deliveryProjects.find(project => project.name === name), configuration = deliveryConfigurations.get(name)
+      if (!project || !configuration?.configured) throw new ApiError('Delivery project not found', 22005, 404)
+      const release: DeliveryRelease = { ...structuredClone(releases[0]), id: Math.max(...releases.map(row => row.id), 0) + 1, project_id: project.id, repository_url: configuration.repository.clone_url, git_ref: configuration.repository.ref, commit_sha: 'd'.repeat(40), commit_message: 'Demo candidate checked', task_id: taskID, status: 'awaiting_approval', latest_record_id: undefined, deployments: [], started_at: undefined, approved_at: undefined, approved_by: undefined, approved_by_name: undefined, health_summary: '', created_at: new Date().toISOString(), finished_at: undefined }
+      releases.unshift(release)
+      return { project: name, operation: 'check', release_id: release.id, trigger: 'manual' }
+    }
+    if (kind === 'project.cd.check' && nodeID) {
+      const key = `${nodeID}/${name}`, configuration = projectCDConfigurations.get(key)
+      if (!configuration?.enabled) throw new ApiError('Project CD is not configured', 22005, 404)
+      const rows = projectCDRecords.get(key) ?? []
+      const record: ProjectCDRecord = { id: Math.max(...rows.map(row => row.id), 0) + 1, operation: 'check', status: 'succeeded', task_id: taskID, actor: user.username, revision: configuration.revision, commit_sha: 'd'.repeat(40), commit_message: 'Demo Git configuration', config_hash: 'e'.repeat(64), created_at: new Date().toISOString(), failure_reason: '' }
+      rows.unshift(record); projectCDRecords.set(key, rows); configuration.candidate = record
+      return { project: name, operation: 'check', record_id: record.id, commit: record.commit_sha, config_hash: record.config_hash }
+    }
+    throw new ApiError('Unsupported task kind', 22002, 400)
+  },
+})
+
+function syncDeliveryRule(name: string, configuration: CDConfiguration) {
+  const rule = taskCenter.upsert({ name: `Sync ${name}`, kind: 'cd.sync', subject: name, params: { project: name }, cron: '', timezone: 'UTC', schedule_type: 'interval', interval_seconds: configuration.sync_interval_seconds, enabled: configuration.automation_enabled, webhook_enabled: configuration.webhook_enabled })
+  configuration.automation_version = rule.version
+  const project = deliveryProjects.find(project => project.name === name)
+  if (project) project.automation_version = rule.version
+}
+function syncProjectRule(nodeID: string, name: string, configuration: ProjectCDConfiguration) {
+  if (!configuration.enabled) { taskCenter.archive('project.cd.check', nodeID, name); return }
+  taskCenter.upsert({ name: `Check ${name}`, kind: 'project.cd.check', node_id: nodeID, subject: name, params: { project: name }, cron: '', timezone: 'UTC', schedule_type: 'interval', interval_seconds: configuration.sync_interval_seconds, enabled: configuration.automation_enabled, webhook_enabled: configuration.webhook_enabled })
+}
+function syncCleanupRule(policy: CleanupPolicy) {
+  taskCenter.upsert({ name: `Storage cleanup ${policy.node_id}`, kind: 'system.cleanup', node_id: policy.node_id, params: {}, cron: `${policy.schedule.minute} ${policy.schedule.hour} * * ${policy.schedule.frequency === 'weekly' ? policy.schedule.weekday : '*'}`, timezone: policy.schedule.timezone, schedule_type: 'cron', enabled: policy.enabled, timer_enabled: policy.enabled, next_run_at: policy.next_run_at })
+}
+for (const project of deliveryProjects) {
+  const configuration = cdConfiguration(project.name)
+  deliveryConfigurations.set(project.name, configuration); syncDeliveryRule(project.name, configuration)
+}
+taskCenter.upsert({ name: 'media-stack image check', kind: 'image.update', node_id: 'local', subject: 'media-stack', params: { project: 'media-stack', auto_apply: false }, cron: '0 4 * * *', timezone: 'UTC', schedule_type: 'cron', enabled: false })
+
+function demoDeliveryHistory(): DeliveryHistoryRecord[] {
+    const history: DeliveryHistoryRecord[] = []
+    for (const [name, records] of deliveryRecords) for (const record of records) history.push({id:`continuous_delivery:${name}:${record.id}`,source:'continuous_delivery',record_id:record.id,project_id:record.project_id,project_name:name,release_id:record.release_id,node_exists:false,node_ids:record.node_ids,operation:record.operation,status:record.status,actor_name:record.actor_name,task_id:record.task_id||'',source_record_id:record.source_record_id,commit_sha:record.commit_sha,config_hash:record.config_hash,failure_reason:record.failure_reason||'',created_at:record.created_at,finished_at:record.finished_at})
+    for (const [scope, records] of projectCDRecords) {
+      const slash=scope.indexOf('/'),nodeID=scope.slice(0,slash),name=scope.slice(slash+1),node=nodes.find(row=>row.id===nodeID)
+      for (const record of records) history.push({id:`project_cd:${scope}:${record.id}`,source:'project_cd',record_id:record.id,project_id:0,project_name:name,node_id:nodeID,node_name:node?.name||nodeID,node_exists:!!node,node_ids:[nodeID],operation:record.operation==='apply'?'deploy':record.operation==='rollback'?'manual_rollback':record.operation,status:record.status,actor_name:record.actor,task_id:record.task_id,commit_sha:record.commit_sha,config_hash:record.config_hash,failure_reason:record.failure_reason,created_at:record.created_at})
+    }
+    return history
+}
 
 export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
   await wait()
@@ -177,12 +288,26 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
   if (pathname === '/auth/session') { requireSession(); return clone(user) as T }
 
   requireSession()
+  const centerResult = await taskCenter.handle(pathname, method, body, url)
+  if (centerResult !== undefined) return clone(centerResult) as T
   const monitoringResult = mockMonitoring(pathname, method, body, url)
   if (monitoringResult !== undefined) return monitoringResult as T
   const operationsResult = mockNotifications(pathname, method, body)
  if (operationsResult !== undefined) { persistMockNotifications(); return clone(operationsResult) as T }
- const cleanupResult = mockCleanup(pathname, method, body, url)
-  if (cleanupResult !== undefined) return clone(cleanupResult) as T
+ const cleanupResult = mockCleanup.handle(pathname, method, body, url)
+  if (cleanupResult !== undefined) {
+    const policyWrite = pathname.match(/^\/nodes\/([^/]+)\/cleanup\/policy$/)
+    if (policyWrite && method === 'PUT') syncCleanupRule(mockCleanup.policy(policyWrite[1]))
+    const runWrite = pathname.match(/^\/nodes\/([^/]+)\/cleanup\/run$/)
+    if (runWrite && method === 'POST') {
+      const run = mockCleanup.latestRun(runWrite[1])
+      if (run?.task_id) {
+        tasks.unshift({ id: run.task_id, scope: 'node', node_id: run.node_id, node_name: run.node_name, type: 'system.cleanup', name: 'Docker storage cleanup', status: run.status === 'success' ? 'success' : 'failed', progress: 100, message: run.message, params: { trigger: run.trigger, policy_version: run.policy_version }, result: { run_id: run.id, result: run.result }, created_at: run.created_at, finished_at: run.finished_at })
+        taskCenter.record('system.cleanup', run.node_id, '', run.task_id)
+      }
+    }
+    return clone(cleanupResult) as T
+  }
 
   if (pathname === '/account/profile' && method === 'PUT') return clone({ ...user, ...body }) as T
   if (pathname === '/account/passkeys' && method === 'GET') return [] as T
@@ -233,6 +358,25 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     return clone(nodeGroups[index]) as T
   }
   if (pathname === '/nodes' && method === 'GET') return clone(nodes) as T
+  const agentEngineReplacementMatch = pathname.match(/^\/nodes\/([^/]+)\/agent\/replace-engine$/)
+  if (agentEngineReplacementMatch && method === 'POST') {
+    const node = nodes.find((item) => item.id === agentEngineReplacementMatch[1])
+    if (!node) throw new ApiError('Docker node not found', 20504, 404)
+    if (node.connection_type !== 'agent' || !node.engine_id || body.confirmation !== node.name || body.previous_engine_id !== node.engine_id || typeof body.engine_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$/.test(body.engine_id) || body.engine_id === node.engine_id) throw new ApiError('Confirm the node name and a different Docker Engine ID', 20514, 422)
+    if (nodes.some((item) => item.id !== node.id && item.engine_id === body.engine_id)) throw new ApiError('Docker Engine is already registered', 20514, 422)
+    const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString()
+    node.engine_id = body.engine_id
+    node.engine_version = undefined
+    node.agent_version = undefined
+    node.agent_connected_at = undefined
+    node.last_checked_at = undefined
+    node.last_latency_ms = 0
+    node.status = 'offline'
+    node.last_error = ''
+    node.updated_at = new Date().toISOString()
+    node.agent_enrollment = { node_id: node.id, expires_at: expiresAt }
+    return clone({ node_id: node.id, token: 'c'.repeat(64), expires_at: expiresAt, public_url: 'https://suma.example.com' }) as T
+  }
   if (pathname === '/agent-enrollments' && method === 'POST') {
     const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString()
     const existing = nodes.find((item) => item.id === body.node_id)
@@ -278,6 +422,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     }
     if (method === 'DELETE') {
       const [removed] = nodes.splice(index, 1)
+      taskCenter.archive(undefined, removed.id)
       syncNodeGroupCounts()
       return { id: removed.id } as T
     }
@@ -357,12 +502,12 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (pathname === '/tasks') {
     const scope = url.searchParams.get('scope') || 'control_plane'
-    return clone(scope === 'all' ? tasks : tasks.filter((item) => item.scope === scope)) as T
+    const rows = scope === 'all' ? tasks : tasks.filter((item) => item.scope === scope)
+    return clone(url.searchParams.get('view') === 'summary' ? rows.map(({ params: _params, result: _result, ...row }) => row) : rows) as T
   }
   if (/^\/tasks\/[^/]+\/logs$/.test(pathname)) return clone([{ id: 1, level: 'info', message: 'Task accepted by SUMA task service', created_at: earlier }, { id: 2, level: 'info', message: 'Docker operation completed successfully', created_at: now }]) as T
   if (/^\/tasks\/[^/]+\/steps$/.test(pathname)) return clone([{ id: 'download', status: 'success', current: 1, total: 1, progress: 100 }, { id: 'extract', status: 'success', current: 1, total: 1, progress: 100 }]) as T
   if (/^\/tasks\/[^/]+\/cancel$/.test(pathname)) return {} as T
-  if (/^\/tasks\/[^/]+$/.test(pathname)) return clone(tasks.find((item) => pathname.endsWith(item.id)) ?? { id: pathname.split('/').pop(), scope: 'node', node_id: 'local', type: 'compose.pull', name: 'Compose operation', status: 'success', progress: 100, message: 'Operation completed', created_at: now }) as T
   if (pathname === '/audit-logs') {
     const scope = url.searchParams.get('scope') || 'all'
     const entries = audits
@@ -385,15 +530,17 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     return clone(settings) as T
   }
 
+  const taskEvidence = pathname.match(/^\/delivery-records\/by-task\/([^/]+)$/)
+  if (taskEvidence) {
+    const task = tasks.find(task => task.id === taskEvidence[1])
+    const releaseID = task?.type.startsWith('cd.') ? taskReference(task, 'release_id') : undefined
+    const history = demoDeliveryHistory().filter(row => matchesTaskEvidence(row, taskEvidence[1]))
+    return clone({ records: { items: history.slice(0, 20), total: history.length, page: 1, page_size: 20 }, releases: releases.filter(row => row.task_id === taskEvidence[1] || row.id === releaseID).map(row => ({ id: row.id, project_id: row.project_id, project_name: deliveryProjects.find(project => project.id === row.project_id)?.name ?? '', status: row.status, commit_sha: row.commit_sha, commit_message: row.commit_message, created_at: row.created_at })) }) as T
+  }
   if (pathname === '/delivery-records' && method === 'GET') {
-    const history: DeliveryHistoryRecord[] = []
-    for (const [name, records] of deliveryRecords) for (const record of records) history.push({id:`continuous_delivery:${name}:${record.id}`,source:'continuous_delivery',record_id:record.id,project_id:record.project_id,project_name:name,release_id:record.release_id,node_exists:false,node_ids:record.node_ids,operation:record.operation,status:record.status,actor_name:record.actor_name,task_id:record.task_id||'',source_record_id:record.source_record_id,commit_sha:record.commit_sha,config_hash:record.config_hash,failure_reason:record.failure_reason||'',created_at:record.created_at,finished_at:record.finished_at})
-    for (const [scope, records] of projectCDRecords) {
-      const slash=scope.indexOf('/'),nodeID=scope.slice(0,slash),name=scope.slice(slash+1),node=nodes.find(row=>row.id===nodeID)
-      for (const record of records) history.push({id:`project_cd:${scope}:${record.id}`,source:'project_cd',record_id:record.id,project_id:0,project_name:name,node_id:nodeID,node_name:node?.name||nodeID,node_exists:!!node,node_ids:[nodeID],operation:record.operation==='apply'?'deploy':record.operation==='rollback'?'manual_rollback':record.operation,status:record.status,actor_name:record.actor,task_id:record.task_id,commit_sha:record.commit_sha,config_hash:record.config_hash,failure_reason:record.failure_reason,created_at:record.created_at})
-    }
+    const history = demoDeliveryHistory()
     const search=(url.searchParams.get('search')||'').toLowerCase()
-    const filtered=history.filter(row=>(!url.searchParams.has('source')||row.source===url.searchParams.get('source'))&&(!url.searchParams.has('operation')||row.operation===url.searchParams.get('operation'))&&(!url.searchParams.has('status')||row.status===url.searchParams.get('status'))&&(!search||[row.project_name,row.node_name||'',row.node_id||''].some(value=>value.toLowerCase().includes(search)))).sort((a,b)=>b.created_at.localeCompare(a.created_at)||a.id.localeCompare(b.id))
+    const filtered=history.filter(row=>(!url.searchParams.has('task_id')||matchesTaskEvidence(row,url.searchParams.get('task_id')!))&&(!url.searchParams.has('source')||row.source===url.searchParams.get('source'))&&(!url.searchParams.has('operation')||row.operation===url.searchParams.get('operation'))&&(!url.searchParams.has('status')||row.status===url.searchParams.get('status'))&&(!search||[row.project_name,row.node_name||'',row.node_id||''].some(value=>value.toLowerCase().includes(search)))).sort((a,b)=>b.created_at.localeCompare(a.created_at)||a.id.localeCompare(b.id))
     const page=Number(url.searchParams.get('page')||1),pageSize=Number(url.searchParams.get('page_size')||20)
     return clone({items:filtered.slice((page-1)*pageSize,page*pageSize),total:filtered.length,page,page_size:pageSize}) as T
   }
@@ -426,6 +573,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     }
     const project: DeliveryProject = { id: Math.max(...deliveryProjects.map(row => row.id), 0) + 1, name, deployment_name: name, configured: !!input, automation_enabled: input?.automation_enabled !== false, repository_url: input?.repository.clone_url, git_ref: input?.repository.ref, node_ids: [...targetIDs], created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
     deliveryProjects.push(project)
+    if (configuration) syncDeliveryRule(name, configuration)
     return clone({ ...project, ...(configuration ? { configuration: { ...configuration, webhook_secret: generatedSecret } } : {}) }) as T
   }
   if ((pathname === '/delivery-projects/test-connection' || /^\/delivery-projects\/[^/]+\/test-connection$/.test(pathname)) && method === 'POST') {
@@ -439,18 +587,26 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
   if (deliveryMatch) {
     const name = deliveryMatch[1]
     const suffix = deliveryMatch[2] || ''
-    const project = deliveryProjects.find((item) => item.name === name) ?? deliveryProjects[0]
+    const project = deliveryProjects.find((item) => item.name === name)
+    if (!project) throw new ApiError('Delivery project not found', 17701, 404)
     if (suffix === '/environment' && method === 'GET') return clone(deliveryEnvironments.get(name) ?? {}) as T
     if (!suffix && method === 'GET') return clone(project) as T
+    if (suffix === '/sync' && method === 'POST') { const run = taskCenter.dispatch('cd.sync', undefined, { project: name }, 'check'); return clone(tasks.find(task => task.id === run.task_id)) as T }
+    if (!suffix && method === 'DELETE') { taskCenter.archive('cd.sync', undefined, name); deliveryProjects.splice(deliveryProjects.indexOf(project), 1); deliveryConfigurations.delete(name); return { name } as T }
     if (suffix === '/automation' && method === 'PUT') {
+      if (body.expected_automation_version !== project.automation_version && body.enabled !== project.automation_enabled) throw new ApiError('Schedule changed concurrently; reload and retry', 22003, 409)
       project.automation_enabled = body.enabled === true
       const configuration = deliveryConfigurations.get(name) || cdConfiguration(name)
-      deliveryConfigurations.set(name, { ...configuration, automation_enabled: project.automation_enabled })
+      configuration.automation_enabled = project.automation_enabled
+      deliveryConfigurations.set(name, configuration)
+      syncDeliveryRule(name, configuration)
       return clone(project) as T
     }
     if (suffix === '/configuration') {
       if (method === 'PUT') {
         const input = body as unknown as CDConfigureInput
+        const current = deliveryConfigurations.get(name)
+        if (current && (input.expected_automation_version !== undefined ? input.expected_automation_version !== current.automation_version : input.automation_enabled !== current.automation_enabled || input.sync_interval_seconds !== current.sync_interval_seconds || input.webhook_enabled !== current.webhook_enabled)) throw new ApiError('Schedule changed concurrently; reload and retry', 22003, 409)
         if (input.environment) {
           const current = deliveryEnvironments.get(name) ?? {}
           deliveryEnvironments.set(name, Object.fromEntries(input.environment.map(variable => [variable.name, variable.value ?? current[variable.name] ?? ''])))
@@ -462,16 +618,17 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
         project.repository_url = saved.repository.clone_url
         project.git_ref = saved.repository.ref
         project.node_ids = [...saved.node_ids]
+        syncDeliveryRule(name, saved)
       }
       return clone(deliveryConfigurations.get(name) || cdConfiguration(name)) as T
     }
     if (suffix === '/drift') return clone({ drifted: false, status: 'healthy', desired_commit: project.desired_commit ?? '', observed_commit: project.observed_commit ?? '', active_commit: project.observed_commit ?? '', active_release_id: project.active_release_id, runtime_healthy: true, checked_at: now, nodes: project.node_ids.map((nodeID) => ({ node_id: nodeID, node_name: nodes.find((item) => item.id === nodeID)?.name ?? nodeID, status: 'healthy' as const, drifted: false, active_release_id: project.active_release_id, active_commit: project.observed_commit, health_summary: '[{"State":"running","Health":"healthy"}]', checked_at: now })) } satisfies CDDrift) as T
-    const recordRows: DeliveryRecord[] = releases.map(release => ({
+    const recordRows: DeliveryRecord[] = releases.filter(release => release.project_id === project.id).map(release => ({
       id: release.id + 1000, project_id: project.id, release_id: release.id, operation: 'deploy', actor_name: release.trigger_actor, trigger_type: release.trigger_type, status: release.status,
       snapshot_complete: true, config_hash: release.config_hash, image_references: release.image_references, compose_files: release.compose_files, environment_file: '.env', environment: [], node_ids: [...project.node_ids], registry_credential_ids: [1], deployment_timeout: 180, auto_rollback: true, commit_sha: release.commit_sha, commit_message: release.commit_message, created_at: release.created_at,
       task_id: release.task_id, attempts: (release.deployments || []).flatMap(deployment => (deployment.attempts || []).map(attempt => ({ ...attempt, node_id: deployment.node_id, node_name: deployment.node_name }))),
     }))
-    const projectRecords = deliveryRecords.get(name) || recordRows
+    const projectRecords = deliveryRecords.get(name) || recordRows.filter(record => record.status !== 'awaiting_approval')
     deliveryRecords.set(name, projectRecords)
     if (suffix === '/records') {
       const filtered = projectRecords.filter(record => (!url.searchParams.has('release_id') || record.release_id === Number(url.searchParams.get('release_id'))) && (!url.searchParams.has('operation') || record.operation === url.searchParams.get('operation')) && (!url.searchParams.has('status') || record.status === url.searchParams.get('status')))
@@ -482,7 +639,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     if (recordMatch) return clone(recordMatch[2] ? {} : projectRecords.find(record => record.id === Number(recordMatch[1]))) as T
     const actionMatch = suffix.match(/^\/releases\/(\d+)\/(deploy|rollback|reject)$/)
     if (actionMatch && method === 'POST') {
-      const release = releases.find(release => release.id === Number(actionMatch[1]))
+      const release = releases.find(release => release.id === Number(actionMatch[1]) && release.project_id === project.id)
       if (!release) throw new ApiError('Release not found', 17706, 404)
       if (actionMatch[2] === 'reject') { release.status = 'rejected'; return clone(release) as T }
       const source = actionMatch[2] === 'rollback' ? projectRecords.find(record => record.id === body.record_id && record.release_id === release.id) : undefined
@@ -491,10 +648,14 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
       if (!baseRecord) throw new ApiError('Configuration record not found', 17706, 404)
       const overrideNodes = Array.isArray(body.node_ids) && body.node_ids.every((node): node is string => typeof node === 'string') ? body.node_ids : undefined
       const record: DeliveryRecord = { ...baseRecord, id: Math.max(...projectRecords.map(record => record.id), 1000) + 1, operation: source ? 'manual_rollback' : 'deploy', source_record_id: source?.id, status: 'succeeded', actor_name: user.username, node_ids: overrideNodes || source?.node_ids || cdConfiguration(name).node_ids, created_at: new Date().toISOString() }
+      const evidence = { project: name, operation: record.operation, record_id: record.id, release_id: release.id }
+      const task = completedDemoTask({ type: `cd.${record.operation}`, name: `Deliver ${name}`, params: evidence, result: evidence })
+      for (const nodeID of record.node_ids) completedDemoTask({ type: 'cd.deploy.node', name: `Deliver ${name} to ${nodeID}`, node_id: nodeID, parent_task_id: task.id, params: evidence, result: evidence })
+      record.task_id = task.id; release.task_id = task.id
       projectRecords.unshift(record); release.latest_record_id = record.id; release.status = 'succeeded'; project.active_release_id = release.id
-      return clone({ task: { id: crypto.randomUUID(), status: 'success' }, record_id: record.id }) as T
+      return clone({ task, record_id: record.id }) as T
     }
-    if (suffix === '/releases') return clone(project.active_release_id ? releases.map((release) => ({ ...release, project_id: project.id, latest_record_id: release.latest_record_id || release.id + 1000 })) : []) as T
+    if (suffix === '/releases') return clone(releases.filter(release => release.project_id === project.id)) as T
     return {} as T
   }
 
@@ -514,7 +675,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
       const row: ContainerSummary = { id, name: input.name, image: input.image, command: input.command.join(' '), created, state: input.start ? 'running' : 'created', status: input.start ? 'Up' : 'Created', ports: input.ports.map(port => ({ private_port: port.container_port, public_port: port.host_port || 32768, type: port.protocol, ip: port.host_ip })), networks: input.network === 'none' ? [] : [{ name: input.network }], labels: {}, cpu_percent: 0, memory_bytes: 0, uptime_seconds: 0 }
       containers.push(row)
       createdContainerDetails.set(nodeID + ':' + id, { ...row, pid: input.start ? 1 : 0, entrypoint: input.entrypoint, working_directory: input.working_directory, restart_policy: input.restart_policy, read_only_rootfs: input.read_only_rootfs, network_mode: input.network, environment: input.environment.map(variable => ({ key: variable.key, sensitive: true })), mounts: input.mounts.map(mount => ({ type: mount.type, name: mount.type === 'volume' ? mount.source : undefined, source: mount.source, destination: mount.target, read_write: !mount.read_only })), networks: (row.networks ?? []).map(network => ({ name: network.name, ip_address: '', gateway: '', mac_address: '' })) })
-      const task = { id: crypto.randomUUID(), scope: 'node', node_id: nodeID, node_name: node.name, type: 'container.create', name: 'Create ' + input.name, status: 'success', progress: 100, message: 'Container ready: ' + id, created_at: created }
+      const task: TaskRecord = { id: crypto.randomUUID(), scope: 'node', node_id: nodeID, node_name: node.name, type: 'container.create', name: 'Create ' + input.name, status: 'success', progress: 100, message: 'Container ready: ' + id, created_at: created }
       createdContainerIDs.set(task.id, id)
       tasks.unshift(task)
       audits.unshift({ id: Math.max(...audits.map(row => row.id)) + 1, scope: 'node', node_id: nodeID, node_name: node.name, user_id: 1, action: 'container.create', resource_type: 'container', resource_name: id, task_id: task.id, ip: '127.0.0.1', result: 'success', created_at: created })
@@ -537,7 +698,10 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     }
     const operation = operationsDemo(suffix, url)
     if (operation.handled) return clone(operation.value) as T
-    if (suffix === '/tasks') return clone(tasks.filter((item) => item.scope === 'node' && item.node_id === nodeID)) as T
+    if (suffix === '/tasks') {
+      const rows = tasks.filter(item => item.scope === 'node' && item.node_id === nodeID)
+      return clone(url.searchParams.get('view') === 'summary' ? rows.map(({ params: _params, result: _result, ...row }) => row) : rows) as T
+    }
     if (/^\/tasks\/[^/]+\/logs$/.test(suffix)) return clone([{ id: 1, level: 'info', message: 'Task accepted by SUMA task service', created_at: earlier }, { id: 2, level: 'info', message: 'Docker operation completed successfully', created_at: now }]) as T
     if (/^\/tasks\/[^/]+\/steps$/.test(suffix)) return clone([{ id: 'download', status: 'success', current: 1, total: 1, progress: 100 }, { id: 'extract', status: 'success', current: 1, total: 1, progress: 100 }]) as T
     if (/^\/tasks\/[^/]+\/cancel$/.test(suffix)) return {} as T
@@ -606,7 +770,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
         if (body.action === 'copy' || body.action === 'move' || body.action === 'rename') {
           for (const [key, value] of [...tree.entries()]) if (key === name || key.startsWith(`${name}/`)) { tree.set(target + key.slice(name.length), { ...value }); if (body.action !== 'copy') tree.delete(key) }
         }
-        return clone(['copy', 'move', 'delete'].includes(String(body.action)) ? { id: `task-file-${Date.now()}`, status: 'success', progress: 100, message: 'Completed' } : { path: name, target }) as T
+        return clone(['copy', 'move', 'delete'].includes(String(body.action)) ? completedDemoTask({ type: 'container.files', name: `File ${String(body.action)} ${name}`, node_id: nodeID, params: { action: body.action, path: name, target }, result: { path: name, target } }) : { path: name, target }) as T
       }
     }
     const observationMatch = suffix.match(/^\/containers\/([^/]+)\/(runtime|events)$/)
@@ -627,7 +791,10 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     }
 
     if (suffix === '/images' && method === 'GET') return clone(images) as T
-    if (suffix === '/images/pull') return clone({ id: 'task-pull-demo', type: 'image_pull', name: 'Pull demo image', status: 'success', progress: 100, message: 'Image pulled' }) as T
+    if (suffix === '/images/pull') {
+      const reference = String(body.reference ?? body.image ?? 'demo image')
+      return clone(completedDemoTask({ type: 'image.pull', name: `Pull ${reference}`, node_id: nodeID, params: { reference }, result: { reference } })) as T
+    }
     if (suffix.startsWith('/images/') && method === 'GET') return clone(images.find((item) => suffix.includes(item.id)) ?? images[0]) as T
     if (suffix.startsWith('/images/')) return {} as T
 
@@ -676,22 +843,26 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
           const next:ProjectCDConfiguration={...cd,...body,configured:true,enabled:true,revision:cd.revision+1,repository:{...cd.repository,...(typeof body.repository==='object'&&body.repository!==null?body.repository:{})}}
           next.repository.authentication={...next.repository.authentication,credential:undefined}
           if(Array.isArray(body.environment)){const values:Record<string,string>={};for(const variable of body.environment)if(typeof variable.name==='string' && typeof variable.value==='string')values[variable.name]=variable.value;projectCDValues.set(configurationKey,values);next.environment=Object.keys(values).map(name=>({name,has_value:true}))}
-          projectCDConfigurations.set(configurationKey,next);return clone(next) as T
+          projectCDConfigurations.set(configurationKey,next);syncProjectRule(nodeID,name,next);return clone(next) as T
         }
         if(action==='/environment' && method==='PUT'){
           const values=projectCDValues.get(configurationKey) ?? {};const nextValues:Record<string,string>={}
           if(Array.isArray(body.environment))for(const variable of body.environment)if(typeof variable.name==='string')nextValues[variable.name]=typeof variable.value==='string'?variable.value:values[variable.name]??''
           projectCDValues.set(configurationKey,nextValues);cd.environment=Object.keys(nextValues).map(name=>({name,has_value:true}));cd.revision++;cd.candidate=undefined;projectCDConfigurations.set(configurationKey,cd);return clone(cd) as T
         }
-        if(action==='/automation'){if(body.enabled===true && cd.initial_application_required)throw new ApiError('Confirm first application',20902,422);cd.automation_enabled=body.enabled===true;projectCDConfigurations.set(configurationKey,cd);return clone(cd) as T}
-        if(action==='/detach'){cd.enabled=false;cd.automation_enabled=false}
-        else if(action==='/check' || action==='/apply' || action.includes('/rollback')){
-          const operation=action==='/check'?'check':action==='/apply'?'apply':'rollback'
-          const record:ProjectCDRecord={id:records.length+1,operation,status:'succeeded',task_id:`demo-project-cd-${Date.now()}`,actor:'Demo admin',revision:cd.revision,commit_sha:'d'.repeat(40),commit_message:'Demo Git configuration',config_hash:'e'.repeat(64),created_at:new Date().toISOString(),failure_reason:''}
+        if(action==='/check'){const run=taskCenter.dispatch('project.cd.check',nodeID,{project:name},'check');return clone(tasks.find(task=>task.id===run.task_id)) as T}
+        if(action==='/automation'){if(body.enabled===true && cd.initial_application_required)throw new ApiError('Confirm first application',20902,422);cd.automation_enabled=body.enabled===true;cd.revision++;projectCDConfigurations.set(configurationKey,cd);syncProjectRule(nodeID,name,cd);return clone(cd) as T}
+        if(action==='/detach' || action==='/apply' || action.includes('/rollback')){
+          const operation=action==='/detach'?'detach':action==='/apply'?'apply':'rollback'
+          const recordID = Math.max(...records.map(record => record.id), 0) + 1
+          const task = completedDemoTask({ type: `project.cd.${operation}`, name: `${operation} ${name}`, node_id: nodeID, params: { project: name }, result: { project: name, operation, record_id: recordID } })
+          const record:ProjectCDRecord={id:recordID,operation,status:'succeeded',task_id:task.id,actor:'Demo admin',revision:cd.revision,commit_sha:'d'.repeat(40),commit_message:'Demo Git configuration',config_hash:'e'.repeat(64),created_at:new Date().toISOString(),failure_reason:''}
           records.unshift(record);projectCDRecords.set(configurationKey,records)
-          if(operation==='check')cd.candidate=record;else{cd.applied=record;cd.initial_application_required=false;if(operation==='rollback')cd.automation_enabled=false}
+          if(operation==='detach'){cd.enabled=false;cd.automation_enabled=false}
+          else {cd.applied=record;cd.initial_application_required=false;if(operation==='rollback')cd.automation_enabled=false}
+          projectCDConfigurations.set(configurationKey,cd);syncProjectRule(nodeID,name,cd);return clone(task) as T
         }
-        projectCDConfigurations.set(configurationKey,cd);return {id:`demo-project-cd-${Date.now()}`,status:'success',progress:100,message:'Demo operation completed'} as T
+        throw new ApiError('Unknown project CD operation', 20901, 400)
       }
       if (!rest && method === 'GET') return clone({...detail,deployment_mode:cd.enabled?'cd':'manual'}) as T
       if (!rest && method === 'PUT') {
@@ -708,6 +879,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
         return { valid: true } as T
       }
       if (!rest && method === 'DELETE') {
+        taskCenter.archive('image.update', nodeID, name); taskCenter.archive('project.cd.check', nodeID, name)
         projectConfigurations.delete(configurationKey)
         const index = projects.findIndex((item) => item.name === name)
         if (index >= 0) projects.splice(index, 1)
@@ -720,18 +892,17 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
         return clone(draft) as T
       }
       if (rest === '/takeover/shadow/assess') return clone({ eligible: true, reasons: [], warnings: [] } satisfies ShadowAssessment) as T
-      if (rest === '/takeover/shadow' && method === 'POST') return clone({ session_id: 'shadow-demo', preview_project: `${name}-preview`, expires_at: now, task: { id: 'task-shadow-demo', status: 'success', progress: 100, message: 'Preview ready' } } satisfies ShadowPreviewSession) as T
+      if (rest === '/takeover/shadow' && method === 'POST') return clone({ session_id: 'shadow-demo', preview_project: `${name}-preview`, expires_at: now, task: completedDemoTask({ type: 'compose.shadow.preview', name: `Preview ${name}`, node_id: nodeID, params: { project: name }, result: { session_id: 'shadow-demo' } }) } satisfies ShadowPreviewSession) as T
       if (rest.startsWith('/takeover/shadow/')) return clone({ session_id: 'shadow-demo', preview_project: `${name}-preview`, expires_at: now, containers: '1 running', logs: 'Preview service is healthy' } satisfies ShadowPreviewStatus) as T
       if (rest.startsWith('/actions/')) {
         if (body.expected_revision && body.expected_revision !== detail.revision) throw new ApiError('Project configuration changed', 20416, 409)
-        const task = { id: `task-${name}-${Date.now()}`, scope: 'node', node_id: nodeID, node_name: nodeID, type: `compose.${rest.slice('/actions/'.length)}`, name: `Compose ${name}`, status: 'success', progress: 100, message: 'Operation completed', created_at: new Date().toISOString() }
-        tasks.push(task)
+        const task = completedDemoTask({ type: `compose.${rest.slice('/actions/'.length)}`, name: `Compose ${name}`, node_id: nodeID, params: { project: name }, result: { project: name } })
         return clone(task) as T
       }
-      if (rest === '/cleanup' && method === 'POST') return clone({ id: `task-cleanup-${name}`, scope: 'node', node_id: nodeID, type: 'project.cleanup', name: `Clean ${name}`, status: 'success', progress: 100, message: 'Project resources removed', created_at: now }) as T
+      if (rest === '/cleanup' && method === 'POST') return clone(completedDemoTask({ type: 'project.cleanup', name: `Clean ${name}`, node_id: nodeID, params: { project: name }, result: { project: name } })) as T
       return {} as T
     }
-    if (suffix === '/system/prune') return clone({ id: 'task-prune-demo', type: 'system_prune', name: 'Docker system prune', status: 'success', progress: 100, message: 'Reclaimed 512 MB', created_at: now }) as T
+    if (suffix === '/system/prune') return clone(completedDemoTask({ type: 'system.prune', name: 'Docker system prune', node_id: nodeID, params: {}, result: { reclaimed_bytes: 512 * 1024 * 1024 } })) as T
   }
 
   return {} as T

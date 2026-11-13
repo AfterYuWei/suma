@@ -21,6 +21,7 @@ import (
 	"github.com/suma/suma/server/internal/projectcd"
 	"github.com/suma/suma/server/internal/secret"
 	"github.com/suma/suma/server/internal/task"
+	"github.com/suma/suma/server/internal/taskcenter"
 	"gorm.io/gorm"
 )
 
@@ -60,6 +61,16 @@ func projectCDTransportSmoke(t *testing.T, ctx context.Context, root, nodeID, tr
 		target, _, err := nodes.ComposeTarget(ctx, id)
 		return target, err
 	}})
+	kinds := taskcenter.NewRegistry()
+	center := taskcenter.New(db, kinds, taskcenter.Dependencies{NodeName: func(ctx context.Context, id string) (string, error) {
+		view, err := nodes.Get(ctx, id)
+		return view.Name, err
+	}})
+	service.SetTaskCenter(center)
+	if err := kinds.Register(service.AutomationKind()); err != nil {
+		t.Fatal(err)
+	}
+	defer center.Stop()
 	t.Cleanup(func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -97,6 +108,13 @@ func projectCDTransportSmoke(t *testing.T, ctx context.Context, root, nodeID, tr
 	if err != nil || config.Candidate == nil {
 		t.Fatal("missing checked candidate", err)
 	}
+	if rows, err := current.Services(ctx, name); err != nil || len(rows) != 0 {
+		t.Fatal("manual center check published before application confirmation", err)
+	}
+	var manual database.TaskCenterScheduleRun
+	if err := db.Where("task_id = ?", checked.ID).First(&manual).Error; err != nil || manual.Status != "started" || manual.TriggeredBy != taskcenter.ReasonManual || manual.ScheduleID == nil {
+		t.Fatalf("project CD check bypassed unified admission: %+v %v", manual, err)
+	}
 	applied, err := service.Apply(ctx, nodeID, name, config.Candidate.ID, config.Revision, false, projectcd.Actor{Name: "Smoke"})
 	join(applied, err)
 	before, err := current.Services(ctx, name)
@@ -111,14 +129,20 @@ func projectCDTransportSmoke(t *testing.T, ctx context.Context, root, nodeID, tr
 		t.Fatal(err)
 	}
 	git.root, git.commit = failedWorktree, strings.Repeat("d", 40)
-	failed, err := service.Check(ctx, nodeID, name, "poll", projectcd.Actor{Name: "Smoke"})
-	if err != nil {
+	if err := db.Model(&database.TaskCenterSchedule{}).Where("id = ?", *manual.ScheduleID).Update("next_run_at", time.Now().Add(-time.Second)).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := tasks.Wait(ctx, failed.ID); err != nil {
+	if err := center.RunDue(ctx); err != nil {
 		t.Fatal(err)
 	}
-	failedTask, err := tasks.Get(ctx, failed.ID)
+	var scheduled database.TaskCenterScheduleRun
+	if err := db.Where("schedule_id = ? AND triggered_by = ?", *manual.ScheduleID, taskcenter.ReasonScheduled).Order("id DESC").First(&scheduled).Error; err != nil || scheduled.TaskID == "" || scheduled.ScheduledFor == nil || scheduled.Status != "started" {
+		t.Fatalf("center did not dispatch real project CD check: %+v %v", scheduled, err)
+	}
+	if err := tasks.Wait(ctx, scheduled.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	failedTask, err := tasks.Get(ctx, scheduled.TaskID)
 	if err != nil || failedTask.Status != task.StatusFailed {
 		t.Fatal("unhealthy delivery was not retained as failed", err)
 	}

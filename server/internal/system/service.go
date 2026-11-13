@@ -22,5 +22,10 @@ func (s *Service) Prune() (database.Task, error) {
 	return s.PruneForNode("local", "Local")
 }
 func (s *Service) PruneForNode(nodeID, nodeName string) (database.Task, error) {
-	return s.tasks.StartForNode(nodeID, nodeName, "system.prune", "Prune unused Docker resources", func(ctx context.Context, report task.Reporter) error { return s.adapter.Prune(ctx, report) })
+	return s.tasks.StartDefinition(context.Background(), task.Definition{
+		Type: "system.prune", Name: "Prune unused Docker resources",
+		NodeID: nodeID, NodeName: nodeName,
+	}, func(ctx context.Context, _ string, report task.Reporter) (any, error) {
+		return nil, s.adapter.Prune(ctx, report)
+	})
 }

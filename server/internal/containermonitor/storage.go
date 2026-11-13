@@ -182,13 +182,16 @@ func (s *Service) startCleanup() (string, error) {
 	if !row.CleanupPending {
 		return "", nil
 	}
-	started, err := s.tasks.StartControlPlane("monitoring.retention", "Clean expired container monitoring history", func(ctx context.Context, report task.Reporter) error {
+	started, err := s.tasks.StartDefinition(context.Background(), task.Definition{
+		Type: "monitoring.retention", Name: "Clean expired container monitoring history",
+		Params: map[string]any{"revision": row.Revision},
+	}, func(ctx context.Context, _ string, report task.Reporter) (any, error) {
 		report(10, "Removing expired monitoring history")
 		if err := s.Prune(ctx, time.Now().UTC()); err != nil {
-			return err
+			return nil, err
 		}
 		report(100, "Expired monitoring history removed")
-		return s.db.WithContext(ctx).Model(&database.MonitoringPolicy{}).Where("id = 1 AND revision = ?", row.Revision).UpdateColumn("cleanup_pending", false).Error
+		return nil, s.db.WithContext(ctx).Model(&database.MonitoringPolicy{}).Where("id = 1 AND revision = ?", row.Revision).UpdateColumn("cleanup_pending", false).Error
 	})
 	if err != nil {
 		return "", err

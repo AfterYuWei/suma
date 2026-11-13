@@ -416,18 +416,22 @@ type GitWebhookDelivery struct {
 }
 
 type Task struct {
-	ID         string     `gorm:"primaryKey;size:36" json:"id"`
-	Scope      string     `gorm:"size:24;not null;default:node;index" json:"scope"`
-	NodeID     string     `gorm:"size:64;not null;default:'';index" json:"node_id,omitempty"`
-	NodeName   string     `gorm:"size:128" json:"node_name,omitempty"`
-	Type       string     `gorm:"size:64;not null" json:"type"`
-	Name       string     `gorm:"not null" json:"name"`
-	Status     string     `gorm:"size:16;not null;index" json:"status"`
-	Progress   int        `gorm:"not null;default:0" json:"progress"`
-	Message    string     `json:"message"`
-	CreatedAt  time.Time  `json:"created_at"`
-	StartedAt  *time.Time `json:"started_at,omitempty"`
-	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	ID           string     `gorm:"primaryKey;size:36" json:"id"`
+	Scope        string     `gorm:"size:24;not null;default:node;index" json:"scope"`
+	NodeID       string     `gorm:"size:64;not null;default:'';index" json:"node_id,omitempty"`
+	NodeName     string     `gorm:"size:128" json:"node_name,omitempty"`
+	Type         string     `gorm:"size:64;not null" json:"type"`
+	Name         string     `gorm:"not null" json:"name"`
+	Status       string     `gorm:"size:16;not null;index" json:"status"`
+	Progress     int        `gorm:"not null;default:0" json:"progress"`
+	Message      string     `json:"message"`
+	Params       JSONB      `gorm:"type:jsonb" json:"params,omitempty"`
+	Result       JSONB      `gorm:"type:jsonb" json:"result,omitempty"`
+	ResultError  string     `gorm:"not null;default:''" json:"result_error,omitempty"`
+	ParentTaskID string     `gorm:"size:36;index" json:"parent_task_id,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	FinishedAt   *time.Time `json:"finished_at,omitempty"`
 }
 
 type TaskLog struct {

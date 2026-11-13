@@ -77,7 +77,7 @@ test('inline rule creation returns to the same recipient and retains the unsaved
  await expect(sheet.getByRole('combobox',{name:'Configure subscription for',exact:true})).toContainText('On-call team')
  await sheet.getByRole('button',{name:'New rule',exact:true}).click()
  await sheet.getByLabel('Rule name',{exact:true}).fill('Image updates')
- await choose(page,sheet,'Use preset','Image updates')
+ await choose(page,sheet,'Use preset','Image pulls')
  await sheet.getByRole('button',{name:'Save rule',exact:true}).click()
  await expect(sheet.getByRole('checkbox',{name:'Image updates',exact:true})).toBeChecked()
  let data = await snapshot(page)

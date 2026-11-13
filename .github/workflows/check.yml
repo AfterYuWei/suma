@@ -35,13 +35,23 @@ jobs:
       - run: npm ci
         working-directory: web
       - run: make check
-      - run: go test -race ./internal/notification ./internal/database ./internal/app ./internal/compose ./internal/projectcd ./internal/api
+      - run: go test -race ./internal/notification ./internal/database ./internal/app ./internal/task ./internal/taskcenter ./internal/cleanup ./internal/cd ./internal/imageupdate ./internal/redact ./internal/compose ./internal/projectcd ./internal/api
         working-directory: server
+      - run: npm test
+        working-directory: web
       - run: npx playwright install --with-deps chromium
         working-directory: web
-      - run: npx playwright test e2e/notifications.spec.ts e2e/feishu-channel.spec.ts e2e/operations.spec.ts
+      - name: Full browser regression
+        run: |
+          SUMA_VITE_CACHE_DIR=/tmp/suma-ci-main npx playwright test
+          SUMA_VITE_CACHE_DIR=/tmp/suma-ci-projects npx playwright test -c playwright.project-services.config.ts
+          SUMA_VITE_CACHE_DIR=/tmp/suma-ci-containers npx playwright test -c playwright.containers.config.ts
+          SUMA_VITE_CACHE_DIR=/tmp/suma-ci-overview npx playwright test -c playwright.overview.config.ts
         working-directory: web
-      - run: npx playwright test -c playwright.project-services.config.ts project-gitops.spec.ts delivery-history.spec.ts
+      - name: Task Center browser regression
+        run: |
+          npx playwright test -c playwright.task-center.config.ts
+          npx playwright test -c playwright.task-center-demo.config.ts
         working-directory: web
   project-docker-smoke:
     runs-on: ubuntu-latest
@@ -72,6 +82,8 @@ jobs:
           docker pull docker:27-dind
           docker pull alpine:3.24
           docker build -f Dockerfile.agent -t "$SUMA_AGENT_SMOKE_IMAGE" .
-      - name: Verify project CD over Unix, TCP and Agent
+      - name: Verify Task Center image updates and CD over Unix, TCP and Agent
         # The disposable daemon owns its Unix socket; production is never used.
-        run: sudo --preserve-env=SUMA_TEST_DATABASE_DSN,SUMA_AGENT_SMOKE_IMAGE,GIN_MODE env "PATH=$PATH" "GOMODCACHE=$(go env GOMODCACHE)" bash doc/project-configuration-smoke.sh
+        run: sudo --preserve-env=SUMA_TEST_DATABASE_DSN,SUMA_AGENT_SMOKE_IMAGE,GIN_MODE env "PATH=$PATH" "GOMODCACHE=$(go env GOMODCACHE)" bash doc/operations-smoke.sh
+      - name: Verify Task Center cleanup over Unix, TCP and Agent
+        run: sudo --preserve-env=SUMA_TEST_DATABASE_DSN,SUMA_AGENT_SMOKE_IMAGE,GIN_MODE env "PATH=$PATH" "GOMODCACHE=$(go env GOMODCACHE)" bash doc/cleanup-smoke.sh

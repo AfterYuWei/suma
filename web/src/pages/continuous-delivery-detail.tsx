@@ -139,7 +139,7 @@ export function ContinuousDeliveryDetailPage() {
       <div className="flex flex-col gap-4">
         {isGit && view !== 'Settings' && <div className="flex flex-col gap-3 rounded-lg bg-muted/40 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0 flex-1"><p className="text-sm font-medium">{zh ? '自动交付触发' : 'Automatic delivery triggers'}</p><p className="mt-1 text-xs text-muted-foreground">{configuration.automation_enabled === false ? (zh ? '轮询与 Webhook 已暂停。手动同步仅生成候选版本，仍可手动发布和回滚。已开始的任务会继续完成。' : 'Polling and webhooks are paused. Manual sync creates candidates; manual deploy and rollback remain available. Started tasks finish normally.') : (zh ? '轮询和 Webhook 按已保存的交付策略执行。' : 'Polling and webhooks follow the saved delivery policy.')}</p></div>
-          <DeliveryAutomationSwitch projectName={projectName} enabled={configuration.automation_enabled !== false} zh={zh} />
+          <DeliveryAutomationSwitch projectName={projectName} enabled={configuration.automation_enabled !== false} version={configuration.automation_version} zh={zh} />
         </div>}
         <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
           <Tabs value={view} onValueChange={(value) => setView(value as View)}>

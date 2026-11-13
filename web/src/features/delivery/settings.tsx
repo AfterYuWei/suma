@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Copy, Plus, Save, Trash2 } from 'lucide-react'
 import { Children, cloneElement, isValidElement, type ComponentProps, type Dispatch, type FormEvent, type ReactElement, type ReactNode, type SetStateAction, useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '../../components/ui/alert'
@@ -14,12 +14,13 @@ import { Spinner } from '../../components/ui/spinner'
 import { Switch } from '../../components/ui/switch'
 import { Textarea } from '../../components/ui/textarea'
 import { useListPagination } from '../../components/ui/use-list-pagination'
-import { api } from '../../lib/api'
+import { api, ApiError } from '../../lib/api'
 import { cn } from '../../lib/utils'
 import {prepareCDSettingsInput} from './settings-input'
 import { nodesForFilteredSelection, type DockerNode } from '../../lib/nodes'
 import { useUIStore } from '../../stores/ui'
 import { GitConnectionTest } from './connection-test'
+import { PollIntervalInput } from './poll-interval-input'
 import { EnvironmentFields } from './environment-fields'
 import {
   type CDConfiguration,
@@ -34,6 +35,7 @@ import {
 function toDraft(value: CDConfiguration): CDConfigureInput {
   const configuration = normalizedCDConfiguration(value)
   return {
+    expected_automation_version: configuration.automation_version,
     repository: { ...configuration.repository },
     environment: configuration.environment?.map(variable => ({ ...variable })),
     automation_enabled: configuration.automation_enabled,
@@ -66,6 +68,8 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
   onDirtyChange?: (dirty: boolean) => void
 }) {
   const initial = normalizedCDConfiguration(configuration)
+	const client = useQueryClient()
+	const draftProject = useRef(projectName)
   const [draft, setDraft] = useState<CDConfigureInput>(() => toDraft(initial))
   const [composeFiles, setComposeFiles] = useState<string[]>(initial.repository.compose_files.length ? initial.repository.compose_files : ['compose.yml'])
   const [notice, setNotice] = useState('')
@@ -94,11 +98,10 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
   }, [])
 
   useEffect(() => {
-    const value = normalizedCDConfiguration(configuration)
-    const signature = JSON.stringify(toDraft(value))
-    if (signature === configurationSignature.current) return
-    resetDraft(value)
-  }, [configuration, resetDraft])
+    if (draftProject.current === projectName) return
+    draftProject.current = projectName
+    resetDraft(configuration)
+  }, [configuration, projectName, resetDraft])
 
   useEffect(() => {
     setEnvironmentValues(null)
@@ -142,8 +145,21 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
       setNotice(creation ? (zh ? '交付项目已创建，配置已保存。' : 'Delivery project created and configured.') : (zh ? '持续交付配置已保存。' : 'Continuous delivery configuration saved.'))
       onSaved(value)
     },
-    onError: (error) => setNotice(error.message),
+    onError: (error) => {
+      setNotice(error.message)
+      if (error instanceof ApiError && error.status === 409) void client.invalidateQueries({ queryKey: ['delivery-configuration', projectName] })
+    },
   })
+	const changedElsewhere = !creation && configuration.automation_version !== undefined && configuration.automation_version !== draft.expected_automation_version
+	const reload = async () => {
+		try {
+			const current = await api<CDConfiguration>(`/delivery-projects/${encodeURIComponent(projectName)}/configuration`)
+			resetDraft(current)
+			client.setQueryData(['delivery-configuration', projectName], current)
+			save.reset()
+			setNotice('')
+		} catch (error) { setNotice(error instanceof Error ? error.message : String(error)) }
+	}
 
   const draftSignature = JSON.stringify(draft)
   const filesSignature = JSON.stringify(composeFiles)
@@ -175,6 +191,7 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
     : ''
 
   return <form onSubmit={submit} className="flex w-full max-w-[1120px] flex-col gap-6" aria-label={creation ? (zh ? '新建交付项目配置' : 'New delivery project configuration') : (zh ? '交付项目配置' : 'Delivery project configuration')}>
+		{(changedElsewhere || (save.error instanceof ApiError && save.error.status === 409)) && <div className="section-surface flex flex-wrap items-center gap-3"><p className="text-sm text-muted-foreground">{zh ? '配置已在其他入口更新；当前草稿与起始版本已保留。' : 'Configuration changed elsewhere. Your draft and its starting version are preserved.'}</p><Button type="button" variant="outline" onClick={() => void reload()}>{zh ? '重新加载配置' : 'Reload configuration'}</Button></div>}
     {!configuration.configured && !creation && <Alert>
       <AlertTitle>{zh ? '连接 Git 持续交付' : 'Connect Git continuous delivery'}</AlertTitle>
       <AlertDescription>{zh ? '保存后 Git 将成为部署期望状态来源，SUMA 中的 Compose 文件会切换为只读。' : 'After saving, Git becomes the deployment source of truth and Compose files become read-only in SUMA.'}</AlertDescription>
@@ -327,7 +344,7 @@ export function CDSettingsFields({projectName, configuration, draft, setDraft, c
         ))}
       </RadioGroup>
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label={zh ? '轮询间隔（秒）' : 'Polling interval (seconds)'} hint="30–86400"><Input required min={30} max={86400} type="number" value={draft.sync_interval_seconds} onChange={(event) => setDraft((current) => ({ ...current, sync_interval_seconds: Number(event.target.value) }))} /></Field>
+        <PollIntervalInput value={draft.sync_interval_seconds} onChange={sync_interval_seconds => setDraft(current => ({ ...current, sync_interval_seconds }))} zh={zh} />
         <Field label={zh ? '部署超时（秒）' : 'Deployment timeout (seconds)'} hint="10–3600"><Input required min={10} max={3600} type="number" value={draft.deployment_timeout} onChange={(event) => setDraft((current) => ({ ...current, deployment_timeout: Number(event.target.value) }))} /></Field>
       </div>
       <label className="flex max-w-xl cursor-pointer items-start gap-2">

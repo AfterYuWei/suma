@@ -16,7 +16,7 @@ import {recordOperationLabel, shortCommit, type DeliveryHistoryPage, type Delive
 const operations = ['check', 'deploy', 'retry', 'manual_rollback', 'auto_rollback', 'rollback_failed', 'start', 'stop', 'restart', 'detach']
 const statuses = ['succeeded', 'failed', 'partial_failed', 'running', 'pending', 'validating', 'pulling', 'deploying', 'verifying', 'interrupted', 'rolling_back', 'rolled_back', 'rollback_failed', 'canceled']
 
-export function DeliveryHistory({zh}: {zh: boolean}) {
+export function DeliveryHistory({zh, taskID}: {zh: boolean; taskID?: string}) {
   const [source, setSource] = useState('all'), [operation, setOperation] = useState('all'), [status, setStatus] = useState('all'), [search, setSearch] = useState('')
   const [page, setPage] = useState(0), [pageSize, setPageSize] = useState<ListPageSize>(20)
   const {formatDateTime} = useDateTime()
@@ -26,9 +26,10 @@ export function DeliveryHistory({zh}: {zh: boolean}) {
   const operationItems = [{value: 'all', label: zh ? '全部操作' : 'All operations'}, ...operations.map(value => ({value, label: recordOperationLabel(value, zh)}))]
   const statusItems = [{value: 'all', label: zh ? '全部状态' : 'All statuses'}, ...statuses.map(value => ({value, label: <ReleaseStatus status={value} zh={zh}/>}))]
   const query = useQuery({
-    queryKey: ['delivery-history', source, operation, status, search, page, pageSize],
+    queryKey: ['delivery-history', source, operation, status, search, taskID ?? '', page, pageSize],
     queryFn: () => {
       const params = new URLSearchParams({page: String(page + 1), page_size: String(pageSize)})
+      if (taskID) params.set('task_id', taskID)
       if (source !== 'all') params.set('source', source)
       if (operation !== 'all') params.set('operation', operation)
       if (status !== 'all') params.set('status', status)
@@ -45,6 +46,7 @@ export function DeliveryHistory({zh}: {zh: boolean}) {
     }
   }
   return <div className="flex min-w-0 flex-col gap-3" data-testid="delivery-history">
+    {taskID && <p className="break-all text-xs text-muted-foreground">{zh ? '关联任务' : 'Linked task'} · {taskID}</p>}
     <div className="flex min-w-0 flex-wrap gap-2">
       <Input className="min-w-0 flex-1 sm:min-w-52" maxLength={256} aria-label={zh ? '搜索项目或节点' : 'Search projects or nodes'} placeholder={zh ? '搜索项目或节点' : 'Search projects or nodes'} value={search} onChange={event => {setSearch(event.target.value); setPage(0)}}/>
       <Select items={sources} value={source} onValueChange={value => {if (value) {setSource(value); setPage(0)}}}><SelectTrigger className="w-44" aria-label={zh ? '记录来源' : 'Record source'}><SelectValue/></SelectTrigger><SelectContent>{sources.map(item => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent></Select>

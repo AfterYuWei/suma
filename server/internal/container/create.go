@@ -238,7 +238,11 @@ func (s *CreationService) CreateForNode(nodeID, nodeName string, input CreateReq
 		}
 		return redact.Bounded(value, 4096)
 	}
-	return s.tasks.StartWithIDForNode(nodeID, nodeName, "container.create", "Create "+input.Name, func(ctx context.Context, taskID string, report task.Reporter) (workErr error) {
+	return s.tasks.StartDefinition(context.Background(), task.Definition{
+		Type: "container.create", Name: "Create " + input.Name,
+		NodeID: nodeID, NodeName: nodeName,
+		Params: map[string]any{"name": input.Name, "image": input.Image, "pull_policy": input.PullPolicy},
+	}, func(ctx context.Context, taskID string, report task.Reporter) (_ any, workErr error) {
 		ctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 		defer cancel()
 		resource := input.Name
@@ -256,14 +260,14 @@ func (s *CreationService) CreateForNode(nodeID, nodeName string, input CreateReq
 				_ = s.audit.RecordLinkedForNode(auditCtx, nodeID, nodeName, actor.UserID, "container.create", "container", resource, actor.IP, result, taskID, nil)
 			}
 		}()
-		fail := func(err error) error { return errors.New(safe(err.Error())) }
+		fail := func(err error) (any, error) { return nil, errors.New(safe(err.Error())) }
 		report(5, "Checking image on the selected node")
 		exists, err := s.adapter.ContainerImageExists(ctx, input.Image)
 		if err != nil {
 			return fail(fmt.Errorf("unable to inspect image: %w", err))
 		}
 		if !exists && input.PullPolicy == "never" {
-			return errors.New("image is not present on the selected node; allow pulling or select a local image")
+			return nil, errors.New("image is not present on the selected node; allow pulling or select a local image")
 		}
 		if input.PullPolicy == "always" || !exists {
 			report(10, "Pulling image")
@@ -271,7 +275,7 @@ func (s *CreationService) CreateForNode(nodeID, nodeName string, input CreateReq
 			if material.ServerAddress != "" {
 				authenticated, ok := s.adapter.(image.AuthenticatedAdapter)
 				if !ok {
-					return errors.New("runtime does not support registry authentication")
+					return nil, errors.New("runtime does not support registry authentication")
 				}
 				stream, err = authenticated.PullImageAuthenticated(ctx, input.Image, material.ServerAddress, material.Username, material.Secret, material.AuthType == credential.RegistryToken)
 			} else {
@@ -286,7 +290,7 @@ func (s *CreationService) CreateForNode(nodeID, nodeName string, input CreateReq
 			}
 		}
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil, err
 		}
 		report(70, "Creating container")
 		created, err := s.adapter.CreateContainer(ctx, input)
@@ -305,15 +309,15 @@ func (s *CreationService) CreateForNode(nodeID, nodeName string, input CreateReq
 		}
 		if *input.Start {
 			if err := ctx.Err(); err != nil {
-				return err
+				return nil, err
 			}
 			report(90, "Starting container")
 			if err := s.adapter.Start(ctx, created.ID); err != nil {
 				return fail(fmt.Errorf("container %s was created but could not start; inspect it before retrying: %w", created.ID, err))
 			}
 		}
-		report(100, "Container ready: "+created.ID)
-		return nil
+		report(100, "Container ready: " + created.ID)
+		return map[string]any{"container_id": created.ID}, nil
 	})
 }
 

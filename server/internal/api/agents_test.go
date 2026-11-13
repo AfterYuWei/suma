@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -122,6 +123,8 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	root := t.TempDir()
 	observationID := strings.Repeat("c", 64)
+	var engineID atomic.Value
+	engineID.Store("agent-engine")
 	eventCanceled := make(chan struct{}, 1)
 	dockerSocket := filepath.Join(root, "docker.sock")
 	listener, err := net.Listen("unix", dockerSocket)
@@ -137,7 +140,7 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 			_, _ = fmt.Fprint(w, "OK")
 		case "/info":
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{"ID": "agent-engine", "Name": "agent-test", "ServerVersion": "29.0", "OSType": "linux"})
+			_ = json.NewEncoder(w).Encode(map[string]any{"ID": engineID.Load(), "Name": "agent-test", "ServerVersion": "29.0", "OSType": "linux"})
 		case "/containers/json":
 			writeProjectDockerJSON(w, []map[string]any{{"Id": observationID, "NetworkSettings": map[string]any{"Networks": map[string]any{"app_default": map[string]any{"IPAddress": "172.20.0.2"}}}}})
 		case "/containers/" + observationID + "/json":
@@ -187,6 +190,13 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 	router.ServeHTTP(unauthorized, unauthorizedRequest)
 	if unauthorized.Code != http.StatusUnauthorized {
 		t.Fatalf("enrollment creation bypassed session: %d", unauthorized.Code)
+	}
+	unauthorizedReplacement := httptest.NewRecorder()
+	unauthorizedReplacementRequest := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/local/agent/replace-engine", strings.NewReader(`{}`))
+	unauthorizedReplacementRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(unauthorizedReplacement, unauthorizedReplacementRequest)
+	if unauthorizedReplacement.Code != http.StatusUnauthorized {
+		t.Fatalf("Engine replacement bypassed session: %d", unauthorizedReplacement.Code)
 	}
 	if _, err := adminAuth.Initialize(context.Background(), "admin", "admin@example.test", "", "AgentAdmin123!"); err != nil {
 		t.Fatal(err)
@@ -323,7 +333,7 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer control.Close()
-	serveControl := func(control *websocket.Conn) <-chan struct{} {
+	serveControl := func(control *websocket.Conn, headers http.Header) <-chan struct{} {
 		closed := make(chan struct{})
 		go func() {
 			defer close(closed)
@@ -355,7 +365,7 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 		}()
 		return closed
 	}
-	controlClosed := serveControl(control)
+	controlClosed := serveControl(control, headers)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		view, err := nodes.Get(context.Background(), issued.NodeID)
@@ -572,7 +582,7 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 				t.Fatalf("saved credential failed to reconnect after token expiry: %v", err)
 			}
 			defer reconnected.Close()
-			reconnectedClosed := serveControl(reconnected)
+			reconnectedClosed := serveControl(reconnected, headers)
 			reconnectDeadline := time.Now().Add(5 * time.Second)
 			for !hub.Connected(issued.NodeID) && time.Now().Before(reconnectDeadline) {
 				time.Sleep(20 * time.Millisecond)
@@ -597,7 +607,74 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 					t.Fatalf("revoked credential rejection for %s: response=%v, err=%v", path, response, err)
 				}
 			}
-			return
+			replacementPath := "/api/v1/nodes/" + issued.NodeID + "/agent/replace-engine"
+			badReplacement := adminRequest(http.MethodPost, replacementPath, `{"previous_engine_id":"agent-engine","engine_id":"replacement-engine","confirmation":"wrong-name"}`)
+			if badReplacement.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("unconfirmed Engine replacement accepted: %d %s", badReplacement.Code, badReplacement.Body.String())
+			}
+			replacement := adminRequest(http.MethodPost, replacementPath, `{"previous_engine_id":"agent-engine","engine_id":"replacement-engine","confirmation":"edge"}`)
+			if replacement.Code != http.StatusCreated || replacement.Header().Get("Cache-Control") != "no-store" {
+				t.Fatalf("Engine replacement failed: %d %s", replacement.Code, replacement.Body.String())
+			}
+			var replaced struct {
+				Data node.AgentEnrollmentView `json:"data"`
+			}
+			if err := json.Unmarshal(replacement.Body.Bytes(), &replaced); err != nil || replaced.Data.NodeID != issued.NodeID || len(replaced.Data.Token) != 64 {
+				t.Fatalf("replacement lost node identity: %v", err)
+			}
+			stale := adminRequest(http.MethodPost, replacementPath, `{"previous_engine_id":"agent-engine","engine_id":"other-engine","confirmation":"edge"}`)
+			if stale.Code != http.StatusUnprocessableEntity {
+				t.Fatal("stale replacement request was accepted")
+			}
+			var auditRow database.AuditLog
+			if err := db.Where("action = ?", "agent.engine.replace").First(&auditRow).Error; err != nil || !strings.Contains(auditRow.ResourceName, "agent-engine -> replacement-engine") || strings.Contains(auditRow.ResourceName, replaced.Data.Token) {
+				t.Fatalf("replacement audit missing identity evidence or exposed token: %+v %v", auditRow, err)
+			}
+			_, replacementCredential, err := nodes.ClaimAgentEnrollment(context.Background(), replaced.Data.Token, agentwire.ProtocolVersion)
+			if err != nil {
+				t.Fatal(err)
+			}
+			replacementHeaders := headers.Clone()
+			replacementHeaders.Set("Authorization", "Bearer "+replacementCredential)
+			wrongEngine, _, err := websocket.DefaultDialer.Dial(address+"/ws/agents/control", replacementHeaders)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer wrongEngine.Close()
+			wrongClosed := serveControl(wrongEngine, replacementHeaders)
+			select {
+			case <-wrongClosed:
+			case <-time.After(5 * time.Second):
+				t.Fatal("replacement accepted an unconfirmed Engine")
+			}
+			failed, err := nodes.Get(context.Background(), issued.NodeID)
+			if err != nil || failed.EngineID != "replacement-engine" || failed.Status == "online" || failed.AgentEnrollment == nil || !strings.Contains(failed.AgentEnrollment.LastError, "does not match") {
+				t.Fatalf("replacement bypassed Engine verification: %+v %v", failed, err)
+			}
+			engineID.Store("replacement-engine")
+			replacementControl, _, err := websocket.DefaultDialer.Dial(address+"/ws/agents/control", replacementHeaders)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer replacementControl.Close()
+			serveControl(replacementControl, replacementHeaders)
+			deadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(deadline) {
+				ready, err := nodes.Get(context.Background(), issued.NodeID)
+				if err == nil && ready.Status == "online" && ready.EngineID == "replacement-engine" && ready.AgentEnrollment != nil && ready.AgentEnrollment.LastError == "" {
+					runtime, err := nodes.Runtime(context.Background(), issued.NodeID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer runtime.Close()
+					if info, err := runtime.Info(context.Background()); err != nil || info.ID != "replacement-engine" {
+						t.Fatalf("replacement runtime failed: %+v %v", info, err)
+					}
+					return
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			t.Fatal("confirmed replacement Engine did not go online")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

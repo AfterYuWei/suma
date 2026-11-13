@@ -44,6 +44,7 @@ type BatchResult struct {
 type Service struct {
 	projectCDView   func(context.Context, string, string) (ProjectDeployment, error)
 	projectCDAction func(context.Context, string, string, string) (database.Task, error)
+	scheduleRemoval func(context.Context, string, string) error
 	db              *gorm.DB
 	root            string
 	runner          Runner
@@ -69,7 +70,13 @@ func NewService(db *gorm.DB, root string, runner Runner, tasks *task.Service, co
 	return &Service{db: db, root: absolute, runner: runner, tasks: tasks, containers: containers, nodeID: "local", nodeName: "Local", localSources: true, instanceID: fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano()), projectLocks: &sync.Map{}, operations: &sync.Map{}}, nil
 }
 func (s *Service) ForNode(nodeID, nodeName string, runner Runner, containers containerdomain.Service, localSources bool) *Service {
-	return &Service{db: s.db, projectCDAction: s.projectCDAction, projectCDView: s.projectCDView, root: s.root, runner: runner, tasks: s.tasks, containers: containers, nodeID: nodeID, nodeName: nodeName, localSources: localSources, instanceID: s.instanceID, projectLocks: s.projectLocks, operations: s.operations, registries: s.registries}
+	return &Service{db: s.db, projectCDAction: s.projectCDAction, projectCDView: s.projectCDView, scheduleRemoval: s.scheduleRemoval, root: s.root, runner: runner, tasks: s.tasks, containers: containers, nodeID: nodeID, nodeName: nodeName, localSources: localSources, instanceID: s.instanceID, projectLocks: s.projectLocks, operations: s.operations, registries: s.registries}
+}
+
+// SetScheduleRemoval wires the Task Center cascade: deleting a Project must
+// drop its scheduled plans (kind, node, subject).
+func (s *Service) SetScheduleRemoval(removal func(context.Context, string, string) error) {
+	s.scheduleRemoval = removal
 }
 func (s *Service) List(ctx context.Context) ([]Project, error) {
 	containers, err := s.containers.List(ctx)
@@ -303,7 +310,15 @@ func (s *Service) removeUnlocked(_ context.Context, name string) error {
 	if err != nil || filepath.Clean(project.Path) != filepath.Clean(expectedPath) {
 		return errors.New("stored Compose project path is outside the configured root")
 	}
-	return os.RemoveAll(project.Path)
+	if err := os.RemoveAll(project.Path); err != nil {
+		return err
+	}
+	if s.scheduleRemoval != nil {
+		if err := s.scheduleRemoval(context.Background(), s.effectiveNodeID(), name); err != nil {
+			return fmt.Errorf("remove scheduled plans: %w", err)
+		}
+	}
+	return nil
 }
 
 // ForceRemove tears down runtime resources with no graceful-stop delay before
@@ -439,9 +454,15 @@ func (s *Service) Action(ctx context.Context, name, action string) (database.Tas
 	return s.ActionWithRevision(ctx, name, action, "")
 }
 func (s *Service) ActionWithRevision(ctx context.Context, name, action, expected string, allowDockerSocket ...bool) (database.Task, error) {
-	return s.action(ctx, name, action, expected, allowDockerSocket...)
+	return s.action(ctx, name, action, expected, nil, allowDockerSocket...)
 }
-func (s *Service) action(ctx context.Context, name, action, expected string, allowDockerSocket ...bool) (database.Task, error) {
+
+// UpdateSelected pins the given services to verified remote digests and
+// recreates only them, inside the ordinary Compose task and lock pipeline.
+func (s *Service) UpdateSelected(ctx context.Context, name, revision string, update SelectedUpdate) (database.Task, error) {
+	return s.action(ctx, name, "update", revision, &update, update.AllowDockerSocket)
+}
+func (s *Service) action(ctx context.Context, name, action, expected string, selected *SelectedUpdate, allowDockerSocket ...bool) (database.Task, error) {
 	if owned, err := s.projectCDOwned(name); err != nil {
 		return database.Task{}, err
 	} else if owned {
@@ -482,26 +503,63 @@ func (s *Service) action(ctx context.Context, name, action, expected string, all
 	}
 	key := s.operationKey(name)
 	s.operations.Store(key, true)
-	result, startErr := s.tasks.StartWithIDForNode(s.effectiveNodeID(), s.effectiveNodeName(), "compose."+action, strings.Title(action)+" "+name, func(ctx context.Context, taskID string, report task.Reporter) (workErr error) {
+	parentTaskID := ""
+	if selected != nil {
+		parentTaskID = selected.ParentTaskID
+	}
+	result, startErr := s.tasks.StartDefinition(ctx, task.Definition{
+		Type: "compose." + action, Name: strings.Title(action) + " " + name,
+		NodeID: s.effectiveNodeID(), NodeName: s.effectiveNodeName(),
+		Params:       map[string]any{"project": name, "action": action, "revision": revision},
+		ParentTaskID: parentTaskID,
+	}, func(ctx context.Context, taskID string, report task.Reporter) (_ any, workErr error) {
+		if selected != nil {
+			defer func() {
+				if workErr == nil && ctx.Err() != nil {
+					workErr = ctx.Err()
+				}
+				if selected.Complete != nil {
+					selected.Complete(taskID, workErr)
+				}
+			}()
+		}
 		defer s.operations.Delete(key)
 		if err := s.checkRevision(project.Path, revision); err != nil {
-			return err
+			return nil, err
 		}
 		if expected != "" && (action == "up" || action == "update") {
 			if err := ValidateComposeBindMounts(snapshot[0], !s.localSources, confirmedSocket); err != nil {
-				return err
+				return nil, err
 			}
 			if err := s.ValidateConfiguration(ctx, name, snapshot[0], snapshot[1]); err != nil {
-				return err
+				return nil, err
+			}
+		}
+		var spec ExecutionSpec
+		if selected != nil {
+			if selected.Start != nil {
+				if err := selected.Start(ctx, taskID); err != nil {
+					return nil, err
+				}
+			}
+			var cleanup func()
+			var selectedErr error
+			spec, cleanup, selectedErr = s.selectedSpec(ctx, project, *selected)
+			if selectedErr != nil {
+				return nil, selectedErr
+			}
+			defer cleanup()
+			if selectedErr = selected.Check(ctx); selectedErr != nil {
+				return nil, selectedErr
 			}
 		}
 		var err error
 		runner := s.runner
 		if action == "pull" || action == "update" || action == "up" {
 			var config string
-			runner, config, err = s.registryRunner(ctx, project)
+			runner, config, err = s.registryRunner(ctx, project, spec.Services...)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if config != "" {
 				redact = registryRedactor(config, redact)
@@ -538,7 +596,19 @@ func (s *Service) action(ctx context.Context, name, action, expected string, all
 		case "build":
 			err = run(5, 95, func(output io.Writer) error { return s.runner.Build(ctx, project.Path, output) })
 		case "update":
-			if err = run(5, 55, func(output io.Writer) error { return runner.Pull(ctx, project.Path, output) }); err == nil {
+			if selected != nil {
+				err = run(5, 55, func(output io.Writer) error { return runner.PullRelease(ctx, spec, output) })
+				if err == nil {
+					err = selected.Check(ctx)
+				}
+				if err == nil {
+					err = s.validateSelectedRuntime(ctx, name, selected.Services)
+				}
+				if err == nil {
+					report(60, "Images verified; recreating selected services")
+					err = run(60, 95, func(output io.Writer) error { return runner.UpRelease(ctx, spec, 120, output) })
+				}
+			} else if err = run(5, 55, func(output io.Writer) error { return runner.Pull(ctx, project.Path, output) }); err == nil {
 				report(60, "Images ready; recreating Compose services")
 				err = run(60, 95, func(output io.Writer) error { return runner.Up(ctx, project.Path, output) })
 			}
@@ -549,9 +619,9 @@ func (s *Service) action(ctx context.Context, name, action, expected string, all
 			_ = s.markDeployed(project)
 		}
 		if err != nil && redact(err.Error()) != err.Error() {
-			return errors.New(redact(err.Error()))
+			return nil, errors.New(redact(err.Error()))
 		}
-		return err
+		return nil, err
 	})
 	if startErr != nil {
 		s.operations.Delete(key)

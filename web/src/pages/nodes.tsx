@@ -62,6 +62,9 @@ export function NodesPage() {
   const [groupValues, setGroupValues] = useState({ name: '', description: '' })
   const [agentActionError, setAgentActionError] = useState('')
   const [reissuing, setReissuing] = useState(false)
+  const [replacementNode, setReplacementNode] = useState<DockerNode | null>(null)
+  const [replacementEngineID, setReplacementEngineID] = useState('')
+  const [replacementConfirmation, setReplacementConfirmation] = useState('')
   const [now, setNow] = useState(() => Date.now())
   const hasPendingEnrollment = pairing !== null || query.data?.some((node) => node.agent_enrollment && !node.agent_enrollment.consumed_at && !tokenExpired(node.agent_enrollment.expires_at, now))
   useEffect(() => {
@@ -71,6 +74,10 @@ export function NodesPage() {
   }, [hasPendingEnrollment])
   const save = useMutation({ mutationFn: (input: NodeInput) => api<DockerNode>(editing ? `/nodes/${editing.id}` : '/nodes', { method: editing ? 'PUT' : 'POST', body: JSON.stringify(input) }), onSuccess: async () => { setOpen(false); await Promise.all([client.invalidateQueries({ queryKey: ['nodes'] }), client.invalidateQueries({ queryKey: ['node-groups'] })]) } })
   const enroll = useMutation({ mutationFn: (input: { name: string; group_ids?: number[]; node_id?: string }) => api<AgentEnrollment>('/agent-enrollments', { method: 'POST', body: JSON.stringify(input) }), onSuccess: async (value) => { setOpen(false); setPairing(value); setNow(Date.now()); await client.invalidateQueries({ queryKey: ['nodes'] }) } })
+  const replaceEngine = useMutation({
+    mutationFn: ({ node, engineID, confirmation }: { node: DockerNode; engineID: string; confirmation: string }) => api<AgentEnrollment>(`/nodes/${node.id}/agent/replace-engine`, { method: 'POST', body: JSON.stringify({ previous_engine_id: node.engine_id, engine_id: engineID, confirmation }) }),
+    onSuccess: async (value) => { setReplacementNode(null); setAgentActionError(''); setPairing(value); setNow(Date.now()); await client.invalidateQueries({ queryKey: ['nodes'] }) },
+  })
   const saveGroup = useMutation({ mutationFn: (input: { name: string; description: string }) => api<NodeGroup>(editingGroup ? `/node-groups/${editingGroup.id}` : '/node-groups', { method: editingGroup ? 'PUT' : 'POST', body: JSON.stringify(input) }), onSuccess: async () => { setGroupOpen(false); await Promise.all([client.invalidateQueries({ queryKey: ['node-groups'] }), client.invalidateQueries({ queryKey: ['nodes'] })]) } })
   const test = useMutation({ mutationFn: (id: string) => api(`/nodes/${id}/test`, { method: 'POST' }), onSuccess: () => client.invalidateQueries({ queryKey: ['nodes'] }) })
   const edit = (node: DockerNode) => { setEditing(node); setValues({ name: node.name, connection_type: node.connection_type, endpoint: node.endpoint, tls_mode: node.tls_mode, tls_credential_id: node.tls_credential_id, enabled: node.enabled, group_ids: node.group_ids }); setOpen(true) }
@@ -245,6 +252,7 @@ export function NodesPage() {
             <Input id="node-endpoint" required value={values.endpoint} onChange={(event) => update({ endpoint: event.target.value })} />
           </div>}
           {values.connection_type === 'agent' && <p className="text-sm text-muted-foreground">{zh ? 'Agent 主动通过 HTTPS/WSS 连接；保存后生成 10 分钟有效的配对令牌。' : 'The Agent connects outbound over HTTPS/WSS. Saving generates a pairing token valid for 10 minutes.'}</p>}
+          {editing?.connection_type === 'agent' && values.connection_type === 'agent' && editing.engine_id && <Button type="button" variant="outline" onClick={() => { setOpen(false); setReplacementNode(editing); setReplacementEngineID(''); setReplacementConfirmation(''); replaceEngine.reset() }}>{zh ? '迁移服务器 / 更换 Docker Engine' : 'Migrate server / replace Docker Engine'}</Button>}
           {tcp && <>
             <div className="grid gap-1.5">
               <Label>TLS</Label>
@@ -295,6 +303,27 @@ export function NodesPage() {
         </form>
       </SheetContent>
     </Sheet>
+    <Sheet open={replacementNode !== null} onOpenChange={(next) => { if (!next && !replaceEngine.isPending) setReplacementNode(null) }}>
+      <SheetContent side="right" className="w-full sm:max-w-[560px]">
+        <SheetHeader><SheetTitle>{zh ? '更换 Docker Engine' : 'Replace Docker Engine'}</SheetTitle><SheetDescription>{zh ? '迁移服务器后，保留原节点并配对新的 Docker 引擎。' : 'Keep this node and pair a new Docker Engine after migrating servers.'}</SheetDescription></SheetHeader>
+        {replacementNode && <form className="flex flex-col gap-4 overflow-y-auto px-4 pb-4" onSubmit={(event) => { event.preventDefault(); if (!replaceEngine.isPending) replaceEngine.mutate({ node: replacementNode, engineID: replacementEngineID.trim(), confirmation: replacementConfirmation }) }}>
+          <Alert><AlertDescription>{zh ? '保留节点 ID、分组、项目关联、凭据授权和历史记录。关联项目与授权将继续作用于新主机；旧 Agent 凭据会立即失效。' : 'The node ID, groups, project links, credential grants and history are retained. Linked projects and grants will apply to the new host. The old Agent credential is revoked immediately.'}</AlertDescription></Alert>
+          <p className="text-sm text-muted-foreground">{zh ? '请先完成业务数据库、Docker 卷和挂载目录的迁移。此操作只更新引擎绑定并生成配对令牌，不搬运业务数据。' : 'Migrate application databases, Docker volumes and bind directories first. This operation updates the Engine binding and creates a pairing token; it does not transfer application data.'}</p>
+          <div className="grid gap-1.5"><Label htmlFor="replacement-node-id">{zh ? '保留的节点 ID' : 'Retained node ID'}</Label><Input id="replacement-node-id" readOnly value={replacementNode.id} className="font-mono" /></div>
+          <div className="grid gap-1.5"><Label htmlFor="replacement-old-engine">{zh ? '当前 Engine ID' : 'Current Engine ID'}</Label><Input id="replacement-old-engine" readOnly value={replacementNode.engine_id} className="font-mono" /></div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="replacement-engine">{zh ? '新主机的 Engine ID' : 'New host Engine ID'}</Label>
+            <Input id="replacement-engine" required maxLength={128} pattern="[A-Za-z0-9][A-Za-z0-9:._\-]*" autoComplete="off" value={replacementEngineID} onChange={(event) => setReplacementEngineID(event.target.value)} disabled={replaceEngine.isPending} className="font-mono" />
+            <p className="text-xs text-muted-foreground">{zh ? '在新主机上运行以下命令；如使用自定义 Docker socket，请替换路径。' : 'Run this on the new host. Replace the path if using a custom Docker socket.'}</p>
+            <pre className="overflow-x-auto rounded-md bg-surface p-3 text-xs"><code>{"docker -H unix:///var/run/docker.sock info --format '{{.ID}}'"}</code></pre>
+            <p className="text-xs text-muted-foreground">{zh ? '只有 Engine ID 与填写值一致的 Agent 才能上线。填错后可重新执行更换操作修正。' : 'Only an Agent with this Engine ID can go online. If entered incorrectly, repeat this operation with the correct ID.'}</p>
+          </div>
+          <div className="grid gap-1.5"><Label htmlFor="replacement-confirmation">{zh ? `输入节点名 ${replacementNode.name} 以确认` : `Enter node name ${replacementNode.name} to confirm`}</Label><Input id="replacement-confirmation" required autoComplete="off" value={replacementConfirmation} onChange={(event) => setReplacementConfirmation(event.target.value)} disabled={replaceEngine.isPending} /></div>
+          {replaceEngine.isError && <Alert variant="destructive"><AlertDescription>{replaceEngine.error instanceof ApiError && replaceEngine.error.code === 20501 ? agentURLHelp : replaceEngine.error.message}</AlertDescription></Alert>}
+          <div className="mt-auto flex justify-end gap-2"><Button type="button" variant="outline" disabled={replaceEngine.isPending} onClick={() => setReplacementNode(null)}>{zh ? '取消' : 'Cancel'}</Button><Button type="submit" variant="destructive" disabled={replaceEngine.isPending || !/^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$/.test(replacementEngineID.trim()) || replacementEngineID.trim() === replacementNode.engine_id || replacementConfirmation !== replacementNode.name}>{replaceEngine.isPending && <Spinner className="size-4" />}{zh ? '确认更换并生成令牌' : 'Replace and create token'}</Button></div>
+        </form>}
+      </SheetContent>
+    </Sheet>
     <Sheet open={pairing !== null} onOpenChange={(next) => { if (!next) setPairing(null) }}>
       <SheetContent side="right" className="w-full sm:max-w-[620px]">
         <SheetHeader><SheetTitle>{zh ? 'Agent 配对' : 'Agent pairing'}</SheetTitle><SheetDescription>{zh ? '令牌只显示一次，最长有效期 10 分钟，首次成功使用后立即失效。配对后的 Agent 凭据长期有效，保存在数据卷中，重启或断线后可自动重连。撤销凭据或手动刷新令牌会使旧凭据失效，需要重新配对。请勿将含令牌的 Compose 提交到仓库。' : 'The token is shown once, is valid for up to 10 minutes, and can be used only once. After pairing, the Agent stores a persistent credential in its data volume and reconnects automatically after restarts or disconnections. Revoking the credential or manually refreshing the token invalidates the old credential and requires pairing again. Do not commit Compose files containing tokens.'}</SheetDescription></SheetHeader>
@@ -306,6 +335,7 @@ export function NodesPage() {
             <div className="grid gap-1.5"><Label>docker-compose.yml</Label><pre className="overflow-x-auto rounded-md bg-surface p-3 text-xs">{agentCompose(pairing.public_url, pairing.token)}</pre><Button type="button" variant="outline" onClick={() => void navigator.clipboard.writeText(agentCompose(pairing.public_url, pairing.token))}><Copy />{zh ? '复制 Compose' : 'Copy Compose'}</Button></div>
           </>}
           {agentActionError && <Alert variant="destructive"><AlertDescription>{agentActionError}</AlertDescription></Alert>}
+          {pairingNode?.agent_enrollment?.last_error && <Alert variant="destructive"><AlertDescription>{pairingNode.agent_enrollment.last_error}</AlertDescription></Alert>}
           {!pairingConnected && <Button type="button" variant="outline" disabled={reissuing} onClick={() => void reissue(pairing.node_id)}>{reissuing && <Spinner className="size-4" />}<RefreshCw />{zh ? '手动刷新令牌' : 'Refresh token manually'}</Button>}
           <p className="text-xs text-muted-foreground">{zh ? 'Docker socket 即使只读挂载，Agent 仍拥有 Docker 管理权限。生产环境请固定镜像版本，并确保 SUMA 的 HTTPS 证书受信任。' : 'A read-only Docker socket mount still grants Docker control. Pin the image version and use a trusted HTTPS certificate in production.'}</p>
         </div>}

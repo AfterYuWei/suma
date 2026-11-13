@@ -27,6 +27,16 @@ func TestImageUpdateRemovalUpgradeRetainsExistingData(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// The upgrade test applies migrations manually, so the migration ledger
+	// that database.Open would normally maintain is seeded here.
+	if _, err := connection.Exec("CREATE TABLE IF NOT EXISTS schema_migrations (key varchar(128) PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"0001_initial.sql", "0002_container_monitoring.sql", "0003_notification_incidents.sql", "0004_delivery_automation.sql", "0005_delivery_environment.sql", "0006_project_image_updates.sql", "0007_delivery_release_records.sql", "0008_project_cd.sql", "0009_project_cd_policy.sql"} {
+		if _, err := connection.Exec("INSERT INTO schema_migrations(key) VALUES($1)", name); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, statement := range []string{
 		"INSERT INTO users(id,username,password_hash) VALUES(41,'retained','password-hash')",
 		"INSERT INTO nodes(id,name,connection_type,endpoint) VALUES('edge','Retained','unix','unix:///fixture.sock')",
@@ -35,8 +45,8 @@ func TestImageUpdateRemovalUpgradeRetainsExistingData(t *testing.T) {
 		"INSERT INTO image_update_policies(node_id,version,enabled,interval_hours) VALUES('edge',2,true,6)",
 		"INSERT INTO image_update_registry_credentials(node_id,registry,credential_id) VALUES('edge','registry.example.test',51)",
 		"INSERT INTO project_image_updates(node_id,project) VALUES('edge','shop')",
-		"INSERT INTO project_image_candidates(id,node_id,project,services_json,status,created_at,updated_at) VALUES('candidate','edge','shop','[]','pending',now(),now())",
-		"INSERT INTO project_image_actions(token_hash,candidate_id,delivery_id,channel_id,chat_id,created_at) VALUES(decode('aabb','hex'),'candidate','delivery','channel','chat',now())",
+		"INSERT INTO project_image_candidates(id,node_id,project,fingerprint,revision,runtime_key,services_json,status,created_at,updated_at) VALUES('candidate','edge','shop','fp','rev','rt','[]','pending',now(),now())",
+		"INSERT INTO project_image_actions(token_hash,candidate_id,delivery_id,channel_id,chat_id,destination_version,created_at) VALUES(decode('aabb','hex'),'candidate','delivery','channel','chat',1,now())",
 		"INSERT INTO tasks(id,type,name,status) VALUES('retained-task','image.updates.check','Retained','pending')",
 		"INSERT INTO audit_logs(action,result) VALUES('image.updates.check','success')",
 		"INSERT INTO notification_channels(id,config_json,secret_ciphertext) VALUES('channel','{\"language\":\"zh-CN\"}',decode('ccdd','hex'))",

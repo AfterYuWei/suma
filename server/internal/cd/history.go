@@ -12,6 +12,7 @@ import (
 
 type HistoryQuery struct {
 	Source, Operation, Status, Search string
+	TaskID                            string
 	Page, PageSize                    int
 }
 
@@ -46,6 +47,27 @@ type HistoryPage struct {
 	Total    int64           `json:"total"`
 	Page     int             `json:"page"`
 	PageSize int             `json:"page_size"`
+}
+
+type TaskReleaseEvidence struct {
+	ID            uint      `json:"id"`
+	ProjectID     uint      `json:"project_id"`
+	ProjectName   string    `json:"project_name"`
+	Status        string    `json:"status"`
+	CommitSHA     string    `json:"commit_sha"`
+	CommitMessage string    `json:"commit_message"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// ReleasesForTask keeps candidate checks visible even when no deployment
+// record was created. It reads original identities without encrypted snapshots.
+func (s *Service) ReleasesForTask(ctx context.Context, taskID string) ([]TaskReleaseEvidence, error) {
+	rows := []TaskReleaseEvidence{}
+	err := s.db.WithContext(ctx).Table("delivery_releases AS r").
+		Select("r.id, r.project_id, COALESCE(p.name, '') AS project_name, r.status, r.commit_sha, r.commit_message, r.created_at").
+		Joins("LEFT JOIN delivery_projects p ON p.id = r.project_id").Where("r.task_id = ? OR r.id::text IN (SELECT COALESCE(result->>'release_id', params->>'release_id') FROM tasks WHERE id = ? AND type LIKE 'cd.%')", taskID, taskID).
+		Order("r.created_at DESC, r.id DESC").Scan(&rows).Error
+	return rows, err
 }
 
 const historySource = `
@@ -83,6 +105,13 @@ func (s *Service) ListHistory(ctx context.Context, q HistoryQuery) (HistoryPage,
 	}
 	result := HistoryPage{Items: []HistoryRecord{}, Page: q.Page, PageSize: q.PageSize}
 	base := s.db.WithContext(ctx).Table("(" + historySource + ") AS history")
+	if q.TaskID != "" {
+		base = base.Where(`task_id = ?
+ OR (source = 'continuous_delivery' AND record_id::text IN
+   (SELECT COALESCE(result->>'record_id', params->>'record_id') FROM tasks WHERE id = ? AND type LIKE 'cd.%'))
+ OR (source = 'project_cd' AND record_id::text IN
+   (SELECT result->>'record_id' FROM tasks WHERE id = ? AND type LIKE 'project.cd.%'))`, q.TaskID, q.TaskID, q.TaskID)
+	}
 	if q.Source != "" {
 		base = base.Where("source = ?", q.Source)
 	}

@@ -151,11 +151,15 @@ func (s *Service) StartShadowPreview(ctx context.Context, name, fingerprint, con
 	createdAt := time.Now().UTC()
 	expiresAt := createdAt.Add(shadowPreviewTTL)
 	previewProject := shadowProjectName(name, createdAt.UnixNano())
-	row, err := s.tasks.StartWithIDForNode(s.effectiveNodeID(), s.effectiveNodeName(), "project.shadow_preview", "Preview "+name, func(taskContext context.Context, taskID string, report task.Reporter) error {
+	row, err := s.tasks.StartDefinition(ctx, task.Definition{
+		Type: "project.shadow_preview", Name: "Preview " + name,
+		NodeID: s.effectiveNodeID(), NodeName: s.effectiveNodeName(),
+		Params: map[string]any{"project": name},
+	}, func(taskContext context.Context, taskID string, report task.Reporter) (any, error) {
 		metadata := shadowMetadata{SessionID: taskID, NativeName: name, PreviewProject: previewProject, CreatedAt: createdAt, ExpiresAt: expiresAt, InstanceID: s.instanceID}
 		directory := s.shadowSessionPath(taskID)
 		if err := os.MkdirAll(directory, 0o700); err != nil {
-			return err
+			return nil, err
 		}
 		cleanup := true
 		defer func() {
@@ -164,28 +168,28 @@ func (s *Service) StartShadowPreview(ctx context.Context, name, fingerprint, con
 			}
 		}()
 		if err := writeAtomic(filepath.Join(directory, "compose.yml"), isolatedContent); err != nil {
-			return err
+			return nil, err
 		}
 		if err := writeAtomic(filepath.Join(directory, ".env"), environment); err != nil {
-			return err
+			return nil, err
 		}
 		_ = os.Chmod(filepath.Join(directory, ".env"), 0o600)
 		if err := writeShadowMetadata(directory, metadata); err != nil {
-			return err
+			return nil, err
 		}
 		spec := shadowExecutionSpec(metadata, directory)
 		report(10, "Validating isolated Compose Project")
 		if err := s.runner.ValidateRelease(taskContext, spec, &reportWriter{report: report}); err != nil {
-			return err
+			return nil, err
 		}
 		report(25, "Starting isolated Compose Project")
 		if err := s.runner.UpRelease(taskContext, spec, 60, &reportWriter{report: report}); err != nil {
-			return err
+			return nil, err
 		}
 		report(100, "Shadow preview is ready")
 		cleanup = false
 		time.AfterFunc(time.Until(expiresAt), func() { _ = s.removeShadowResources(context.Background(), metadata) })
-		return nil
+		return nil, nil
 	})
 	if err != nil {
 		return ShadowPreviewSession{}, err
@@ -218,13 +222,17 @@ func (s *Service) StopShadowPreview(sessionID string) (database.Task, error) {
 	if err != nil {
 		return database.Task{}, err
 	}
-	return s.tasks.StartForNode(s.effectiveNodeID(), s.effectiveNodeName(), "project.shadow_cleanup", "Clean preview "+metadata.NativeName, func(ctx context.Context, report task.Reporter) error {
+	return s.tasks.StartDefinition(context.Background(), task.Definition{
+		Type: "project.shadow_cleanup", Name: "Clean preview " + metadata.NativeName,
+		NodeID: s.effectiveNodeID(), NodeName: s.effectiveNodeName(),
+		Params: map[string]any{"project": metadata.NativeName, "session": sessionID},
+	}, func(ctx context.Context, _ string, report task.Reporter) (any, error) {
 		report(10, "Stopping isolated Compose Project")
 		if err := s.removeShadowResources(ctx, metadata); err != nil {
-			return err
+			return nil, err
 		}
 		report(100, "Shadow preview removed")
-		return nil
+		return nil, nil
 	})
 }
 

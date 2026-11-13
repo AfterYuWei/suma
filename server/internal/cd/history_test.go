@@ -56,6 +56,46 @@ func TestDeliveryHistoryCombinesExistingSourcesWithoutChangingOwnership(t *testi
 	}
 	s := NewService(db, nil, nil, nil, nil, nil, nil)
 	ctx := context.Background()
+	if err := db.Model(&release).Updates(map[string]any{"task_id": "candidate-check", "status": "awaiting_approval"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := s.ReleasesForTask(ctx, "candidate-check")
+	if err != nil || len(candidates) != 1 || candidates[0].ID != release.ID || candidates[0].ProjectName != batch.Name || candidates[0].Status != "awaiting_approval" {
+		t.Fatal("candidate check lost original release evidence", err)
+	}
+	payload, err := json.Marshal(map[string]any{"release_id": release.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&database.Task{ID: "candidate-check", Type: "cd.sync", Name: "Original check", Status: "success", Result: database.JSONB(payload)}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&release).Update("task_id", "later-deployment").Error; err != nil {
+		t.Fatal(err)
+	}
+	candidates, err = s.ReleasesForTask(ctx, "candidate-check")
+	if err != nil || len(candidates) != 1 || candidates[0].ID != release.ID {
+		t.Fatal("later deployment erased original check association", err)
+	}
+	checks, err := s.ListHistory(ctx, HistoryQuery{TaskID: "candidate-check"})
+	if err != nil || checks.Total != 0 {
+		t.Fatal("candidate check fabricated an operation record", err)
+	}
+	// Independent record tables can both contain ID 1. A stable Task reference
+	// must select only the original business namespace, including node work.
+	linkedTasks := []database.Task{
+		{ID: "cd-node-reference", Type: "cd.deploy.node", Status: "success", Params: database.JSONB(`{"record_id":1}`)},
+		{ID: "project-reference", Type: "project.cd.check", Status: "success", Result: database.JSONB(`{"record_id":1}`)},
+	}
+	if err := db.Create(&linkedTasks).Error; err != nil {
+		t.Fatal(err)
+	}
+	for taskID, source := range map[string]string{"cd-node-reference": "continuous_delivery", "project-reference": "project_cd"} {
+		linked, err := s.ListHistory(ctx, HistoryQuery{TaskID: taskID})
+		if err != nil || linked.Total != 1 || linked.Items[0].Source != source || linked.Items[0].RecordID != 1 {
+			t.Fatalf("stable Task reference crossed business ownership: %+v %v", linked, err)
+		}
+	}
 	first, err := s.ListHistory(ctx, HistoryQuery{Page: 1, PageSize: 2})
 	if err != nil || first.Total != 6 || len(first.Items) != 2 || first.Items[0].ID != "continuous_delivery:1" || first.Items[1].ID != "project_cd:5" {
 		t.Fatalf("first merged page: %+v, %v", first, err)
@@ -68,6 +108,10 @@ func TestDeliveryHistoryCombinesExistingSourcesWithoutChangingOwnership(t *testi
 		query HistoryQuery
 		count int64
 	}{
+		{HistoryQuery{TaskID: "node-task"}, 1},
+		{HistoryQuery{TaskID: "missing-task"}, 0},
+		{HistoryQuery{TaskID: "cd-node-reference", Source: "project_cd"}, 0},
+		{HistoryQuery{TaskID: "project-reference", Source: "continuous_delivery"}, 0},
 		{HistoryQuery{Source: "project_cd"}, 5},
 		{HistoryQuery{Operation: "deploy"}, 2},
 		{HistoryQuery{Source: "project_cd", Operation: "deploy"}, 1},

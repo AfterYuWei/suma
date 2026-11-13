@@ -6,13 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/deployment"
 	gitrepo "github.com/suma/suma/server/internal/git"
+	"github.com/suma/suma/server/internal/taskcenter"
 	"gorm.io/gorm"
 )
 
@@ -26,62 +26,20 @@ func (s *Service) Recover(ctx context.Context) error {
 			if err := tx.Model(&database.ProjectCD{}).Where("id IN ?", ids).Update("automation_enabled", false).Error; err != nil {
 				return err
 			}
+			if s.automation != nil {
+				var rows []database.ProjectCD
+				if err := tx.Where("id IN ?", ids).Find(&rows).Error; err != nil {
+					return err
+				}
+				for _, row := range rows {
+					if err := s.syncAutomation(tx, row); err != nil {
+						return err
+					}
+				}
+			}
 		}
 		return tx.Model(&database.ProjectCDRecord{}).Where("status = ?", "running").Updates(map[string]any{"status": "interrupted", "failure_reason": "SUMA restarted before the operation completed; inspect Docker before retrying", "finished_at": time.Now().UTC()}).Error
 	})
-}
-func (s *Service) Start() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.cancel != nil {
-		return
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	s.cancel = cancel
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		ticker := time.NewTicker(15 * time.Second)
-		defer ticker.Stop()
-		for {
-			if err := s.reconcile(ctx); err != nil && ctx.Err() == nil {
-				slog.Warn("project CD scheduling failed; check database availability")
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
-}
-func (s *Service) Stop() {
-	s.mu.Lock()
-	cancel := s.cancel
-	s.cancel = nil
-	s.mu.Unlock()
-	if cancel != nil {
-		cancel()
-		s.wg.Wait()
-	}
-}
-func (s *Service) reconcile(ctx context.Context) error {
-	var rows []database.ProjectCD
-	if err := s.db.WithContext(ctx).Where("enabled = true AND automation_enabled = true").Find(&rows).Error; err != nil {
-		return err
-	}
-	for _, row := range rows {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if row.LastCheckAt != nil && time.Since(*row.LastCheckAt) < time.Duration(row.SyncIntervalSeconds)*time.Second {
-			continue
-		}
-		if _, err := s.Check(ctx, row.NodeID, row.ProjectName, "poll", Actor{Name: "SUMA project CD"}); err != nil && !errors.Is(err, ErrPaused) {
-			slog.Warn("project CD check could not be queued", "project", row.ProjectName)
-		}
-	}
-	return nil
 }
 func (s *Service) Webhook(ctx context.Context, hook string, headers http.Header, body []byte) (bool, error) {
 	if len(body) == 0 || len(body) > 2<<20 {
@@ -99,7 +57,7 @@ func (s *Service) Webhook(ctx context.Context, hook string, headers http.Header,
 	if err := deployment.VerifyWebhook(format, secret, headers, body); err != nil {
 		return false, err
 	}
-	if !row.AutomationEnabled {
+	if !row.AutomationEnabled && s.automation == nil {
 		return true, nil
 	}
 	event, err := deployment.ParseWebhook(format, headers, body)
@@ -140,14 +98,20 @@ func (s *Service) Webhook(ctx context.Context, hook string, headers http.Header,
 		}
 		return false, err
 	}
-	task, queueErr := s.Check(ctx, row.NodeID, row.ProjectName, "webhook", Actor{Name: "Git webhook"})
+	task, queueErr := s.Check(ctx, row.NodeID, row.ProjectName, "webhook", Actor{Name: "Git webhook", SourceID: id})
 	status := "queued"
 	if queueErr != nil {
 		status = "failed"
+		if errors.Is(queueErr, taskcenter.ErrPaused) || errors.Is(queueErr, taskcenter.ErrBusy) {
+			status = "skipped"
+		}
 	}
 	if err := s.db.WithContext(ctx).Model(&delivery).Updates(map[string]any{"status": status, "processed_at": time.Now().UTC()}).Error; err != nil {
 		return false, errors.Join(queueErr, err)
 	}
 	_ = task
+	if errors.Is(queueErr, taskcenter.ErrPaused) || errors.Is(queueErr, taskcenter.ErrBusy) {
+		return true, nil
+	}
 	return false, queueErr
 }

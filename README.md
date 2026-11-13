@@ -54,7 +54,7 @@ SUMA 是一个面向多节点 Docker 管理的单体控制平面：通过一个 
 
 ### 运维与安全
 
-- 任务中心：长耗时操作（拉取、prune、部署等）持久化为任务，区分节点与控制平面作用域，WebSocket 实时推送进度与日志
+- 任务中心：长耗时操作（拉取、prune、部署等）持久化为任务，区分节点与控制平面作用域，WebSocket 实时推送进度与日志；统一自动化分支的操作与验收边界见[使用说明](doc/task-center.md)
 - 审计日志：关键变更操作按节点 / 控制平面严格留痕（操作者、动作、对象、时间）
 - 设置 → 存储清理：每节点独立的每日／每周策略、IANA 时区、五分钟预览、立即执行、暂停、任务取消与执行历史
 - 设置 → 常规设置 → 时区：默认跟随浏览器所在设备，也可选择 IANA 时区；项目、日志、任务等界面时间统一使用该设置。存储清理通过节点菜单「管理清理」进入，已有策略的执行时区保持原值。
@@ -226,6 +226,10 @@ volumes:
 ```
 
 运行 `docker compose up -d`，确认节点在线后可从 Compose 删除 `SUMA_AGENT_TOKEN` 并再次运行该命令；持久卷保存后续重连凭据。Docker 服务随系统启动且 Agent 未被手动停止时，`restart: unless-stopped` 会自动启动 Agent。撤销凭据或手动刷新令牌会立即作废旧凭据并断开 Agent；如需重新配对，生成新令牌、更新环境变量并重新部署 Agent，旧身份认证失败时会自动用新令牌注册。Agent 只转发 Docker API；Compose 文件与 CLI 仍在 SUMA 控制端，远端 bind 源必须是目标主机上的明确绝对路径。
+
+迁移服务器或重新初始化 Docker 后，如果出现 `Agent Docker Engine ID does not match the node`，在节点页选择原节点的「编辑 → 迁移服务器 / 更换 Docker Engine」。先在新主机运行 `docker -H unix:///var/run/docker.sock info --format '{{.ID}}'`（自定义 socket 请替换路径），填入新 Engine ID，再输入原节点名确认。确认会原子更新预期的 Engine 绑定、撤销旧 Agent 凭据并生成新的十分钟单次令牌；节点在新 Agent 通过 Ping/Info 和精确 Engine ID 校验前保持离线。将新令牌写入新主机的 `SUMA_AGENT_TOKEN` 并重新部署 Agent，即可沿用原节点 ID、分组、项目关联、凭据授权和历史记录。禁用节点仍保持禁用；历史容器监控继续保留原 Engine 身份，不拼接为新引擎的运行记录。
+
+此操作不迁移业务数据库、Docker 卷或挂载目录；请先完成业务数据迁移，确认关联项目和授权可以继续作用于新主机。普通「刷新配对令牌」不会更换 Engine 绑定。填错新 Engine ID 时可再次执行更换操作修正；若要回到旧主机，使用旧主机的 Engine ID 重新确认换绑并部署新令牌，无需删除节点或重置数据库。
 
 > 重要安全提醒：永远不要在网络上暴露无认证的 Docker API（明文 2375）。TCP 远程接入使用 mTLS；Agent 接入使用经验证的 HTTPS/WSS。Docker socket 即使以 `:ro` 挂载，仍授予 Agent 完整的 Docker 管理权限。公网 SUMA 请置于 HTTPS 反向代理之后；浏览器通过 HTTPS 访问时会自动使用 Secure Cookie。
 

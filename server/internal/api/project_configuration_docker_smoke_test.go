@@ -25,6 +25,7 @@ import (
 	containerdomain "github.com/suma/suma/server/internal/container"
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/node"
+	"github.com/suma/suma/server/internal/redact"
 	"github.com/suma/suma/server/internal/secret"
 	"github.com/suma/suma/server/internal/task"
 )
@@ -35,7 +36,7 @@ func TestRealDockerProjectConfigurationTransports(t *testing.T) {
 		t.Skip("set SUMA_RUN_PROJECT_SMOKE=1")
 	}
 	unixHost := os.Getenv("SUMA_PROJECT_SMOKE_UNIX")
-	if !strings.HasPrefix(unixHost, "unix:///tmp/suma-project-live.") || !strings.HasPrefix(os.Getenv("SUMA_PROJECT_SMOKE_DIND"), "suma-project-isolated-") {
+	if !strings.HasPrefix(unixHost, "unix://"+filepath.Join(os.TempDir(), "suma-project-live.")) || !strings.HasPrefix(os.Getenv("SUMA_PROJECT_SMOKE_DIND"), "suma-project-isolated-") {
 		t.Fatal("a disposable Project smoke Engine is required")
 	}
 	for _, transport := range []string{"unix", "tcp", "agent"} {
@@ -113,7 +114,7 @@ func projectConfigurationTransportSmoke(t *testing.T, transport, unixHost string
 		if image == "" {
 			image = "suma-agent:env-only-smoke"
 		}
-		command := exec.CommandContext(ctx, "docker", "run", "-d", "--name", name, "--add-host", "host.docker.internal:host-gateway", "--env-file", env, "-e", "SUMA_AGENT_SERVER_URL="+publicURL, "-e", "SUMA_AGENT_CA_FILE=/run/secrets/ca.pem", "-v", strings.TrimPrefix(unixHost, "unix://")+":/var/run/docker.sock:ro", "-v", cert+":/run/secrets/ca.pem:ro", image)
+		command := exec.CommandContext(ctx, "docker", "run", "-d", "--name", name, "--add-host", "host.docker.internal:"+smokeHostGateway(t, ctx), "--env-file", env, "-e", "SUMA_AGENT_SERVER_URL="+publicURL, "-e", "SUMA_AGENT_CA_FILE=/run/secrets/ca.pem", "-v", strings.TrimPrefix(unixHost, "unix://")+":/var/run/docker.sock:ro", "-v", cert+":/run/secrets/ca.pem:ro", image)
 		if output, err := command.CombinedOutput(); err != nil {
 			t.Fatalf("isolated Agent startup: %v %s", err, output)
 		}
@@ -127,7 +128,8 @@ func projectConfigurationTransportSmoke(t *testing.T, transport, unixHost string
 		}
 		view, err := nodes.Get(ctx, nodeID)
 		if err != nil || view.ConnectionType != node.ConnectionAgent || view.Status != "online" {
-			t.Fatal("isolated Agent did not connect")
+			logs, _ := exec.CommandContext(ctx, "docker", "logs", "--tail", "10", name).CombinedOutput()
+			t.Fatalf("isolated Agent did not connect: %s", redact.Bounded(strings.ReplaceAll(string(logs), enrollment.Token, "[redacted]"), 4096))
 		}
 	}
 	adapter, err := nodes.Runtime(ctx, nodeID)
@@ -156,90 +158,107 @@ func projectConfigurationTransportSmoke(t *testing.T, transport, unixHost string
 		t.Fatal(err)
 	}
 	h := projectHTTPHarness{router: NewRouter(Dependencies{Engine: &fakeEngine{}, Nodes: nodes, Auth: authentication, Audit: audit.NewService(db), Tasks: tasks, Compose: projects, ComposeRunner: runner}), cookie: &http.Cookie{Name: sessionCookie, Value: token}, db: db, compose: projects}
-	operationsTransportSmoke(t, ctx, root, unixHost, nodeID, transport, db, nodes, adapter, tasks, authentication, current, h.cookie)
-	notificationTransportSmoke(t, ctx, root, nodeID, transport, db, adapter, tasks, current)
-	name := fmt.Sprintf("visual-%s-%d", transport, time.Now().UnixNano())
-	path := "/api/v1/nodes/" + nodeID + "/projects"
-	content := "# visual source\nservices:\n  app:\n    image: alpine:3.24\n    command: [sh, -c, 'echo project-dialog; exec sleep 300']\n    environment:\n      APP_VALUE: ${APP_VALUE}\n    volumes:\n      - data:/data\n    healthcheck:\n      test: [CMD, 'true']\n      interval: 1s\n    cpus: 0.25\n    mem_limit: 32M\n    x-preserved: value\nvolumes:\n  data: {}\n"
-	body, _ := json.Marshal(map[string]string{"backend": "compose", "name": name, "compose": content, "environment": "APP_VALUE=project-smoke\n"})
-	validated := h.request(http.MethodPost, path+"/validate", body)
-	if validated.Code != 200 {
-		t.Fatalf("new validation %d: %s", validated.Code, validated.Body)
-	}
-	created := h.request(http.MethodPost, path, body)
-	if created.Code != 201 {
-		t.Fatalf("create %d: %s", created.Code, created.Body)
-	}
-	t.Cleanup(func() {
-		cleanup, done := context.WithTimeout(context.Background(), 30*time.Second)
-		defer done()
-		_ = current.ForceRemove(cleanup, name, false)
+	t.Run("task_center", func(t *testing.T) {
+		if os.Getenv("SUMA_RUN_OPERATIONS_SMOKE") == "1" {
+			t.Run("image_update", func(t *testing.T) {
+				operationsTransportSmoke(t, ctx, root, unixHost, nodeID, transport, db, nodes, adapter, tasks, authentication, current, h.cookie)
+			})
+		}
+		t.Run("project_cd", func(t *testing.T) {
+			projectCDTransportSmoke(t, ctx, root, nodeID, transport, db, nodes, current, tasks, store)
+		})
+		t.Run("global_cd", func(t *testing.T) {
+			globalCDTaskCenterSmoke(t, ctx, root, nodeID, transport, db, nodes, current, tasks, store)
+		})
 	})
-	var response struct {
-		Data compose.Project `json:"data"`
+	if os.Getenv("SUMA_RUN_OPERATIONS_SMOKE") == "1" {
+		t.Run("notifications", func(t *testing.T) {
+			notificationTransportSmoke(t, ctx, root, nodeID, transport, db, adapter, tasks, current)
+		})
 	}
-	if err := json.Unmarshal(created.Body.Bytes(), &response); err != nil {
-		t.Fatal(err)
-	}
-	if response.Data.Compose != content || response.Data.Revision == "" {
-		t.Fatal("source/revision mismatch")
-	}
-	rows, err := current.Services(ctx, name)
-	if err != nil || len(rows) != 0 {
-		t.Fatal("saving started containers")
-	}
-	update, _ := json.Marshal(map[string]string{"compose": content, "environment": "APP_VALUE=updated-smoke\n", "expected_revision": response.Data.Revision})
-	saved := h.request(http.MethodPut, path+"/compose/"+name, update)
-	if saved.Code != 200 {
-		t.Fatalf("save %d: %s", saved.Code, saved.Body)
-	}
-	stale, _ := json.Marshal(map[string]string{"expected_revision": response.Data.Revision})
-	if result := h.request(http.MethodPost, path+"/compose/"+name+"/actions/up", stale); result.Code != 409 {
-		t.Fatal("stale deployment accepted")
-	}
-	if err := json.Unmarshal(saved.Body.Bytes(), &response); err != nil {
-		t.Fatal(err)
-	}
-	deployment, _ := json.Marshal(map[string]string{"expected_revision": response.Data.Revision})
-	started := h.request(http.MethodPost, path+"/compose/"+name+"/actions/up", deployment)
-	if started.Code != 202 {
-		t.Fatalf("deployment %d: %s", started.Code, started.Body)
-	}
-	var result struct {
-		Data database.Task `json:"data"`
-	}
-	if err := json.Unmarshal(started.Body.Bytes(), &result); err != nil {
-		t.Fatal(err)
-	}
-	for {
-		work, err := tasks.Get(ctx, result.Data.ID)
-		if err != nil {
+	t.Run("project_configuration", func(t *testing.T) {
+		name := fmt.Sprintf("visual-%s-%d", transport, time.Now().UnixNano())
+		path := "/api/v1/nodes/" + nodeID + "/projects"
+		content := "# visual source\nservices:\n  app:\n    image: alpine:3.24\n    command: [sh, -c, 'echo project-dialog; exec sleep 300']\n    environment:\n      APP_VALUE: ${APP_VALUE}\n    volumes:\n      - data:/data\n    healthcheck:\n      test: [CMD, 'true']\n      interval: 1s\n    cpus: 0.25\n    mem_limit: 32M\n    x-preserved: value\nvolumes:\n  data: {}\n"
+		body, _ := json.Marshal(map[string]string{"backend": "compose", "name": name, "compose": content, "environment": "APP_VALUE=project-smoke\n"})
+		validated := h.request(http.MethodPost, path+"/validate", body)
+		if validated.Code != 200 {
+			t.Fatalf("new validation %d: %s", validated.Code, validated.Body)
+		}
+		created := h.request(http.MethodPost, path, body)
+		if created.Code != 201 {
+			t.Fatalf("create %d: %s", created.Code, created.Body)
+		}
+		t.Cleanup(func() {
+			cleanup, done := context.WithTimeout(context.Background(), 30*time.Second)
+			defer done()
+			_ = current.ForceRemove(cleanup, name, false)
+		})
+		var response struct {
+			Data compose.Project `json:"data"`
+		}
+		if err := json.Unmarshal(created.Body.Bytes(), &response); err != nil {
 			t.Fatal(err)
 		}
-		if work.Status == task.StatusSuccess {
-			break
+		if response.Data.Compose != content || response.Data.Revision == "" {
+			t.Fatal("source/revision mismatch")
 		}
-		if work.Status == task.StatusFailed || work.Status == task.StatusCanceled {
-			t.Fatalf("deployment: %s", work.Message)
+		rows, err := current.Services(ctx, name)
+		if err != nil || len(rows) != 0 {
+			t.Fatal("saving started containers")
 		}
-		select {
-		case <-ctx.Done():
-			t.Fatal(ctx.Err())
-		case <-time.After(100 * time.Millisecond):
+		update, _ := json.Marshal(map[string]string{"compose": content, "environment": "APP_VALUE=updated-smoke\n", "expected_revision": response.Data.Revision})
+		saved := h.request(http.MethodPut, path+"/compose/"+name, update)
+		if saved.Code != 200 {
+			t.Fatalf("save %d: %s", saved.Code, saved.Body)
 		}
-	}
-	rows, err = current.Services(ctx, name)
-	if err != nil || len(rows) != 1 || rows[0].State != "running" || !strings.HasPrefix(rows[0].ImageID, "sha256:") {
-		t.Fatalf("runtime mismatch: %v", err)
-	}
-	projectDialogRuntimeSmoke(t, ctx, h, nodeID, name, rows[0].ID)
-	projectCDTransportSmoke(t, ctx, root, nodeID, transport, db, nodes, current, tasks, store)
-	if transport != "unix" {
-		unsafe, _ := json.Marshal(map[string]string{"name": name, "compose": "services: {app: {image: alpine:3.24, volumes: ['./relative:/data']}}\n", "environment": ""})
-		if result := h.request(http.MethodPost, path+"/validate", unsafe); result.Code != 422 {
-			t.Fatal("remote relative bind accepted")
+		stale, _ := json.Marshal(map[string]string{"expected_revision": response.Data.Revision})
+		if result := h.request(http.MethodPost, path+"/compose/"+name+"/actions/up", stale); result.Code != 409 {
+			t.Fatal("stale deployment accepted")
 		}
-	}
+		if err := json.Unmarshal(saved.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		deployment, _ := json.Marshal(map[string]string{"expected_revision": response.Data.Revision})
+		started := h.request(http.MethodPost, path+"/compose/"+name+"/actions/up", deployment)
+		if started.Code != 202 {
+			t.Fatalf("deployment %d: %s", started.Code, started.Body)
+		}
+		var result struct {
+			Data database.Task `json:"data"`
+		}
+		if err := json.Unmarshal(started.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		for {
+			work, err := tasks.Get(ctx, result.Data.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if work.Status == task.StatusSuccess {
+				break
+			}
+			if work.Status == task.StatusFailed || work.Status == task.StatusCanceled {
+				t.Fatalf("deployment: %s", work.Message)
+			}
+			select {
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+		rows, err = current.Services(ctx, name)
+		if err != nil || len(rows) != 1 || rows[0].State != "running" || !strings.HasPrefix(rows[0].ImageID, "sha256:") {
+			t.Fatalf("runtime mismatch: %v", err)
+		}
+		projectDialogRuntimeSmoke(t, ctx, h, nodeID, name, rows[0].ID)
+		if transport != "unix" {
+			unsafe, _ := json.Marshal(map[string]string{"name": name, "compose": "services: {app: {image: alpine:3.24, volumes: ['./relative:/data']}}\n", "environment": ""})
+			if result := h.request(http.MethodPost, path+"/validate", unsafe); result.Code != 422 {
+				t.Fatal("remote relative bind accepted")
+			}
+		}
+	})
 }
 
 // Exercise the exact HTTP/WS interfaces used by the project list and its Dialog.
