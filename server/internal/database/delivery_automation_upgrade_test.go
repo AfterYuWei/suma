@@ -54,7 +54,7 @@ func TestDeliveryAutomationUpgradeRetainsProductionEvidence(t *testing.T) {
 		projection := "to_jsonb(t) - 'environment_ciphertext' - 'canonical_release_id' - 'latest_record_id' - 'legacy_snapshot_json'"
 		if table == "tasks" {
 			// 0011 adds nullable params/result columns; row evidence itself is unchanged.
-			projection += " - 'params' - 'result'"
+			projection += " - 'params' - 'result' - 'parent_task_id' - 'result_error'"
 		}
 		if table == "delivery_projects" {
 			projection += " - 'automation_enabled'"

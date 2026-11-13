@@ -110,7 +110,7 @@ func TestRealDockerAgentInPlaceComposeReconnectAndRevoke(t *testing.T) {
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
 	startAgent := func() {
 		t.Helper()
-		docker("run", "-d", "--name", name, "--restart", "unless-stopped", "--add-host", "host.docker.internal:host-gateway", "--env-file", environmentFile, "-e", "SUMA_AGENT_SERVER_URL="+publicURL,
+		docker("run", "-d", "--name", name, "--restart", "unless-stopped", "--add-host", "host.docker.internal:"+smokeHostGateway(t, ctx), "--env-file", environmentFile, "-e", "SUMA_AGENT_SERVER_URL="+publicURL,
 			"-e", "SUMA_AGENT_CA_FILE=/run/secrets/ca.pem",
 			"-v", "/var/run/docker.sock:/var/run/docker.sock:ro", "-v", certFile+":/run/secrets/ca.pem:ro",
 			"-v", identityDir+":/var/lib/suma-agent", image)
@@ -523,13 +523,34 @@ func (g *agentSmokeGit) set(revision gitrepo.Revision) {
 	g.mu.Unlock()
 }
 
-func smokeCertificate(t *testing.T, root string) (string, string) {
+func smokeHostGateway(t *testing.T, ctx context.Context) string {
+	t.Helper()
+	output, err := exec.CommandContext(ctx, "docker", "network", "inspect", "bridge", "--format", "{{(index .IPAM.Config 0).Gateway}}").Output()
+	if err != nil {
+		t.Fatal("read smoke host bridge gateway", err)
+	}
+	gateway := strings.TrimSpace(string(output))
+	if net.ParseIP(gateway) == nil {
+		t.Fatal("invalid smoke host bridge gateway")
+	}
+	return gateway
+}
+
+func smokeCertificate(t *testing.T, root string, addresses ...string) (string, string) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	template := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "host.docker.internal"}, DNSNames: []string{"host.docker.internal"}, IPAddresses: []net.IP{net.ParseIP("172.17.0.1"), net.ParseIP("127.0.0.1")}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	ips := []net.IP{net.ParseIP("127.0.0.1")}
+	for _, address := range addresses {
+		ip := net.ParseIP(address)
+		if ip == nil {
+			t.Fatal("invalid fixture certificate IP")
+		}
+		ips = append(ips, ip)
+	}
+	template := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "host.docker.internal"}, DNSNames: []string{"host.docker.internal"}, IPAddresses: ips, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {
 		t.Fatal(err)

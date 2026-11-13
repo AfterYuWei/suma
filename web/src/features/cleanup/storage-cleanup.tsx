@@ -348,6 +348,7 @@ export function CleanupNodeSheet({
       client.invalidateQueries({ queryKey: ['cleanup-policy', node.id] }),
       client.invalidateQueries({ queryKey: ['cleanup-policies'] }),
       client.invalidateQueries({ queryKey: ['cleanup-runs', node.id] }),
+      client.invalidateQueries({ queryKey: ['task-schedules'] }),
       client.invalidateQueries({ queryKey: ['tasks'] }),
     ])
   }
@@ -1376,9 +1377,39 @@ function RunDetails({
     enabled: !!row.task_id,
     refetchInterval: ['running', 'pending'].includes(row.status) ? 2000 : false,
   })
-  const outcomes = useListPagination(run.result.outcomes ?? [])
   return (
     <div className="space-y-3 bg-surface p-3">
+      <CleanupRunEvidence run={run} zh={zh} />
+      {details.isError && <ErrorState description={details.error.message} />}
+      {row.task_id && (
+        <details>
+          <summary className="cursor-pointer text-xs font-medium">
+            {zh ? '任务日志' : 'Task logs'} · {row.task_id.slice(0, 12)}
+          </summary>
+          {logs.isError ? (
+            <ErrorState description={logs.error.message} />
+          ) : (
+            <div className="mt-2 max-h-56 space-y-1 overflow-y-auto rounded-md bg-muted p-2 font-mono text-xs">
+              {logs.data?.map((log) => (
+                <div key={log.id} className="break-all">
+                  {formatTime(log.created_at)}{' '}
+                  {log.message}
+                </div>
+              ))}
+            </div>
+          )}
+        </details>
+      )}
+    </div>
+  )
+}
+
+
+// Shared read-only evidence. Fetching the original row is independent of the
+// current Docker node and never grants preview or deletion permissions.
+export function CleanupRunEvidence({ run, zh }: { run: Run; zh: boolean }) {
+  const outcomes = useListPagination(run.result.outcomes ?? [])
+  return <div className="space-y-3">
       <p className="text-xs text-muted-foreground">{run.message}</p>
       <p className="text-xs">{scopeLabel(run.policy, zh)}</p>
       <div className="space-y-1 text-xs">
@@ -1441,26 +1472,5 @@ function RunDetails({
       {(run.result.outcomes?.length ?? 0) > 0 && (
         <ListPagination {...outcomes} zh={zh} />
       )}
-      {details.isError && <ErrorState description={details.error.message} />}
-      {row.task_id && (
-        <details>
-          <summary className="cursor-pointer text-xs font-medium">
-            {zh ? '任务日志' : 'Task logs'} · {row.task_id.slice(0, 12)}
-          </summary>
-          {logs.isError ? (
-            <ErrorState description={logs.error.message} />
-          ) : (
-            <div className="mt-2 max-h-56 space-y-1 overflow-y-auto rounded-md bg-muted p-2 font-mono text-xs">
-              {logs.data?.map((log) => (
-                <div key={log.id} className="break-all">
-                  {formatTime(log.created_at)}{' '}
-                  {log.message}
-                </div>
-              ))}
-            </div>
-          )}
-        </details>
-      )}
-    </div>
-  )
+  </div>
 }

@@ -339,7 +339,7 @@ func (s *Service) startRecordOperation(ctx context.Context, name string, release
 		defer lock.Unlock()
 		runErr = s.executeRecord(runCtx, project, release, record, taskID, report, true)
 		s.recordFinal(actor, recordAction(operation), name, taskID, &release.ID, runErr)
-		return nil, runErr
+		return map[string]any{"project": name, "operation": operation, "record_id": record.ID, "release_id": release.ID}, runErr
 	})
 	if err != nil {
 		return OperationResult{}, errors.Join(err, s.finishRecord(context.Background(), release, record, StatusFailed, err.Error(), ""))
@@ -528,12 +528,13 @@ func (s *Service) executeRecord(ctx context.Context, p database.DeliveryProject,
 		}
 		child, err := s.tasks.StartDefinition(context.Background(), task.Definition{
 			Type: "cd.deploy.node", Name: "Deliver " + p.Name + " to " + deployment.NodeName,
-			NodeID: node, NodeName: deployment.NodeName,
-			Params: map[string]any{"project": p.Name, "operation": r.Operation, "deployment_id": deployment.ID},
+			ParentTaskID: taskID,
+			NodeID:       node, NodeName: deployment.NodeName,
+			Params: map[string]any{"project": p.Name, "operation": r.Operation, "deployment_id": deployment.ID, "record_id": r.ID, "release_id": nodeRelease.ID},
 		}, func(childCtx context.Context, childID string, childReport task.Reporter) (any, error) {
-			_, nodeErr := s.executeRecordNode(childCtx, p, nodeRelease, nodeRecord, deployment, attempt, previous, childID, childReport)
+			health, nodeErr := s.executeRecordNode(childCtx, p, nodeRelease, nodeRecord, deployment, attempt, previous, childID, childReport)
 			s.recordNodeFinal(Actor{UserID: r.ActorID, Name: r.ActorName, IP: r.ActorIP}, recordAction(r.Operation)+".node", p.Name, node, deployment.NodeName, childID, release.ID, nodeErr)
-			return nil, nodeErr
+			return map[string]any{"project": p.Name, "operation": r.Operation, "record_id": r.ID, "release_id": nodeRelease.ID, "attempt_id": attempt.ID, "health_summary": health}, nodeErr
 		})
 		if err != nil {
 			if finishErr := s.finishAttempt(ctx, attempt.ID, StatusFailed, err.Error(), ""); finishErr != nil {

@@ -1,9 +1,12 @@
 package taskcenter
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -11,49 +14,58 @@ import (
 	"github.com/suma/suma/server/internal/redact"
 	"github.com/suma/suma/server/internal/task"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var (
-	ErrNotFound        = errors.New("schedule not found")
-	ErrBusy            = errors.New("a previous run of this schedule is still active")
-	ErrInvalid         = errors.New("invalid schedule")
-	ErrVersionConflict = errors.New("schedule was modified concurrently")
-	ErrUnknownKind     = errors.New("unknown task kind")
-	ErrDuplicate       = errors.New("an identical schedule already exists")
-	ErrInvalidParams   = errors.New("invalid task parameters")
+	ErrNotFound          = errors.New("schedule not found")
+	ErrBusy              = errors.New("a previous run of this schedule is still active")
+	ErrInvalid           = errors.New("invalid schedule")
+	ErrVersionConflict   = errors.New("schedule was modified concurrently")
+	ErrUnknownKind       = errors.New("unknown task kind")
+	ErrDuplicate         = errors.New("an identical schedule already exists")
+	ErrInvalidParams     = errors.New("invalid task parameters")
+	ErrPaused            = errors.New("automatic triggers are paused")
+	ErrUnsupportedAction = errors.New("unsupported task action")
+	ErrBusinessOwned     = errors.New("configure this automation through its business settings")
+	ErrStopped           = errors.New("task center is shutting down")
 )
 
 const (
 	lastErrorLimit = 512
-	paramsLimit     = 8192
+	paramsLimit    = 8192
+	snapshotLimit  = 16384
 	fireInterval   = 15 * time.Second
 )
 
-// Dependencies wires the scheduler into its surroundings without import
-// cycles. Every field is optional; OnError receives loop errors.
 type Dependencies struct {
-	// NodeName resolves a node's current display name; an error means the
-	// node no longer exists and the run is not started.
-	NodeName func(ctx context.Context, nodeID string) (string, error)
-	// Now overrides the wall clock in tests.
-	Now func() time.Time
-	// OnError receives background loop failures.
-	OnError func(err error)
+	NodeName func(context.Context, string) (string, error)
+	Now      func() time.Time
+	OnError  func(error)
 }
 
-// Service owns every scheduled plan of the Task Center: the due scan, the
-// dispatch history and manual runs. Schedule CRUD lives in schedules.go.
 type Service struct {
-	db    *gorm.DB
-	kinds *Registry
-	deps  Dependencies
-
+	db      *gorm.DB
+	kinds   *Registry
+	deps    Dependencies
 	mu      sync.Mutex
 	started bool
 	stopped bool
 	ctx     context.Context
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
+}
+
+type DispatchRequest struct {
+	ScheduleID   uint
+	Kind         string
+	NodeID       string
+	Params       json.RawMessage
+	Reason       string
+	SourceID     string
+	ScheduledFor *time.Time
+	Action       string
+	Actor        Actor
 }
 
 func New(db *gorm.DB, kinds *Registry, deps Dependencies) *Service {
@@ -63,57 +75,108 @@ func New(db *gorm.DB, kinds *Registry, deps Dependencies) *Service {
 	return &Service{db: db, kinds: kinds, deps: deps}
 }
 
-// Recover re-arms plans whose next run fell due while the control plane was
-// down. Missed occurrences are skipped on purpose: a restart must never burst
-// a backlog of updates or cleanups behind the operator's back.
+// Recover never replays a claimed occurrence. CD intervals may perform one
+// fresh check of their current configuration after business recovery finishes.
 func (s *Service) Recover(ctx context.Context) error {
+	if err := s.db.WithContext(ctx).Model(&database.TaskCenterScheduleRun{}).
+		Where("status = ?", "dispatching").Updates(map[string]any{"status": "interrupted", "reason_code": "process_restarted", "error": "SUMA stopped before dispatch completed; not replayed"}).Error; err != nil {
+		return err
+	}
 	now := s.now()
 	var rows []database.TaskCenterSchedule
-	if err := s.db.WithContext(ctx).Where("enabled = ? AND next_run_at IS NOT NULL AND next_run_at < ?", true, now).Find(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("archived_at IS NULL").Find(&rows).Error; err != nil {
 		return err
 	}
 	for _, row := range rows {
-		next, err := NextRuns(row.Cron, row.Timezone, now, 1)
-		if err != nil || len(next) == 0 {
-			continue // fireDue reports broken plans; nothing to re-arm from.
+		if err := s.validateRule(row); err != nil {
+			if err := s.park(ctx, row, err.Error()); err != nil {
+				return err
+			}
+			continue
 		}
-		if err := s.db.WithContext(ctx).Model(&database.TaskCenterSchedule{}).Where("id = ? AND next_run_at < ?", row.ID, now).Update("next_run_at", next[0]).Error; err != nil {
+		if row.ScheduleType == "cron" {
+			if _, err := s.nextForRule(row); err != nil {
+				if err := s.park(ctx, row, err.Error()); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		if !row.Enabled || !row.TimerEnabled || row.ScheduleType == "none" {
+			continue
+		}
+		if row.NextRunAt == nil {
+			if row.LastError == "" {
+				if err := s.park(ctx, row, "next execution time is missing; edit the rule to resume"); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if !row.NextRunAt.Before(now) {
+			continue
+		}
+		if row.ScheduleType == "interval" {
+			if err := s.db.WithContext(ctx).Model(&row).Where("version = ? AND next_run_at = ?", row.Version, row.NextRunAt).Update("next_run_at", now).Error; err != nil {
+				return err
+			}
+			continue
+		}
+		next, err := s.nextForRule(row)
+		if err != nil {
+			if err := s.park(ctx, row, err.Error()); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			claimed := tx.Model(&database.TaskCenterSchedule{}).Where("id = ? AND version = ? AND next_run_at = ?", row.ID, row.Version, row.NextRunAt).Update("next_run_at", next)
+			if claimed.Error != nil || claimed.RowsAffected == 0 {
+				return claimed.Error
+			}
+			if spec, ok := s.kinds.Get(row.Kind); ok && spec.Advance != nil {
+				if err := spec.Advance(ctx, tx, row, next); err != nil {
+					return err
+				}
+			}
+			return tx.Create(&database.TaskCenterScheduleRun{ScheduleID: &row.ID, TriggeredBy: ReasonSystem, Status: "skipped", ReasonCode: "missed_while_stopped", Error: "Missed while SUMA was stopped; not replayed", CreatedAt: now}).Error
+		}); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// Start recovers pending plans and launches the dispatch loop once.
-func (s *Service) Start() {
+func (s *Service) Start() error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.started || s.stopped {
-		s.mu.Unlock()
-		return
+		return nil
 	}
-	s.started = true
-	s.ctx, s.cancel = context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := s.Recover(ctx); err != nil {
+		cancel()
+		return err
+	}
+	s.ctx, s.cancel, s.started = ctx, cancel, true
 	s.wg.Add(1)
-	s.mu.Unlock()
-	if err := s.Recover(s.ctx); err != nil {
-		s.report(err)
-	}
 	go func() {
 		defer s.wg.Done()
 		ticker := time.NewTicker(fireInterval)
 		defer ticker.Stop()
+		s.fireDue(ctx)
 		for {
 			select {
-			case <-s.ctx.Done():
+			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				s.fireDue(s.ctx)
+				s.fireDue(ctx)
 			}
 		}
 	}()
+	return nil
 }
 
-// Stop cancels the dispatch loop and waits for it to exit.
 func (s *Service) Stop() {
 	s.mu.Lock()
 	s.stopped = true
@@ -123,167 +186,342 @@ func (s *Service) Stop() {
 	s.mu.Unlock()
 	s.wg.Wait()
 }
-
 func (s *Service) now() time.Time { return s.deps.Now().UTC().Truncate(time.Second) }
-
 func (s *Service) report(err error) {
-	if s.deps.OnError != nil {
+	if err != nil && s.deps.OnError != nil {
 		s.deps.OnError(err)
 	}
 }
 
-// fireDue dispatches every plan that fell due. Each plan advances exactly one
-// occurrence per tick; a still-active previous run defers the tick.
-func (s *Service) fireDue(ctx context.Context) {
-	now := s.now()
-	var rows []database.TaskCenterSchedule
-	if err := s.db.WithContext(ctx).Where("enabled = ? AND next_run_at IS NOT NULL AND next_run_at <= ?", true, now).Order("id").Find(&rows).Error; err != nil {
-		s.report(err)
-		return
-	}
-	for _, row := range rows {
-		s.fireOne(ctx, row, now)
-	}
-}
-
-func (s *Service) fireOne(ctx context.Context, row database.TaskCenterSchedule, now time.Time) {
-	spec, ok := s.kinds.Get(row.Kind)
-	if !ok {
-		// The feature behind this kind is gone; park the plan instead of
-		// spinning on a due date that can never be honored.
-		s.park(ctx, row, "task type "+row.Kind+" is not registered")
-		return
-	}
-	busy, err := s.scheduleBusy(ctx, row.ID)
-	if err != nil {
-		s.report(err)
-		return
-	}
-	if busy {
-		return // previous occurrence still active; the next tick re-checks.
-	}
-	next, err := NextRuns(row.Cron, row.Timezone, now, 1)
-	if err != nil || len(next) == 0 {
-		s.park(ctx, row, "invalid schedule: "+errText(err, "cron expression"))
-		return
-	}
-	// Advance the occurrence before starting work so a slow start cannot
-	// double-fire the same plan.
-	claimed := s.db.WithContext(ctx).Model(&database.TaskCenterSchedule{}).
-		Where("id = ? AND next_run_at = ?", row.ID, *row.NextRunAt).
-		Updates(map[string]any{"next_run_at": next[0], "last_run_at": now, "version": gorm.Expr("version + 1")})
-	if claimed.Error != nil {
-		s.report(claimed.Error)
-		return
-	}
-	if claimed.RowsAffected != 1 {
-		return // another dispatch already claimed this occurrence.
-	}
-	nodeID, nodeName := row.NodeID, row.NodeName
-	if nodeID != "" && s.deps.NodeName != nil {
-		name, err := s.deps.NodeName(ctx, nodeID)
-		if err != nil {
-			s.recordRun(ctx, row.ID, "", ReasonScheduled, err)
-			return
-		}
-		nodeName = name
-	}
-	taskID, startErr := spec.Start(ctx, StartRequest{NodeID: nodeID, NodeName: nodeName, Params: json.RawMessage(row.Params), Reason: ReasonScheduled})
-	s.recordRun(ctx, row.ID, taskID, ReasonScheduled, startErr)
-}
-
-// RunNow starts one manual run of a plan without touching its next occurrence.
-func (s *Service) RunNow(ctx context.Context, id uint) (database.TaskCenterScheduleRun, error) {
+// DispatchSubject is used by existing business endpoints after their ordinary
+// authentication or webhook verification. No second scheduling loop calls it.
+func (s *Service) DispatchSubject(ctx context.Context, kind, nodeID, subject string, request DispatchRequest) (database.TaskCenterScheduleRun, error) {
 	var row database.TaskCenterSchedule
-	if err := s.db.WithContext(ctx).First(&row, "id = ?", id).Error; err != nil {
-		return database.TaskCenterScheduleRun{}, ErrNotFound
-	}
-	spec, ok := s.kinds.Get(row.Kind)
-	if !ok {
-		return database.TaskCenterScheduleRun{}, ErrUnknownKind
-	}
-	busy, err := s.scheduleBusy(ctx, row.ID)
-	if err != nil {
+	if err := s.db.WithContext(ctx).Where("kind = ? AND node_id = ? AND subject = ? AND archived_at IS NULL", kind, nodeID, subject).First(&row).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return database.TaskCenterScheduleRun{}, ErrNotFound
+		}
 		return database.TaskCenterScheduleRun{}, err
 	}
-	if busy {
-		return database.TaskCenterScheduleRun{}, ErrBusy
+	request.ScheduleID = row.ID
+	if request.Reason == ReasonScheduled && request.ScheduledFor == nil {
+		request.ScheduledFor = row.NextRunAt
 	}
-	nodeID, nodeName := row.NodeID, row.NodeName
-	if nodeID != "" && s.deps.NodeName != nil {
-		if nodeName, err = s.deps.NodeName(ctx, nodeID); err != nil {
-			return database.TaskCenterScheduleRun{}, err
-		}
-	}
-	taskID, startErr := spec.Start(ctx, StartRequest{NodeID: nodeID, NodeName: nodeName, Params: json.RawMessage(row.Params), Reason: ReasonManual})
-	return s.recordRun(ctx, row.ID, taskID, ReasonManual, startErr), startErr
+	return s.Dispatch(ctx, request)
 }
 
-// StartManual launches a one-off run of a registered kind, not tied to a plan.
-func (s *Service) StartManual(ctx context.Context, kind, nodeID string, params json.RawMessage) (string, error) {
-	spec, ok := s.kinds.Get(kind)
-	if !ok {
-		return "", ErrUnknownKind
+// ValidateRun is the final asynchronous gate, after task creation but before
+// business work begins. Pausing an admitted trigger must still take effect.
+func (s *Service) ValidateRun(ctx context.Context, id uint) error {
+	if id == 0 {
+		return nil
 	}
-	if spec.RequiresNode && nodeID == "" {
-		return "", ErrInvalidParams
+	var run database.TaskCenterScheduleRun
+	if err := s.db.WithContext(ctx).First(&run, id).Error; err != nil {
+		return err
 	}
-	if spec.ValidateParams != nil {
-		if err := spec.ValidateParams(params); err != nil {
+	if run.ScheduleID == nil {
+		return nil
+	}
+	var row database.TaskCenterSchedule
+	if err := s.db.WithContext(ctx).First(&row, *run.ScheduleID).Error; err != nil {
+		return err
+	}
+	var snapshot struct {
+		Rule struct {
+			Version uint64 `json:"version"`
+		} `json:"rule"`
+	}
+	if json.Unmarshal(run.RuleSnapshot, &snapshot) != nil || snapshot.Rule.Version != row.Version {
+		return ErrVersionConflict
+	}
+	if row.ArchivedAt != nil || (run.TriggeredBy != ReasonManual && (!row.Enabled || (run.TriggeredBy == ReasonScheduled && !row.TimerEnabled) || (run.TriggeredBy == ReasonWebhook && !row.WebhookEnabled))) {
+		return ErrPaused
+	}
+	if spec, ok := s.kinds.Get(row.Kind); ok && spec.ConfigVersion != nil {
+		version, err := spec.ConfigVersion(ctx, s.db.WithContext(ctx), row)
+		if err != nil {
+			return err
+		}
+		if version != run.ConfigVersion {
+			return ErrVersionConflict
+		}
+	}
+	return nil
+}
+
+func (s *Service) fireDue(ctx context.Context) {
+	s.report(s.RunDue(ctx))
+}
+
+// RunDue scans once using the same admission path as the clock loop. It is
+// also used by deterministic business integration tests.
+func (s *Service) RunDue(ctx context.Context) error {
+	var rows []database.TaskCenterSchedule
+	if err := s.db.WithContext(ctx).Where("archived_at IS NULL AND enabled AND timer_enabled AND next_run_at <= ?", s.now()).Order("next_run_at, id").Find(&rows).Error; err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		s.fireOne(ctx, row, s.now())
+	}
+	return nil
+}
+func (s *Service) fireOne(ctx context.Context, row database.TaskCenterSchedule, _ time.Time) {
+	if _, ok := s.kinds.Get(row.Kind); !ok {
+		s.report(s.park(ctx, row, "task kind is not registered"))
+		return
+	}
+	if _, err := s.nextForRule(row); err != nil {
+		s.report(s.park(ctx, row, err.Error()))
+		return
+	}
+	_, err := s.Dispatch(ctx, DispatchRequest{ScheduleID: row.ID, Reason: ReasonScheduled, ScheduledFor: row.NextRunAt})
+	if err != nil && !errors.Is(err, ErrBusy) && !errors.Is(err, ErrPaused) && !errors.Is(err, ErrVersionConflict) {
+		s.report(err)
+	}
+}
+
+// Dispatch records admission before any network operation and hands the
+// trigger ID to Task.StartDefinition for transactional task/run association.
+func (s *Service) Dispatch(ctx context.Context, request DispatchRequest) (database.TaskCenterScheduleRun, error) {
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return database.TaskCenterScheduleRun{}, ErrStopped
+	}
+	s.wg.Add(1)
+	s.mu.Unlock()
+	defer s.wg.Done()
+	if request.Reason == "" {
+		request.Reason = ReasonManual
+	}
+	if !slices.Contains([]string{ReasonManual, ReasonScheduled, ReasonWebhook, ReasonSystem}, request.Reason) || len(request.SourceID) > 256 {
+		return database.TaskCenterScheduleRun{}, ErrInvalidParams
+	}
+	var row database.TaskCenterSchedule
+	var spec KindSpec
+	var run database.TaskCenterScheduleRun
+	var admissionErr error
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if request.ScheduleID != 0 {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&row, "id = ? AND archived_at IS NULL", request.ScheduleID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrNotFound
+				}
+				return err
+			}
+			request.Kind, request.NodeID = row.Kind, row.NodeID
+			if request.Params == nil || request.Reason != ReasonManual {
+				request.Params = json.RawMessage(row.Params)
+			}
+		}
+		var ok bool
+		if spec, ok = s.kinds.Get(request.Kind); !ok {
+			return ErrUnknownKind
+		}
+		if request.Action == "" {
+			request.Action = spec.Actions[0]
+		}
+		if !slices.Contains(spec.Actions, request.Action) {
+			return ErrUnsupportedAction
+		}
+		if spec.RequiresNode && request.NodeID == "" {
+			return ErrInvalidParams
+		}
+		if request.Params == nil {
+			request.Params = json.RawMessage("{}")
+		}
+		if len(request.Params) > paramsLimit || !json.Valid(request.Params) {
+			return ErrInvalidParams
+		}
+		if spec.ValidateParams != nil {
+			if err := spec.ValidateParams(request.Params); err != nil {
+				return err
+			}
+		}
+		if request.Reason == ReasonWebhook && !spec.Webhook {
+			return ErrUnsupportedAction
+		}
+		snapshotValue := map[string]any{"rule": row, "kind": request.Kind, "node_id": request.NodeID, "action": request.Action}
+		if row.ID == 0 || !bytes.Equal(row.Params, request.Params) {
+			snapshotValue["params"] = request.Params
+		}
+		snapshot, err := redact.JSON(snapshotValue, snapshotLimit)
+		if err != nil {
+			return fmt.Errorf("%w: trigger snapshot cannot be saved", ErrInvalidParams)
+		}
+		run = database.TaskCenterScheduleRun{TriggeredBy: request.Reason, SourceID: request.SourceID, Status: "dispatching", ActorID: request.Actor.ID, RuleSnapshot: snapshot, CreatedAt: s.now()}
+		if row.ID != 0 {
+			run.ScheduleID = &row.ID
+			if request.Reason == ReasonScheduled && row.Enabled && row.TimerEnabled {
+				if request.ScheduledFor == nil || row.NextRunAt == nil || !row.NextRunAt.Equal(*request.ScheduledFor) {
+					return ErrVersionConflict
+				}
+				run.ScheduledFor = request.ScheduledFor
+				next, err := s.nextForRule(row)
+				if err != nil {
+					return err
+				}
+				if err := tx.Model(&row).Updates(map[string]any{"next_run_at": next, "last_run_at": s.now()}).Error; err != nil {
+					return err
+				}
+				if spec.Advance != nil {
+					if err := spec.Advance(ctx, tx, row, next); err != nil {
+						return err
+					}
+				}
+			}
+			if request.Reason != ReasonManual && (!row.Enabled || (request.Reason == ReasonScheduled && !row.TimerEnabled) || (request.Reason == ReasonWebhook && !row.WebhookEnabled)) {
+				admissionErr = ErrPaused
+				run.Status, run.ReasonCode = "skipped", "automation_paused"
+			} else if request.Reason == ReasonScheduled && s.now().Sub(*request.ScheduledFor) >= time.Minute {
+				run.Status, run.ReasonCode, run.Error = "skipped", "missed_window", "Missed execution window; not replayed"
+			} else {
+				busy, err := s.scheduleBusyDB(tx, row.ID)
+				if err != nil {
+					return err
+				}
+				if busy {
+					admissionErr = ErrBusy
+					run.Status, run.ReasonCode = "skipped", "busy"
+				}
+			}
+			if run.Status == "dispatching" && spec.ConfigVersion != nil {
+				run.ConfigVersion, admissionErr = spec.ConfigVersion(ctx, tx, row)
+				if admissionErr != nil {
+					run.Status, run.ReasonCode = "start_failed", "configuration_unavailable"
+					updates := map[string]any{"last_error": redact.Bounded(admissionErr.Error(), lastErrorLimit)}
+					if invalidBinding(admissionErr) {
+						updates["next_run_at"] = nil
+						if spec.Advance != nil {
+							if err := spec.Advance(ctx, tx, row, nil); err != nil {
+								return err
+							}
+						}
+					}
+					if err := tx.Model(&database.TaskCenterSchedule{}).Where("id = ?", row.ID).Updates(updates).Error; err != nil {
+						return err
+					}
+				}
+			}
+		}
+		if admissionErr != nil {
+			run.Error = redact.Bounded(admissionErr.Error(), lastErrorLimit)
+		}
+		return tx.Create(&run).Error
+	})
+	if err != nil {
+		return run, err
+	}
+	if run.Status != "dispatching" {
+		return run, admissionErr
+	}
+	nodeName := row.NodeName
+	var startErr error
+	if request.NodeID != "" && s.deps.NodeName != nil {
+		nodeName, startErr = s.deps.NodeName(ctx, request.NodeID)
+	}
+	var taskID string
+	if startErr == nil {
+		taskID, startErr = spec.Start(ctx, StartRequest{NodeID: request.NodeID, NodeName: nodeName, Params: request.Params, Reason: request.Reason, RunID: run.ID, ScheduleID: run.ScheduleID, Action: request.Action, Actor: request.Actor, ConfigVersion: run.ConfigVersion, Subject: row.Subject, ScheduledFor: request.ScheduledFor})
+	}
+	finishCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if startErr == nil {
+		var bound database.TaskCenterScheduleRun
+		if err := s.db.WithContext(finishCtx).First(&bound, run.ID).Error; err != nil {
+			return run, err
+		}
+		if bound.TaskID != taskID || bound.Status != "started" {
+			startErr = errors.New("task was not atomically linked to its trigger")
+		} else {
+			run = bound
+		}
+	}
+	if startErr != nil {
+		run.Status, run.ReasonCode, run.Error = "start_failed", "start_failed", redact.Bounded(startErr.Error(), lastErrorLimit)
+		if err := s.db.WithContext(finishCtx).Model(&database.TaskCenterScheduleRun{}).Where("id = ? AND status = ?", run.ID, "dispatching").Updates(map[string]any{"status": run.Status, "reason_code": run.ReasonCode, "error": run.Error}).Error; err != nil {
+			return run, errors.Join(startErr, err)
+		}
+	}
+	if row.ID != 0 {
+		if err := s.db.WithContext(finishCtx).Transaction(func(tx *gorm.DB) error {
+			updates := map[string]any{"last_error": run.Error}
+			if invalidBinding(startErr) {
+				updates["next_run_at"] = nil
+			}
+			updated := tx.Model(&database.TaskCenterSchedule{}).Where("id = ? AND version = ? AND archived_at IS NULL", row.ID, row.Version).Updates(updates)
+			if updated.Error != nil || updated.RowsAffected == 0 {
+				return updated.Error
+			}
+			if invalidBinding(startErr) && spec.Advance != nil {
+				return spec.Advance(finishCtx, tx, row, nil)
+			}
+			return nil
+		}); err != nil {
+			return run, errors.Join(startErr, err)
+		}
+	}
+	return run, startErr
+}
+
+func (s *Service) RunNow(ctx context.Context, id uint, options ...DispatchRequest) (database.TaskCenterScheduleRun, error) {
+	request := DispatchRequest{}
+	if len(options) > 0 {
+		request = options[0]
+	}
+	request.ScheduleID, request.Reason = id, ReasonManual
+	return s.Dispatch(ctx, request)
+}
+func (s *Service) StartManual(ctx context.Context, kind, nodeID string, params json.RawMessage, actors ...Actor) (string, error) {
+	request := DispatchRequest{Kind: kind, NodeID: nodeID, Params: params, Reason: ReasonManual}
+	if spec, ok := s.kinds.Get(kind); ok && spec.Subject != nil {
+		if len(params) > paramsLimit || !json.Valid(params) {
+			return "", ErrInvalidParams
+		}
+		if spec.ValidateParams != nil {
+			if err := spec.ValidateParams(params); err != nil {
+				return "", err
+			}
+		}
+		var rule database.TaskCenterSchedule
+		err := s.db.WithContext(ctx).Where("kind = ? AND node_id = ? AND subject = ? AND archived_at IS NULL", kind, nodeID, spec.Subject(params)).First(&rule).Error
+		if err == nil {
+			request.ScheduleID = rule.ID
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return "", err
 		}
 	}
-	nodeName := ""
-	if nodeID != "" && s.deps.NodeName != nil {
-		var err error
-		if nodeName, err = s.deps.NodeName(ctx, nodeID); err != nil {
-			return "", err
-		}
+	if len(actors) > 0 {
+		request.Actor = actors[0]
 	}
-	return spec.Start(ctx, StartRequest{NodeID: nodeID, NodeName: nodeName, Params: params, Reason: ReasonManual})
+	run, err := s.Dispatch(ctx, request)
+	return run.TaskID, err
 }
-
-// scheduleBusy reports whether the most recent run of a plan is still active.
-func (s *Service) scheduleBusy(ctx context.Context, scheduleID uint) (bool, error) {
+func (s *Service) scheduleBusy(ctx context.Context, id uint) (bool, error) {
+	return s.scheduleBusyDB(s.db.WithContext(ctx), id)
+}
+func (s *Service) scheduleBusyDB(db *gorm.DB, id uint) (bool, error) {
 	var count int64
-	err := s.db.WithContext(ctx).Model(&database.Task{}).Where(
-		"status IN ? AND id IN (SELECT task_id FROM task_center_schedule_runs WHERE schedule_id = ? AND task_id <> '' ORDER BY created_at DESC, id DESC LIMIT 1)",
-		[]string{task.StatusPending, task.StatusRunning}, scheduleID,
-	).Count(&count).Error
+	err := db.Model(&database.TaskCenterScheduleRun{}).Where("schedule_id = ? AND (status = 'dispatching' OR (status = 'started' AND task_id IN (SELECT id FROM tasks WHERE status IN ?)))", id, []string{task.StatusPending, task.StatusRunning}).Count(&count).Error
 	return count > 0, err
 }
-
-func (s *Service) recordRun(ctx context.Context, scheduleID uint, taskID, reason string, startErr error) database.TaskCenterScheduleRun {
-	run := database.TaskCenterScheduleRun{ScheduleID: scheduleID, TaskID: taskID, TriggeredBy: reason, CreatedAt: s.now()}
-	if startErr != nil {
-		run.Error = redact.Bounded(startErr.Error(), lastErrorLimit)
-	}
-	if err := s.db.WithContext(ctx).Create(&run).Error; err != nil {
-		s.report(err)
-	}
-	if startErr != nil {
-		if err := s.db.WithContext(ctx).Model(&database.TaskCenterSchedule{}).Where("id = ?", scheduleID).Update("last_error", run.Error).Error; err != nil {
-			s.report(err)
+func (s *Service) park(ctx context.Context, row database.TaskCenterSchedule, message string) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		updated := tx.Model(&database.TaskCenterSchedule{}).Where("id = ? AND version = ? AND next_run_at IS NOT DISTINCT FROM ? AND archived_at IS NULL", row.ID, row.Version, row.NextRunAt).Updates(map[string]any{"next_run_at": nil, "last_error": redact.Bounded(message, lastErrorLimit)})
+		if updated.Error != nil || updated.RowsAffected == 0 {
+			return updated.Error
 		}
-	} else if err := s.db.WithContext(ctx).Model(&database.TaskCenterSchedule{}).Where("id = ?", scheduleID).Update("last_error", "").Error; err != nil {
-		s.report(err)
-	}
-	return run
+		if spec, ok := s.kinds.Get(row.Kind); ok && spec.Advance != nil {
+			return spec.Advance(ctx, tx, row, nil)
+		}
+		return nil
+	})
 }
 
-// park takes a permanently broken plan out of the due scan and records why.
-func (s *Service) park(ctx context.Context, row database.TaskCenterSchedule, message string) {
-	result := s.db.WithContext(ctx).Model(&database.TaskCenterSchedule{}).
-		Where("id = ? AND next_run_at = ?", row.ID, *row.NextRunAt).
-		Updates(map[string]any{"next_run_at": nil, "last_error": redact.Bounded(message, lastErrorLimit), "version": gorm.Expr("version + 1")})
-	if result.Error != nil {
-		s.report(result.Error)
-	}
-}
-
-func errText(err error, fallback string) string {
-	if err != nil {
-		return err.Error()
-	}
-	return fallback
+func invalidBinding(err error) bool {
+	return errors.Is(err, gorm.ErrRecordNotFound) || errors.Is(err, ErrInvalid) || errors.Is(err, ErrInvalidParams)
 }

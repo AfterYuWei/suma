@@ -40,12 +40,12 @@ func TestValidateParamsRejectsBadInput(t *testing.T) {
 
 func TestNormalizeClassifiesReferences(t *testing.T) {
 	cases := map[string]string{
-		"nginx:latest":                             "",
-		"docker.io/library/nginx:latest":           "",
-		"<none>:<none>":                            "untagged",
-		"sha256:abc":                               "image_id",
+		"nginx:latest":                   "",
+		"docker.io/library/nginx:latest": "",
+		"<none>:<none>":                  "untagged",
+		"sha256:abc":                     "image_id",
 		"nginx:latest@sha256:0000000000000000000000000000000000000000000000000000000000000000": "digest_pinned",
-		"nginx::bad":               "invalid_reference",
+		"nginx::bad": "invalid_reference",
 	}
 	for value, reason := range cases {
 		if _, _, got := Normalize(value); got != reason {
@@ -88,6 +88,23 @@ func TestPlanChecksFiltersEligibleServices(t *testing.T) {
 	}
 }
 
+func TestPlanChecksContinuesFollowingDeclaredTagAfterPinnedUpdate(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	inventory := Inventory{Images: []LocalImage{{ID: "sha256:current", Platform: Platform{OS: "linux", Architecture: "amd64"}}}, Containers: []Usage{{Project: "blog", Service: "web", State: "running", ImageID: "sha256:current", Reference: "docker.io/library/nginx@" + digest}}}
+	targets, blocked := planChecks(inventory, Params{Project: "blog"}, map[string]string{"web": "nginx:latest"})
+	if len(targets) != 1 || len(blocked) != 0 || targets[0].reference != "docker.io/library/nginx:latest" {
+		t.Fatalf("tag following stopped after an update: %+v %+v", targets, blocked)
+	}
+	targets, blocked = planChecks(inventory, Params{Project: "blog"}, map[string]string{"web": "nginx@" + digest})
+	if len(targets) != 0 || len(blocked) != 1 || blocked[0].ReasonCode != "digest_pinned" {
+		t.Fatalf("explicit digest must remain pinned: %+v %+v", targets, blocked)
+	}
+	targets, blocked = planChecks(inventory, Params{Project: "blog"}, map[string]string{"web": "redis:latest"})
+	if len(targets) != 0 || len(blocked) != 1 || blocked[0].ReasonCode != "image_mismatch" {
+		t.Fatalf("repository drift must be blocked: %+v %+v", targets, blocked)
+	}
+}
+
 type fakeResolver struct {
 	mu     sync.Mutex
 	digest map[string]string // reference -> config digest
@@ -109,7 +126,9 @@ func (r fakeRuntime) UpdateInventory(ctx context.Context) (Inventory, error) { r
 
 type fakeCredentials struct{}
 
-func (fakeCredentials) AuthorizedForNode(ctx context.Context, id uint, nodeID string) error { return nil }
+func (fakeCredentials) AuthorizedForNode(ctx context.Context, id uint, nodeID string) error {
+	return nil
+}
 func (fakeCredentials) Material(ctx context.Context, id uint) (credential.RegistryMaterial, error) {
 	return credential.RegistryMaterial{}, nil
 }

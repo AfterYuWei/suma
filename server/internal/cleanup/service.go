@@ -14,6 +14,7 @@ import (
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/task"
+	"github.com/suma/suma/server/internal/taskcenter"
 	"gorm.io/gorm"
 )
 
@@ -26,19 +27,19 @@ type Dependencies struct {
 	OnError    func(error)
 }
 type Service struct {
-	db       *gorm.DB
-	tasks    *task.Service
-	audits   *audit.Service
-	deps     Dependencies
-	mu       sync.Mutex
-	previews map[string]Preview
-	active   map[string]string
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	stopped  bool
-	started  bool
-	now      func() time.Time
+	automation *taskcenter.Service
+	db         *gorm.DB
+	tasks      *task.Service
+	audits     *audit.Service
+	deps       Dependencies
+	mu         sync.Mutex
+	previews   map[string]Preview
+	active     map[string]string
+	ctx        context.Context
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
+	stopped    bool
+	now        func() time.Time
 }
 
 func NewService(db *gorm.DB, tasks *task.Service, audits *audit.Service, deps Dependencies) *Service {
@@ -166,8 +167,16 @@ func (s *Service) Update(ctx context.Context, nodeID string, in Update, actor Ac
 	}
 	row := database.CleanupPolicy{NodeID: nodeID, Version: p.Version, Enabled: p.Enabled, ConfigJSON: encode(p.Config), AuthorizedBy: p.AuthorizedBy, AuthorizedAt: p.AuthorizedAt, NextRunAt: p.NextRunAt}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if s.automation != nil {
+			if err := s.automation.LockOwned(tx, "system.cleanup", nodeID, ""); err != nil {
+				return err
+			}
+		}
 		if old.Version == 0 {
-			return tx.Create(&row).Error
+			if err := tx.Create(&row).Error; err != nil {
+				return err
+			}
+			return s.syncAutomation(tx, p)
 		}
 		result := tx.Model(&database.CleanupPolicy{}).Where("node_id = ? AND version = ?", nodeID, old.Version).Updates(map[string]any{"version": row.Version, "enabled": row.Enabled, "config_json": row.ConfigJSON, "authorized_by": row.AuthorizedBy, "authorized_at": row.AuthorizedAt, "next_run_at": row.NextRunAt})
 		if result.Error != nil {
@@ -176,7 +185,7 @@ func (s *Service) Update(ctx context.Context, nodeID string, in Update, actor Ac
 		if result.RowsAffected != 1 {
 			return ErrConflict
 		}
-		return nil
+		return s.syncAutomation(tx, p)
 	})
 	if err != nil {
 		return Policy{}, err
@@ -369,6 +378,19 @@ func (s *Service) ready(ctx context.Context, node Node) error {
 	return s.busy(ctx, node.ID)
 }
 func (s *Service) StartRun(ctx context.Context, nodeID, previewID, confirmation string, actor Actor) (database.Task, error) {
+	if s.automation != nil && actor.TriggerRunID == 0 {
+		params, _ := json.Marshal(map[string]string{"preview_id": previewID})
+		request := taskcenter.DispatchRequest{Reason: taskcenter.ReasonManual, Action: "run", Params: params, Actor: taskcenter.Actor{ID: actor.UserID, IP: actor.IP, ConfirmationName: confirmation}}
+		run, err := s.automation.DispatchSubject(ctx, "system.cleanup", nodeID, "", request)
+		if errors.Is(err, taskcenter.ErrNotFound) {
+			request.Kind, request.NodeID = "system.cleanup", nodeID
+			run, err = s.automation.Dispatch(ctx, request)
+		}
+		if err != nil {
+			return database.Task{}, err
+		}
+		return s.tasks.Get(ctx, run.TaskID)
+	}
 	node, err := s.deps.Node(ctx, nodeID)
 	if err != nil {
 		return database.Task{}, err
@@ -433,12 +455,33 @@ func (s *Service) startLocked(ctx context.Context, node Node, preview Preview, a
 	row, err := s.tasks.StartDefinition(context.Background(), task.Definition{
 		Type: "system.cleanup", Name: "Docker storage cleanup",
 		NodeID: node.ID, NodeName: node.Name,
-		Params: map[string]any{"trigger": run.Trigger, "policy_version": run.PolicyVersion},
+		Params:       map[string]any{"trigger": run.Trigger, "policy_version": run.PolicyVersion},
+		TriggerRunID: actor.TriggerRunID,
 	}, func(ctx context.Context, taskID string, report task.Reporter) (any, error) {
 		defer s.wg.Done()
 		defer func() { s.mu.Lock(); delete(s.active, node.ID); s.mu.Unlock() }()
 		run.TaskID = taskID
-		return nil, s.execute(ctx, node, preview, run, actor, report)
+		if s.automation != nil {
+			if err := s.automation.ValidateRun(ctx, actor.TriggerRunID); err != nil {
+				finishCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if saveErr := s.db.WithContext(finishCtx).Model(&database.CleanupRun{}).Where("id = ?", run.ID).Updates(map[string]any{"status": "skipped", "message": "Automation configuration changed before execution", "finished_at": s.now().UTC()}).Error; saveErr != nil {
+					return nil, errors.Join(err, saveErr)
+				}
+				return map[string]any{"run_id": run.ID}, errors.Join(task.ErrNotExecuted, err)
+			}
+		}
+		workErr := s.execute(ctx, node, preview, run, actor, report)
+		finishCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var saved database.CleanupRun
+		if err := s.db.WithContext(finishCtx).First(&saved, "id = ?", run.ID).Error; err == nil {
+			var result Result
+			if json.Unmarshal([]byte(saved.ResultJSON), &result) == nil {
+				return map[string]any{"run_id": run.ID, "result": result}, workErr
+			}
+		}
+		return map[string]any{"run_id": run.ID, "result_unavailable": true}, workErr
 	})
 	if err != nil {
 		delete(s.active, node.ID)
@@ -687,6 +730,14 @@ func (s *Service) Run(ctx context.Context, nodeID, runID string) (Run, error) {
 	err := s.db.WithContext(ctx).First(&row, "node_id = ? AND id = ?", nodeID, runID).Error
 	return decodeRun(row), err
 }
+
+// RunForTask reads historical evidence without resolving the current node or
+// Docker runtime. The original node may have been removed after execution.
+func (s *Service) RunForTask(ctx context.Context, taskID string) (Run, error) {
+	var row database.CleanupRun
+	err := s.db.WithContext(ctx).First(&row, "task_id = ?", taskID).Error
+	return decodeRun(row), err
+}
 func (s *Service) CheckVolumeDeletion(ctx context.Context, nodeID, name string) error {
 	p, err := s.policy(ctx, nodeID)
 	if err != nil {
@@ -736,6 +787,9 @@ func (s *Service) Recover(ctx context.Context) error {
 		}
 		s.record(Node{ID: run.NodeID, Name: run.NodeName}, Actor{UserID: run.UserID}, "cleanup.finish", "interrupted", run.TaskID)
 	}
+	if s.automation != nil {
+		return nil
+	}
 	var rows []database.CleanupPolicy
 	if err := s.db.WithContext(ctx).Where("enabled = ?", true).Find(&rows).Error; err != nil {
 		return err
@@ -761,31 +815,6 @@ func (s *Service) Recover(ctx context.Context) error {
 		}
 	}
 	return nil
-}
-func (s *Service) Start() {
-	s.mu.Lock()
-	if s.stopped || s.started {
-		s.mu.Unlock()
-		return
-	}
-	s.started = true
-	s.wg.Add(1)
-	s.mu.Unlock()
-	go func() {
-		defer s.wg.Done()
-		ticker := time.NewTicker(15 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-s.ctx.Done():
-				return
-			case <-ticker.C:
-				if err := s.Tick(s.ctx); err != nil && s.ctx.Err() == nil && s.deps.OnError != nil {
-					s.deps.OnError(err)
-				}
-			}
-		}
-	}()
 }
 func (s *Service) Stop() {
 	s.mu.Lock()
@@ -819,83 +848,6 @@ func (s *Service) skip(ctx context.Context, p Policy, scheduled *time.Time, mess
 	}
 
 	s.record(Node{ID: p.NodeID, Name: name}, Actor{}, "cleanup.finish", "skipped", "")
-	return nil
-}
-func (s *Service) Tick(ctx context.Context) error {
-	now := s.now().UTC()
-	var rows []database.CleanupPolicy
-	if err := s.db.WithContext(ctx).Where("enabled = ? AND next_run_at <= ?", true, now).Order("next_run_at").Find(&rows).Error; err != nil {
-		return err
-	}
-	for _, row := range rows {
-		p, err := s.policy(ctx, row.NodeID)
-		if err != nil {
-			return err
-		}
-		if !p.Enabled || p.NextRunAt == nil || row.NextRunAt == nil || p.NextRunAt.After(now) || p.Version != row.Version || !p.NextRunAt.Equal(*row.NextRunAt) {
-			continue
-		}
-		scheduled := *p.NextRunAt
-		next := NextOccurrences(p.Schedule, now, 1)
-		if len(next) == 0 {
-			return ErrInvalid
-		}
-		claimID := id()
-		s.mu.Lock()
-		claimErr := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			changed := tx.Model(&database.CleanupPolicy{}).Where("node_id = ? AND enabled = ? AND version = ? AND next_run_at = ?", p.NodeID, true, p.Version, scheduled).Update("next_run_at", next[0])
-			if changed.Error != nil {
-				return changed.Error
-			}
-			if changed.RowsAffected != 1 {
-				return ErrConflict
-			}
-			return tx.Create(&database.CleanupRun{ID: claimID, NodeID: p.NodeID, NodeName: p.NodeID, PolicyVersion: p.Version, PolicyJSON: encode(p.Config), Trigger: "scheduled", ScheduledFor: &scheduled, AuthorizedBy: p.AuthorizedBy, Status: "pending", CreatedAt: now}).Error
-		})
-		s.mu.Unlock()
-		if errors.Is(claimErr, ErrConflict) {
-			continue
-		}
-		if claimErr != nil {
-			return claimErr
-		}
-
-		if now.Sub(scheduled) >= time.Minute {
-			if err := s.skip(ctx, p, &scheduled, "Missed execution window; not replayed"); err != nil {
-				return err
-			}
-			continue
-		}
-		node, err := s.deps.Node(ctx, p.NodeID)
-		if err != nil || !node.Enabled || p.AuthorizedAt == nil || p.AuthorizedBy == nil {
-			if err := s.skip(ctx, p, &scheduled, "Node disabled, removed, or policy not authorized"); err != nil {
-				return err
-			}
-			continue
-		}
-		scanCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		preview, scanErr := s.inventory(scanCtx, p.NodeID, p)
-		cancel()
-		if scanErr != nil {
-			if err := s.skip(ctx, p, &scheduled, scanErr.Error()); err != nil {
-				return err
-			}
-			continue
-		}
-		s.mu.Lock()
-		latest, err := s.policy(ctx, p.NodeID)
-		if err == nil && latest.Version == p.Version && latest.Enabled {
-			_, err = s.startLocked(ctx, node, preview, Actor{}, "scheduled", &scheduled, claimID)
-		} else {
-			err = ErrConflict
-		}
-		s.mu.Unlock()
-		if err != nil {
-			if e := s.skip(ctx, p, &scheduled, err.Error()+"; not replayed"); e != nil {
-				return e
-			}
-		}
-	}
 	return nil
 }
 

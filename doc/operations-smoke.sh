@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Image-update, aggregate-log, Project configuration and notification smoke.
 # Only this disposable daemon and its anonymous volumes are removed on exit.
-project_smoke_root=$(mktemp -d /tmp/suma-project-live.XXXXXX)
+project_smoke_root=$(mktemp -d "${TMPDIR:-/tmp}/suma-project-live.XXXXXX")
 project_smoke_daemon="suma-project-isolated-$(date +%s)-$$"
 cleanup_project_smoke() {
   docker rm -f -v "$project_smoke_daemon" >/dev/null 2>&1 || true

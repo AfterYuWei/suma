@@ -400,6 +400,10 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 		}
 	}
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Keep rule and trigger evidence when the owning node is removed.
+		if err := tx.Model(&database.TaskCenterSchedule{}).Where("node_id = ? AND archived_at IS NULL", id).Updates(map[string]any{"archived_at": time.Now().UTC(), "enabled": false, "timer_enabled": false, "next_run_at": nil, "version": gorm.Expr("version + 1")}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("node_id = ?", id).Delete(&database.AgentEnrollment{}).Error; err != nil {
 			return err
 		}

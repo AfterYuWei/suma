@@ -13,6 +13,12 @@ export interface TaskRecord {
   message: string
   params?: unknown
   result?: unknown
+	result_error?: string
+	parent_task_id?: string
+  run_id?: number
+  schedule_id?: number
+  schedule_name?: string
+  triggered_by?: string
   created_at: string
   started_at?: string
   finished_at?: string
@@ -21,7 +27,7 @@ export interface TaskRecord {
 export interface TaskLog { id: number; level: string; message: string; created_at: string }
 export interface TaskStep { id: string; status: string; current: number; total: number; progress: number; created_at: string; updated_at: string }
 
-export interface KindInfo { type: string; requires_node: boolean }
+export interface KindInfo { type: string; requires_node: boolean; schedule_types: ('cron' | 'interval' | 'none')[]; actions: string[]; webhook: boolean; business_owned: boolean }
 
 export interface Schedule {
   id: number
@@ -34,6 +40,12 @@ export interface Schedule {
   cron: string
   timezone: string
   enabled: boolean
+	schedule_type: 'cron' | 'interval' | 'none'
+	interval_seconds: number
+	timer_enabled: boolean
+	webhook_enabled: boolean
+	archived_at?: string
+	effective_status?: string
   version: number
   next_run_at?: string
   last_run_at?: string
@@ -43,6 +55,10 @@ export interface Schedule {
   updated_at: string
   summary?: string
   last_task_id?: string
+	last_run_id?: number
+	last_run_status?: string
+	last_run_reason?: string
+	last_run_error?: string
   last_task_status?: string
   last_task_progress?: number
   last_task_message?: string
@@ -51,11 +67,23 @@ export interface Schedule {
 
 export interface ScheduleRun {
   id: number
-  schedule_id: number
+  schedule_id?: number
   task_id: string
   triggered_by: 'scheduled' | 'manual' | string
   error?: string
+	status: 'dispatching' | 'started' | 'skipped' | 'start_failed' | 'interrupted'
+	reason_code?: string
+	scheduled_for?: string
+	source_id?: string
   created_at: string
+  actor_id?: number
+  config_version?: string
+  rule_snapshot?: unknown
+  kind?: string
+  node_id?: string
+  node_name?: string
+  rule_name?: string
+  subject?: string
   task_status?: string
   task_progress?: number
   task_finished_at?: string
@@ -70,6 +98,9 @@ export interface ScheduleInput {
   cron: string
   timezone: string
   enabled?: boolean
+	schedule_type?: 'cron' | 'interval' | 'none'
+	interval_seconds?: number
+	timer_enabled?: boolean
 }
 
 export interface ImageUpdateServiceCheck {

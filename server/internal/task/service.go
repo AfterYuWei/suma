@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	domainEvent "github.com/suma/suma/server/internal/event"
 	"github.com/suma/suma/server/internal/redact"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -27,10 +29,11 @@ const (
 	StatusCanceled    = "canceled"
 
 	paramsLimit = 8192
-	resultLimit = 65536
+	ResultLimit = 1 << 20
 )
 
 var ErrNotExecuted = errors.New("operation was not executed")
+var ErrInvalidParams = errors.New("invalid task parameters")
 
 type Event struct {
 	Type     string    `json:"type"`
@@ -50,11 +53,15 @@ type RecordedWork func(context.Context, string, Reporter) (any, error)
 // Definition describes a task launched with its input parameters recorded.
 // A non-empty NodeID selects node scope, an empty one the control plane.
 type Definition struct {
-	Type     string
-	Name     string
-	NodeID   string
-	NodeName string
-	Params   any
+	Type         string
+	Name         string
+	NodeID       string
+	NodeName     string
+	Params       any
+	ParentTaskID string
+	TriggerRunID uint
+	// ArtifactSubject requests a business-query projection of the saved result.
+	ArtifactSubject string
 }
 
 type recordedWork func(context.Context, string, Reporter) (any, error)
@@ -64,6 +71,7 @@ func recorded(work IdentifiedWork) recordedWork {
 		return nil, work(ctx, id, report)
 	}
 }
+
 type Service struct {
 	db          *gorm.DB
 	sink        domainEvent.Sink
@@ -124,13 +132,13 @@ func (s *Service) StartDefinition(ctx context.Context, def Definition, work Reco
 	}
 	params := database.JSONB(nil)
 	if def.Params != nil {
-		raw, err := json.Marshal(def.Params)
+		raw, err := redact.JSON(def.Params, paramsLimit)
 		if err != nil {
-			return database.Task{}, fmt.Errorf("encode task parameters: %w", err)
+			return database.Task{}, fmt.Errorf("%w: %w", ErrInvalidParams, err)
 		}
-		params = database.JSONB(redact.Bounded(string(raw), paramsLimit))
+		params = database.JSONB(raw)
 	}
-	return s.startWithID(ctx, scope, def.NodeID, def.NodeName, def.Type, def.Name, params, recordedWork(work))
+	return s.startWithID(ctx, scope, def, params, recordedWork(work))
 }
 
 func defaultNodeTaskType(taskType string) bool {
@@ -143,20 +151,55 @@ func defaultNodeTaskType(taskType string) bool {
 }
 
 func (s *Service) StartWithIDControlPlane(taskType, name string, work IdentifiedWork) (database.Task, error) {
-	return s.startWithID(context.Background(), ScopeControlPlane, "", "", taskType, name, nil, recorded(work))
+	return s.StartDefinition(context.Background(), Definition{Type: taskType, Name: name}, RecordedWork(recorded(work)))
 }
 
 func (s *Service) StartWithIDForNode(nodeID, nodeName, taskType, name string, work IdentifiedWork) (database.Task, error) {
-	return s.startWithID(context.Background(), ScopeNode, nodeID, nodeName, taskType, name, nil, recorded(work))
+	return s.StartDefinition(context.Background(), Definition{Type: taskType, Name: name, NodeID: nodeID, NodeName: nodeName}, RecordedWork(recorded(work)))
 }
 
-func (s *Service) startWithID(ctx context.Context, scope, nodeID, nodeName, taskType, name string, params database.JSONB, work recordedWork) (database.Task, error) {
+func (s *Service) startWithID(ctx context.Context, scope string, def Definition, params database.JSONB, work recordedWork) (database.Task, error) {
 	id, err := randomID()
 	if err != nil {
 		return database.Task{}, err
 	}
-	row := database.Task{ID: id, Scope: scope, NodeID: nodeID, NodeName: nodeName, Type: taskType, Name: name, Status: StatusPending, Params: params}
-	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
+	row := database.Task{ID: id, Scope: scope, NodeID: def.NodeID, NodeName: def.NodeName, Type: def.Type, Name: def.Name, Status: StatusPending, Params: params, ParentTaskID: def.ParentTaskID}
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&row).Error; err != nil {
+			return err
+		}
+		if def.TriggerRunID != 0 {
+			var trigger database.TaskCenterScheduleRun
+			if err := tx.First(&trigger, "id = ? AND status = ? AND task_id = ''", def.TriggerRunID, "dispatching").Error; err != nil {
+				return errors.New("task trigger is no longer claimable")
+			}
+			if trigger.ScheduleID != nil {
+				var rule database.TaskCenterSchedule
+				if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&rule, *trigger.ScheduleID).Error; err != nil {
+					return err
+				}
+				var snapshot struct {
+					Rule struct {
+						Version uint64 `json:"version"`
+					} `json:"rule"`
+				}
+				if err := json.Unmarshal(trigger.RuleSnapshot, &snapshot); err != nil || snapshot.Rule.Version != rule.Version || rule.ArchivedAt != nil {
+					return errors.New("automation configuration changed before task creation")
+				}
+				if trigger.TriggeredBy != "manual" && (!rule.Enabled || (trigger.TriggeredBy == "scheduled" && !rule.TimerEnabled) || (trigger.TriggeredBy == "webhook" && !rule.WebhookEnabled)) {
+					return errors.New("automatic triggers were paused before task creation")
+				}
+			}
+			bound := tx.Model(&database.TaskCenterScheduleRun{}).Where("id = ? AND status = ? AND task_id = ''", def.TriggerRunID, "dispatching").Updates(map[string]any{"task_id": row.ID, "status": "started"})
+			if bound.Error != nil {
+				return bound.Error
+			}
+			if bound.RowsAffected != 1 {
+				return errors.New("task trigger is no longer claimable")
+			}
+		}
+		return nil
+	}); err != nil {
 		return row, err
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -164,11 +207,11 @@ func (s *Service) startWithID(ctx context.Context, scope, nodeID, nodeName, task
 	s.cancels[id] = cancel
 	s.done[id] = make(chan struct{})
 	s.mu.Unlock()
-	go s.run(runCtx, row, work)
+	go s.run(runCtx, row, work, def.ArtifactSubject)
 	return row, nil
 }
 
-func (s *Service) run(ctx context.Context, row database.Task, work recordedWork) {
+func (s *Service) run(ctx context.Context, row database.Task, work recordedWork, artifactSubject string) {
 	defer func() {
 		s.mu.Lock()
 		if cancel := s.cancels[row.ID]; cancel != nil {
@@ -208,21 +251,47 @@ func (s *Service) run(ctx context.Context, row database.Task, work recordedWork)
 		progress = 0
 	}
 	resultJSON := database.JSONB(nil)
+	resultError := ""
 	if result != nil {
-		if raw, mErr := json.Marshal(result); mErr == nil {
-			resultJSON = database.JSONB(redact.Bounded(string(raw), resultLimit))
+		if raw, mErr := redact.JSON(result, ResultLimit); mErr == nil {
+			resultJSON = database.JSONB(raw)
+		} else if errors.Is(mErr, redact.ErrJSONTooLarge) {
+			resultError = "result_too_large: result exceeds 1 MiB; inspect actual state before retrying"
+		} else {
+			resultError = "result_encoding_failed: structured result could not be encoded; inspect actual state before retrying"
 		}
 	}
 	// A caller observing a terminal status must also be able to read its result
 	// log. Persist both before publishing completion or emitting domain events.
-	persistErr := s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(&database.TaskLog{TaskID: row.ID, Level: map[bool]string{true: "info", false: "error"}[status == StatusSuccess], Message: message}).Error; err != nil {
-			return err
-		}
-		return tx.Model(&database.Task{}).Where("id = ?", row.ID).Updates(map[string]any{"status": status, "progress": progress, "message": message, "result": resultJSON, "finished_at": finished}).Error
-	})
+	finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer finishCancel()
+	persist := func(includeArtifact bool) error {
+		return s.db.WithContext(finishCtx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Create(&database.TaskLog{TaskID: row.ID, Level: map[bool]string{true: "info", false: "error"}[status == StatusSuccess], Message: message}).Error; err != nil {
+				return err
+			}
+			if resultError != "" {
+				if err := tx.Create(&database.TaskLog{TaskID: row.ID, Level: "error", Message: resultError}).Error; err != nil {
+					return err
+				}
+			}
+			if err := tx.Model(&database.Task{}).Where("id = ?", row.ID).Updates(map[string]any{"status": status, "progress": progress, "message": message, "result": resultJSON, "result_error": resultError, "finished_at": finished}).Error; err != nil {
+				return err
+			}
+			if includeArtifact && artifactSubject != "" && len(resultJSON) > 0 {
+				return tx.Create(&database.TaskCenterArtifact{TaskID: row.ID, Kind: row.Type, NodeID: row.NodeID, Subject: artifactSubject, Data: resultJSON, CreatedAt: finished}).Error
+			}
+			return nil
+		})
+	}
+	persistErr := persist(true)
 	if persistErr != nil {
-		s.publish(row.ID, Event{Type: "status", Status: StatusFailed, Message: "Unable to persist task result; inspect actual state before retrying", Time: finished})
+		resultError = "result_persistence_failed: evidence storage failed; inspect actual state before retrying"
+		persistErr = persist(false)
+	}
+	if persistErr != nil {
+		slog.Error("unable to persist task completion", "task_id", row.ID)
+		s.publish(row.ID, Event{Type: "error", Message: "Unable to persist task result; inspect actual state before retrying", Time: finished})
 		return
 	}
 	s.publish(row.ID, Event{Type: "status", Status: status, Progress: progress, Message: message, Time: finished})
@@ -266,18 +335,21 @@ func (s *Service) updateProgress(ctx context.Context, id string, progress int, m
 	return nil
 }
 
-func (s *Service) List(ctx context.Context) ([]database.Task, error) {
-	return s.list(ctx, "", "")
+func (s *Service) List(ctx context.Context, summary ...bool) ([]database.Task, error) {
+	return s.list(ctx, "", "", summary...)
 }
-func (s *Service) ListForNode(ctx context.Context, nodeID string) ([]database.Task, error) {
-	return s.list(ctx, ScopeNode, nodeID)
+func (s *Service) ListForNode(ctx context.Context, nodeID string, summary ...bool) ([]database.Task, error) {
+	return s.list(ctx, ScopeNode, nodeID, summary...)
 }
-func (s *Service) ListControlPlane(ctx context.Context) ([]database.Task, error) {
-	return s.list(ctx, ScopeControlPlane, "")
+func (s *Service) ListControlPlane(ctx context.Context, summary ...bool) ([]database.Task, error) {
+	return s.list(ctx, ScopeControlPlane, "", summary...)
 }
-func (s *Service) list(ctx context.Context, scope, nodeID string) ([]database.Task, error) {
+func (s *Service) list(ctx context.Context, scope, nodeID string, summary ...bool) ([]database.Task, error) {
 	var rows []database.Task
-	query := s.db.WithContext(ctx).Order("created_at DESC").Limit(200)
+	query := s.db.WithContext(ctx).Order("created_at DESC, id DESC").Limit(200)
+	if len(summary) > 0 && summary[0] {
+		query = query.Omit("params", "result")
+	}
 	if scope != "" {
 		query = query.Where("scope = ?", scope)
 	}
@@ -287,37 +359,10 @@ func (s *Service) list(ctx context.Context, scope, nodeID string) ([]database.Ta
 	return rows, query.Find(&rows).Error
 }
 
-// ListRecords serves the Task Center records view: filterable, paged history.
-// Empty scope means every scope, status filters exactly, typePrefix matches a
-// task-type prefix. limit<=0 defaults to 50 (capped at 200); offset paginates.
-func (s *Service) ListRecords(ctx context.Context, scope, nodeID, status, typePrefix string, limit, offset int) ([]database.Task, int64, error) {
-	query := s.db.WithContext(ctx).Model(&database.Task{})
-	if scope != "" {
-		query = query.Where("scope = ?", scope)
-	}
-	if nodeID != "" {
-		query = query.Where("node_id = ?", nodeID)
-	}
-	if status != "" {
-		query = query.Where("status = ?", status)
-	}
-	if typePrefix != "" {
-		query = query.Where("type LIKE ?", typePrefix+"%")
-	}
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-	if limit <= 0 {
-		limit = 50
-	}
-	limit = min(limit, 200)
-	if offset < 0 {
-		offset = 0
-	}
-	var rows []database.Task
-	err := query.Order("created_at DESC").Limit(limit).Offset(offset).Find(&rows).Error
-	return rows, total, err
+func (s *Service) Children(ctx context.Context, id string) ([]database.Task, error) {
+	rows := []database.Task{}
+	err := s.db.WithContext(ctx).Omit("params", "result").Where("parent_task_id = ?", id).Order("created_at,id").Find(&rows).Error
+	return rows, err
 }
 
 func (s *Service) Get(ctx context.Context, id string) (database.Task, error) {

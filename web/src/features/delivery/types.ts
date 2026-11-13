@@ -3,6 +3,7 @@ export type ReconcileMode = 'observe' | 'manual' | 'auto'
 export type GitAuthType = 'none' | 'http_token' | 'http_basic' | 'ssh_key'
 
 export interface DeliveryProject {
+  automation_version?: number
 	automation_enabled: boolean
   id: number
   name: string
@@ -53,6 +54,7 @@ export interface CDEnvironmentVariable {
 }
 
 export interface CDConfiguration {
+  automation_version?: number
   environment?: CDEnvironmentVariable[]
 	automation_enabled: boolean
   configured: boolean
@@ -72,6 +74,7 @@ export interface CDConfiguration {
 }
 
 export interface CDConfigureInput {
+  expected_automation_version?: number
   environment?: CDEnvironmentVariable[]
 	automation_enabled: boolean
   repository: GitRepositoryConfiguration

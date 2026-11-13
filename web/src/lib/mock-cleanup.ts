@@ -89,12 +89,63 @@ export function createMockCleanup(nodes: DockerNode[]) {
       active_run: null,
     }
   }
-  return (
+  const savePolicy = (nodeID: string, body: Record<string, unknown>): Policy => {
+    const node = nodes.find(node => node.id === nodeID)
+    if (!node) throw new ApiError('Node not found', 20601, 404)
+    const old = view(nodeID).policy
+    const candidate = body as unknown as Policy
+    if (candidate.version !== old.version)
+      throw new ApiError('Policy version changed', 20601, 409)
+    if (
+      !['daily', 'weekly'].includes(candidate.schedule.frequency) ||
+      candidate.images.retention_days < 1 ||
+      candidate.cache.retention_days < 1 ||
+      candidate.containers.retention_days < 1 ||
+      candidate.networks.retention_days < 1
+    )
+      throw new ApiError('Invalid retention or schedule', 20601, 422)
+    try {
+      new Intl.DateTimeFormat('en', { timeZone: candidate.schedule.timezone })
+    } catch {
+      throw new ApiError('Invalid timezone', 20601, 422)
+    }
+    if (
+      candidate.enabled &&
+      (!old.enabled || !old.authorized_at || expands(old, candidate)) &&
+      (body.confirmation_name !== node.name || body.authorize !== true)
+    )
+      throw new ApiError(
+        'Confirm node and automatic deletion authorization',
+        20601,
+        422,
+      )
+    const policy: Policy = {
+      ...configuration(candidate),
+      node_id: nodeID,
+      version: old.version + 1,
+      authorized_at: body.authorize
+        ? new Date().toISOString()
+        : old.authorized_at,
+      authorized_by: body.authorize ? 1 : old.authorized_by,
+    }
+    if (policy.enabled) policy.next_run_at = nextRuns(policy)[0]
+    policies.set(nodeID, policy)
+    for (const [key, preview] of previews)
+      if (preview.node_id === nodeID) previews.delete(key)
+    return policy
+  }
+  const handle = (
     pathname: string,
     method: string,
     body: Record<string, unknown>,
     url: URL,
   ): unknown | undefined => {
+    const byTask = pathname.match(/^\/cleanup\/runs\/by-task\/([^/]+)$/)
+    if (byTask) {
+      const run = [...runs.values()].flat().find(row => row.task_id === byTask[1])
+      if (!run) throw new ApiError('Run not found', 20601, 404)
+      return run
+    }
     if (pathname === '/cleanup/policies')
       return nodes.map((node) => ({
         node_id: node.id,
@@ -126,49 +177,7 @@ export function createMockCleanup(nodes: DockerNode[]) {
     const node = nodes.find((item) => item.id === nodeID)
     if (!node) throw new ApiError('Node not found', 20601, 404)
     if (suffix === '/policy' && method === 'GET') return view(nodeID)
-    if (suffix === '/policy' && method === 'PUT') {
-      const old = view(nodeID).policy
-      const candidate = body as unknown as Policy
-      if (candidate.version !== old.version)
-        throw new ApiError('Policy version changed', 20601, 409)
-      if (
-        !['daily', 'weekly'].includes(candidate.schedule.frequency) ||
-        candidate.images.retention_days < 1 ||
-        candidate.cache.retention_days < 1 ||
-        candidate.containers.retention_days < 1 ||
-        candidate.networks.retention_days < 1
-      )
-        throw new ApiError('Invalid retention or schedule', 20601, 422)
-      try {
-        new Intl.DateTimeFormat('en', { timeZone: candidate.schedule.timezone })
-      } catch {
-        throw new ApiError('Invalid timezone', 20601, 422)
-      }
-      if (
-        candidate.enabled &&
-        (!old.enabled || !old.authorized_at || expands(old, candidate)) &&
-        (body.confirmation_name !== node.name || body.authorize !== true)
-      )
-        throw new ApiError(
-          'Confirm node and automatic deletion authorization',
-          20601,
-          422,
-        )
-      const policy: Policy = {
-        ...configuration(candidate),
-        node_id: nodeID,
-        version: old.version + 1,
-        authorized_at: body.authorize
-          ? new Date().toISOString()
-          : old.authorized_at,
-        authorized_by: body.authorize ? 1 : old.authorized_by,
-      }
-      if (policy.enabled) policy.next_run_at = nextRuns(policy)[0]
-      policies.set(nodeID, policy)
-      for (const [key, preview] of previews)
-        if (preview.node_id === nodeID) previews.delete(key)
-      return policy
-    }
+    if (suffix === '/policy' && method === 'PUT') return savePolicy(nodeID, body)
     if (suffix === '/preview' && method === 'POST') {
       const policy = view(nodeID).policy
       const old = new Date(Date.now() - 90 * 86400000).toISOString()
@@ -378,4 +387,5 @@ export function createMockCleanup(nodes: DockerNode[]) {
     }
     return undefined
   }
+  return { handle, savePolicy, policy: (id: string) => view(id).policy, latestRun: (id: string) => runs.get(id)?.[0] }
 }

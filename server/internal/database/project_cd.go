@@ -38,7 +38,7 @@ type ProjectCDRecord struct {
 	Operation          string     `json:"operation"`
 	Trigger            string     `json:"trigger"`
 	Status             string     `json:"status"`
-	TaskID             string     `json:"task_id"`
+	TaskID             string     `gorm:"index" json:"task_id"`
 	Actor              string     `json:"actor"`
 	Revision           uint64     `json:"revision"`
 	CommitSHA          string     `json:"commit_sha"`

@@ -3,13 +3,19 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"slices"
 	"strconv"
-	"time"
+	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/suma/suma/server/internal/cleanup"
 	"github.com/suma/suma/server/internal/imageupdate"
+	"github.com/suma/suma/server/internal/projectcd"
+	"github.com/suma/suma/server/internal/task"
 	"github.com/suma/suma/server/internal/taskcenter"
+	"gorm.io/gorm"
 )
 
 // Task Center error codes: 22xxx.
@@ -33,7 +39,12 @@ func registerTaskCenterRoutes(v1 *gin.RouterGroup, deps Dependencies) {
 		success(c, deps.TaskCenterKinds.List())
 	})
 	group.GET("/schedules", func(c *gin.Context) {
-		views, err := deps.TaskCenter.Schedules(c.Request.Context(), c.Query("kind"), c.Query("node_id"))
+		scope := c.DefaultQuery("scope", "all")
+		if scope != "all" && scope != "node" && scope != "control_plane" {
+			failure(c, http.StatusBadRequest, codeTaskCenterInvalid, "Invalid automation scope")
+			return
+		}
+		views, err := deps.TaskCenter.Schedules(c.Request.Context(), c.Query("kind"), c.Query("node_id"), taskcenter.ScheduleFilter{Scope: c.Query("scope"), IncludeArchived: c.Query("include_archived") == "true"})
 		if err != nil {
 			failure(c, http.StatusInternalServerError, codeTaskCenterStartFailed, "Unable to list schedules")
 			return
@@ -46,7 +57,7 @@ func registerTaskCenterRoutes(v1 *gin.RouterGroup, deps Dependencies) {
 			failure(c, http.StatusBadRequest, codeTaskCenterInvalid, "Invalid schedule")
 			return
 		}
-		row, err := deps.TaskCenter.Create(c.Request.Context(), input, currentUser(c).Username)
+		row, err := deps.TaskCenter.Create(c.Request.Context(), input, currentUser(c).Username, taskCenterActor(c))
 		if err != nil {
 			if taskCenterFailure(c, err) {
 				return
@@ -58,9 +69,9 @@ func registerTaskCenterRoutes(v1 *gin.RouterGroup, deps Dependencies) {
 		success(c, row)
 	})
 	group.GET("/schedules/preview", func(c *gin.Context) {
-		runs, err := taskcenter.NextRuns(c.Query("cron"), c.Query("timezone"), time.Now(), 5)
-		if err != nil || len(runs) == 0 {
-			failure(c, http.StatusBadRequest, codeTaskCenterPreviewInvalid, "Cron expression or timezone is invalid")
+		runs, err := deps.TaskCenter.Preview(taskcenter.ScheduleInput{Kind: c.Query("kind"), ScheduleType: c.Query("schedule_type"), Cron: c.Query("cron"), Timezone: c.Query("timezone"), IntervalSeconds: queryInt(c, "interval_seconds", 0)}, 5)
+		if err != nil {
+			failure(c, http.StatusBadRequest, codeTaskCenterPreviewInvalid, "Schedule or timezone is invalid")
 			return
 		}
 		success(c, runs)
@@ -87,13 +98,17 @@ func registerTaskCenterRoutes(v1 *gin.RouterGroup, deps Dependencies) {
 		}
 		var input struct {
 			taskcenter.ScheduleInput
-			ExpectedVersion uint64 `json:"expected_version"`
+			ExpectedVersion  uint64 `json:"expected_version"`
+			ConfirmationName string `json:"confirmation_name"`
+			Authorize        bool   `json:"authorize"`
 		}
 		if c.ShouldBindJSON(&input) != nil {
 			failure(c, http.StatusBadRequest, codeTaskCenterInvalid, "Invalid schedule")
 			return
 		}
-		row, err := deps.TaskCenter.Update(c.Request.Context(), id, input.ScheduleInput, input.ExpectedVersion)
+		actor := taskCenterActor(c)
+		actor.ConfirmationName, actor.Authorize = input.ConfirmationName, input.Authorize
+		row, err := deps.TaskCenter.Update(c.Request.Context(), id, input.ScheduleInput, input.ExpectedVersion, actor)
 		if err != nil {
 			if taskCenterFailure(c, err) {
 				return
@@ -109,16 +124,21 @@ func registerTaskCenterRoutes(v1 *gin.RouterGroup, deps Dependencies) {
 		if !ok {
 			return
 		}
-		view, viewErr := deps.TaskCenter.Schedule(c.Request.Context(), id)
-		if viewErr == nil {
-			defer recordAudit(c, deps.Audit, "task_center.schedule", "task_schedule", view.Name, "success")
+		version, err := strconv.ParseUint(c.Query("expected_version"), 10, 64)
+		if err != nil || version == 0 {
+			failure(c, http.StatusBadRequest, codeTaskCenterInvalid, "Expected rule version is required")
+			return
 		}
-		if err := deps.TaskCenter.Delete(c.Request.Context(), id); err != nil {
+		view, viewErr := deps.TaskCenter.Schedule(c.Request.Context(), id)
+		if err := deps.TaskCenter.Delete(c.Request.Context(), id, version); err != nil {
 			if taskCenterFailure(c, err) {
 				return
 			}
 			failure(c, http.StatusInternalServerError, codeTaskCenterStartFailed, "Unable to delete schedule")
 			return
+		}
+		if viewErr == nil {
+			recordAudit(c, deps.Audit, "task_center.schedule.archive", "task_schedule", view.Name, "success")
 		}
 		success(c, gin.H{"id": id})
 	})
@@ -127,7 +147,18 @@ func registerTaskCenterRoutes(v1 *gin.RouterGroup, deps Dependencies) {
 		if !ok {
 			return
 		}
-		run, err := deps.TaskCenter.RunNow(c.Request.Context(), id)
+		var input struct {
+			Action           string `json:"action"`
+			ConfirmationName string `json:"confirmation_name"`
+			Authorize        bool   `json:"authorize"`
+		}
+		if err := c.ShouldBindJSON(&input); err != nil && !errors.Is(err, io.EOF) {
+			failure(c, http.StatusBadRequest, codeTaskCenterInvalidParams, "Invalid task action")
+			return
+		}
+		actor := taskCenterActor(c)
+		actor.ConfirmationName, actor.Authorize = input.ConfirmationName, input.Authorize
+		run, err := deps.TaskCenter.RunNow(c.Request.Context(), id, taskcenter.DispatchRequest{Action: input.Action, Actor: actor})
 		if err != nil {
 			if taskCenterFailure(c, err) {
 				return
@@ -143,12 +174,49 @@ func registerTaskCenterRoutes(v1 *gin.RouterGroup, deps Dependencies) {
 		if !ok {
 			return
 		}
-		runs, err := deps.TaskCenter.Runs(c.Request.Context(), id, queryInt(c, "limit", 20))
-		if err != nil {
-			failure(c, http.StatusInternalServerError, codeTaskCenterStartFailed, "Unable to list schedule runs")
+		filter, ok := taskCenterRunFilter(c)
+		if !ok {
 			return
 		}
-		success(c, runs)
+		filter.ScheduleID = id
+		page, err := deps.TaskCenter.TriggerRecords(c.Request.Context(), filter, queryInt(c, "limit", 20), queryInt(c, "offset", 0))
+		if err != nil {
+			failure(c, http.StatusInternalServerError, codeTaskCenterStartFailed, "Unable to list trigger records")
+			return
+		}
+		if _, paged := c.GetQuery("offset"); paged {
+			success(c, page)
+		} else {
+			success(c, page.Items)
+		}
+	})
+	group.GET("/runs", func(c *gin.Context) {
+		filter, ok := taskCenterRunFilter(c)
+		if !ok {
+			return
+		}
+		page, err := deps.TaskCenter.TriggerRecords(c.Request.Context(), filter, queryInt(c, "limit", 20), queryInt(c, "offset", 0))
+		if err != nil {
+			failure(c, http.StatusInternalServerError, codeTaskCenterStartFailed, "Unable to list trigger records")
+			return
+		}
+		success(c, page)
+	})
+	group.GET("/runs/:id", func(c *gin.Context) {
+		id, ok := taskCenterID(c)
+		if !ok {
+			return
+		}
+		row, err := deps.TaskCenter.TriggerRecord(c.Request.Context(), id)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			failure(c, http.StatusNotFound, codeTaskCenterNotFound, "Trigger record not found")
+			return
+		}
+		if err != nil {
+			failure(c, http.StatusInternalServerError, codeTaskCenterStartFailed, "Unable to load trigger record")
+			return
+		}
+		success(c, row)
 	})
 	group.POST("/tasks", func(c *gin.Context) {
 		var input struct {
@@ -163,7 +231,7 @@ func registerTaskCenterRoutes(v1 *gin.RouterGroup, deps Dependencies) {
 		if input.Params == nil {
 			input.Params = json.RawMessage("{}")
 		}
-		taskID, err := deps.TaskCenter.StartManual(c.Request.Context(), input.Kind, input.NodeID, input.Params)
+		taskID, err := deps.TaskCenter.StartManual(c.Request.Context(), input.Kind, input.NodeID, input.Params, taskCenterActor(c))
 		if err != nil {
 			if taskCenterFailure(c, err) {
 				return
@@ -199,20 +267,54 @@ func registerTaskCenterRoutes(v1 *gin.RouterGroup, deps Dependencies) {
 			failure(c, http.StatusBadRequest, codeTaskCenterInvalid, "Scope must be all, control_plane or node")
 			return
 		}
-		nodeID := c.Query("node_id")
-		if nodeID != "" && deps.Nodes != nil {
-			if _, err := deps.Nodes.Get(c.Request.Context(), nodeID); err != nil {
-				failure(c, http.StatusNotFound, codeTaskCenterNodeMissing, "Docker node not found")
-				return
-			}
+		source := c.Query("source")
+		status := c.Query("status")
+		search := strings.TrimSpace(c.Query("search"))
+		if !slices.Contains([]string{"", "manual", "scheduled", "webhook", "system", "unrecorded"}, source) ||
+			!slices.Contains([]string{"", "active", "finished", "pending", "running", "success", "failed", "canceled"}, status) ||
+			len([]rune(search)) > 256 || len(c.Query("type")) > 64 {
+			failure(c, http.StatusBadRequest, codeTaskCenterInvalid, "Invalid task record filter")
+			return
 		}
-		rows, total, err := deps.Tasks.ListRecords(c.Request.Context(), mapScope(scope), nodeID, c.Query("status"), c.Query("type"), queryInt(c, "limit", 50), queryInt(c, "offset", 0))
+		scheduleID, ok := taskCenterRuleFilter(c)
+		if !ok {
+			return
+		}
+		// Historical node IDs remain valid after node deletion; this is a DB-only
+		// evidence query and does not resolve a live Docker runtime.
+		rows, total, err := deps.Tasks.Records(c.Request.Context(), task.RecordQuery{Scope: mapScope(scope), NodeID: c.Query("node_id"), Status: status, TypePrefix: c.Query("type"), Search: search, Source: source, ScheduleID: scheduleID, Limit: queryInt(c, "limit", 50), Offset: queryInt(c, "offset", 0), Summary: c.Query("view") == "summary"})
 		if err != nil {
 			failure(c, http.StatusInternalServerError, codeTaskCenterStartFailed, "Unable to list task records")
 			return
 		}
 		success(c, gin.H{"items": rows, "total": total})
 	})
+}
+
+func taskCenterRuleFilter(c *gin.Context) (uint, bool) {
+	value := c.Query("schedule_id")
+	if value == "" {
+		return 0, true
+	}
+	id, err := strconv.ParseUint(value, 10, 64)
+	if err != nil || id == 0 {
+		failure(c, http.StatusBadRequest, codeTaskCenterInvalid, "Invalid rule filter")
+		return 0, false
+	}
+	return uint(id), true
+}
+
+func taskCenterRunFilter(c *gin.Context) (taskcenter.RunFilter, bool) {
+	filter := taskcenter.RunFilter{Scope: c.DefaultQuery("scope", "all"), NodeID: c.Query("node_id"), Source: c.Query("source"), Status: c.Query("status"), Summary: c.Query("view") == "summary"}
+	if !slices.Contains([]string{"all", "node", "control_plane"}, filter.Scope) ||
+		!slices.Contains([]string{"", "manual", "scheduled", "webhook", "system"}, filter.Source) ||
+		!slices.Contains([]string{"", "dispatching", "started", "skipped", "start_failed", "interrupted"}, filter.Status) {
+		failure(c, http.StatusBadRequest, codeTaskCenterInvalid, "Invalid trigger record filter")
+		return filter, false
+	}
+	var ok bool
+	filter.ScheduleID, ok = taskCenterRuleFilter(c)
+	return filter, ok
 }
 
 // taskCenterFailure maps domain errors onto 22xxx responses; it reports
@@ -235,12 +337,29 @@ func taskCenterFailure(c *gin.Context, err error) bool {
 		failure(c, http.StatusBadRequest, codeTaskCenterUnknownKind, "Unknown task kind")
 	case errors.Is(err, taskcenter.ErrInvalidParams):
 		failure(c, http.StatusBadRequest, codeTaskCenterInvalidParams, err.Error())
+	case errors.Is(err, task.ErrInvalidParams), errors.Is(err, taskcenter.ErrUnsupportedAction), errors.Is(err, taskcenter.ErrBusinessOwned):
+		failure(c, http.StatusBadRequest, codeTaskCenterInvalidParams, err.Error())
+	case errors.Is(err, taskcenter.ErrPaused):
+		failure(c, http.StatusConflict, codeTaskCenterConflict, err.Error())
+	case errors.Is(err, cleanup.ErrConfirmation):
+		failure(c, http.StatusBadRequest, codeTaskCenterInvalidParams, cleanup.ErrConfirmation.Error())
+	case errors.Is(err, cleanup.ErrConflict), errors.Is(err, projectcd.ErrConflict):
+		failure(c, http.StatusConflict, codeTaskCenterConflict, err.Error())
+	case errors.Is(err, cleanup.ErrInvalid):
+		failure(c, http.StatusBadRequest, codeTaskCenterInvalidParams, cleanup.ErrInvalid.Error())
+	case errors.Is(err, taskcenter.ErrStopped):
+		failure(c, http.StatusServiceUnavailable, codeTaskCenterStartFailed, taskcenter.ErrStopped.Error())
 	case errors.Is(err, taskcenter.ErrInvalid):
 		failure(c, http.StatusBadRequest, codeTaskCenterInvalid, err.Error())
 	default:
 		return false
 	}
 	return true
+}
+
+func taskCenterActor(c *gin.Context) taskcenter.Actor {
+	user := currentUser(c)
+	return taskcenter.Actor{ID: &user.ID, Name: user.Username, IP: requestClientIP(c)}
 }
 
 func taskCenterID(c *gin.Context) (uint, bool) {

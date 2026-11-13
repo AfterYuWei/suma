@@ -11,6 +11,7 @@ import (
 	"github.com/suma/suma/server/internal/audit"
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/task"
+	"github.com/suma/suma/server/internal/taskcenter"
 	"gorm.io/gorm"
 )
 
@@ -347,6 +348,7 @@ func TestRecoverDoesNotReplayMissedScheduleOrInterruptedWork(t *testing.T) {
 func TestScheduledOccurrenceIsExecutedOnce(t *testing.T) {
 	f := &fakeRuntime{}
 	s, actor := fixture(t, f)
+	center := attachTaskCenter(t, s)
 	in := Update{Config: DefaultConfig("UTC"), ConfirmationName: "Node a", Authorize: true}
 	in.Enabled = true
 	p, err := s.Update(context.Background(), "a", in, actor)
@@ -354,14 +356,14 @@ func TestScheduledOccurrenceIsExecutedOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	due := s.now().Add(-10 * time.Second)
-	if err = s.db.Model(&database.CleanupPolicy{}).Where("node_id = ?", p.NodeID).Update("next_run_at", due).Error; err != nil {
+	if err = s.db.Model(&database.TaskCenterSchedule{}).Where("kind = ? AND node_id = ?", "system.cleanup", p.NodeID).Update("next_run_at", due).Error; err != nil {
 		t.Fatal(err)
 	}
 	var ticks sync.WaitGroup
 	tickErrors := make(chan error, 2)
 	for range 2 {
 		ticks.Add(1)
-		go func() { defer ticks.Done(); tickErrors <- s.Tick(context.Background()) }()
+		go func() { defer ticks.Done(); tickErrors <- center.RunDue(context.Background()) }()
 	}
 	ticks.Wait()
 	close(tickErrors)
@@ -498,6 +500,7 @@ func TestScheduledSkipsOfflineDisabledBusyAndMissedNodes(t *testing.T) {
 		t.Run(reason, func(t *testing.T) {
 			f := &fakeRuntime{resources: []Resource{oldResource(Image, "old")}, cacheSupported: true}
 			s, actor := fixture(t, f)
+			center := attachTaskCenter(t, s)
 			in := Update{Config: DefaultConfig("UTC"), ConfirmationName: "Node a", Authorize: true}
 			in.Enabled = true
 			if _, err := s.Update(context.Background(), "a", in, actor); err != nil {
@@ -516,16 +519,20 @@ func TestScheduledSkipsOfflineDisabledBusyAndMissedNodes(t *testing.T) {
 			case "missed":
 				due = s.now().Add(-2 * time.Minute)
 			}
-			if err := s.db.Model(&database.CleanupPolicy{}).Where("node_id = ?", "a").Update("next_run_at", due).Error; err != nil {
+			if err := s.db.Model(&database.TaskCenterSchedule{}).Where("kind = ? AND node_id = ?", "system.cleanup", "a").Update("next_run_at", due).Error; err != nil {
 				t.Fatal(err)
 			}
 			for i := 0; i < 2; i++ {
-				if err := s.Tick(context.Background()); err != nil {
+				if err := center.RunDue(context.Background()); err != nil {
 					t.Fatal(err)
 				}
 			}
-			runs, err := s.Runs(context.Background(), "a", 1, false)
-			if err != nil || runs.Total != 1 || runs.Items[0].Status != "skipped" || runs.Items[0].TaskID != "" || len(f.removed) != 0 || f.cacheCalls != 0 {
+			var rule database.TaskCenterSchedule
+			if err := s.db.Where("kind = ? AND node_id = ?", "system.cleanup", "a").First(&rule).Error; err != nil {
+				t.Fatal(err)
+			}
+			runs, err := center.RunsPage(context.Background(), rule.ID, 20, 0)
+			if err != nil || runs.Total != 1 || (runs.Items[0].Status != "skipped" && runs.Items[0].Status != "start_failed") || runs.Items[0].TaskID != "" || len(f.removed) != 0 || f.cacheCalls != 0 {
 				t.Fatalf("unsafe scheduled skip: %+v %v", runs, err)
 			}
 		})
@@ -565,20 +572,21 @@ func TestLostProtectionStopsAfterCompletedDeletion(t *testing.T) {
 func TestRescheduleBetweenDueScanAndClaimDoesNotRunEarly(t *testing.T) {
 	f := &fakeRuntime{}
 	s, actor := fixture(t, f)
+	center := attachTaskCenter(t, s)
 	input := Update{Config: DefaultConfig("UTC"), ConfirmationName: "Node a", Authorize: true}
 	input.Enabled = true
 	if _, err := s.Update(context.Background(), "a", input, actor); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.db.Model(&database.CleanupPolicy{}).Where("node_id = ?", "a").Update("next_run_at", s.now().Add(-time.Second)).Error; err != nil {
+	if err := s.db.Model(&database.TaskCenterSchedule{}).Where("kind = ? AND node_id = ?", "system.cleanup", "a").Update("next_run_at", s.now().Add(-time.Second)).Error; err != nil {
 		t.Fatal(err)
 	}
 	changed := false
 	callback := "cleanup:test-reschedule"
 	if err := s.db.Callback().Query().After("gorm:query").Register(callback, func(db *gorm.DB) {
-		if _, selected := db.Statement.Dest.(*[]database.CleanupPolicy); selected && !changed {
+		if _, selected := db.Statement.Dest.(*[]database.TaskCenterSchedule); selected && !changed {
 			changed = true
-			db.AddError(db.Session(&gorm.Session{NewDB: true}).Model(&database.CleanupPolicy{}).Where("node_id = ?", "a").Update("next_run_at", s.now().Add(24*time.Hour)).Error)
+			db.AddError(db.Session(&gorm.Session{NewDB: true}).Model(&database.TaskCenterSchedule{}).Where("kind = ? AND node_id = ?", "system.cleanup", "a").Update("next_run_at", s.now().Add(24*time.Hour)).Error)
 		}
 	}); err != nil {
 		t.Fatal(err)
@@ -586,11 +594,48 @@ func TestRescheduleBetweenDueScanAndClaimDoesNotRunEarly(t *testing.T) {
 	defer s.db.Callback().Query().Remove(callback)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := s.Tick(ctx); err != nil {
+	if err := center.RunDue(ctx); err != nil {
 		t.Fatal(err)
 	}
 	runs, err := s.Runs(context.Background(), "a", 1, false)
 	if !changed || err != nil || runs.Total != 0 {
 		t.Fatalf("future plan claimed from stale due scan: %+v %v", runs, err)
+	}
+}
+
+func attachTaskCenter(t *testing.T, s *Service) *taskcenter.Service {
+	t.Helper()
+	registry := taskcenter.NewRegistry()
+	center := taskcenter.New(s.db, registry, taskcenter.Dependencies{Now: s.now, NodeName: func(ctx context.Context, id string) (string, error) {
+		node, err := s.deps.Node(ctx, id)
+		return node.Name, err
+	}})
+	s.SetTaskCenter(center)
+	if err := registry.Register(s.AutomationKind()); err != nil {
+		t.Fatal(err)
+	}
+	return center
+}
+
+func TestRunForTaskPreservesEvidenceWithoutResolvingDeletedNode(t *testing.T) {
+	db, err := testutil.Open(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := database.CleanupRun{ID: "retained-cleanup", NodeID: "removed-node", NodeName: "Original node", TaskID: "retained-task", PolicyVersion: 9, Status: "partial_failed", PolicyJSON: encode(DefaultConfig("UTC")), ResultJSON: `{"outcomes":[{"kind":"image","id":"old-image","name":"old-image","status":"deleted"}],"stats":{"image":{"deleted":1,"failed":1,"skipped":0,"scanned":0}}}`}
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(db, nil, nil, Dependencies{Node: func(context.Context, string) (Node, error) {
+		t.Fatal("history lookup resolved the live node")
+		return Node{}, ErrUnavailable
+	}})
+	t.Cleanup(service.Stop)
+	run, err := service.RunForTask(context.Background(), row.TaskID)
+	if err != nil || run.ID != row.ID || run.NodeName != "Original node" || run.PolicyVersion != 9 || run.Status != "partial_failed" {
+		t.Fatal("historical cleanup identity was lost", err)
+	}
+	if len(run.Result.Outcomes) != 1 || run.Result.Stats[Image] == nil || run.Result.Stats[Image].Failed != 1 {
+		t.Fatal("partial cleanup evidence was lost")
 	}
 }

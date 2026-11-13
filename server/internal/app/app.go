@@ -123,7 +123,24 @@ func New(logger *slog.Logger) (*App, error) {
 		},
 	})
 	imageUpdates := imageupdate.NewService(db, taskService, imageupdate.Dependencies{
-		Audit: auditService,
+		Audit:      auditService,
+		Automation: taskCenter,
+		ConfigRevision: func(ctx context.Context, nodeID string, params imageupdate.Params) (string, error) {
+			view, err := nodes.Get(ctx, nodeID)
+			if err != nil {
+				return "", err
+			}
+			current, err := compose.ForNode(nodeID, "", runner, nil, false).ManagedConfiguration(params.Project)
+			if err != nil {
+				return "", err
+			}
+			if params.AutoApply {
+				if err := composeService.ValidateComposeBindMounts(current.Compose, view.ConnectionType != nodeService.ConnectionUnix, params.AllowDockerSocket); err != nil {
+					return "", fmt.Errorf("%w: %s", taskcenter.ErrInvalidParams, err)
+				}
+			}
+			return current.Revision, nil
+		},
 		Node: func(ctx context.Context, id string) (imageupdate.Node, error) {
 			view, err := nodes.Get(ctx, id)
 			if err != nil {
@@ -131,15 +148,19 @@ func New(logger *slog.Logger) (*App, error) {
 			}
 			return imageupdate.Node{ID: view.ID, Name: view.Name, Enabled: view.Enabled}, nil
 		},
-		Runtime: func(ctx context.Context, id string) (imageupdate.Runtime, error) { return nodes.Runtime(ctx, id) },
-		Resolver: registry.Adapter{},
+		Runtime:     func(ctx context.Context, id string) (imageupdate.Runtime, error) { return nodes.Runtime(ctx, id) },
+		Resolver:    registry.Adapter{},
 		Credentials: registryCredentials,
 		Compose: func(ctx context.Context, id string) (*composeService.Service, error) {
 			target, view, err := nodes.ComposeTarget(ctx, id)
 			if err != nil {
 				return nil, err
 			}
-			return compose.ForNode(id, view.Name, runner.ForTarget(target), engine, view.ConnectionType == nodeService.ConnectionUnix), nil
+			adapter, err := nodes.Runtime(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			return compose.ForNode(id, view.Name, runner.ForTarget(target), adapter, view.ConnectionType == nodeService.ConnectionUnix), nil
 		},
 		OnError: func(err error) { logger.Warn("image update service", "error", err) },
 	})
@@ -150,6 +171,10 @@ func New(logger *slog.Logger) (*App, error) {
 		return taskCenter.DeleteSchedules(ctx, imageupdate.KindImageUpdate, nodeID, subject)
 	})
 	continuousDelivery := cdService.NewService(db, gitClient, gitCredentials, runner, taskService, auditService, secretStore)
+	continuousDelivery.SetTaskCenter(taskCenter)
+	if err := taskCenterKinds.Register(continuousDelivery.AutomationKind()); err != nil {
+		return nil, err
+	}
 	continuousDelivery.SetTargetResolver(nodes)
 	continuousDelivery.SetRegistryCredentials(registryCredentials)
 	if err := continuousDelivery.Recover(context.Background()); err != nil {
@@ -173,6 +198,10 @@ func New(logger *slog.Logger) (*App, error) {
 		},
 	})
 	compose.SetProjectCDAction(projectCD.Lifecycle)
+	projectCD.SetTaskCenter(taskCenter)
+	if err := taskCenterKinds.Register(projectCD.AutomationKind()); err != nil {
+		return nil, err
+	}
 	compose.SetProjectCDView(projectCD.ProjectView)
 	if err := projectCD.Recover(context.Background()); err != nil {
 		return nil, err
@@ -220,8 +249,15 @@ func New(logger *slog.Logger) (*App, error) {
 			return cleanup.Protection{cleanup.Image: append(append(refs.Images, images...), gitrefs.Images...), cleanup.Network: append(refs.Networks, gitrefs.Networks...), cleanup.Volume: append(refs.Volumes, gitrefs.Volumes...)}, nil
 		},
 	})
+	cleanupService.SetTaskCenter(taskCenter)
+	if err := taskCenterKinds.Register(cleanupService.AutomationKind()); err != nil {
+		return nil, err
+	}
 	if err := cleanupService.Recover(context.Background()); err != nil {
 		return nil, fmt.Errorf("recover cleanup: %w", err)
+	}
+	if err := taskCenter.BackfillBusinessRules(context.Background(), cleanupService.BackfillAutomation, continuousDelivery.BackfillAutomation, projectCD.BackfillAutomation); err != nil {
+		return nil, fmt.Errorf("convert automation rules: %w", err)
 	}
 	if setupToken != "" {
 		logger.Info("SUMA initialization key", "setup_token", setupToken, "expires_at", setupExpires.UTC().Format(time.RFC3339))
@@ -269,10 +305,9 @@ func New(logger *slog.Logger) (*App, error) {
 	notifications.Start()
 	projectLogs := projectLogsService(nodes, compose, runner, db)
 	nodes.Start()
-	continuousDelivery.Start()
-	projectCD.Start()
-	cleanupService.Start()
-	taskCenter.Start()
+	if err := taskCenter.Start(); err != nil {
+		return nil, fmt.Errorf("start task center: %w", err)
+	}
 	recoveryContext, recoveryCancel := context.WithCancel(context.Background())
 	fileService := containerfiles.NewService(db, secretStore)
 	application := &App{projectCD: projectCD, containerMonitoring: containerMonitoring, notifications: notifications, projectLogs: projectLogs, cleanup: cleanupService, taskCenter: taskCenter, logger: logger, engine: engine, nodes: nodes, agents: agents, cd: continuousDelivery, recoveryCancel: recoveryCancel, server: &http.Server{Addr: cfg.Address, Handler: api.NewRouter(api.Dependencies{ProjectCD: projectCD, ContainerMonitoring: containerMonitoring, Notifications: notifications, ProjectLogs: projectLogs, Cleanup: cleanupService, Engine: engine, Containers: engine, Files: fileService, Auth: authService, Audit: auditService, Tasks: taskService, Images: images, Networks: networkService.Service(engine), Volumes: volumeService.Service(engine), Compose: compose, ComposeRunner: runner, CD: continuousDelivery, GitCredentials: gitCredentials, RegistryCredentials: registryCredentials, Settings: applicationSettings, Monitor: monitorService.NewService(engine, cfg.DataRoot), System: systemService.NewService(engine, taskService), Nodes: nodes, TaskCenter: taskCenter, TaskCenterKinds: taskCenterKinds, ImageUpdates: imageUpdates, Agents: agents, AgentPublicURL: cfg.AgentPublicURL, CookieSecure: cfg.CookieSecure}), ReadHeaderTimeout: 10_000_000_000}}
@@ -342,6 +377,9 @@ func (a *App) Run() error {
 }
 
 func (a *App) Shutdown(ctx context.Context) error {
+	if a.taskCenter != nil {
+		a.taskCenter.Stop()
+	}
 	if a.containerMonitoring != nil {
 		a.containerMonitoring.Stop()
 	}
@@ -351,18 +389,9 @@ func (a *App) Shutdown(ctx context.Context) error {
 	if a.cleanup != nil {
 		a.cleanup.Stop()
 	}
-	if a.taskCenter != nil {
-		a.taskCenter.Stop()
-	}
 	if a.recoveryCancel != nil {
 		a.recoveryCancel()
 		a.recoveryWG.Wait()
-	}
-	if a.projectCD != nil {
-		a.projectCD.Stop()
-	}
-	if a.cd != nil {
-		a.cd.Stop()
 	}
 	if a.notifications != nil {
 		a.notifications.Stop()

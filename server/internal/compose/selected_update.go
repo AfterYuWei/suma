@@ -31,6 +31,7 @@ type SelectedUpdate struct {
 	Start             func(context.Context, string) error
 	Check             func(context.Context) error
 	Complete          func(string, error)
+	ParentTaskID      string
 }
 
 func (s *Service) validateSelectedRuntime(ctx context.Context, project string, services []ServiceImageUpdate) error {

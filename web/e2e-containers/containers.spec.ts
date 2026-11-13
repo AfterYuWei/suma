@@ -32,6 +32,9 @@ async function setup(page: Page, language = 'en-US', theme = 'dark') {
   const monitoringNow = () => Date.parse(started) + 10 * 60_000
   const monitoring = createMonitoringMock(() => nodes.flatMap((node, index) => state.rows.map(row => ({ id: String(index+1).padStart(4,'0')+row.id.slice(4), node_id: node.id, node_name: node.name, engine_id: node.engine_id, container_id: row.id, name: row.name, image: row.image, project: row.labels['com.docker.compose.project'] ?? '', service: row.labels['com.docker.compose.service'] ?? '', first_seen: new Date(monitoringNow()-3*86400_000).toISOString(), last_seen: new Date(monitoringNow()).toISOString() } satisfies Instance))), monitoringNow)
   await page.addInitScript(({ language, theme }) => {
+    // Vite loads more than the browser's default 250 resource entries across
+    // these pages. Keep the ECharts module URL available to geometry probes.
+    performance.setResourceTimingBufferSize(2000)
     localStorage.setItem('suma-language', language)
     localStorage.setItem('suma-theme', theme)
     localStorage.setItem('suma-node-group', 'all')
@@ -79,7 +82,10 @@ const rowFor = (page: Page, name: string) => page.locator('tbody tr').filter({ h
 async function hoverPlotEnd(page: Page, chart: Locator) {
   const point = await chart.evaluate(async element => {
     const resource = performance.getEntriesByType('resource').find(entry => new URL(entry.name).pathname.endsWith('/echarts_core.js'))
-    if (!resource) throw new Error('Monitoring chart engine was not loaded')
+    if (!resource) {
+      const resources = performance.getEntriesByType('resource')
+      throw new Error(`Monitoring chart engine was not loaded (${resources.length} resource entries; ECharts resources: ${resources.filter(entry => /echarts|charts/.test(entry.name)).map(entry => new URL(entry.name).pathname).join(', ')})`)
+    }
     const core = await import(resource.name)
     const instance = core.getInstanceByDom(element)
     const rect = instance.getModel().getComponent('grid').coordinateSystem.getRect()
@@ -302,7 +308,16 @@ for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']
       await expect(charts.nth(index)).toHaveAttribute('data-canvas-clears', '0')
       state.gates.delete('/nodes/local/containers/metrics'); idleSamples.resolve()
       await page.clock.runFor(5000)
-      expect(await seriesPixels(index)).toBeGreaterThanOrEqual(before * 0.9)
+      await expect(popup).toHaveAttribute('aria-busy', 'false')
+      // Refetching advances the sampled sine wave. Compare hover against the
+      // refreshed data itself, rather than an older frame with different data.
+      await page.mouse.move(0, 0); await page.clock.runFor(300)
+      const refreshed = await strokeBounds(charts.nth(index))
+      expect(refreshed.pixels).toBeGreaterThan(100)
+      expect(refreshed.width).toBeGreaterThan(0.9)
+      await page.mouse.move(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2)
+      await page.clock.runFor(300)
+      expect(await seriesPixels(index)).toBeGreaterThanOrEqual(refreshed.pixels * 0.9)
       await page.screenshot({ path: `/tmp/suma-chart-hover-${language}-${theme}-${index}.png`, animations: 'disabled' })
     }
   })
@@ -494,6 +509,7 @@ test('port tags fit five-digit mappings and keep protocols distinct', async ({ p
     })
   })
   expect(layout).toEqual([{ height: 20, centered: true, fits: true }, { height: 20, centered: true, fits: true }])
+  expect(await ports.locator('[data-slot="port-mapping"] .truncate').evaluateAll(labels => labels.every(label => label.scrollWidth <= label.clientWidth + 1))).toBe(true)
   await expect(rowFor(page, 'vaultwarden').getByRole('cell').nth(6)).toHaveText('81')
   await expect(rowFor(page, 'redis').getByRole('cell').nth(6)).toHaveText('—')
   await ports.click()
@@ -699,6 +715,7 @@ test('monitoring custom ranges freeze following and CSV includes queried data', 
 
 test('monitoring period comparisons retain actual timestamps and surface expired history', async ({ page }) => {
   await setup(page)
+  await page.clock.install({ time: new Date('2026-10-12T00:10:00Z') })
   await page.goto('/containers/' + containers[0].id + '#monitoring')
   await page.getByRole('combobox', { name: 'Comparison mode' }).click()
   await page.getByRole('option', { name: 'Compare periods', exact: true }).click()

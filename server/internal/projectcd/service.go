@@ -12,7 +12,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/suma/suma/server/internal/audit"
@@ -23,6 +22,7 @@ import (
 	gitrepo "github.com/suma/suma/server/internal/git"
 	"github.com/suma/suma/server/internal/secret"
 	"github.com/suma/suma/server/internal/task"
+	"github.com/suma/suma/server/internal/taskcenter"
 	"gorm.io/gorm"
 )
 
@@ -31,8 +31,11 @@ var ErrPaused = errors.New("project CD automatic synchronization is paused")
 var errDeploymentFailed = errors.New("single-node delivery failed; inspect task and Docker state before retrying (private diagnostic hidden)")
 
 type Actor struct {
-	UserID   *uint
-	Name, IP string
+	UserID       *uint
+	Name, IP     string
+	TriggerRunID uint
+	SourceID     string
+	CheckOnly    bool
 }
 type Dependencies struct {
 	Inspect func(context.Context, string, string) (compose.RuntimeProjectSnapshot, error)
@@ -40,6 +43,7 @@ type Dependencies struct {
 	Target  func(context.Context, string) (compose.Target, error)
 }
 type Service struct {
+	automation  *taskcenter.Service
 	db          *gorm.DB
 	git         gitrepo.Client
 	credentials *gitrepo.CredentialService
@@ -49,9 +53,6 @@ type Service struct {
 	audit       *audit.Service
 	secrets     *secret.Store
 	deps        Dependencies
-	mu          sync.Mutex
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
 }
 
 func New(db *gorm.DB, git gitrepo.Client, credentials *gitrepo.CredentialService, registries *credential.RegistryService, runner *compose.CLIRunner, tasks *task.Service, audits *audit.Service, secrets *secret.Store, deps Dependencies) *Service {
@@ -352,6 +353,11 @@ func (s *Service) Configure(ctx context.Context, node, name string, input Config
 		revealed = ""
 	}
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if s.automation != nil {
+			if err := s.automation.LockOwned(tx, "project.cd.check", node, name); err != nil {
+				return err
+			}
+		}
 		if input.Repository.Authentication.SaveToCenter {
 			if input.Repository.Authentication.Source != gitrepo.CredentialSourceProject || input.Repository.Authentication.Credential == nil {
 				return errors.New("a project credential is required before saving to the authentication center")
@@ -373,7 +379,10 @@ func (s *Service) Configure(ctx context.Context, node, name string, input Config
 			}
 			row.RepositoryJSON, row.GitCredentialID, row.CredentialCiphertext = string(raw), &created.ID, nil
 		}
-		return tx.WithContext(ctx).Save(&row).Error
+		if err := tx.WithContext(ctx).Save(&row).Error; err != nil {
+			return err
+		}
+		return s.syncAutomation(tx, row)
 	}); err != nil {
 		return Configuration{}, err
 	}
@@ -429,7 +438,25 @@ func (s *Service) SetAutomation(ctx context.Context, node, name string, enabled 
 	if !row.Enabled {
 		return Configuration{}, errors.New("project CD mode is not enabled")
 	}
-	if err := s.db.WithContext(ctx).Model(&row).Updates(map[string]any{"automation_enabled": enabled, "revision": row.Revision + 1}).Error; err != nil {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if s.automation != nil {
+			if err := s.automation.LockOwned(tx, "project.cd.check", node, name); err != nil {
+				return err
+			}
+		}
+		updated := tx.Model(&database.ProjectCD{}).Where("id = ? AND revision = ?", row.ID, row.Revision).Updates(map[string]any{"automation_enabled": enabled, "revision": row.Revision + 1})
+		if updated.Error != nil {
+			return updated.Error
+		}
+		if updated.RowsAffected != 1 {
+			return ErrConflict
+		}
+		var saved database.ProjectCD
+		if err := tx.First(&saved, row.ID).Error; err != nil {
+			return err
+		}
+		return s.syncAutomation(tx, saved)
+	}); err != nil {
 		return Configuration{}, err
 	}
 	return s.Get(ctx, node, name)
@@ -559,9 +586,15 @@ func (s *Service) submit(ctx context.Context, node, name, operation, trigger str
 	result, err := s.tasks.StartDefinition(context.Background(), task.Definition{
 		Type: "project.cd." + operation, Name: operation + " " + name,
 		NodeID: node, NodeName: target.NodeName,
-		Params: map[string]any{"project": name, "operation": operation, "trigger": trigger, "revision": row.Revision},
+		Params:       map[string]any{"project": name, "operation": operation, "trigger": trigger, "revision": row.Revision},
+		TriggerRunID: actor.TriggerRunID,
 	}, func(ctx context.Context, id string, report task.Reporter) (_ any, workErr error) {
 		defer release()
+		if s.automation != nil {
+			if err := s.automation.ValidateRun(ctx, actor.TriggerRunID); err != nil {
+				return nil, err
+			}
+		}
 		current, err := s.row(ctx, node, name)
 		if err != nil {
 			return nil, err
@@ -600,7 +633,7 @@ func (s *Service) submit(ctx context.Context, node, name, operation, trigger str
 				return nil, errors.Join(workErr, err)
 			}
 		}
-		return nil, workErr
+		return map[string]any{"project": name, "operation": operation, "record_id": record.ID, "commit": record.CommitSHA, "config_hash": record.ConfigHash}, workErr
 	})
 	if err != nil {
 		release()
@@ -608,6 +641,19 @@ func (s *Service) submit(ctx context.Context, node, name, operation, trigger str
 	return result, err
 }
 func (s *Service) Check(ctx context.Context, node, name, trigger string, actor Actor) (database.Task, error) {
+	if s.automation != nil && actor.TriggerRunID == 0 {
+		reason := taskcenter.ReasonManual
+		if trigger == "webhook" {
+			reason = taskcenter.ReasonWebhook
+		} else if trigger == "poll" {
+			reason = taskcenter.ReasonScheduled
+		}
+		run, err := s.automation.DispatchSubject(ctx, "project.cd.check", node, name, taskcenter.DispatchRequest{Reason: reason, SourceID: actor.SourceID, Action: "check", Actor: taskcenter.Actor{ID: actor.UserID, Name: actor.Name, IP: actor.IP}})
+		if err != nil {
+			return database.Task{}, err
+		}
+		return s.tasks.Get(ctx, run.TaskID)
+	}
 	return s.submit(ctx, node, name, "check", trigger, actor, func(ctx context.Context, record *database.ProjectCDRecord, row database.ProjectCD, report task.Reporter) error {
 		now := time.Now().UTC()
 		if err := s.db.WithContext(ctx).Model(&row).Update("last_check_at", now).Error; err != nil {
@@ -673,7 +719,7 @@ func (s *Service) Check(ctx context.Context, node, name, trigger string, actor A
 		if err := s.db.WithContext(ctx).Model(&row).Update("candidate_record_id", record.ID).Error; err != nil {
 			return err
 		}
-		if row.ReconcileMode == "auto" && row.AutomationEnabled && !row.InitialApplicationRequired {
+		if row.ReconcileMode == "auto" && row.AutomationEnabled && !row.InitialApplicationRequired && !actor.CheckOnly {
 			if row.FailedFingerprint == record.CommitSHA+record.ConfigHash {
 				report(100, "Previous application failed; manual retry required")
 				return nil

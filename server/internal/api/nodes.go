@@ -224,7 +224,7 @@ func registerNodeRoutes(router *gin.Engine, v1 *gin.RouterGroup, deps Dependenci
 			failure(c, http.StatusNotFound, 20004, "Docker node not found")
 			return
 		}
-		rows, err := deps.Tasks.ListForNode(c.Request.Context(), c.Param("nodeID"))
+		rows, err := deps.Tasks.ListForNode(c.Request.Context(), c.Param("nodeID"), c.Query("view") == "summary")
 		if err != nil {
 			failure(c, http.StatusInternalServerError, 16001, "Unable to list tasks")
 			return

@@ -192,7 +192,9 @@ func TestAgentEnrollmentAndDockerRuntimeOverWSS(t *testing.T) {
 		t.Fatalf("enrollment creation bypassed session: %d", unauthorized.Code)
 	}
 	unauthorizedReplacement := httptest.NewRecorder()
-	router.ServeHTTP(unauthorizedReplacement, httptest.NewRequest(http.MethodPost, "/api/v1/nodes/local/agent/replace-engine", strings.NewReader(`{}`)))
+	unauthorizedReplacementRequest := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/local/agent/replace-engine", strings.NewReader(`{}`))
+	unauthorizedReplacementRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(unauthorizedReplacement, unauthorizedReplacementRequest)
 	if unauthorizedReplacement.Code != http.StatusUnauthorized {
 		t.Fatalf("Engine replacement bypassed session: %d", unauthorizedReplacement.Code)
 	}

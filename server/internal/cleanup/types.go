@@ -71,8 +71,9 @@ type Update struct {
 	Authorize        bool   `json:"authorize"`
 }
 type Actor struct {
-	UserID *uint
-	IP     string
+	UserID       *uint
+	IP           string
+	TriggerRunID uint
 }
 type Node struct {
 	RuntimeKey string

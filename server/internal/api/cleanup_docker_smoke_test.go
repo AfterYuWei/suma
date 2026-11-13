@@ -23,6 +23,7 @@ import (
 	dockernetwork "github.com/docker/docker/api/types/network"
 	dockervolume "github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/errdefs"
 	"github.com/gin-gonic/gin"
 	"github.com/suma/suma/server/internal/agenthub"
 	"github.com/suma/suma/server/internal/audit"
@@ -33,6 +34,7 @@ import (
 	"github.com/suma/suma/server/internal/node"
 	"github.com/suma/suma/server/internal/secret"
 	"github.com/suma/suma/server/internal/task"
+	"github.com/suma/suma/server/internal/taskcenter"
 )
 
 // This suite refuses the normal host Engine. All resources and cache operations
@@ -43,7 +45,7 @@ func TestRealDockerCleanupTransports(t *testing.T) {
 		t.Skip("set SUMA_RUN_CLEANUP_SMOKE=1 with isolated daemon endpoints")
 	}
 	unixHost := os.Getenv("SUMA_CLEANUP_SMOKE_UNIX")
-	if !strings.HasPrefix(os.Getenv("SUMA_CLEANUP_SMOKE_DIND"), "suma-cleanup-isolated-") || !strings.HasPrefix(unixHost, "unix:///tmp/suma-cleanup-live.") {
+	if !strings.HasPrefix(os.Getenv("SUMA_CLEANUP_SMOKE_DIND"), "suma-cleanup-isolated-") || !strings.HasPrefix(unixHost, "unix://"+filepath.Join(os.TempDir(), "suma-cleanup-live.")) {
 		t.Fatal("isolated daemon is required")
 	}
 	for _, transport := range []string{"unix", "tcp", "agent"} {
@@ -200,7 +202,7 @@ func cleanupTransportSmoke(t *testing.T, transport, unixHost string) {
 			t.Fatal(e)
 		}
 		socket := strings.TrimPrefix(unixHost, "unix://")
-		command := exec.CommandContext(ctx, "docker", "run", "-d", "--name", agentName, "--add-host", "host.docker.internal:host-gateway", "--env-file", envFile, "-e", "SUMA_AGENT_SERVER_URL="+publicURL, "-e", "SUMA_AGENT_CA_FILE=/run/secrets/ca.pem", "-v", socket+":/var/run/docker.sock:ro", "-v", cert+":/run/secrets/ca.pem:ro", image)
+		command := exec.CommandContext(ctx, "docker", "run", "-d", "--name", agentName, "--add-host", "host.docker.internal:"+smokeHostGateway(t, ctx), "--env-file", envFile, "-e", "SUMA_AGENT_SERVER_URL="+publicURL, "-e", "SUMA_AGENT_CA_FILE=/run/secrets/ca.pem", "-v", socket+":/var/run/docker.sock:ro", "-v", cert+":/run/secrets/ca.pem:ro", image)
 		if output, e := command.CombinedOutput(); e != nil {
 			t.Fatalf("start isolated Agent: %v %s", e, output)
 		}
@@ -225,7 +227,7 @@ func cleanupTransportSmoke(t *testing.T, transport, unixHost string) {
 	// each transport. Production policies retain at least one day; zero days
 	// is used only here to make the disposable cache immediately eligible.
 	buildTag := marker + ":cache-fixture"
-	script := "set -eu; dir=$(mktemp -d /tmp/cleanup-cache.XXXXXX); trap 'rm -rf \"$dir\"' EXIT; printf 'FROM alpine:3.24\\nRUN dd if=/dev/zero of=/cache-payload bs=1048576 count=2\\n' > \"$dir/Dockerfile\"; DOCKER_BUILDKIT=1 docker build --no-cache --network=none -t \"$1\" \"$dir\""
+	script := "set -eu; dir=$(mktemp -d /tmp/cleanup-cache.XXXXXX); trap 'rm -rf \"$dir\"' EXIT; dd if=/dev/zero of=\"$dir/cache-payload\" bs=1048576 count=2; printf 'FROM alpine:3.24\\nCOPY cache-payload /cache-payload\\n' > \"$dir/Dockerfile\"; DOCKER_BUILDKIT=1 docker build --no-cache --network=none -t \"$1\" \"$dir\""
 	build := exec.CommandContext(ctx, "docker", "exec", os.Getenv("SUMA_CLEANUP_SMOKE_DIND"), "sh", "-c", script, "sh", buildTag)
 	if output, e := build.CombinedOutput(); e != nil {
 		t.Fatalf("isolated cache fixture: %v %s", e, output)
@@ -280,6 +282,16 @@ func cleanupTransportSmoke(t *testing.T, transport, unixHost string) {
 		return cleanup.Protection{cleanup.Image: refs.Images, cleanup.Volume: refs.Volumes}, e
 	}})
 	defer service.Stop()
+	kinds := taskcenter.NewRegistry()
+	center := taskcenter.New(db, kinds, taskcenter.Dependencies{Now: func() time.Time { return clock }, NodeName: func(ctx context.Context, id string) (string, error) {
+		view, err := nodes.Get(ctx, id)
+		return view.Name, err
+	}})
+	service.SetTaskCenter(center)
+	if err := kinds.Register(service.AutomationKind()); err != nil {
+		t.Fatal(err)
+	}
+	defer center.Stop()
 	authentication := auth.NewService(db, time.Hour)
 	if _, err = authentication.Initialize(ctx, "admin", "admin@example.test", "", "long-password"); err != nil {
 		t.Fatal(err)
@@ -288,7 +300,7 @@ func cleanupTransportSmoke(t *testing.T, transport, unixHost string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router := NewRouter(Dependencies{Engine: &fakeEngine{}, Nodes: nodes, Auth: authentication, Tasks: tasks, Audit: audits, Cleanup: service})
+	router := NewRouter(Dependencies{Engine: &fakeEngine{}, Nodes: nodes, Auth: authentication, Tasks: tasks, Audit: audits, Cleanup: service, TaskCenter: center, TaskCenterKinds: kinds})
 	request := func(method, path string, input any) *httptest.ResponseRecorder {
 		var body string
 		if input != nil {
@@ -364,6 +376,17 @@ func cleanupTransportSmoke(t *testing.T, transport, unixHost string) {
 	if run.Status != "success" {
 		t.Fatalf("cleanup failed: %+v", run)
 	}
+	if err := tasks.Wait(ctx, started.Data.ID); err != nil {
+		t.Fatal(err)
+	}
+	var trigger database.TaskCenterScheduleRun
+	if err := db.Where("task_id = ?", started.Data.ID).First(&trigger).Error; err != nil || trigger.Status != "started" || trigger.TriggeredBy != taskcenter.ReasonManual || trigger.ScheduleID == nil || trigger.ActorID == nil {
+		t.Fatalf("cleanup bypassed unified admission: %+v %v", trigger, err)
+	}
+	completed, err := tasks.Get(ctx, started.Data.ID)
+	if err != nil || completed.Status != task.StatusSuccess || !json.Valid(completed.Result) {
+		t.Fatalf("cleanup Task result was not retained: %+v %v", completed, err)
+	}
 	if _, err = cli.ContainerInspect(ctx, stopped); err == nil {
 		t.Fatal("stopped fixture retained")
 	}
@@ -399,5 +422,72 @@ func cleanupTransportSmoke(t *testing.T, transport, unixHost string) {
 	if _, err = cli.VolumeInspect(ctx, unusedVolume); err == nil {
 		t.Fatal("confirmed volume still exists")
 	}
-	t.Logf("%s: isolated cleanup, cache API, stopped/active references, declarative protection, frozen candidates, manual volume deletion, tasks and audits passed", transport)
+	// Verify the actual automatic path as well as the confirmed manual preview.
+	// Enabling deletion requires explicit authorization at the ordinary HTTP API.
+	policy, err := service.Get(ctx, nodeID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config = policy.Policy.Config
+	config.Enabled = true
+	authorization := cleanup.Update{Config: config, Version: policy.Policy.Version}
+	if out = request("PUT", path+"/cleanup/policy", authorization); out.Code != http.StatusUnprocessableEntity {
+		t.Fatal("automatic deletion accepted without authorization", out.Code)
+	}
+	authorization.Authorize, authorization.ConfirmationName = true, n.Name
+	out = request("PUT", path+"/cleanup/policy", authorization)
+	if out.Code != http.StatusOK {
+		t.Fatal("authorize scheduled cleanup", out.Code, out.Body.String())
+	}
+	var authorized struct {
+		Data cleanup.Policy `json:"data"`
+	}
+	if err := json.Unmarshal(out.Body.Bytes(), &authorized); err != nil || authorized.Data.AuthorizedBy == nil || authorized.Data.AuthorizedAt == nil {
+		t.Fatal("automatic deletion grant was not retained", err)
+	}
+	scheduledContainer := createContainer("-scheduled", nil, false, "", "")
+	var rule database.TaskCenterSchedule
+	if err := db.Where("kind = ? AND node_id = ? AND archived_at IS NULL", "system.cleanup", nodeID).First(&rule).Error; err != nil {
+		t.Fatal(err)
+	}
+	due := clock.Add(-time.Second)
+	if err := db.Model(&rule).Update("next_run_at", due).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := center.RunDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var scheduled database.TaskCenterScheduleRun
+	if err := db.Where("schedule_id = ? AND scheduled_for = ?", rule.ID, due).First(&scheduled).Error; err != nil || scheduled.TriggeredBy != taskcenter.ReasonScheduled || scheduled.Status != "started" || scheduled.ActorID != nil || scheduled.TaskID == "" {
+		t.Fatalf("scheduled cleanup admission lost: %+v %v", scheduled, err)
+	}
+	if err := tasks.Wait(ctx, scheduled.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	automaticTask, err := tasks.Get(ctx, scheduled.TaskID)
+	if err != nil || automaticTask.Status != task.StatusSuccess || !json.Valid(automaticTask.Result) {
+		t.Fatal("scheduled cleanup Task failed", automaticTask.Message, err)
+	}
+	var automaticRun database.CleanupRun
+	if err := db.Where("task_id = ?", scheduled.TaskID).First(&automaticRun).Error; err != nil || automaticRun.Status != "success" || automaticRun.Trigger != "scheduled" || automaticRun.AuthorizedBy == nil || *automaticRun.AuthorizedBy != *authorized.Data.AuthorizedBy {
+		t.Fatal("scheduled cleanup lost original authorization/evidence", err)
+	}
+	if _, err := cli.ContainerInspect(ctx, scheduledContainer); !errdefs.IsNotFound(err) {
+		t.Fatal("scheduled cleanup did not remove its eligible real container", err)
+	}
+	if _, err := cli.ContainerInspect(ctx, running); err != nil {
+		t.Fatal("scheduled cleanup removed an active container", err)
+	}
+	if err := center.RunDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var occurrences int64
+	if err := db.Model(&database.TaskCenterScheduleRun{}).Where("schedule_id = ? AND scheduled_for = ?", rule.ID, due).Count(&occurrences).Error; err != nil || occurrences != 1 {
+		t.Fatal("scheduled cleanup replayed an occurrence", occurrences, err)
+	}
+	var advanced database.TaskCenterSchedule
+	if err := db.First(&advanced, rule.ID).Error; err != nil || advanced.Version != rule.Version || advanced.NextRunAt == nil || !advanced.NextRunAt.After(clock) {
+		t.Fatal("scheduled cleanup changed configuration version or failed to advance", err)
+	}
+	t.Logf("%s: isolated manual and authorized scheduled cleanup, cache API, stopped/active references, declarative protection, frozen candidates, manual volume deletion, tasks and audits passed", transport)
 }

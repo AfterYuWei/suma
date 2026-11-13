@@ -1,18 +1,20 @@
 package imageupdate
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/distribution/reference"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/suma/suma/server/internal/audit"
-	"github.com/suma/suma/server/internal/credential"
 	"github.com/suma/suma/server/internal/compose"
+	"github.com/suma/suma/server/internal/credential"
 	"github.com/suma/suma/server/internal/database"
 	domainEvent "github.com/suma/suma/server/internal/event"
 	"github.com/suma/suma/server/internal/redact"
@@ -24,23 +26,26 @@ import (
 // Dependencies wires the kind into node runtimes, registries and Compose
 // without import cycles. Every field except Emit is required for checks.
 type Dependencies struct {
-	Emit        domainEvent.Sink
-	Node        func(context.Context, string) (Node, error)
-	Runtime     func(context.Context, string) (Runtime, error)
-	Resolver    Resolver
-	Credentials CredentialStore
-	Compose     func(context.Context, string) (*compose.Service, error)
-	Audit       *audit.Service
-	OnError     func(error)
-	Now         func() time.Time
+	Emit           domainEvent.Sink
+	Node           func(context.Context, string) (Node, error)
+	Runtime        func(context.Context, string) (Runtime, error)
+	Resolver       Resolver
+	Credentials    CredentialStore
+	Compose        func(context.Context, string) (*compose.Service, error)
+	Audit          *audit.Service
+	OnError        func(error)
+	Now            func() time.Time
+	Automation     *taskcenter.Service
+	ConfigRevision func(context.Context, string, Params) (string, error)
 }
 
 // Service implements the image.update Task Center kind.
 type Service struct {
-	db    *gorm.DB
-	tasks *task.Service
-	deps  Dependencies
-	slots chan struct{}
+	db        *gorm.DB
+	tasks     *task.Service
+	deps      Dependencies
+	slots     chan struct{}
+	admission sync.Mutex
 }
 
 func NewService(db *gorm.DB, tasks *task.Service, deps Dependencies) *Service {
@@ -56,9 +61,30 @@ func (s *Service) Kind() taskcenter.KindSpec {
 	return taskcenter.KindSpec{
 		Type:           KindImageUpdate,
 		RequiresNode:   true,
+		ScheduleTypes:  []string{"cron", "none"},
+		Actions:        []string{"run", "check", "update"},
 		ValidateParams: ValidateParams,
-		Describe:       describe,
-		Start:          s.StartKind,
+		Subject: func(raw json.RawMessage) string {
+			var params Params
+			_ = json.Unmarshal(raw, &params)
+			return params.Project
+		},
+		Describe: describe,
+		Start:    s.StartKind,
+		ValidateChange: func(ctx context.Context, next database.TaskCenterSchedule) error {
+			var params Params
+			if json.Unmarshal(next.Params, &params) != nil || params.Project != next.Subject {
+				return taskcenter.ErrInvalidParams
+			}
+			if next.Enabled && next.TimerEnabled && s.deps.ConfigRevision != nil {
+				_, err := s.deps.ConfigRevision(ctx, next.NodeID, params)
+				return err
+			}
+			return nil
+		},
+		ConfigVersion: func(_ context.Context, _ *gorm.DB, row database.TaskCenterSchedule) (string, error) {
+			return fmt.Sprint(row.Version), nil
+		},
 	}
 }
 
@@ -76,7 +102,9 @@ func describe(params json.RawMessage) string {
 // ValidateParams checks stored params before a plan is saved or a run starts.
 func ValidateParams(params json.RawMessage) error {
 	var parsed Params
-	if err := json.Unmarshal(params, &parsed); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(params))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&parsed); err != nil {
 		return fmt.Errorf("%w: %s", taskcenter.ErrInvalidParams, err)
 	}
 	if !projectIdentifier.MatchString(parsed.Project) || len(parsed.Project) > 128 {
@@ -95,6 +123,8 @@ func ValidateParams(params json.RawMessage) error {
 // StartKind launches one image.update run for the Task Center. A project may
 // only have one active run at a time.
 func (s *Service) StartKind(ctx context.Context, request taskcenter.StartRequest) (string, error) {
+	s.admission.Lock()
+	defer s.admission.Unlock()
 	var params Params
 	if err := json.Unmarshal(request.Params, &params); err != nil {
 		return "", fmt.Errorf("%w: %s", taskcenter.ErrInvalidParams, err)
@@ -109,10 +139,24 @@ func (s *Service) StartKind(ctx context.Context, request taskcenter.StartRequest
 	if err := ValidateParams(request.Params); err != nil {
 		return "", err
 	}
+	if request.ScheduleID != nil && params.Project != request.Subject {
+		return "", taskcenter.ErrInvalidParams
+	}
+	if request.Action == "check" {
+		params.AutoApply = false
+	}
+	if request.Action == "update" {
+		params.AutoApply = true
+	}
 	if running, err := s.runningTask(ctx, request.NodeID, params.Project); err != nil {
 		return "", err
 	} else if running != "" {
 		return "", &BusyError{TaskID: running}
+	}
+	if params.AutoApply && s.deps.ConfigRevision != nil {
+		if _, err := s.deps.ConfigRevision(ctx, node.ID, params); err != nil {
+			return "", err
+		}
 	}
 	name := "Check image updates " + params.Project
 	if params.AutoApply {
@@ -121,8 +165,15 @@ func (s *Service) StartKind(ctx context.Context, request taskcenter.StartRequest
 	row, err := s.tasks.StartDefinition(ctx, task.Definition{
 		Type: KindImageUpdate, Name: name,
 		NodeID: node.ID, NodeName: nodeName(request, node),
-		Params: params,
+		Params:          params,
+		TriggerRunID:    request.RunID,
+		ArtifactSubject: params.Project,
 	}, func(taskCtx context.Context, taskID string, report task.Reporter) (any, error) {
+		if s.deps.Automation != nil {
+			if err := s.deps.Automation.ValidateRun(taskCtx, request.RunID); err != nil {
+				return nil, err
+			}
+		}
 		return s.run(taskCtx, node, params, taskID, report)
 	})
 	if err != nil {
@@ -181,7 +232,22 @@ func (s *Service) run(ctx context.Context, node Node, params Params, taskID stri
 	if err != nil {
 		return nil, fmt.Errorf("unable to collect images: %w", err)
 	}
-	targets, blocked := planChecks(inventory, params)
+	revision := ""
+	var declared map[string]string
+	if s.deps.Compose != nil {
+		projectService, err := s.deps.Compose(ctx, node.ID)
+		if err != nil {
+			return nil, err
+		}
+		resolved, err := projectService.ResolvedImages(ctx, params.Project)
+		if err != nil {
+			return nil, err
+		}
+		if resolved != nil {
+			revision, declared = resolved.Revision, resolved.Images
+		}
+	}
+	targets, blocked := planChecks(inventory, params, declared)
 	for _, item := range blocked {
 		report(5, "Skipping "+item.Service+": "+item.ReasonCode)
 	}
@@ -198,7 +264,12 @@ func (s *Service) run(ctx context.Context, node Node, params Params, taskID stri
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			s.slots <- struct{}{}
+			select {
+			case s.slots <- struct{}{}:
+			case <-ctx.Done():
+				results[i] = ServiceCheck{Service: targets[i].service, Status: StatusUnavailable, ReasonCode: "timeout"}
+				return
+			}
 			defer func() { <-s.slots }()
 			results[i] = s.checkOne(ctx, targets[i], materials)
 			progressMu.Lock()
@@ -225,17 +296,19 @@ func (s *Service) run(ctx context.Context, node Node, params Params, taskID stri
 		s.emit(domainEvent.Event{
 			Type: "image.available", Severity: "info", Scope: "node", NodeID: node.ID, NodeName: node.Name,
 			ResourceType: "project", ResourceID: params.Project, Project: params.Project,
-			Title: fmt.Sprintf("%d image updates available for %s", len(updates), params.Project),
+			Title:  fmt.Sprintf("%d image updates available for %s", len(updates), params.Project),
 			TaskID: taskID, DedupeKey: "image.available:" + node.ID + ":" + params.Project, Time: s.deps.Now().UTC(),
 		})
 	}
 	if params.AutoApply && len(updates) > 0 && ctx.Err() == nil {
-		if err := s.apply(ctx, node, params, updates, taskID, report, &summary); err != nil {
+		if err := s.apply(ctx, node, params, updates, taskID, report, &summary, revision); err != nil {
+			summary.FinishedAt = s.deps.Now().UTC()
 			s.finish(ctx, node, params, taskID, summary, err)
 			return summary, err
 		}
 	}
 	failure := firstUnavailable(results)
+	summary.FinishedAt = s.deps.Now().UTC()
 	s.finish(ctx, node, params, taskID, summary, failure)
 	return summary, failure
 }
@@ -243,7 +316,7 @@ func (s *Service) run(ctx context.Context, node Node, params Params, taskID stri
 // apply pins the detected digests and recreates the selected services through
 // the ordinary Compose pipeline; the child compose.update task carries the
 // pull and recreate evidence in the Task Center.
-func (s *Service) apply(ctx context.Context, node Node, params Params, updates []ServiceCheck, taskID string, report task.Reporter, summary *Summary) error {
+func (s *Service) apply(ctx context.Context, node Node, params Params, updates []ServiceCheck, taskID string, report task.Reporter, summary *Summary, revision string) error {
 	composeService, err := s.deps.Compose(ctx, node.ID)
 	if err != nil {
 		return err
@@ -251,6 +324,9 @@ func (s *Service) apply(ctx context.Context, node Node, params Params, updates [
 	project, err := composeService.ManagedConfiguration(params.Project)
 	if err != nil {
 		return err
+	}
+	if revision == "" || project.Revision != revision {
+		return compose.ErrRevisionConflict
 	}
 	services := make([]compose.ServiceImageUpdate, 0, len(updates))
 	for _, item := range updates {
@@ -262,37 +338,27 @@ func (s *Service) apply(ctx context.Context, node Node, params Params, updates [
 			Replicas: item.Replicas,
 		})
 	}
-	verified := &sync.Once{}
 	report(55, fmt.Sprintf("Pulling and recreating %d updated services", len(services)))
 	row, err := composeService.UpdateSelected(ctx, params.Project, project.Revision, compose.SelectedUpdate{
 		Services: services, AllowDockerSocket: params.AllowDockerSocket,
-		Start: func(_ context.Context, childID string) error {
-			summary.UpdateTaskID = childID
-			return nil
-		},
+		ParentTaskID: taskID,
 		// Check re-resolves the digests right before recreating so a
 		// reference that moved again after the check never deploys stale bytes.
 		Check: func(checkCtx context.Context) error {
-			var verifyErr error
-			verified.Do(func() {
-				materials, mErr := s.materials(checkCtx, node.ID)
-				if mErr != nil {
-					verifyErr = mErr
-					return
+			materials, mErr := s.materials(checkCtx, node.ID)
+			if mErr != nil {
+				return mErr
+			}
+			for _, item := range updates {
+				remote, rErr := s.deps.Resolver.Resolve(checkCtx, item.Reference, parsePlatform(item.Platform), materials[item.Registry])
+				if rErr != nil {
+					return fmt.Errorf("verify %s: %w", item.Service, rErr)
 				}
-				for _, item := range updates {
-					remote, rErr := s.deps.Resolver.Resolve(checkCtx, item.Reference, parsePlatform(item.Platform), materials[item.Registry])
-					if rErr != nil {
-						verifyErr = fmt.Errorf("verify %s: %w", item.Service, rErr)
-						return
-					}
-					if remote.ManifestDigest != item.RemoteManifestDigest {
-						verifyErr = fmt.Errorf("%s moved to a newer manifest; check the project again", item.Service)
-						return
-					}
+				if remote.ManifestDigest != item.RemoteManifestDigest {
+					return fmt.Errorf("%s moved to a newer manifest; check the project again", item.Service)
 				}
-			})
-			return verifyErr
+			}
+			return nil
 		},
 		Complete: func(childID string, childErr error) {
 			if childErr != nil {
@@ -304,10 +370,14 @@ func (s *Service) apply(ctx context.Context, node Node, params Params, updates [
 		return err
 	}
 	summary.UpdateTaskID = row.ID
-	if err := s.tasks.Wait(ctx, row.ID); err != nil {
+	stopCancel := context.AfterFunc(ctx, func() { s.tasks.Cancel(row.ID) })
+	defer stopCancel()
+	if err := s.tasks.Wait(context.Background(), row.ID); err != nil {
 		return err
 	}
-	finished, err := s.tasks.Get(ctx, row.ID)
+	finishCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	finished, err := s.tasks.Get(finishCtx, row.ID)
 	if err != nil {
 		return err
 	}
@@ -317,10 +387,13 @@ func (s *Service) apply(ctx context.Context, node Node, params Params, updates [
 	for _, item := range updates {
 		summary.Updated = append(summary.Updated, item.Service)
 	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	s.emit(domainEvent.Event{
 		Type: "image.updated", Severity: "info", Scope: "node", NodeID: node.ID, NodeName: node.Name,
 		ResourceType: "project", ResourceID: params.Project, Project: params.Project,
-		Title: fmt.Sprintf("Updated %d services in %s", len(updates), params.Project),
+		Title:  fmt.Sprintf("Updated %d services in %s", len(updates), params.Project),
 		TaskID: taskID, DedupeKey: "image.updated:" + node.ID + ":" + params.Project + ":" + row.ID, Time: s.deps.Now().UTC(),
 	})
 	return nil
@@ -358,7 +431,11 @@ func (s *Service) checkOne(ctx context.Context, target checkTarget, materials ma
 
 // planChecks groups a project's containers into eligible check targets plus
 // blocked entries that stay untouched by updates.
-func planChecks(inventory Inventory, params Params) (targets []checkTarget, blocked []ServiceCheck) {
+func planChecks(inventory Inventory, params Params, declarations ...map[string]string) (targets []checkTarget, blocked []ServiceCheck) {
+	var declared map[string]string
+	if len(declarations) > 0 {
+		declared = declarations[0]
+	}
 	images := map[string]LocalImage{}
 	for _, image := range inventory.Images {
 		images[image.ID] = image
@@ -400,6 +477,20 @@ func planChecks(inventory Inventory, params Params) (targets []checkTarget, bloc
 			continue
 		}
 		normalized, registry, reason := Normalize(first.Reference)
+		if declared != nil {
+			declaredRef, declaredRegistry, declaredReason := Normalize(declared[service])
+			if declaredReason != "" {
+				blockedItem(declaredReason)
+				continue
+			}
+			runningRef, runningErr := reference.ParseNormalizedNamed(first.Reference)
+			configuredRef, configuredErr := reference.ParseNormalizedNamed(declaredRef)
+			if runningErr != nil || configuredErr != nil || reference.TrimNamed(runningRef).String() != reference.TrimNamed(configuredRef).String() || (reason != "digest_pinned" && normalized != declaredRef) {
+				blockedItem("image_mismatch")
+				continue
+			}
+			normalized, registry, reason = declaredRef, declaredRegistry, ""
+		}
 		if reason != "" {
 			blockedItem(reason)
 			continue
@@ -410,9 +501,9 @@ func planChecks(inventory Inventory, params Params) (targets []checkTarget, bloc
 			continue
 		}
 		for _, usage := range entries {
-			if usage.ImageID != first.ImageID || usage.State != "running" {
+			if usage.ImageID != first.ImageID || usage.State != "running" || usage.DeliveryProject != "" || usage.Reference != first.Reference {
 				blockedItem("image_mismatch")
-				continue
+				break
 			}
 		}
 		if blocked != nil && len(blocked) > 0 && blocked[len(blocked)-1].Service == service {
@@ -448,13 +539,7 @@ func (s *Service) materials(ctx context.Context, nodeID string) (map[string]cred
 }
 
 // finish persists the run artifact, audit trail and failure events.
-func (s *Service) finish(ctx context.Context, node Node, params Params, taskID string, summary Summary, failure error) {
-	if raw, err := json.Marshal(summary); err == nil {
-		artifact := database.TaskCenterArtifact{TaskID: taskID, Kind: KindImageUpdate, NodeID: node.ID, Subject: params.Project, Data: database.JSONB(redact.Bounded(string(raw), resultLimitJSON)), CreatedAt: s.deps.Now().UTC()}
-		if err := s.db.WithContext(ctx).Create(&artifact).Error; err != nil && s.deps.OnError != nil {
-			s.deps.OnError(err)
-		}
-	}
+func (s *Service) finish(ctx context.Context, node Node, params Params, taskID string, _ Summary, failure error) {
 	outcome := "success"
 	if failure != nil {
 		outcome = "failed"
@@ -532,8 +617,6 @@ func contains(values []string, value string) bool {
 	return false
 }
 
-const resultLimitJSON = 65536
-
 // ProjectStatus is the persisted image update state of one project.
 type ProjectStatus struct {
 	Project            string     `json:"project"`
@@ -548,58 +631,36 @@ type ProjectStatus struct {
 // focused on a single project. Live runs override the stored artifact.
 func (s *Service) View(ctx context.Context, nodeID, project string) ([]ProjectStatus, error) {
 	clause := ""
-	args := []any{KindImageUpdate, nodeID}
+	args := []any{KindImageUpdate, nodeID, []string{task.StatusPending, task.StatusRunning}}
 	if project != "" {
-		clause = " AND subject = ?"
+		clause = " AND COALESCE(t.params->>'project', a.subject) = ?"
 		args = append(args, project)
 	}
-	var artifacts []struct {
-		TaskID  string           `gorm:"column:task_id"`
-		Subject string           `gorm:"column:subject"`
-		Data    database.JSONB   `gorm:"column:data"`
+	var rows []struct {
+		TaskID     string
+		Subject    string
+		Status     string
+		FinishedAt *time.Time
+		Data       database.JSONB
 	}
-	if err := s.db.WithContext(ctx).Raw("SELECT DISTINCT ON (subject) task_id, subject, data FROM task_center_artifacts WHERE kind = ? AND node_id = ?"+clause+" ORDER BY subject, created_at DESC", args...).Scan(&artifacts).Error; err != nil {
+	query := "SELECT DISTINCT ON (COALESCE(t.params->>'project', a.subject)) t.id AS task_id, COALESCE(t.params->>'project', a.subject) AS subject, t.status, t.finished_at, COALESCE(t.result,a.data) AS data FROM tasks t LEFT JOIN task_center_artifacts a ON a.task_id = t.id WHERE t.type = ? AND t.node_id = ? AND t.status NOT IN ? AND COALESCE(t.params->>'project',a.subject,'') <> ''" + clause + " ORDER BY COALESCE(t.params->>'project',a.subject),t.created_at DESC,t.id DESC"
+	if err := s.db.WithContext(ctx).Raw(query, args...).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	byProject := map[string]*ProjectStatus{}
-	order := []string{}
-	add := func(subject string) *ProjectStatus {
-		if existing, ok := byProject[subject]; ok {
-			return existing
-		}
-		status := &ProjectStatus{Project: subject}
-		byProject[subject] = status
-		order = append(order, subject)
-		return status
-	}
-	taskIDs := make([]string, 0, len(artifacts))
-	for _, artifact := range artifacts {
-		status := add(artifact.Subject)
-		status.LastTaskID = artifact.TaskID
-		taskIDs = append(taskIDs, artifact.TaskID)
-		var summary Summary
-		if json.Unmarshal(artifact.Data, &summary) == nil {
+	for _, row := range rows {
+		status := &ProjectStatus{Project: row.Subject, LastTaskID: row.TaskID, LastTaskStatus: row.Status, LastTaskFinishedAt: row.FinishedAt}
+		if len(row.Data) > 0 {
+			var summary Summary
+			if err := json.Unmarshal(row.Data, &summary); err != nil {
+				return nil, fmt.Errorf("invalid stored image update result")
+			}
 			status.LastResult = &summary
 		}
-	}
-	statuses := map[string]database.Task{}
-	if len(taskIDs) > 0 {
-		var rows []database.Task
-		if err := s.db.WithContext(ctx).Where("id IN ?", taskIDs).Find(&rows).Error; err != nil {
-			return nil, err
-		}
-		for _, row := range rows {
-			statuses[row.ID] = row
-		}
-	}
-	for _, status := range byProject {
-		if row, ok := statuses[status.LastTaskID]; ok {
-			status.LastTaskStatus = row.Status
-			status.LastTaskFinishedAt = row.FinishedAt
-		}
+		byProject[row.Subject] = status
 	}
 	var running []database.Task
-	if err := s.db.WithContext(ctx).Where("type = ? AND node_id = ? AND status IN ?", KindImageUpdate, nodeID, []string{task.StatusPending, task.StatusRunning}).Find(&running).Error; err != nil {
+	if err := s.db.WithContext(ctx).Select("id", "params").Where("type = ? AND node_id = ? AND status IN ?", KindImageUpdate, nodeID, []string{task.StatusPending, task.StatusRunning}).Find(&running).Error; err != nil {
 		return nil, err
 	}
 	for _, row := range running {
@@ -607,8 +668,16 @@ func (s *Service) View(ctx context.Context, nodeID, project string) ([]ProjectSt
 		if subject == "" || (project != "" && subject != project) {
 			continue
 		}
-		status := add(subject)
+		status := byProject[subject]
+		if status == nil {
+			status = &ProjectStatus{Project: subject}
+			byProject[subject] = status
+		}
 		status.RunningTaskID = row.ID
+	}
+	order := make([]string, 0, len(byProject))
+	for subject := range byProject {
+		order = append(order, subject)
 	}
 	sort.Strings(order)
 	result := make([]ProjectStatus, 0, len(order))

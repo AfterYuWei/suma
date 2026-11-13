@@ -101,11 +101,13 @@ test('failed credential save preserves editable draft and does not test or creat
 test('global audit links open node and control-plane task details', async ({ page }) => {
  await setup(page); await page.goto('/audit-logs')
  await page.getByRole('row').filter({ has: page.getByText('image.pull', { exact: true }) }).getByRole('link', { name: 'View task', exact: true }).click()
- const linked = page.getByRole('region', { name: 'Linked task', exact: true })
- await expect(linked.getByRole('heading', { name: 'Pull ghcr.io/afteryuwei/gateway:1.8.2', exact: true })).toBeVisible(); await expect(linked.getByText('Docker operation completed successfully', { exact: true })).toBeVisible()
- await page.getByRole('button', { name: 'Close task details', exact: true }).click(); await expect(linked).toHaveCount(0)
+ const linked = page.getByRole('dialog')
+ await expect(linked.getByRole('heading', { name: /^Pull ghcr.io\/afteryuwei\/gateway:1\.8\.2/ })).toBeVisible(); await expect(linked.getByText('Docker operation completed successfully', { exact: true })).toBeVisible()
+ await linked.getByRole('button', { name: 'Close', exact: true }).click(); await expect(linked).toBeHidden()
  await page.goto('/audit-logs'); await page.getByRole('row').filter({ has: page.getByText('project.deploy', { exact: true }) }).getByRole('link', { name: 'View task', exact: true }).click()
- await expect(page.getByRole('tab', { name: 'Current node', exact: true })).toHaveAttribute('aria-selected', 'true'); await expect(linked.getByRole('heading', { name: 'Deploy gateway-prod release #184', exact: true })).toBeVisible(); await expect(linked.getByText('Control plane', { exact: false })).toBeVisible(); await expect(linked.getByText('Docker operation completed successfully', { exact: true })).toBeVisible()
+ await expect(linked.getByRole('heading', { name: /^Deploy gateway-prod release #184/ })).toBeVisible(); await expect(linked.getByText('Control plane', { exact: false })).toBeVisible(); await expect(linked.getByText('Docker operation completed successfully', { exact: true })).toBeVisible()
+ await linked.getByRole('button', { name: 'Close', exact: true }).click(); await expect(linked).toBeHidden()
+ await expect(page.getByRole('tab', { name: 'Current node', exact: true })).toHaveAttribute('aria-selected', 'true')
 })
 
 test('Telegram recipient discovery is an independent opt-in and does not subscribe automatically', async ({ page }) => {
@@ -193,7 +195,7 @@ for (const width of [390, 1440]) for (const language of ['en-US', 'zh-CN']) for 
    }
    else if (path === '/settings#ai') await expect(page.getByRole('tab', { name: zh ? '常规设置' : 'General settings', exact: true })).toHaveAttribute('aria-selected', 'true')
    else if (path === '/audit-logs') await expect(page.getByRole('tab', { name: zh ? '全部' : 'All', exact: true })).toHaveAttribute('aria-selected', 'true')
-   else if (path === '/tasks#task-pull-183') await expect(page.getByRole('region', { name: zh ? '关联任务' : 'Linked task', exact: true }).getByRole('heading', { name: 'Pull ghcr.io/afteryuwei/gateway:1.8.2', exact: true })).toBeVisible()
+   else if (path === '/tasks#task-pull-183') await expect(page.getByRole('dialog').getByRole('heading', { name: /^Pull ghcr.io\/afteryuwei\/gateway:1\.8\.2/ })).toBeVisible()
    else if (path === '/notifications') {
     await expect(page.getByRole('heading', { name: zh ? '容器内存不足' : 'Container out of memory', exact: true })).toBeVisible()
     await page.getByRole('button', { name: zh ? '标为已读' : 'Mark read', exact: true }).click()

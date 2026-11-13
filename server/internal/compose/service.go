@@ -72,9 +72,12 @@ func NewService(db *gorm.DB, root string, runner Runner, tasks *task.Service, co
 func (s *Service) ForNode(nodeID, nodeName string, runner Runner, containers containerdomain.Service, localSources bool) *Service {
 	return &Service{db: s.db, projectCDAction: s.projectCDAction, projectCDView: s.projectCDView, scheduleRemoval: s.scheduleRemoval, root: s.root, runner: runner, tasks: s.tasks, containers: containers, nodeID: nodeID, nodeName: nodeName, localSources: localSources, instanceID: s.instanceID, projectLocks: s.projectLocks, operations: s.operations, registries: s.registries}
 }
+
 // SetScheduleRemoval wires the Task Center cascade: deleting a Project must
 // drop its scheduled plans (kind, node, subject).
-func (s *Service) SetScheduleRemoval(removal func(context.Context, string, string) error) { s.scheduleRemoval = removal }
+func (s *Service) SetScheduleRemoval(removal func(context.Context, string, string) error) {
+	s.scheduleRemoval = removal
+}
 func (s *Service) List(ctx context.Context) ([]Project, error) {
 	containers, err := s.containers.List(ctx)
 	if err != nil {
@@ -453,6 +456,7 @@ func (s *Service) Action(ctx context.Context, name, action string) (database.Tas
 func (s *Service) ActionWithRevision(ctx context.Context, name, action, expected string, allowDockerSocket ...bool) (database.Task, error) {
 	return s.action(ctx, name, action, expected, nil, allowDockerSocket...)
 }
+
 // UpdateSelected pins the given services to verified remote digests and
 // recreates only them, inside the ordinary Compose task and lock pipeline.
 func (s *Service) UpdateSelected(ctx context.Context, name, revision string, update SelectedUpdate) (database.Task, error) {
@@ -499,17 +503,24 @@ func (s *Service) action(ctx context.Context, name, action, expected string, sel
 	}
 	key := s.operationKey(name)
 	s.operations.Store(key, true)
+	parentTaskID := ""
+	if selected != nil {
+		parentTaskID = selected.ParentTaskID
+	}
 	result, startErr := s.tasks.StartDefinition(ctx, task.Definition{
 		Type: "compose." + action, Name: strings.Title(action) + " " + name,
 		NodeID: s.effectiveNodeID(), NodeName: s.effectiveNodeName(),
-		Params: map[string]any{"project": name, "action": action, "revision": revision},
+		Params:       map[string]any{"project": name, "action": action, "revision": revision},
+		ParentTaskID: parentTaskID,
 	}, func(ctx context.Context, taskID string, report task.Reporter) (_ any, workErr error) {
 		if selected != nil {
 			defer func() {
 				if workErr == nil && ctx.Err() != nil {
 					workErr = ctx.Err()
 				}
-				selected.Complete(taskID, workErr)
+				if selected.Complete != nil {
+					selected.Complete(taskID, workErr)
+				}
 			}()
 		}
 		defer s.operations.Delete(key)
@@ -526,8 +537,10 @@ func (s *Service) action(ctx context.Context, name, action, expected string, sel
 		}
 		var spec ExecutionSpec
 		if selected != nil {
-			if err := selected.Start(ctx, taskID); err != nil {
-				return nil, err
+			if selected.Start != nil {
+				if err := selected.Start(ctx, taskID); err != nil {
+					return nil, err
+				}
 			}
 			var cleanup func()
 			var selectedErr error

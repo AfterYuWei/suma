@@ -16,6 +16,7 @@ import (
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/deployment"
 	"github.com/suma/suma/server/internal/task"
+	"gorm.io/gorm"
 )
 
 func (s *Service) Detach(ctx context.Context, node, name string, revision uint64, actor Actor) (database.Task, error) {
@@ -23,7 +24,21 @@ func (s *Service) Detach(ctx context.Context, node, name string, revision uint64
 		if row.Revision != revision {
 			return ErrConflict
 		}
-		if err := s.db.WithContext(ctx).Model(&row).Update("automation_enabled", false).Error; err != nil {
+		if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if s.automation != nil {
+				if err := s.automation.LockOwned(tx, "project.cd.check", node, name); err != nil {
+					return err
+				}
+			}
+			if err := tx.Model(&database.ProjectCD{}).Where("id = ?", row.ID).Update("automation_enabled", false).Error; err != nil {
+				return err
+			}
+			var saved database.ProjectCD
+			if err := tx.First(&saved, row.ID).Error; err != nil {
+				return err
+			}
+			return s.syncAutomation(tx, saved)
+		}); err != nil {
 			return err
 		}
 		project, err := s.deps.Project(ctx, node)
@@ -133,7 +148,20 @@ func (s *Service) Detach(ctx context.Context, node, name string, revision uint64
 		}
 		// Ownership is released last. Interrupted publication remains protected and
 		// can be retried from the retained immutable applied snapshot after restart.
-		if err := s.db.WithContext(ctx).Model(&row).Updates(map[string]any{"enabled": false, "automation_enabled": false, "initial_application_required": true, "revision": row.Revision + 1}).Error; err != nil {
+		if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if s.automation != nil {
+				if err := s.automation.LockOwned(tx, "project.cd.check", node, name); err != nil {
+					return err
+				}
+			}
+			if err := tx.Model(&database.ProjectCD{}).Where("id = ?", row.ID).Updates(map[string]any{"enabled": false, "automation_enabled": false, "initial_application_required": true, "revision": row.Revision + 1}).Error; err != nil {
+				return err
+			}
+			if s.automation != nil {
+				return s.automation.ArchiveOwned(tx, "project.cd.check", node, name)
+			}
+			return nil
+		}); err != nil {
 			return err
 		}
 		report(100, "Manual mode restored; running containers and Git history retained")

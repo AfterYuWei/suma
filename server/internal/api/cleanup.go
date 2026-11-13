@@ -56,6 +56,18 @@ func registerCleanupRoutes(v1 *gin.RouterGroup, deps Dependencies) {
 	if deps.Cleanup == nil || deps.Nodes == nil {
 		return
 	}
+	v1.GET("/cleanup/runs/by-task/:taskID", requireAuth(deps.Auth), func(c *gin.Context) {
+		if !cleanup.ValidIdentifier(c.Param("taskID")) || len(c.Param("taskID")) > 64 {
+			cleanupFailure(c, cleanup.ErrInvalid)
+			return
+		}
+		row, err := deps.Cleanup.RunForTask(c.Request.Context(), c.Param("taskID"))
+		if err != nil {
+			cleanupFailure(c, err)
+			return
+		}
+		success(c, row)
+	})
 	v1.GET("/cleanup/policies", requireAuth(deps.Auth), func(c *gin.Context) {
 		nodes, err := deps.Nodes.List(c.Request.Context())
 		if err != nil {

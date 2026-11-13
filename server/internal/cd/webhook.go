@@ -9,8 +9,9 @@ import (
 	"time"
 
 	"github.com/suma/suma/server/internal/database"
-	gitrepo "github.com/suma/suma/server/internal/git"
 	"github.com/suma/suma/server/internal/deployment"
+	gitrepo "github.com/suma/suma/server/internal/git"
+	"github.com/suma/suma/server/internal/taskcenter"
 	"gorm.io/gorm"
 )
 
@@ -44,7 +45,7 @@ func (s *Service) handleWebhook(ctx context.Context, format, hookID string, head
 	if err := verifyWebhook(format, secretValue, headers, body); err != nil {
 		return database.Task{}, err
 	}
-	if !project.AutomationEnabled {
+	if !project.AutomationEnabled && s.automation == nil {
 		return database.Task{}, ErrAutomationPaused
 	}
 	event, err := parseWebhook(format, headers, body)
@@ -70,14 +71,20 @@ func (s *Service) handleWebhook(ctx context.Context, format, hookID string, head
 		}
 		return database.Task{}, err
 	}
-	row, err := s.Sync(ctx, project.Name, "webhook", Actor{Name: "Git webhook"})
+	row, err := s.Sync(ctx, project.Name, "webhook", Actor{Name: "Git webhook", SourceID: event.DeliveryID})
 	now := time.Now()
 	updates := map[string]any{"processed_at": now, "status": "queued"}
 	if err != nil {
 		updates["status"] = "failed"
 		updates["failure_reason"] = err.Error()
+		if errors.Is(err, taskcenter.ErrPaused) || errors.Is(err, taskcenter.ErrBusy) {
+			updates["status"] = "skipped"
+		}
 	}
 	_ = s.db.WithContext(ctx).Model(&delivery).Updates(updates).Error
+	if errors.Is(err, taskcenter.ErrPaused) {
+		return row, ErrAutomationPaused
+	}
 	return row, err
 }
 

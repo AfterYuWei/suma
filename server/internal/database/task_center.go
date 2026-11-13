@@ -64,35 +64,47 @@ func (j *JSONB) UnmarshalJSON(data []byte) error {
 // Task Center owns the scheduler; features register kinds and write plans.
 // An empty Subject is allowed only for kinds that keep a single plan per node.
 type TaskCenterSchedule struct {
-	ID        uint   `gorm:"primaryKey" json:"id"`
-	Name      string `gorm:"size:120;not null" json:"name"`
-	Kind      string `gorm:"size:64;not null;index" json:"kind"`
-	NodeID    string `gorm:"size:64;not null;default:'';uniqueIndex:idx_task_center_schedule_target" json:"node_id,omitempty"`
-	NodeName  string `gorm:"size:128;not null;default:''" json:"node_name,omitempty"`
-	Subject   string `gorm:"size:200;not null;default:'';uniqueIndex:idx_task_center_schedule_target" json:"subject"`
-	Params    JSONB  `gorm:"type:jsonb" json:"params"`
-	Cron      string `gorm:"size:64;not null" json:"cron"`
-	Timezone  string `gorm:"size:64;not null" json:"timezone"`
-	Enabled   bool   `gorm:"not null;default:true" json:"enabled"`
-	Version   uint64 `gorm:"not null;default:1" json:"version"`
-	NextRunAt *time.Time `json:"next_run_at,omitempty"`
-	LastRunAt *time.Time `json:"last_run_at,omitempty"`
-	LastError string `json:"last_error,omitempty"`
-	CreatedBy string `gorm:"size:120;not null;default:''" json:"created_by,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID              uint       `gorm:"primaryKey" json:"id"`
+	Name            string     `gorm:"size:120;not null" json:"name"`
+	Kind            string     `gorm:"size:64;not null;index" json:"kind"`
+	NodeID          string     `gorm:"size:64;not null;default:'';uniqueIndex:idx_task_center_schedule_target" json:"node_id,omitempty"`
+	NodeName        string     `gorm:"size:128;not null;default:''" json:"node_name,omitempty"`
+	Subject         string     `gorm:"size:200;not null;default:'';uniqueIndex:idx_task_center_schedule_target" json:"subject"`
+	Params          JSONB      `gorm:"type:jsonb" json:"params"`
+	Cron            string     `gorm:"size:64;not null" json:"cron"`
+	Timezone        string     `gorm:"size:64;not null" json:"timezone"`
+	Enabled         bool       `gorm:"not null" json:"enabled"`
+	ScheduleType    string     `gorm:"size:16;not null;default:cron" json:"schedule_type"`
+	IntervalSeconds int        `gorm:"not null;default:0" json:"interval_seconds"`
+	TimerEnabled    bool       `gorm:"not null" json:"timer_enabled"`
+	WebhookEnabled  bool       `gorm:"not null" json:"webhook_enabled"`
+	ArchivedAt      *time.Time `json:"archived_at,omitempty"`
+	Version         uint64     `gorm:"not null;default:1" json:"version"`
+	NextRunAt       *time.Time `json:"next_run_at,omitempty"`
+	LastRunAt       *time.Time `json:"last_run_at,omitempty"`
+	LastError       string     `json:"last_error,omitempty"`
+	CreatedBy       string     `gorm:"size:120;not null;default:''" json:"created_by,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 // TaskCenterScheduleRun records every dispatch attempt of a plan, including
 // failures to start the task (empty TaskID plus Error). Task state itself
 // always lives in tasks.
 type TaskCenterScheduleRun struct {
-	ID          uint      `gorm:"primaryKey" json:"id"`
-	ScheduleID  uint      `gorm:"index;not null" json:"schedule_id"`
-	TaskID      string    `gorm:"size:36;not null;default:''" json:"task_id"`
-	TriggeredBy string    `gorm:"size:16;not null;default:scheduled" json:"triggered_by"`
-	Error       string    `json:"error,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID            uint       `gorm:"primaryKey" json:"id"`
+	ScheduleID    *uint      `gorm:"index" json:"schedule_id,omitempty"`
+	TaskID        string     `gorm:"size:36;not null;default:'';index" json:"task_id"`
+	TriggeredBy   string     `gorm:"size:16;not null;default:scheduled" json:"triggered_by"`
+	Error         string     `json:"error,omitempty"`
+	Status        string     `gorm:"size:16;not null;default:interrupted" json:"status"`
+	ReasonCode    string     `gorm:"size:64;not null;default:''" json:"reason_code,omitempty"`
+	SourceID      string     `gorm:"size:256;not null;default:''" json:"source_id,omitempty"`
+	ScheduledFor  *time.Time `json:"scheduled_for,omitempty"`
+	ActorID       *uint      `json:"actor_id,omitempty"`
+	RuleSnapshot  JSONB      `gorm:"type:jsonb" json:"rule_snapshot,omitempty"`
+	ConfigVersion string     `gorm:"size:128;not null;default:''" json:"config_version,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 // TaskCenterArtifact holds the structured result of one finished task run, so

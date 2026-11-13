@@ -24,6 +24,7 @@ import (
 	gitrepo "github.com/suma/suma/server/internal/git"
 	"github.com/suma/suma/server/internal/secret"
 	"github.com/suma/suma/server/internal/task"
+	"github.com/suma/suma/server/internal/taskcenter"
 	"gorm.io/gorm"
 )
 
@@ -56,21 +57,33 @@ const (
 	DriftUnknown  = "unknown"
 )
 
+type syncResult struct {
+	Project    string `json:"project"`
+	Operation  string `json:"operation"`
+	Trigger    string `json:"trigger"`
+	ReleaseID  *uint  `json:"release_id,omitempty"`
+	RecordID   *uint  `json:"record_id,omitempty"`
+	Commit     string `json:"commit,omitempty"`
+	ConfigHash string `json:"config_hash,omitempty"`
+}
+
 type ConfigureInput struct {
-	Environment           []EnvironmentVariable `json:"environment"`
-	AutomationEnabled     *bool                 `json:"automation_enabled,omitempty"`
-	Repository            gitrepo.Repository    `json:"repository"`
-	ReconcileMode         string                `json:"reconcile_mode"`
-	SyncIntervalSeconds   int                   `json:"sync_interval_seconds"`
-	AutoRollback          bool                  `json:"auto_rollback"`
-	DeploymentTimeout     int                   `json:"deployment_timeout"`
-	WebhookEnabled        bool                  `json:"webhook_enabled"`
-	WebhookSecret         string                `json:"webhook_secret"`
-	NodeIDs               []string              `json:"node_ids,omitempty"`
-	RegistryCredentialIDs []uint                `json:"registry_credential_ids,omitempty"`
+	ExpectedAutomationVersion *uint64               `json:"expected_automation_version,omitempty"`
+	Environment               []EnvironmentVariable `json:"environment"`
+	AutomationEnabled         *bool                 `json:"automation_enabled,omitempty"`
+	Repository                gitrepo.Repository    `json:"repository"`
+	ReconcileMode             string                `json:"reconcile_mode"`
+	SyncIntervalSeconds       int                   `json:"sync_interval_seconds"`
+	AutoRollback              bool                  `json:"auto_rollback"`
+	DeploymentTimeout         int                   `json:"deployment_timeout"`
+	WebhookEnabled            bool                  `json:"webhook_enabled"`
+	WebhookSecret             string                `json:"webhook_secret"`
+	NodeIDs                   []string              `json:"node_ids,omitempty"`
+	RegistryCredentialIDs     []uint                `json:"registry_credential_ids,omitempty"`
 }
 
 type Configuration struct {
+	AutomationVersion     uint64                `json:"automation_version,omitempty"`
 	Environment           []EnvironmentVariable `json:"environment"`
 	AutomationEnabled     bool                  `json:"automation_enabled"`
 	Configured            bool                  `json:"configured"`
@@ -90,6 +103,7 @@ type Configuration struct {
 }
 
 type Project struct {
+	AutomationVersion uint64    `json:"automation_version,omitempty"`
 	AutomationEnabled bool      `json:"automation_enabled"`
 	ID                uint      `json:"id"`
 	Name              string    `json:"name"`
@@ -139,31 +153,32 @@ type driftCacheEntry struct {
 }
 
 type Actor struct {
-	UserID *uint
-	Name   string
-	IP     string
+	UserID       *uint
+	Name         string
+	IP           string
+	TriggerRunID uint
+	SourceID     string
+	CheckOnly    bool
 }
 
 type Service struct {
-	emit             event.Sink
-	db               *gorm.DB
-	git              gitrepo.Client
-	credentials      *gitrepo.CredentialService
-	compose          compose.Runner
-	tasks            *task.Service
-	audit            *audit.Service
-	secrets          *secret.Store
-	mu               sync.Mutex
-	locks            map[uint]*sync.Mutex
-	queued           map[uint]bool
-	backgroundMu     sync.Mutex
-	backgroundCancel context.CancelFunc
-	backgroundWG     sync.WaitGroup
-	targets          TargetResolver
-	registries       *credentialrepo.RegistryService
-	driftMu          sync.Mutex
-	driftCache       map[uint]driftCacheEntry
-	driftFlight      map[uint]chan struct{}
+	automation  *taskcenter.Service
+	emit        event.Sink
+	db          *gorm.DB
+	git         gitrepo.Client
+	credentials *gitrepo.CredentialService
+	compose     compose.Runner
+	tasks       *task.Service
+	audit       *audit.Service
+	secrets     *secret.Store
+	mu          sync.Mutex
+	locks       map[uint]*sync.Mutex
+	queued      map[uint]bool
+	targets     TargetResolver
+	registries  *credentialrepo.RegistryService
+	driftMu     sync.Mutex
+	driftCache  map[uint]driftCacheEntry
+	driftFlight map[uint]chan struct{}
 }
 
 type TargetResolver interface {
@@ -195,6 +210,7 @@ func (s *Service) CreateConfiguredProject(ctx context.Context, name string, inpu
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		credentials := gitrepo.NewCredentialService(tx, s.secrets)
 		service := NewService(tx, s.git, credentials, s.compose, s.tasks, s.audit, s.secrets)
+		service.SetTaskCenter(s.automation)
 		if s.registries != nil {
 			service.SetRegistryCredentials(credentialrepo.NewRegistryService(tx, s.secrets))
 		}
@@ -248,8 +264,19 @@ func (s *Service) ListProjects(ctx context.Context) ([]Project, error) {
 		return nil, err
 	}
 	projects := make([]Project, 0, len(rows))
+	versions := map[string]uint64{}
+	if s.automation != nil {
+		var rules []database.TaskCenterSchedule
+		if err := s.db.WithContext(ctx).Select("subject", "version").Where("kind = 'cd.sync' AND node_id = '' AND archived_at IS NULL").Find(&rules).Error; err != nil {
+			return nil, err
+		}
+		for _, rule := range rules {
+			versions[rule.Subject] = rule.Version
+		}
+	}
 	for _, row := range rows {
 		value := projectSummary(row)
+		value.AutomationVersion = versions[row.Name]
 		value.NodeIDs, _ = s.projectNodeIDs(ctx, row.ID)
 		projects = append(projects, value)
 	}
@@ -262,6 +289,14 @@ func (s *Service) GetProject(ctx context.Context, name string) (Project, error) 
 		return Project{}, err
 	}
 	value := projectSummary(row)
+	if s.automation != nil {
+		var rule database.TaskCenterSchedule
+		err := s.db.WithContext(ctx).Select("version").Where("kind = 'cd.sync' AND node_id = '' AND subject = ? AND archived_at IS NULL", name).First(&rule).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return value, err
+		}
+		value.AutomationVersion = rule.Version
+	}
 	value.NodeIDs, err = s.projectNodeIDs(ctx, row.ID)
 	return value, err
 }
@@ -272,13 +307,35 @@ func projectSummary(row database.DeliveryProject) Project {
 
 // SetAutomation changes only automatic triggers, preserving policy, credentials
 // and release history. Operations that already started may finish normally.
-func (s *Service) SetAutomation(ctx context.Context, name string, enabled bool) (Project, error) {
-	result := s.db.WithContext(ctx).Model(&database.DeliveryProject{}).Where("name = ?", name).Update("automation_enabled", enabled)
-	if result.Error != nil {
-		return Project{}, result.Error
-	}
-	if result.RowsAffected == 0 {
-		return Project{}, gorm.ErrRecordNotFound
+func (s *Service) SetAutomation(ctx context.Context, name string, enabled bool, expected ...uint64) (Project, error) {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if s.automation != nil {
+			if err := s.automation.LockOwned(tx, "cd.sync", "", name, expected...); err != nil {
+				return err
+			}
+			if len(expected) == 0 {
+				var rule database.TaskCenterSchedule
+				if err := tx.Where("kind = 'cd.sync' AND node_id = '' AND subject = ? AND archived_at IS NULL", name).First(&rule).Error; err == nil && rule.Enabled != enabled {
+					return taskcenter.ErrVersionConflict
+				} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+					return err
+				}
+			}
+		}
+		result := tx.Model(&database.DeliveryProject{}).Where("name = ?", name).Update("automation_enabled", enabled)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		var row database.DeliveryProject
+		if err := tx.Where("name = ?", name).First(&row).Error; err != nil {
+			return err
+		}
+		return s.syncAutomation(tx, row)
+	}); err != nil {
+		return Project{}, err
 	}
 	return s.GetProject(ctx, name)
 }
@@ -415,6 +472,25 @@ func (s *Service) Configure(ctx context.Context, name string, input ConfigureInp
 		updates["webhook_secret"] = ciphertext
 	}
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if s.automation != nil {
+			expected := []uint64{}
+			if input.ExpectedAutomationVersion != nil {
+				expected = append(expected, *input.ExpectedAutomationVersion)
+			}
+			if err := s.automation.LockOwned(tx, "cd.sync", "", name, expected...); err != nil {
+				return err
+			}
+			if input.ExpectedAutomationVersion == nil {
+				var rule database.TaskCenterSchedule
+				err := tx.Where("kind = 'cd.sync' AND node_id = '' AND subject = ? AND archived_at IS NULL", name).First(&rule).Error
+				if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+					return err
+				}
+				if err == nil && ((input.AutomationEnabled != nil && *input.AutomationEnabled != rule.Enabled) || input.SyncIntervalSeconds != rule.IntervalSeconds || input.WebhookEnabled != rule.WebhookEnabled) {
+					return taskcenter.ErrVersionConflict
+				}
+			}
+		}
 		var credentialID *uint
 		switch authentication.Source {
 		case gitrepo.CredentialSourceNone:
@@ -456,7 +532,11 @@ func (s *Service) Configure(ctx context.Context, name string, input ConfigureInp
 		if result.RowsAffected == 0 {
 			return gorm.ErrRecordNotFound
 		}
-		return nil
+		var saved database.DeliveryProject
+		if err := tx.First(&saved, current.ID).Error; err != nil {
+			return err
+		}
+		return s.syncAutomation(tx, saved)
 	}); err != nil {
 		return Configuration{}, err
 	}
@@ -472,9 +552,19 @@ func (s *Service) GetConfiguration(ctx context.Context, name string) (Configurat
 	if err != nil {
 		return Configuration{}, err
 	}
+	var automationVersion uint64
+	if s.automation != nil {
+		var rule database.TaskCenterSchedule
+		err := s.db.WithContext(ctx).Select("version").Where("kind = 'cd.sync' AND node_id = '' AND subject = ? AND archived_at IS NULL", name).First(&rule).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return Configuration{}, err
+		}
+		automationVersion = rule.Version
+	}
 	if project.GitCloneURL == "" {
 		nodeIDs, _ := s.projectNodeIDs(ctx, project.ID)
 		return Configuration{
+			AutomationVersion:   automationVersion,
 			AutomationEnabled:   project.AutomationEnabled,
 			Configured:          false,
 			Repository:          gitrepo.Repository{RefType: gitrepo.RefBranch, Ref: "main", Authentication: gitrepo.Authentication{Source: gitrepo.CredentialSourceNone}, ComposeFiles: []string{"compose.yml"}},
@@ -511,6 +601,7 @@ func (s *Service) GetConfiguration(ctx context.Context, name string) (Configurat
 		return Configuration{}, err
 	}
 	return Configuration{
+		AutomationVersion: automationVersion,
 		Environment:       environment,
 		AutomationEnabled: project.AutomationEnabled,
 		Configured:        true,
@@ -524,6 +615,22 @@ func (s *Service) GetConfiguration(ctx context.Context, name string) (Configurat
 }
 
 func (s *Service) Sync(ctx context.Context, name, trigger string, actor Actor) (database.Task, error) {
+	if s.automation != nil && actor.TriggerRunID == 0 {
+		reason := taskcenter.ReasonManual
+		if trigger == "webhook" {
+			reason = taskcenter.ReasonWebhook
+		} else if trigger == "poll" {
+			reason = taskcenter.ReasonScheduled
+		}
+		run, err := s.automation.DispatchSubject(ctx, "cd.sync", "", name, taskcenter.DispatchRequest{Reason: reason, SourceID: actor.SourceID, Action: "check", Actor: taskcenter.Actor{ID: actor.UserID, Name: actor.Name, IP: actor.IP}})
+		if err != nil {
+			if errors.Is(err, taskcenter.ErrPaused) {
+				return database.Task{}, ErrAutomationPaused
+			}
+			return database.Task{}, err
+		}
+		return s.tasks.Get(ctx, run.TaskID)
+	}
 	project, err := s.project(ctx, name)
 	if err != nil {
 		return database.Task{}, err
@@ -539,15 +646,22 @@ func (s *Service) Sync(ctx context.Context, name, trigger string, actor Actor) (
 	}
 	row, err := s.tasks.StartDefinition(context.Background(), task.Definition{
 		Type: "cd.sync", Name: "Sync " + name,
-		Params: map[string]any{"project": name, "trigger": trigger},
+		Params:       map[string]any{"project": name, "trigger": trigger},
+		TriggerRunID: actor.TriggerRunID,
 	}, func(ctx context.Context, taskID string, report task.Reporter) (any, error) {
 		defer s.releaseReservation(project.ID)
 		lock := s.projectLock(project.ID)
 		lock.Lock()
 		defer lock.Unlock()
-		err := s.syncLocked(ctx, project.ID, taskID, trigger, actor, report)
+		if s.automation != nil {
+			if err := s.automation.ValidateRun(ctx, actor.TriggerRunID); err != nil {
+				return nil, err
+			}
+		}
+		result, err := s.syncLocked(ctx, project.ID, taskID, trigger, actor, report)
+		result.Project = name
 		s.recordFinal(actor, "cd.sync", name, taskID, nil, err)
-		return nil, err
+		return result, err
 	})
 	if err != nil {
 		s.releaseReservation(project.ID)
@@ -555,74 +669,75 @@ func (s *Service) Sync(ctx context.Context, name, trigger string, actor Actor) (
 	return row, err
 }
 
-func (s *Service) syncLocked(ctx context.Context, projectID uint, taskID, trigger string, actor Actor, report task.Reporter) error {
+func (s *Service) syncLocked(ctx context.Context, projectID uint, taskID, trigger string, actor Actor, report task.Reporter) (syncResult, error) {
+	result := syncResult{Operation: "check", Trigger: trigger}
 	var project database.DeliveryProject
 	if err := s.db.WithContext(ctx).First(&project, projectID).Error; err != nil {
-		return err
+		return result, err
 	}
 	// Recheck after acquiring the project lock: a queued trigger may have been paused.
 	if automaticTrigger(trigger) && !project.AutomationEnabled {
-		return ErrAutomationPaused
+		return result, ErrAutomationPaused
 	}
-	autoDeploy := project.ReconcileMode == ModeAuto && project.AutomationEnabled
+	autoDeploy := project.ReconcileMode == ModeAuto && project.AutomationEnabled && !actor.CheckOnly
 	repository, err := repositoryFromProject(project)
 	if err != nil {
-		return err
+		return result, err
 	}
 	credential := gitrepo.CredentialMaterial{AuthType: gitrepo.AuthNone}
 	if project.GitCredentialID != nil {
 		credential, err = s.credentials.Material(ctx, *project.GitCredentialID)
 		if err != nil {
-			return fmt.Errorf("load Git credential: %w", err)
+			return result, fmt.Errorf("load Git credential: %w", err)
 		}
 	} else if credential, err = s.credentials.ProjectMaterial(ctx, project.ID); errors.Is(err, gorm.ErrRecordNotFound) {
 		credential, err = gitrepo.CredentialMaterial{AuthType: gitrepo.AuthNone}, nil
 	} else if err != nil {
-		return fmt.Errorf("load project Git credential: %w", err)
+		return result, fmt.Errorf("load project Git credential: %w", err)
 	}
 	report(5, "Fetching Git repository")
 	revision, err := s.git.Sync(ctx, gitrepo.SyncRequest{ProjectID: project.ID, Repository: repository, Credential: credential}, &reportWriter{report: report, progress: 15})
 	if err != nil {
-		return err
+		return result, err
 	}
 	if err := s.git.Verify(ctx, revision.WorktreePath, revision.CommitSHA); err != nil {
-		return err
+		return result, err
 	}
 	if err := s.db.WithContext(ctx).Model(&project).Update("desired_commit", revision.CommitSHA).Error; err != nil {
-		return err
+		return result, err
 	}
 	now := time.Now()
 	if err := s.db.WithContext(ctx).Model(&project).Update("last_sync_at", now).Error; err != nil {
-		return err
+		return result, err
 	}
 	spec, err := executionSpec(project, repository, revision.WorktreePath)
 	if err != nil {
-		return err
+		return result, err
 	}
 	spec.Environment, err = s.decryptEnvironment(project.EnvironmentCiphertext)
 	if err != nil {
-		return err
+		return result, err
 	}
 	if err := validateComposeSources(spec, revision.WorktreePath); err != nil {
-		return fmt.Errorf("deployment source policy rejected the release: %w", err)
+		return result, fmt.Errorf("deployment source policy rejected the release: %w", err)
 	}
 	report(30, "Validating Compose configuration")
 	validationRunner, err := s.runnerForProject(ctx, project.ID)
 	if err != nil {
-		return err
+		return result, err
 	}
 	if err := validationRunner.ValidateRelease(ctx, spec, io.Discard); err != nil {
-		return err
+		return result, err
 	}
 	rendered, err := validationRunner.Render(ctx, spec, io.Discard)
 	if err != nil {
-		return err
+		return result, err
 	}
 	if err := s.validateDeploymentTargets(ctx, project.ID, spec, rendered); err != nil {
 		if len(spec.Environment) > 0 {
-			return errors.New("deployment policy rejected the release (details hidden for private environment)")
+			return result, errors.New("deployment policy rejected the release (details hidden for private environment)")
 		}
-		return fmt.Errorf("deployment policy rejected the release: %w", err)
+		return result, fmt.Errorf("deployment policy rejected the release: %w", err)
 	}
 	configHash := releaseConfigurationHash(rendered, spec.Environment)
 	images := imageReferences(rendered)
@@ -632,43 +747,45 @@ func (s *Service) syncLocked(ctx context.Context, projectID uint, taskID, trigge
 	var existing database.DeliveryRelease
 	err = s.db.WithContext(ctx).Where("project_id = ? AND repository_url = ? AND commit_sha = ? AND canonical_release_id IS NULL", project.ID, project.GitCloneURL, revision.CommitSHA).First(&existing).Error
 	if err == nil {
+		result.ReleaseID, result.Commit, result.ConfigHash = &existing.ID, existing.CommitSHA, configHash
 		filesJSON, _ := json.Marshal(repository.ComposeFiles)
 		imagesJSON, _ := json.Marshal(images)
 		if err := s.db.WithContext(ctx).Model(&existing).Updates(map[string]any{"config_hash": configHash, "image_references": string(imagesJSON), "compose_files_json": string(filesJSON), "environment_file": repository.EnvironmentFile, "environment_ciphertext": project.EnvironmentCiphertext, "worktree_path": revision.WorktreePath}).Error; err != nil {
-			return err
+			return result, err
 		}
 		if err := s.db.WithContext(ctx).Model(&project).Update("observed_commit", revision.CommitSHA).Error; err != nil {
-			return err
+			return result, err
 		}
 		if !autoDeploy || existing.Status == StatusRejected {
 			report(100, "Commit already synchronized")
-			return nil
+			return result, nil
 		}
 		record, err := s.snapshotRecord(ctx, project, existing, AttemptDeploy, actor)
 		if err != nil {
-			return err
+			return result, err
 		}
 		var activeCount int64
 		var nodeIDs []string
 		if err := json.Unmarshal([]byte(record.NodeIDsJSON), &nodeIDs); err != nil {
-			return err
+			return result, err
 		}
 		if err := s.db.WithContext(ctx).Table("delivery_target_states AS state").Joins("JOIN delivery_records AS record ON record.id = state.active_record_id").Where("state.project_id = ? AND state.node_id IN ? AND state.active_release_id = ? AND record.config_hash = ?", project.ID, nodeIDs, existing.ID, configHash).Count(&activeCount).Error; err != nil {
-			return err
+			return result, err
 		}
 		if activeCount == int64(len(nodeIDs)) {
 			report(100, "Commit already reconciled")
-			return nil
+			return result, nil
 		}
 
 		record.TriggerType = trigger
 		if err := s.db.WithContext(ctx).Create(&record).Error; err != nil {
-			return err
+			return result, err
 		}
-		return s.executeRecord(ctx, project, existing, record, taskID, report, true)
+		result.RecordID, result.Operation = &record.ID, "deploy"
+		return result, s.executeRecord(ctx, project, existing, record, taskID, report, true)
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return err
+		return result, err
 	}
 	filesJSON, _ := json.Marshal(repository.ComposeFiles)
 	imagesJSON, _ := json.Marshal(images)
@@ -684,30 +801,32 @@ func (s *Service) syncLocked(ctx context.Context, projectID uint, taskID, trigge
 		PreviousReleaseID: project.ActiveReleaseID, WorktreePath: revision.WorktreePath, ComposeFilesJSON: string(filesJSON), EnvironmentFile: repository.EnvironmentFile, EnvironmentCiphertext: project.EnvironmentCiphertext,
 	}
 	if err := s.db.WithContext(ctx).Create(&release).Error; err != nil {
-		return err
+		return result, err
 	}
+	result.ReleaseID, result.Commit, result.ConfigHash = &release.ID, release.CommitSHA, configHash
 	if err := s.snapshotReleaseTargets(ctx, project.ID, release.ID); err != nil {
-		return err
+		return result, err
 	}
 	if err := s.db.WithContext(ctx).Model(&project).Update("observed_commit", revision.CommitSHA).Error; err != nil {
-		return err
+		return result, err
 	}
 	if autoDeploy {
 		record, err := s.snapshotRecord(ctx, project, release, AttemptDeploy, actor)
 		if err != nil {
-			return err
+			return result, err
 		}
 		record.TriggerType = trigger
 		if err := s.db.WithContext(ctx).Create(&record).Error; err != nil {
-			return err
+			return result, err
 		}
-		return s.executeRecord(ctx, project, release, record, taskID, report, true)
+		result.RecordID, result.Operation = &record.ID, "deploy"
+		return result, s.executeRecord(ctx, project, release, record, taskID, report, true)
 	}
 	if s.emit != nil {
 		s.emit(event.Event{Type: "cd.awaiting_approval", Severity: "warning", Scope: "control_plane", Project: project.Name, ResourceType: "release", ResourceID: fmt.Sprint(release.ID), ReleaseID: &release.ID, TaskID: taskID, Title: project.Name, Message: "Release " + release.CommitSHA + " is ready for approval"})
 	}
 	report(100, "Release is ready for approval")
-	return nil
+	return result, nil
 }
 
 func (s *Service) Reject(ctx context.Context, name string, releaseID uint, actor Actor) (database.DeliveryRelease, error) {
@@ -969,6 +1088,11 @@ func (s *Service) RemoveProject(ctx context.Context, name string, force, preserv
 		}
 		if err := tx.Where("project_id = ?", project.ID).Delete(&database.DeliveryTargetState{}).Error; err != nil {
 			return err
+		}
+		if s.automation != nil {
+			if err := s.automation.ArchiveOwned(tx, "cd.sync", "", name); err != nil {
+				return err
+			}
 		}
 		return tx.Delete(&project).Error
 	})

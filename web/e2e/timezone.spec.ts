@@ -26,12 +26,12 @@ for (const language of ['en-US', 'zh-CN']) for (const theme of ['dark', 'light']
     // A full navigation/reload must retain the saved zone rather than the device zone.
     await page.getByRole('tab', { name: zh ? '存储清理' : 'Storage cleanup', exact: true }).click()
     await expect(page.getByText('Asia/Kolkata', { exact: true }).first()).toBeVisible()
-    await page.goto('/tasks')
+    await page.goto('/tasks?tab=records')
     const expected = await page.evaluate(async language => {
       // @ts-expect-error Vite serves source imports in the browser.
       const { api } = await import('/src/lib/api.ts')
-      const rows = await api('/nodes/local/tasks')
-      return new Intl.DateTimeFormat(language, { timeZone: 'Asia/Kolkata', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(new Date(rows[0].created_at))
+      const records = await api('/task-center/records?scope=node&node_id=local&status=finished')
+      return new Intl.DateTimeFormat(language, { timeZone: 'Asia/Kolkata', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(new Date(records.items[0].created_at))
     }, language)
     await expect(page.getByRole('cell', { name: expected, exact: true }).first()).toBeVisible()
     await page.goto('/settings#cleanup')

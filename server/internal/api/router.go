@@ -29,7 +29,6 @@ import (
 	gitService "github.com/suma/suma/server/internal/git"
 	imageService "github.com/suma/suma/server/internal/image"
 	"github.com/suma/suma/server/internal/imageupdate"
-	"github.com/suma/suma/server/internal/taskcenter"
 	monitorService "github.com/suma/suma/server/internal/monitor"
 	networkService "github.com/suma/suma/server/internal/network"
 	nodeService "github.com/suma/suma/server/internal/node"
@@ -39,6 +38,7 @@ import (
 	settingsService "github.com/suma/suma/server/internal/settings"
 	systemService "github.com/suma/suma/server/internal/system"
 	"github.com/suma/suma/server/internal/task"
+	"github.com/suma/suma/server/internal/taskcenter"
 	volumeService "github.com/suma/suma/server/internal/volume"
 	"github.com/suma/suma/server/webui"
 	"gorm.io/gorm"
@@ -966,11 +966,33 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		success(c, gin.H{"id": id})
 	})
 
+	v1.GET("/delivery-records/by-task/:taskID", requireAuth(deps.Auth), func(c *gin.Context) {
+		id := c.Param("taskID")
+		if id == "" || len(id) > 64 || strings.ContainsAny(id, "\x00\r\n") {
+			failure(c, http.StatusBadRequest, 17705, "Invalid task identifier")
+			return
+		}
+		if deps.CD == nil {
+			failure(c, http.StatusServiceUnavailable, 17706, "Delivery records unavailable")
+			return
+		}
+		records, err := deps.CD.ListHistory(c.Request.Context(), cdService.HistoryQuery{TaskID: id, Page: 1, PageSize: 20})
+		if err != nil {
+			failure(c, http.StatusInternalServerError, 17706, "Delivery records unavailable")
+			return
+		}
+		releases, err := deps.CD.ReleasesForTask(c.Request.Context(), id)
+		if err != nil {
+			failure(c, http.StatusInternalServerError, 17706, "Delivery records unavailable")
+			return
+		}
+		success(c, gin.H{"records": records, "releases": releases})
+	})
 	v1.GET("/delivery-records", requireAuth(deps.Auth), func(c *gin.Context) {
 		page, pageErr := strconv.Atoi(c.DefaultQuery("page", "1"))
 		size, sizeErr := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 		source, operation, status := c.Query("source"), c.Query("operation"), c.Query("status")
-		if pageErr != nil || sizeErr != nil || page < 1 || page > 1_000_000 || size < 1 || size > 100 || len(c.Query("search")) > 256 ||
+		if pageErr != nil || sizeErr != nil || page < 1 || page > 1_000_000 || size < 1 || size > 100 || len(c.Query("search")) > 256 || len(c.Query("task_id")) > 64 || strings.ContainsAny(c.Query("task_id"), "\x00\r\n") ||
 			(source != "" && source != "continuous_delivery" && source != "project_cd") ||
 			!slices.Contains([]string{"", "check", "deploy", "retry", "manual_rollback", "auto_rollback", "rollback_failed", "start", "stop", "restart", "detach"}, operation) ||
 			!slices.Contains([]string{"", "pending", "running", "validating", "pulling", "deploying", "verifying", "succeeded", "failed", "partial_failed", "interrupted", "rolling_back", "rolled_back", "rollback_failed", "canceled"}, status) {
@@ -981,7 +1003,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			failure(c, http.StatusServiceUnavailable, 17706, "Delivery records unavailable")
 			return
 		}
-		rows, err := deps.CD.ListHistory(c.Request.Context(), cdService.HistoryQuery{Source: source, Operation: operation, Status: status, Search: c.Query("search"), Page: page, PageSize: size})
+		rows, err := deps.CD.ListHistory(c.Request.Context(), cdService.HistoryQuery{Source: source, Operation: operation, Status: status, Search: c.Query("search"), TaskID: c.Query("task_id"), Page: page, PageSize: size})
 		if err != nil {
 			failure(c, http.StatusInternalServerError, 17706, "Delivery records unavailable")
 			return
@@ -1353,6 +1375,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		}
 		configuration, err := deps.CD.Configure(c.Request.Context(), c.Param("name"), input)
 		if err != nil {
+			if taskCenterFailure(c, err) {
+				return
+			}
 			failure(c, http.StatusUnprocessableEntity, 17703, err.Error())
 			return
 		}
@@ -1367,14 +1392,22 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	})
 	delivery.PUT("/:name/automation", func(c *gin.Context) {
 		var input struct {
-			Enabled *bool `json:"enabled" binding:"required"`
+			Enabled         *bool   `json:"enabled" binding:"required"`
+			ExpectedVersion *uint64 `json:"expected_automation_version"`
 		}
 		if c.ShouldBindJSON(&input) != nil {
 			failure(c, http.StatusBadRequest, 17716, "Automation enabled must be a boolean")
 			return
 		}
-		project, err := deps.CD.SetAutomation(c.Request.Context(), c.Param("name"), *input.Enabled)
+		expected := []uint64{}
+		if input.ExpectedVersion != nil {
+			expected = append(expected, *input.ExpectedVersion)
+		}
+		project, err := deps.CD.SetAutomation(c.Request.Context(), c.Param("name"), *input.Enabled, expected...)
 		if err != nil {
+			if taskCenterFailure(c, err) {
+				return
+			}
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				failure(c, http.StatusNotFound, 17701, "Delivery project not found")
 			} else {
@@ -1649,13 +1682,13 @@ func NewRouter(deps Dependencies) *gin.Engine {
 				failure(c, http.StatusNotFound, 16005, "Docker node not found")
 				return
 			}
-			rows, err = deps.Tasks.ListForNode(c.Request.Context(), nodeID)
+			rows, err = deps.Tasks.ListForNode(c.Request.Context(), nodeID, c.Query("view") == "summary")
 		} else {
 			switch c.DefaultQuery("scope", task.ScopeControlPlane) {
 			case task.ScopeControlPlane:
-				rows, err = deps.Tasks.ListControlPlane(c.Request.Context())
+				rows, err = deps.Tasks.ListControlPlane(c.Request.Context(), c.Query("view") == "summary")
 			case "all":
-				rows, err = deps.Tasks.List(c.Request.Context())
+				rows, err = deps.Tasks.List(c.Request.Context(), c.Query("view") == "summary")
 			default:
 				failure(c, http.StatusBadRequest, 16006, "Scope must be control_plane or all")
 				return
@@ -1668,7 +1701,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		success(c, rows)
 	})
 	v1.GET("/tasks/:id", requireAuth(deps.Auth), func(c *gin.Context) {
-		row, err := deps.Tasks.Get(c.Request.Context(), c.Param("id"))
+		row, err := deps.Tasks.Record(c.Request.Context(), c.Param("id"))
 		if err != nil {
 			failure(c, http.StatusNotFound, 16007, "Task not found")
 			return
@@ -1679,6 +1712,14 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		rows, err := deps.Tasks.Logs(c.Request.Context(), c.Param("id"))
 		if err != nil {
 			failure(c, http.StatusInternalServerError, 16002, "Unable to list task logs")
+			return
+		}
+		success(c, rows)
+	})
+	v1.GET("/tasks/:id/children", requireAuth(deps.Auth), func(c *gin.Context) {
+		rows, err := deps.Tasks.Children(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			failure(c, http.StatusInternalServerError, 16001, "Unable to list child tasks")
 			return
 		}
 		success(c, rows)
