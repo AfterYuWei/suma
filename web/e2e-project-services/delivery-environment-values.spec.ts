@@ -47,6 +47,7 @@ for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']
         }
         data = saved
       } else if (path.endsWith('/drift')) data = { status: 'unknown', drifted: false, runtime_healthy: false, nodes: [] }
+      if (path.endsWith('/records')) data = {items: [],total: 0,counts: {}}
       await route.fulfill({ headers: { 'Cache-Control': 'no-store' }, json: { code: 0, message: '', data } })
     })
     await page.goto('/continuous-delivery/app')
@@ -90,8 +91,8 @@ for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']
     await expect(input(3)).toHaveValue('test-only-replacement')
     await expect(input(2)).toHaveValue('')
     await expect(input(4)).toHaveValue('nacos.example.test:8848')
-    await form.getByRole('button', { name: zh ? '保存 CD 配置' : 'Save CD settings', exact: true }).click()
-    await expect(page.getByRole('tab', { name: zh ? '概览' : 'Overview', exact: true })).toHaveAttribute('aria-selected', 'true')
+    await form.getByRole('button', { name: zh ? '保存发布设置' : 'Save release settings', exact: true }).click()
+    await expect(page.getByRole('tab', { name: zh ? '发布' : 'Publish', exact: true })).toHaveAttribute('aria-selected', 'true')
     await settings.click()
     await expect(input(3)).toHaveValue('')
     await expect(input(3)).toHaveAttribute('type', 'password')
@@ -114,7 +115,7 @@ for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']
     await show().click()
     await expect(form.getByRole('button', { name: zh ? '读取中…' : 'Loading…', exact: true })).toBeDisabled()
     await expect.poll(() => !!releaseRead).toBe(true)
-    await page.getByRole('tab', { name: zh ? '概览' : 'Overview', exact: true }).click()
+    await page.getByRole('tab', { name: zh ? '发布' : 'Publish', exact: true }).click()
     holdRead = false
     releaseRead!()
     await settings.click()

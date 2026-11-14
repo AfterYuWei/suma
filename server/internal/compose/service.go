@@ -431,7 +431,7 @@ func composeValidationDetail(output, environment string) string {
 			continue
 		}
 		key, value, ok := strings.Cut(line, "=")
-		if !ok || !sensitiveEnvironmentKey(strings.TrimSpace(strings.TrimPrefix(key, "export "))) {
+		if !ok || !IsSensitiveEnvironmentKey(strings.TrimSpace(strings.TrimPrefix(key, "export "))) {
 			continue
 		}
 		value = unquoteDotEnv(strings.TrimSpace(value))

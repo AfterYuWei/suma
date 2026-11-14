@@ -2,7 +2,7 @@ import {useQuery} from '@tanstack/react-query'
 import {api} from '../../lib/api'
 import {nodePath} from '../../lib/nodes'
 import type {CDEnvironmentVariable,GitRepositoryConfiguration,ReconcileMode} from '../delivery/types'
-export interface ProjectCDRecord {id:number;operation:string;status:string;task_id:string;actor:string;revision:number;commit_sha:string;commit_message:string;config_hash:string;created_at:string;failure_reason:string}
+export interface ProjectCDRecord {id:number;operation:string;status:string;task_id:string;actor:string;revision:number;commit_sha:string;commit_message:string;config_hash:string;created_at:string;failure_reason:string;images_pinned?:boolean}
 export interface ProjectCDConfiguration {
  configured:boolean;enabled:boolean;revision:number;repository:GitRepositoryConfiguration;environment:CDEnvironmentVariable[];registry_credential_ids:number[];deployment_timeout:number;sync_interval_seconds:number;automation_enabled:boolean;reconcile_mode:ReconcileMode;auto_rollback:boolean;initial_application_required:boolean;webhook_enabled:boolean;webhook_id?:string;webhook_secret?:string;candidate?:ProjectCDRecord;applied?:ProjectCDRecord
 }

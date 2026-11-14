@@ -84,7 +84,7 @@ type Node struct {
 }
 
 // Remote carries the digests observed in the registry.
-type Remote struct{ ManifestDigest, ConfigDigest string }
+type Remote struct{ ManifestDigest, ConfigDigest, IndexDigest string }
 
 // LookupError maps registry failures to a stable reason code.
 type LookupError struct{ Code string }

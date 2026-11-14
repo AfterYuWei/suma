@@ -84,8 +84,9 @@ func newProjectCDFixture(t *testing.T) *projectCDFixture {
 	}
 	git := &fixtureGit{root: worktree, commit: strings.Repeat("a", 40)}
 	service := New(db, git, gitrepo.NewCredentialService(db, store), credential.NewRegistryService(db, store), runner, tasks, audit.NewService(db), store, Dependencies{Project: func(context.Context, string) (*compose.Service, error) { return ordinary, nil }, Target: func(context.Context, string) (compose.Target, error) {
-		return compose.Target{NodeID: "local", NodeName: "Local", RuntimeIdentity: "fixture", Host: "unix:///fixture.sock"}, nil
+		return compose.Target{OS: "linux", Architecture: "amd64", NodeID: "local", NodeName: "Local", RuntimeIdentity: "fixture", Host: "unix:///fixture.sock"}, nil
 	}})
+	service.SetImageResolver(fixtureImageResolver{})
 	ordinary.SetProjectCDView(service.ProjectView)
 	input := ConfigureInput{WebhookEnabled: true, Repository: gitrepo.Repository{CloneURL: "https://example.test/repo.git", RefType: "branch", Ref: "main", ComposeFiles: []string{"compose.yml"}, Authentication: gitrepo.Authentication{Source: "none"}}}
 	return &projectCDFixture{db: db, root: root, worktree: worktree, calls: calls, projectPath: projectPath, source: source, tasks: tasks, ordinary: ordinary, service: service, git: git, input: input}

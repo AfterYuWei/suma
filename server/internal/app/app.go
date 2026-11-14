@@ -184,7 +184,7 @@ func New(logger *slog.Logger) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	projectCD := projectcd.New(db, projectGitClient, gitCredentials, registryCredentials, runner, taskService, auditService, secretStore, projectcd.Dependencies{Inspect: nodes.InspectComposeNamespace,
+	projectCD := projectcd.New(db, projectGitClient, gitCredentials, registryCredentials, runner, taskService, auditService, secretStore, projectcd.Dependencies{Inspect: nodes.InspectComposeNamespace, PrepareTarget: nodes.ResolveDeploymentTarget,
 		Project: func(ctx context.Context, id string) (*composeService.Service, error) {
 			target, view, err := nodes.ComposeTarget(ctx, id)
 			if err != nil {

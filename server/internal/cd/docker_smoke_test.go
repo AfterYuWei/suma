@@ -16,6 +16,7 @@ import (
 
 	"github.com/suma/suma/server/internal/compose"
 	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/deployment"
 	gitrepo "github.com/suma/suma/server/internal/git"
 	noderepo "github.com/suma/suma/server/internal/node"
 	"github.com/suma/suma/server/internal/secret"
@@ -46,16 +47,30 @@ func TestRealDockerCDDeliveryRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	unixHost := os.Getenv("SUMA_SMOKE_UNIX_HOST")
+	if unixHost == "" {
+		unixHost = "unix:///var/run/docker.sock"
+	}
+	nodes, err := noderepo.NewService(db, secrets, unixHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = nodes.Close() })
 	projectName := fmt.Sprintf("suma-cd-smoke-%d", time.Now().UnixNano())
 	// The Engine must be able to mount a host configuration outside the Git
 	// worktree. The served content proves the mount is applied, not just accepted.
-	hostConfig := filepath.Join(t.TempDir(), "index.html")
-	if err := os.WriteFile(hostConfig, []byte("suma-host-bind-smoke\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	hostConfig, err = filepath.EvalSymlinks(hostConfig)
-	if err != nil {
-		t.Fatal(err)
+	hostConfig := os.Getenv("SUMA_SMOKE_BIND_SOURCE")
+	if hostConfig == "" {
+		hostConfig = filepath.Join(t.TempDir(), "index.html")
+		if err := os.WriteFile(hostConfig, []byte("suma-host-bind-smoke\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		hostConfig, err = filepath.EvalSymlinks(hostConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else if !filepath.IsAbs(hostConfig) {
+		t.Fatal("SUMA_SMOKE_BIND_SOURCE must be an absolute file path on the target test Engine")
 	}
 	firstTree := smokeHostBindWorktree(t, "one", hostConfig)
 	firstCommit := strings.Repeat("a", 40)
@@ -69,8 +84,12 @@ func TestRealDockerCDDeliveryRollback(t *testing.T) {
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}
+	if err := db.Create(&database.DeliveryProjectNode{ProjectID: project.ID, NodeID: "local"}).Error; err != nil {
+		t.Fatal(err)
+	}
 	runtimeProjectName := runtimeName(project)
 	service := NewService(db, gitClient, gitrepo.NewCredentialService(db, secrets), runner, task.NewService(db), nil, secrets)
+	service.SetTargetResolver(nodes)
 
 	cleanupSpec := compose.ExecutionSpec{ProjectName: runtimeProjectName, ProjectDir: firstTree, Files: []string{filepath.Join(firstTree, "compose.yml")}}
 	defer func() {
@@ -185,7 +204,11 @@ func TestRealDockerMultiNodeConsistency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	nodes, err := noderepo.NewService(db, secrets, "unix:///var/run/docker.sock")
+	unixHost := os.Getenv("SUMA_SMOKE_UNIX_HOST")
+	if unixHost == "" {
+		unixHost = "unix:///var/run/docker.sock"
+	}
+	nodes, err := noderepo.NewService(db, secrets, unixHost)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,20 +294,14 @@ func TestRealDockerMultiNodeConsistency(t *testing.T) {
 	secondReleases, _ := service.ListReleases(ctx, projectName)
 	second := secondReleases[0]
 	service.compose = smokeFailureRunner{Runner: runner, targeted: runner, blockedNode: remote.ID}
-	secondDeploy, err := service.Deploy(ctx, projectName, second.ID, Actor{Name: "Docker smoke"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	smokeWaitTask(t, ctx, db, secondDeploy.ID, task.StatusFailed)
+	secondDeploy := smokePrepareAndConfirm(t, ctx, db, service, projectName, deployment.PrepareReleaseInput{ReleaseID: second.ID})
+	smokeWaitTask(t, ctx, db, secondDeploy.Task.ID, task.StatusFailed)
 	second, _ = service.GetRelease(ctx, projectName, second.ID)
 	if second.Status != StatusPartialFailed {
 		t.Fatalf("partial release = %#v", second)
 	}
 	service.compose = runner
-	retry, err := service.RetryFailedNodes(ctx, projectName, second.ID, *second.LatestRecordID, Actor{Name: "Docker smoke"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	retry := smokePrepareAndConfirm(t, ctx, db, service, projectName, deployment.PrepareReleaseInput{Operation: "retry", SourceRecordID: *second.LatestRecordID})
 	smokeWaitTask(t, ctx, db, retry.Task.ID, task.StatusSuccess)
 	gitClient.SetRevision(gitrepo.Revision{CommitSHA: strings.Repeat("c", 40), CommitAuthor: "Smoke Test", CommitMessage: "third", WorktreePath: smokeWorktree(t, "multi-three")})
 	thirdTask, err := service.Sync(ctx, projectName, "docker_smoke", Actor{Name: "Docker smoke"})
@@ -295,20 +312,14 @@ func TestRealDockerMultiNodeConsistency(t *testing.T) {
 	thirdReleases, _ := service.ListReleases(ctx, projectName)
 	third := thirdReleases[0]
 	service.compose = smokeFailureRunner{Runner: runner, targeted: runner, blockedNode: "local"}
-	deploy, err := service.Deploy(ctx, projectName, third.ID, Actor{Name: "Docker smoke"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	smokeWaitTask(t, ctx, db, deploy.ID, task.StatusFailed)
+	deploy := smokePrepareAndConfirm(t, ctx, db, service, projectName, deployment.PrepareReleaseInput{ReleaseID: third.ID})
+	smokeWaitTask(t, ctx, db, deploy.Task.ID, task.StatusFailed)
 	service.compose = runner
 	third, err = service.GetRelease(ctx, projectName, third.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rollback, err := service.RollbackFailedNodes(ctx, projectName, third.ID, *third.LatestRecordID, Actor{Name: "Docker smoke"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	rollback := smokePrepareAndConfirm(t, ctx, db, service, projectName, deployment.PrepareReleaseInput{Operation: "restore-failed", SourceRecordID: *third.LatestRecordID})
 	smokeWaitTask(t, ctx, db, rollback.Task.ID, task.StatusSuccess)
 	var states []database.DeliveryTargetState
 	if err := db.Where("project_id = ?", project.ID).Order("node_id").Find(&states).Error; err != nil {
@@ -325,16 +336,35 @@ func TestRealDockerMultiNodeConsistency(t *testing.T) {
 
 func smokeSync(t *testing.T, ctx context.Context, db *gorm.DB, service *Service, projectName string) database.DeliveryRelease {
 	t.Helper()
-	row, err := service.Sync(ctx, projectName, "docker_smoke", Actor{Name: "Docker smoke"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	smokeWaitTask(t, ctx, db, row.ID, task.StatusSuccess)
+	result := smokePrepareAndConfirm(t, ctx, db, service, projectName, deployment.PrepareReleaseInput{})
+	smokeWaitTask(t, ctx, db, result.Task.ID, task.StatusSuccess)
 	releases, err := service.ListReleases(ctx, projectName)
 	if err != nil || len(releases) == 0 {
 		t.Fatalf("releases = %#v, %v", releases, err)
 	}
 	return releases[0]
+}
+
+func smokePrepareAndConfirm(t *testing.T, ctx context.Context, db *gorm.DB, service *Service, name string, input deployment.PrepareReleaseInput) OperationResult {
+	t.Helper()
+	prepared, err := service.PrepareRelease(ctx, name, input, Actor{Name: "Docker smoke"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	smokeWaitTask(t, ctx, db, prepared.ID, task.StatusSuccess)
+	plan, err := service.PreparedRelease(ctx, name, prepared.ID)
+	if err != nil || !plan.ImagesPinned {
+		t.Fatal("missing pinned publication plan", err)
+	}
+	result, err := service.ConfirmRelease(ctx, name, plan.ID, deployment.ConfirmReleaseInput{ForceRecreate: true}, Actor{Name: "Docker smoke"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := service.ConfirmRelease(ctx, name, plan.ID, deployment.ConfirmReleaseInput{ForceRecreate: true}, Actor{Name: "Docker smoke"})
+	if err != nil || replayed.Task.ID != result.Task.ID || replayed.RecordID != result.RecordID {
+		t.Fatal("publication confirmation was not idempotent", err)
+	}
+	return result
 }
 
 func smokeWaitTask(t *testing.T, ctx context.Context, db *gorm.DB, id, want string) database.Task {

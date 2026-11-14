@@ -106,7 +106,7 @@ func TestCreateConfiguredProjectRejectsUnauthorizedCredential(t *testing.T) {
 
 func TestCreateConfiguredProjectRollsBackCredentialAndGrants(t *testing.T) {
 	h := newCDHarness(t, ModeManual)
-	if err := h.db.Create(&database.Node{ID: "local", Name: "Local", Enabled: true, Endpoint: "unix:///var/run/docker.sock"}).Error; err != nil {
+	if err := h.db.Save(&database.Node{ID: "local", Name: "Local", Enabled: true, Endpoint: "unix:///var/run/docker.sock"}).Error; err != nil {
 		t.Fatal(err)
 	}
 	input := creationInput()

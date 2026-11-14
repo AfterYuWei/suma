@@ -75,7 +75,7 @@ func (a Adapter) Resolve(ctx context.Context, value string, p imageupdate.Platfo
 	if imageConfig.OS != p.OS || imageConfig.Architecture != p.Architecture || (p.Variant != "" && imageConfig.Variant != p.Variant && (imageConfig.Variant != "" || (descriptor.MediaType != types.OCIImageIndex && descriptor.MediaType != types.DockerManifestList))) {
 		return imageupdate.Remote{}, &imageupdate.LookupError{Code: "platform_unavailable"}
 	}
-	return imageupdate.Remote{ManifestDigest: digest.String(), ConfigDigest: manifest.Config.Digest.String()}, nil
+	return imageupdate.Remote{ManifestDigest: digest.String(), ConfigDigest: manifest.Config.Digest.String(), IndexDigest: descriptor.Digest.String()}, nil
 }
 func lookupError(ctx context.Context, err error) error {
 	code := "registry_unreachable"

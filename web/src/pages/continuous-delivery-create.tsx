@@ -6,6 +6,7 @@ import { Button } from '../components/ui/button'
 import { ErrorState } from '../components/ui/error-state'
 import { LoadingState } from '../components/ui/loading-state'
 import { CDSettings } from '../features/delivery/settings'
+import { requestInitialRelease } from '../features/delivery/release-flow'
 import { defaultRepository, type CDConfiguration, type CDConfigureInput, type CreatedDeliveryProject } from '../features/delivery/types'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
@@ -24,6 +25,7 @@ export function ContinuousDeliveryCreatePage() {
   const [configuration, setConfiguration] = useState<CDConfiguration | null>(null)
   const [dirty, setDirty] = useState(false)
   const [created, setCreated] = useState(false)
+  const [prepareAfterCreate, setPrepareAfterCreate] = useState(true)
   const createdName = useRef('')
   const bypass = useRef(false)
 
@@ -51,6 +53,7 @@ export function ContinuousDeliveryCreatePage() {
 
   const openProject = () => {
     bypass.current = true
+    if (prepareAfterCreate) requestInitialRelease(`/delivery-projects/${encodeURIComponent(createdName.current)}`)
     void navigate({ to: '/continuous-delivery/$projectName', params: { projectName: createdName.current } })
   }
   const submit = async (input: CDConfigureInput) => {
@@ -79,7 +82,7 @@ export function ContinuousDeliveryCreatePage() {
         zh={zh}
         onDirtyChange={setDirty}
         onSaved={value => { if (!value.webhook_secret) openProject() }}
-        creation={{ name, onNameChange: setName, submit, created, onDone: openProject, onCancel: () => void navigate({ to: '/continuous-delivery' }) }}
+        creation={{ name, onNameChange: setName, submit, created, onDone: openProject, prepareAfterSave: prepareAfterCreate, onPrepareChange: setPrepareAfterCreate, onCancel: () => void navigate({ to: '/continuous-delivery' }) }}
       />}
     </ResourceFrame>
   </div>

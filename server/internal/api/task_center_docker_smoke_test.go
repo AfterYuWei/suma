@@ -14,6 +14,7 @@ import (
 	"github.com/suma/suma/server/internal/cd"
 	"github.com/suma/suma/server/internal/compose"
 	"github.com/suma/suma/server/internal/database"
+	"github.com/suma/suma/server/internal/deployment"
 	gitrepo "github.com/suma/suma/server/internal/git"
 	"github.com/suma/suma/server/internal/node"
 	"github.com/suma/suma/server/internal/secret"
@@ -104,11 +105,33 @@ func globalCDTaskCenterSmoke(t *testing.T, ctx context.Context, root, nodeID, tr
 			t.Fatal("manual check implicitly published a candidate")
 		}
 	}
-	publication, err := service.Deploy(ctx, name, releases[0].ID, cd.Actor{Name: "Confirmed smoke publication"})
+	prepared, err := service.PrepareRelease(ctx, name, deployment.PrepareReleaseInput{}, cd.Actor{Name: "Confirmed smoke publication"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait(prepared.ID)
+	plan, err := service.PreparedRelease(ctx, name, prepared.ID)
+	if err != nil || !plan.ImagesPinned || len(plan.Nodes) != 1 || plan.Nodes[0].NodeID != nodeID {
+		t.Fatal("missing global pinned release plan", err)
+	}
+	containers, err = adapter.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, container := range containers {
+		if container.Labels["com.docker.compose.project"] == project.DeploymentName {
+			t.Fatal("preparing a global release changed containers")
+		}
+	}
+	publication, err := service.ConfirmRelease(ctx, name, plan.ID, deployment.ConfirmReleaseInput{}, cd.Actor{Name: "Confirmed smoke publication"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	wait(publication.Task.ID)
+	replayed, err := service.ConfirmRelease(ctx, name, plan.ID, deployment.ConfirmReleaseInput{}, cd.Actor{Name: "Confirmed smoke publication"})
+	if err != nil || replayed.Task.ID != publication.Task.ID || replayed.RecordID != publication.RecordID {
+		t.Fatal("global release confirmation was not idempotent", err)
+	}
 	children, err := tasks.Children(ctx, publication.Task.ID)
 	if err != nil || len(children) != 1 || children[0].NodeID != nodeID || children[0].Status != task.StatusSuccess {
 		t.Fatalf("publication lost node Task evidence: %+v %v", children, err)

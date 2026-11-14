@@ -566,6 +566,37 @@ func (s *Service) ResolveComposeTarget(ctx context.Context, id string) (compose.
 	return target, err
 }
 
+// ResolveDeploymentTarget reads the actual Engine platform only when preparing
+// an immutable release, rather than adding a network probe to every UI query.
+func (s *Service) ResolveDeploymentTarget(ctx context.Context, id string) (compose.Target, error) {
+	target, err := s.ResolveComposeTarget(ctx, id)
+	if err != nil {
+		return target, err
+	}
+	client, err := s.Runtime(ctx, id)
+	if err != nil {
+		return target, err
+	}
+	info, err := client.Info(ctx)
+	if err != nil {
+		return target, err
+	}
+	target.OS, target.Architecture = info.OSType, info.Architecture
+	switch target.Architecture {
+	case "x86_64":
+		target.Architecture = "amd64"
+	case "aarch64":
+		target.Architecture = "arm64"
+	case "armv7l":
+		target.Architecture = "arm"
+		target.Variant = "v7"
+	case "armv6l":
+		target.Architecture = "arm"
+		target.Variant = "v6"
+	}
+	return target, nil
+}
+
 func (s *Service) Close() error {
 	s.Stop()
 	s.mu.Lock()

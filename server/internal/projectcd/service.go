@@ -20,6 +20,7 @@ import (
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/deployment"
 	gitrepo "github.com/suma/suma/server/internal/git"
+	"github.com/suma/suma/server/internal/imageupdate"
 	"github.com/suma/suma/server/internal/secret"
 	"github.com/suma/suma/server/internal/task"
 	"github.com/suma/suma/server/internal/taskcenter"
@@ -38,21 +39,23 @@ type Actor struct {
 	CheckOnly    bool
 }
 type Dependencies struct {
-	Inspect func(context.Context, string, string) (compose.RuntimeProjectSnapshot, error)
-	Project func(context.Context, string) (*compose.Service, error)
-	Target  func(context.Context, string) (compose.Target, error)
+	PrepareTarget func(context.Context, string) (compose.Target, error)
+	Inspect       func(context.Context, string, string) (compose.RuntimeProjectSnapshot, error)
+	Project       func(context.Context, string) (*compose.Service, error)
+	Target        func(context.Context, string) (compose.Target, error)
 }
 type Service struct {
-	automation  *taskcenter.Service
-	db          *gorm.DB
-	git         gitrepo.Client
-	credentials *gitrepo.CredentialService
-	registries  *credential.RegistryService
-	runner      *compose.CLIRunner
-	tasks       *task.Service
-	audit       *audit.Service
-	secrets     *secret.Store
-	deps        Dependencies
+	imageResolver imageupdate.Resolver
+	automation    *taskcenter.Service
+	db            *gorm.DB
+	git           gitrepo.Client
+	credentials   *gitrepo.CredentialService
+	registries    *credential.RegistryService
+	runner        *compose.CLIRunner
+	tasks         *task.Service
+	audit         *audit.Service
+	secrets       *secret.Store
+	deps          Dependencies
 }
 
 func New(db *gorm.DB, git gitrepo.Client, credentials *gitrepo.CredentialService, registries *credential.RegistryService, runner *compose.CLIRunner, tasks *task.Service, audits *audit.Service, secrets *secret.Store, deps Dependencies) *Service {
@@ -105,6 +108,8 @@ type Preview struct {
 	RepositoryEnvironment string       `json:"repository_environment"`
 }
 type snapshot struct {
+	ForceRecreate         bool
+	Frozen                *deployment.FrozenNode
 	Repository            gitrepo.Repository
 	Worktree              string
 	Environment           map[string]string
@@ -482,7 +487,7 @@ func (s *Service) record(ctx context.Context, row database.ProjectCD, id uint) (
 	err := s.db.WithContext(ctx).Where("project_cd_id = ? AND id = ?", row.ID, id).First(&value).Error
 	return value, err
 }
-func (s *Service) Records(ctx context.Context, node, name string, page int) ([]database.ProjectCDRecord, int64, error) {
+func (s *Service) Records(ctx context.Context, node, name string, page int, includeChecks ...bool) ([]database.ProjectCDRecord, int64, error) {
 	row, err := s.row(ctx, node, name)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return []database.ProjectCDRecord{}, 0, nil
@@ -491,6 +496,9 @@ func (s *Service) Records(ctx context.Context, node, name string, page int) ([]d
 		return nil, 0, err
 	}
 	query := s.db.WithContext(ctx).Model(&database.ProjectCDRecord{}).Where("project_cd_id = ?", row.ID)
+	if len(includeChecks) > 0 && !includeChecks[0] {
+		query = query.Where("operation NOT IN ?", []string{"check", "prepare"})
+	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -557,7 +565,7 @@ func (s *Service) Preview(ctx context.Context, node, name string) (Preview, erro
 	return result, nil
 }
 
-func (s *Service) submit(ctx context.Context, node, name, operation, trigger string, actor Actor, work func(context.Context, *database.ProjectCDRecord, database.ProjectCD, task.Reporter) error) (database.Task, error) {
+func (s *Service) submit(ctx context.Context, node, name, operation, trigger string, actor Actor, work func(context.Context, *database.ProjectCDRecord, database.ProjectCD, task.Reporter) error, admissions ...func(*gorm.DB, database.Task) error) (database.Task, error) {
 	project, err := s.deps.Project(ctx, node)
 	if err != nil {
 		return database.Task{}, err
@@ -583,8 +591,13 @@ func (s *Service) submit(ctx context.Context, node, name, operation, trigger str
 		release()
 		return database.Task{}, err
 	}
+	var admission func(*gorm.DB, database.Task) error
+	if len(admissions) > 0 {
+		admission = admissions[0]
+	}
 	result, err := s.tasks.StartDefinition(context.Background(), task.Definition{
-		Type: "project.cd." + operation, Name: operation + " " + name,
+		Admit: admission,
+		Type:  "project.cd." + operation, Name: operation + " " + name,
 		NodeID: node, NodeName: target.NodeName,
 		Params:       map[string]any{"project": name, "operation": operation, "trigger": trigger, "revision": row.Revision},
 		TriggerRunID: actor.TriggerRunID,
@@ -641,6 +654,9 @@ func (s *Service) submit(ctx context.Context, node, name, operation, trigger str
 	return result, err
 }
 func (s *Service) Check(ctx context.Context, node, name, trigger string, actor Actor) (database.Task, error) {
+	if trigger == "manual" {
+		actor.CheckOnly = true
+	}
 	if s.automation != nil && actor.TriggerRunID == 0 {
 		reason := taskcenter.ReasonManual
 		if trigger == "webhook" {
@@ -655,111 +671,116 @@ func (s *Service) Check(ctx context.Context, node, name, trigger string, actor A
 		return s.tasks.Get(ctx, run.TaskID)
 	}
 	return s.submit(ctx, node, name, "check", trigger, actor, func(ctx context.Context, record *database.ProjectCDRecord, row database.ProjectCD, report task.Reporter) error {
-		now := time.Now().UTC()
-		if err := s.db.WithContext(ctx).Model(&row).Update("last_check_at", now).Error; err != nil {
-			return err
+		return s.check(ctx, record, row, actor, report)
+	})
+}
+
+func (s *Service) check(ctx context.Context, record *database.ProjectCDRecord, row database.ProjectCD, actor Actor, report task.Reporter) error {
+	node, name, trigger := row.NodeID, row.ProjectName, record.Trigger
+	now := time.Now().UTC()
+	if err := s.db.WithContext(ctx).Model(&row).Update("last_check_at", now).Error; err != nil {
+		return err
+	}
+	var repository gitrepo.Repository
+	if err := json.Unmarshal([]byte(row.RepositoryJSON), &repository); err != nil {
+		return err
+	}
+	material, _, err := s.credential(ctx, node, repository, row.CredentialCiphertext)
+	if err != nil {
+		return err
+	}
+	report(5, "Fetching Git repository")
+	revision, err := s.git.Sync(ctx, gitrepo.SyncRequest{ProjectID: row.ID, Repository: repository, Credential: material}, io.Discard)
+	if err != nil {
+		return err
+	}
+	if err := s.git.Verify(ctx, revision.WorktreePath, revision.CommitSHA); err != nil {
+		return err
+	}
+	spec, err := deployment.Spec(name, revision.WorktreePath, repository)
+	if err != nil {
+		return err
+	}
+	spec.Environment, err = deployment.DecryptEnvironment(s.secrets, row.EnvironmentCiphertext)
+	if err != nil {
+		return err
+	}
+	target, err := s.deps.Target(ctx, node)
+	if err != nil {
+		return err
+	}
+	runner := s.runner.ForTarget(target)
+	report(25, "Validating Compose configuration")
+	if err := runner.ValidateRelease(ctx, spec, io.Discard); err != nil {
+		return errors.New("Compose validation failed; private diagnostic hidden")
+	}
+	rendered, err := runner.Render(ctx, spec, io.Discard)
+	if err != nil {
+		return errors.New("Compose rendering failed; private diagnostic hidden")
+	}
+	if err := deployment.ValidateTarget(spec, rendered, target.RemoteSources); err != nil {
+		return fmt.Errorf("Git deployment policy rejected configuration: %s", compose.RedactEnvironment(err.Error(), spec.Environment))
+	}
+	var ids []uint
+	if err := json.Unmarshal([]byte(row.RegistryCredentialIDsJSON), &ids); err != nil {
+		return err
+	}
+	value := snapshot{Repository: repository, Worktree: revision.WorktreePath, Environment: spec.Environment, RegistryCredentialIDs: ids, DeploymentTimeout: row.DeploymentTimeout, GitCredentialID: row.GitCredentialID, CredentialCiphertext: row.CredentialCiphertext, RuntimeIdentity: target.RuntimeIdentity, Rendered: rendered}
+	value.AutoRollback = row.AutoRollback
+	cipher, err := s.encrypt(value)
+	if err != nil {
+		return err
+	}
+	record.CommitSHA = revision.CommitSHA
+	record.CommitMessage = revision.CommitMessage
+	record.ConfigHash = deployment.ConfigurationHash(rendered, spec.Environment)
+	record.SnapshotCiphertext = cipher
+	if err := s.db.WithContext(ctx).Save(record).Error; err != nil {
+		return err
+	}
+	if err := s.db.WithContext(ctx).Model(&row).Update("candidate_record_id", record.ID).Error; err != nil {
+		return err
+	}
+	if row.ReconcileMode == "auto" && row.AutomationEnabled && !row.InitialApplicationRequired && !actor.CheckOnly {
+		if row.FailedFingerprint == record.CommitSHA+record.ConfigHash {
+			report(100, "Previous application failed; manual retry required")
+			return nil
 		}
-		var repository gitrepo.Repository
-		if err := json.Unmarshal([]byte(row.RepositoryJSON), &repository); err != nil {
-			return err
-		}
-		material, _, err := s.credential(ctx, node, repository, row.CredentialCiphertext)
-		if err != nil {
-			return err
-		}
-		report(5, "Fetching Git repository")
-		revision, err := s.git.Sync(ctx, gitrepo.SyncRequest{ProjectID: row.ID, Repository: repository, Credential: material}, io.Discard)
-		if err != nil {
-			return err
-		}
-		if err := s.git.Verify(ctx, revision.WorktreePath, revision.CommitSHA); err != nil {
-			return err
-		}
-		spec, err := deployment.Spec(name, revision.WorktreePath, repository)
-		if err != nil {
-			return err
-		}
-		spec.Environment, err = deployment.DecryptEnvironment(s.secrets, row.EnvironmentCiphertext)
-		if err != nil {
-			return err
-		}
-		target, err := s.deps.Target(ctx, node)
-		if err != nil {
-			return err
-		}
-		runner := s.runner.ForTarget(target)
-		report(25, "Validating Compose configuration")
-		if err := runner.ValidateRelease(ctx, spec, io.Discard); err != nil {
-			return errors.New("Compose validation failed; private diagnostic hidden")
-		}
-		rendered, err := runner.Render(ctx, spec, io.Discard)
-		if err != nil {
-			return errors.New("Compose rendering failed; private diagnostic hidden")
-		}
-		if err := deployment.ValidateTarget(spec, rendered, target.RemoteSources); err != nil {
-			return fmt.Errorf("Git deployment policy rejected configuration: %s", compose.RedactEnvironment(err.Error(), spec.Environment))
-		}
-		var ids []uint
-		if err := json.Unmarshal([]byte(row.RegistryCredentialIDsJSON), &ids); err != nil {
-			return err
-		}
-		value := snapshot{Repository: repository, Worktree: revision.WorktreePath, Environment: spec.Environment, RegistryCredentialIDs: ids, DeploymentTimeout: row.DeploymentTimeout, GitCredentialID: row.GitCredentialID, CredentialCiphertext: row.CredentialCiphertext, RuntimeIdentity: target.RuntimeIdentity, Rendered: rendered}
-		value.AutoRollback = row.AutoRollback
-		cipher, err := s.encrypt(value)
-		if err != nil {
-			return err
-		}
-		record.CommitSHA = revision.CommitSHA
-		record.CommitMessage = revision.CommitMessage
-		record.ConfigHash = deployment.ConfigurationHash(rendered, spec.Environment)
-		record.SnapshotCiphertext = cipher
-		if err := s.db.WithContext(ctx).Save(record).Error; err != nil {
-			return err
-		}
-		if err := s.db.WithContext(ctx).Model(&row).Update("candidate_record_id", record.ID).Error; err != nil {
-			return err
-		}
-		if row.ReconcileMode == "auto" && row.AutomationEnabled && !row.InitialApplicationRequired && !actor.CheckOnly {
-			if row.FailedFingerprint == record.CommitSHA+record.ConfigHash {
-				report(100, "Previous application failed; manual retry required")
-				return nil
-			}
-			if row.AppliedRecordID != nil {
-				applied, err := s.record(ctx, row, *row.AppliedRecordID)
-				if err != nil {
-					return err
-				}
-				if applied.CommitSHA == record.CommitSHA && applied.ConfigHash == record.ConfigHash {
-					report(100, "Already synchronized")
-					return nil
-				}
-			}
-			apply := database.ProjectCDRecord{ProjectCDID: row.ID, Operation: "apply", Trigger: trigger, Status: "running", TaskID: record.TaskID, Actor: actor.Name, Revision: row.Revision, CommitSHA: record.CommitSHA, CommitMessage: record.CommitMessage, ConfigHash: record.ConfigHash, SnapshotCiphertext: record.SnapshotCiphertext}
-			apply.SourceRecordID = &record.ID
-			if err := s.db.WithContext(ctx).Create(&apply).Error; err != nil {
+		if row.AppliedRecordID != nil {
+			applied, err := s.record(ctx, row, *row.AppliedRecordID)
+			if err != nil {
 				return err
 			}
-			applyErr := s.applyWithRollback(ctx, row, &apply, report)
-			finished := time.Now().UTC()
-			status := "succeeded"
-			reason := ""
-			if applyErr != nil {
-				status = "failed"
-				reason = applyErr.Error()
+			if applied.CommitSHA == record.CommitSHA && applied.ConfigHash == record.ConfigHash {
+				report(100, "Already synchronized")
+				return nil
 			}
-			if err := s.db.WithContext(context.WithoutCancel(ctx)).Model(&apply).Updates(map[string]any{"status": status, "failure_reason": reason, "finished_at": finished}).Error; err != nil {
+		}
+		apply := database.ProjectCDRecord{ProjectCDID: row.ID, Operation: "apply", Trigger: trigger, Status: "running", TaskID: record.TaskID, Actor: actor.Name, Revision: row.Revision, CommitSHA: record.CommitSHA, CommitMessage: record.CommitMessage, ConfigHash: record.ConfigHash, SnapshotCiphertext: record.SnapshotCiphertext}
+		apply.SourceRecordID = &record.ID
+		if err := s.db.WithContext(ctx).Create(&apply).Error; err != nil {
+			return err
+		}
+		applyErr := s.applyWithRollback(ctx, row, &apply, report)
+		finished := time.Now().UTC()
+		status := "succeeded"
+		reason := ""
+		if applyErr != nil {
+			status = "failed"
+			reason = applyErr.Error()
+		}
+		if err := s.db.WithContext(context.WithoutCancel(ctx)).Model(&apply).Updates(map[string]any{"status": status, "failure_reason": reason, "finished_at": finished}).Error; err != nil {
+			return errors.Join(applyErr, err)
+		}
+		if s.audit != nil {
+			if err := s.audit.RecordLinkedForNode(context.WithoutCancel(ctx), node, target.NodeName, actor.UserID, "project.cd.apply", "project", name, actor.IP, status, record.TaskID, nil); err != nil {
 				return errors.Join(applyErr, err)
 			}
-			if s.audit != nil {
-				if err := s.audit.RecordLinkedForNode(context.WithoutCancel(ctx), node, target.NodeName, actor.UserID, "project.cd.apply", "project", name, actor.IP, status, record.TaskID, nil); err != nil {
-					return errors.Join(applyErr, err)
-				}
-			}
-			return applyErr
 		}
-		report(100, "Git configuration checked; ready for review")
-		return nil
-	})
+		return applyErr
+	}
+	report(100, "Git configuration checked; ready for review")
+	return nil
 }
 func (s *Service) Apply(ctx context.Context, node, name string, id uint, revision uint64, rollback bool, actor Actor) (database.Task, error) {
 	row, err := s.row(ctx, node, name)
@@ -778,6 +799,9 @@ func (s *Service) Apply(ctx context.Context, node, name string, id uint, revisio
 	}
 	if source.Status != "succeeded" || len(source.SnapshotCiphertext) == 0 || rollback && source.Operation == "check" {
 		return database.Task{}, errors.New("choose a successful application record")
+	}
+	if rollback && !source.ImagesPinned {
+		return database.Task{}, errors.New("historical image identity is unavailable; explicitly reapply configuration")
 	}
 	if !rollback && (source.Revision != row.Revision || row.CandidateRecordID == nil || *row.CandidateRecordID != id) {
 		return database.Task{}, ErrConflict
@@ -829,10 +853,31 @@ func (s *Service) apply(ctx context.Context, row database.ProjectCD, record *dat
 	if err != nil {
 		return err
 	}
+	if value.Frozen == nil {
+		if record.Operation != "apply" {
+			return errors.New("historical image identity is unavailable; explicitly reapply configuration")
+		}
+		if err := s.freezeSnapshot(ctx, row, record, &value); err != nil {
+			return err
+		}
+		record.SnapshotCiphertext, err = s.encrypt(value)
+		if err != nil {
+			return err
+		}
+		if err := s.db.WithContext(ctx).Save(record).Error; err != nil {
+			return err
+		}
+	}
+	if !record.ImagesPinned {
+		record.ImagesPinned = true
+		if err := s.db.WithContext(ctx).Model(record).Update("images_pinned", true).Error; err != nil {
+			return err
+		}
+	}
 	if err := s.git.Verify(ctx, value.Worktree, record.CommitSHA); err != nil {
 		return err
 	}
-	if _, _, err := s.credential(ctx, row.NodeID, value.Repository, value.CredentialCiphertext); err != nil {
+	if err := s.snapshotCredential(ctx, row, value); err != nil {
 		return err
 	}
 	target, err := s.deps.Target(ctx, row.NodeID)
@@ -847,7 +892,7 @@ func (s *Service) apply(ctx context.Context, row database.ProjectCD, record *dat
 		return err
 	}
 	spec.Environment = value.Environment
-	spec.ForceRecreate = force
+	spec.ForceRecreate = force || value.ForceRecreate || record.Operation == "retry"
 	runner := s.runner.ForTarget(target)
 	rendered, err := runner.Render(ctx, spec, io.Discard)
 	if err != nil {
@@ -859,6 +904,8 @@ func (s *Service) apply(ctx context.Context, row database.ProjectCD, record *dat
 	if err := deployment.ValidateTarget(spec, rendered, target.RemoteSources); err != nil {
 		return errors.New("Git deployment policy rejected configuration")
 	}
+	baseSpec := spec
+	spec = value.Frozen.Apply(spec)
 	config, err := deployment.RegistryConfiguration(ctx, s.registries, row.NodeID, value.RegistryCredentialIDs)
 	if err != nil {
 		return err
@@ -885,6 +932,16 @@ func (s *Service) apply(ctx context.Context, row database.ProjectCD, record *dat
 		}
 		if current.RuntimeIdentity != target.RuntimeIdentity {
 			return errors.New("node runtime changed during image pull")
+		}
+		if err := s.git.Verify(ctx, value.Worktree, record.CommitSHA); err != nil {
+			return err
+		}
+		currentConfiguration, err := runner.Render(ctx, baseSpec, io.Discard)
+		if err != nil || deployment.ConfigurationHash(currentConfiguration, baseSpec.Environment) != record.ConfigHash {
+			return errors.New("configuration snapshot changed during image pull")
+		}
+		if _, err := deployment.RegistryConfiguration(ctx, s.registries, row.NodeID, value.RegistryCredentialIDs); err != nil {
+			return err
 		}
 		return nil
 	})

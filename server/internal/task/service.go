@@ -53,6 +53,8 @@ type RecordedWork func(context.Context, string, Reporter) (any, error)
 // Definition describes a task launched with its input parameters recorded.
 // A non-empty NodeID selects node scope, an empty one the control plane.
 type Definition struct {
+	// Admit links a confirmed business snapshot in the same transaction as its Task.
+	Admit        func(*gorm.DB, database.Task) error
 	Type         string
 	Name         string
 	NodeID       string
@@ -167,6 +169,11 @@ func (s *Service) startWithID(ctx context.Context, scope string, def Definition,
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&row).Error; err != nil {
 			return err
+		}
+		if def.Admit != nil {
+			if err := def.Admit(tx, row); err != nil {
+				return err
+			}
 		}
 		if def.TriggerRunID != 0 {
 			var trigger database.TaskCenterScheduleRun

@@ -28,6 +28,8 @@ type namedRuntimeRunner struct {
 	names []string
 }
 
+func (r *namedRuntimeRunner) Targeted(compose.Target) compose.Runner { return r }
+
 func (r *namedRuntimeRunner) UpRelease(ctx context.Context, spec compose.ExecutionSpec, timeout int, output io.Writer) error {
 	r.mu.Lock()
 	r.names = append(r.names, spec.ProjectName)
@@ -72,7 +74,7 @@ func TestNamedCDDeploymentPassesTheSavedNameToTheRunner(t *testing.T) {
 			if err := h.db.Model(&h.project).Update("deployment_name", deploymentName).Error; err != nil {
 				t.Fatal(err)
 			}
-			if err := h.db.Create(&database.Node{ID: "local", Name: "Aliyun", ConnectionType: "unix", Endpoint: "unix:///docker.sock", Enabled: true}).Error; err != nil {
+			if err := h.db.Save(&database.Node{ID: "local", Name: "Aliyun", ConnectionType: "unix", Endpoint: "unix:///docker.sock", Enabled: true}).Error; err != nil {
 				t.Fatal(err)
 			}
 			if err := h.db.Create(&database.DeliveryProjectNode{ProjectID: h.project.ID, NodeID: "local"}).Error; err != nil {
@@ -99,7 +101,7 @@ func TestNamedCDDeploymentDoesNotPullOrApplyAForeignNamespace(t *testing.T) {
 	if err := h.db.Model(&h.project).Update("deployment_name", h.project.Name).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := h.db.Create(&database.Node{ID: "local", Name: "Aliyun", ConnectionType: "unix", Endpoint: "unix:///docker.sock", Enabled: true}).Error; err != nil {
+	if err := h.db.Save(&database.Node{ID: "local", Name: "Aliyun", ConnectionType: "unix", Endpoint: "unix:///docker.sock", Enabled: true}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := h.db.Create(&database.DeliveryProjectNode{ProjectID: h.project.ID, NodeID: "local"}).Error; err != nil {
@@ -107,7 +109,7 @@ func TestNamedCDDeploymentDoesNotPullOrApplyAForeignNamespace(t *testing.T) {
 	}
 	h.service.SetTargetResolver(&namedRuntimeResolver{snapshot: compose.RuntimeProjectSnapshot{Volumes: []compose.RuntimeVolume{{Name: "production_data"}}}})
 	h.service.compose = &targetedFakeRunner{fakeComposeRunner: h.runner, runners: map[string]compose.Runner{"local": h.runner}}
-	sync, err := h.service.Sync(context.Background(), h.project.Name, "manual", Actor{Name: "operator"})
+	sync, err := h.service.Sync(context.Background(), h.project.Name, "poll", Actor{Name: "operator"})
 	if err != nil {
 		t.Fatal(err)
 	}

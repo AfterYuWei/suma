@@ -66,3 +66,15 @@ func TestPreviewRedactionPreservesJSONStructureWithShortSecrets(t *testing.T) {
 		t.Fatal("display redaction corrupted metadata or leaked a value")
 	}
 }
+
+func TestPreviewRedactsRepositorySecretsWithoutManualOverrides(t *testing.T) {
+	raw := `{"services":{"app":{"image":"example/app:latest","environment":{"PASSWORD":"repository-private-value","APP_ENV":"production"},"command":["run","repository-private-value"]}}}`
+	redacted, err := RedactConfiguration(raw, nil)
+	if err != nil || strings.Contains(redacted, "repository-private-value") || !strings.Contains(redacted, "production") {
+		t.Fatal("repository secret escaped preview redaction", err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal([]byte(redacted), &document); err != nil {
+		t.Fatal("redaction damaged configuration structure", err)
+	}
+}

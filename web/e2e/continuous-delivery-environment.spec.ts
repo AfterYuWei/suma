@@ -11,6 +11,7 @@ async function openDraft(page: Page, name: string, zh = false, theme = 'dark') {
   const form = page.getByRole('form', { name: zh ? '新建交付项目配置' : 'New delivery project configuration', exact: true })
   await form.getByLabel(zh ? '项目名称' : 'Project name', { exact: true }).fill(name)
   await form.getByLabel('Git Clone URL', { exact: true }).fill('https://git.example.test/deploy.git')
+  await form.getByRole('checkbox', { name: zh ? '保存后准备首次发布，确认前不改变容器' : 'Prepare the first release after saving; containers change only after confirmation', exact: true }).uncheck()
   return form
 }
 
@@ -54,7 +55,7 @@ for (const zh of [false, true]) for (const theme of ['dark', 'light']) for (cons
     await input.press('Escape')
     await expect(dialog).toHaveCount(0)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-    await form.getByRole('button', { name: zh ? '创建交付项目' : 'Create delivery project', exact: true }).click()
+    await form.getByRole('button', { name: zh ? '仅创建并保存' : 'Create and save only', exact: true }).click()
     await expect(page).toHaveURL(/\/continuous-delivery\/quick-/)
     await page.getByRole('tab', { name: zh ? '设置' : 'Settings', exact: true }).click()
     const edit = page.getByRole('form', { name: zh ? '交付项目配置' : 'Delivery project configuration', exact: true })
@@ -70,7 +71,7 @@ test('quick add replaces saved names only when selected and cancellation clears 
   const input = dialog.getByLabel('KEY=VALUE', { exact: true })
   await input.fill('PASSWORD=original')
   await dialog.getByRole('button', { name: 'Add to form', exact: true }).click()
-  await form.getByRole('button', { name: 'Create delivery project', exact: true }).click()
+  await form.getByRole('button', { name: 'Create and save only', exact: true }).click()
   await expect(page).toHaveURL('/continuous-delivery/quick-saved')
   await page.getByRole('tab', { name: 'Settings', exact: true }).click()
   const edit = page.getByRole('form', { name: 'Delivery project configuration', exact: true })

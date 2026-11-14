@@ -54,6 +54,7 @@ export interface CDEnvironmentVariable {
 }
 
 export interface CDConfiguration {
+	initial_application_required?: boolean
   automation_version?: number
   environment?: CDEnvironmentVariable[]
 	automation_enabled: boolean
@@ -107,6 +108,10 @@ export interface CDDrift {
 }
 
 export interface CDNodeDrift {
+	runtime_available?: boolean
+	runtime_healthy?: boolean
+	health_checks?: number
+	runtime_containers?: number
   node_id: string
   node_name: string
   status: 'healthy' | 'degraded' | 'unknown'
@@ -122,7 +127,7 @@ export interface CDNodeDrift {
 export interface DeliveryDeploymentAttempt {
   id: number
   deployment_id: number
-  operation: 'deploy' | 'retry' | 'manual_rollback' | 'auto_rollback'
+  operation: 'deploy' | 'retry' | 'manual_rollback' | 'auto_rollback' | 'rollback_failed'
   target_release_id: number
   task_id?: string
   status: string
@@ -249,6 +254,7 @@ export function repositoryName(value: string) {
 }
 
 export interface DeliveryRecord {
+	images_pinned?: boolean
   id: number
   project_id: number
   release_id: number

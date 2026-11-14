@@ -707,7 +707,7 @@ export function ComposeDetailPage() {
                         ? zh
                           ? '服务'
                           : 'Services'
-                        : name === 'CD' ? 'CD' : zh
+                        : name === 'CD' ? (zh ? '发布' : 'Publish') : zh
                           ? '日志'
                           : 'Logs'}
                   </TabsTrigger>

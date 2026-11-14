@@ -26,17 +26,21 @@ async function setup(page:Page,language='en-US',theme='dark',gitops=true){
   else if(path.endsWith('/gitops') && request.method()==='PUT'){mode=true;config={...config,...body,configured:true,enabled:true,revision:config.revision+1,environment:storeVariables(body.environment as {name:string;value?:string}[])} as typeof config;data=config}
   else if(path.endsWith('/gitops/drift'))data={status:'healthy',reason:'hash_and_health_match'}
   else if(path.endsWith('/gitops/preview'))data={record_id:record.id,commit_sha:record.commit_sha,applied:!!config.applied,compose:source,files:[{path:'compose.yml',content:source},{path:'override.yml',content:'services: {app: {restart: unless-stopped}}'}],repository_environment:'APP_ENV=production\nPASSWORD=repository-private\n'}
-  else if(path.endsWith('/gitops/records'))data={items:[record,...config.applied?[config.applied]:[]],total:config.applied?2:1}
+  else if(path.endsWith('/gitops/records')) { const rows = [...config.applied ? [config.applied] : [], ...new URL(request.url()).searchParams.get('include_checks') === 'true' ? [record] : []]; data={items: rows,total:rows.length} }
   else if(path.endsWith('/gitops/environment/values'))data=storedVariables
   else if(path.endsWith('/gitops/environment')&&request.method()==='PUT'){config={...config,revision:config.revision+1,environment:storeVariables(body.environment as {name:string;value?:string}[])};data=config}
   else if(path.endsWith('/gitops/apply')){config={...config,initial_application_required:false,applied:{...record,id:2,operation:'apply'}};data={id:'apply-task'}}
   else if(path.endsWith('/gitops/detach')){mode=false;config={...config,enabled:false,automation_enabled:false};data={id:'detach-task'}}
   else if(path.endsWith('/gitops/automation')){config={...config,automation_enabled:body.enabled===true};data=config}
-  else if(path.includes('/tasks/'))data={status:'success',message:'Completed',progress:100}
+  else if(path.endsWith('/gitops/release-plans') && request.method()==='POST')data={id:'prepare-task',status:'success',message:'Prepared'}
+  else if(path.endsWith('/gitops/release-plans') || path.endsWith('/gitops/release-plans/'+ 'f'.repeat(32)))data={id:'f'.repeat(32),expires_at:new Date(Date.now()+600000).toISOString(),operation:'deploy',commit_sha:record.commit_sha,commit_message:'Update app',compose_files:['compose.yml'],images_pinned:true,auto_rollback:false,deployment_timeout:120,nodes:[{node_id:'local',node_name:'Local',previous_commit:'',changed:true,runtime_healthy:true,health_checked:true,can_restore:false,compose_before:'',compose_after:source,images:[{service:'app',declared:'busybox:stable',previous:'',reference:'busybox@sha256:'+'7'.repeat(64),platform:'linux/amd64',changed:true}],services:[{name:'app',action:'create'}],environment:[{name:'API_TOKEN',action:'modify'}]}]}
+  else if(path.endsWith('/confirm')){config={...config,initial_application_required:false,applied:{...record,id:2,operation:'apply'}};data={id:'apply-task',status:'success',message:'Completed'}}
+  else if(path.endsWith('/children') || path.endsWith('/logs'))data=[]
+  else if(path.includes('/tasks/'))data={id:path.split('/').pop(),status:'success',message:'Completed',progress:100,result:{record_id:2}}
   return route.fulfill({json:{code:0,message:'',data}})
  })
  await page.goto('/projects/compose/app')
- await expect(page.getByRole('tab',{name:'CD',exact:true})).toBeVisible()
+ await expect(page.getByRole('tab',{name:/^(发布|Publish)$/})).toBeVisible()
  return {writes,zh:language==='zh-CN',setRevision:(revision:number)=>{config={...config,revision}}}
 }
 for(const language of ['en-US','zh-CN'])for(const theme of ['dark','light'])for(const width of [390,1440]){
@@ -56,8 +60,8 @@ for(const language of ['en-US','zh-CN'])for(const theme of ['dark','light'])for(
   await page.getByRole('option',{name:'override.yml',exact:true}).click()
   await workspace.getByRole('tab',{name:'.env',exact:true}).click();await expect(page.getByTestId('gitops-environment')).toBeVisible()
   await expect(page.getByLabel(`${zh?'变量值':'Variable value'} 1`,{exact:true})).toHaveAttribute('type','password')
-  await page.getByRole('tab',{name:'CD',exact:true}).click();await expect(page.getByText(zh?'项目 CD · 单节点交付':'Project CD · Single-node delivery',{exact:true})).toHaveCount(0);await expect(page.getByRole('heading',{name:zh?'Git 仓库':'Git repository',exact:true})).toBeVisible();await expect(page.getByRole('heading',{name:zh?'目标节点':'Target nodes',exact:true})).toHaveCount(0);await expect(page.getByRole('heading',{name:zh?'手动环境变量':'Manual environment variables',exact:true})).toBeVisible()
-  await expect(page.getByRole('switch',{name:zh?'启用自动交付触发':'Enable automatic delivery triggers'})).toBeEnabled()
+  await page.getByRole('tab',{name:/^(发布|Publish)$/}).click();await page.getByRole('button',{name:/^(发布设置|Release settings)$/}).click();await expect(page.getByText(zh?'项目 CD · 单节点交付':'Project CD · Single-node delivery',{exact:true})).toHaveCount(0);await expect(page.getByRole('heading',{name:zh?'Git 仓库':'Git repository',exact:true})).toBeVisible();await expect(page.getByRole('heading',{name:zh?'目标节点':'Target nodes',exact:true})).toHaveCount(0);await expect(page.getByRole('heading',{name:zh?'手动环境变量':'Manual environment variables',exact:true})).toBeVisible()
+  await expect(page.getByRole('switch',{name:zh?'启用自动检查':'Enable automatic checks'})).toBeEnabled()
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1)).toBe(true)
   await page.screenshot({path:`/tmp/gitops-${language}-${theme}-${width}.png`,fullPage:true})
   const reference=page.getByLabel(zh?'引用类型':'Reference type',{exact:true})
@@ -86,15 +90,20 @@ test('GitOps variable edits stay private and application uses the reviewed candi
  await expect.poll(()=>writes.filter(row=>row.path.endsWith('/environment')).length).toBe(1)
  await expect(page.getByLabel('Variable value 1',{exact:true})).toHaveAttribute('type','password')
 })
-test('GitOps review applies a fixed snapshot and manual mode restores editing',async({page})=>{
+test('GitOps review publishes a fixed plan and manual mode restores editing',async({page})=>{
  const {writes}=await setup(page)
- await page.getByRole('tab',{name:'CD',exact:true}).click()
- await page.getByRole('button',{name:'Review and apply',exact:true}).click()
- await expect(page.getByRole('region',{name:'Application review',exact:true})).toContainText('aaaaaaaa')
- await page.getByRole('button',{name:'Confirm application',exact:true}).click()
- await expect.poll(()=>writes.find(row=>row.path.endsWith('/apply'))?.body).toEqual({candidate_id:1,expected_revision:1})
- await expect(page.getByRole('switch',{name:'Enable automatic delivery triggers'})).toBeEnabled()
- await page.getByRole('button',{name:'Return to manual',exact:true}).click()
+ await page.getByRole('tab',{name:'Publish',exact:true}).click()
+ await page.getByRole('button',{name:'Publish…',exact:true}).click()
+ const release=page.getByRole('dialog')
+ await expect(release.getByRole('heading',{name:'Review this release',exact:true})).toBeVisible()
+ await expect(release).toContainText('a'.repeat(40))
+ await expect(release.locator('[data-slot=checkbox]')).toHaveCount(0)
+ await release.getByRole('button',{name:'Publish to current node',exact:true}).click()
+ await expect.poll(()=>writes.find(row=>row.path.endsWith('/confirm'))?.body).toEqual({node_ids:['local'],force_recreate:false})
+ await expect(release.getByRole('heading',{name:'Release result',exact:true})).toBeVisible()
+ await release.getByRole('button',{name:'Close',exact:true}).first().click()
+ await page.getByRole('button',{name:'Release settings',exact:true}).click()
+ await page.getByRole('button',{name:'Return to manual configuration…',exact:true}).click()
  await page.getByRole('dialog').getByRole('button',{name:'Confirm',exact:true}).click()
  await page.getByRole('tab',{name:'Configuration',exact:true}).click()
  await expect(page.getByRole('button',{name:'Pull & recreate',exact:true})).toBeVisible()
@@ -114,11 +123,12 @@ test('CD environment conflict preserves edits across background configuration re
 })
 test('CD settings conflict retains the original version and repository draft',async({page})=>{
  const {writes,setRevision}=await setup(page)
- await page.getByRole('tab',{name:'CD',exact:true}).click()
+ await page.getByRole('tab',{name:/^(发布|Publish)$/}).click()
+ await page.getByRole('button',{name:/^(发布设置|Release settings)$/}).click()
  await page.getByLabel('Reference',{exact:true}).fill('my-draft')
  setRevision(2)
  await page.waitForResponse(async response=>response.url().endsWith('/gitops') && response.request().method()==='GET' && (await response.json()).data.revision===2)
- await page.getByRole('button',{name:'Save CD settings',exact:true}).click()
+ await page.getByRole('button',{name:'Save settings only',exact:true}).click()
  await expect(page.getByText('CD configuration changed',{exact:true})).toBeVisible()
  await expect(page.getByLabel('Reference',{exact:true})).toHaveValue('my-draft')
  expect(writes.find(row=>row.path.endsWith('/gitops'))?.body.expected_revision).toBe(1)
@@ -128,7 +138,8 @@ test('CD and .env share unsaved variables and save to the same project environme
  const {writes}=await setup(page)
  await page.getByRole('tab',{name:'.env',exact:true}).click()
  await page.getByLabel('Variable value 1',{exact:true}).fill('same-private-draft')
- await page.getByRole('tab',{name:'CD',exact:true}).click()
+ await page.getByRole('tab',{name:/^(发布|Publish)$/}).click()
+ await page.getByRole('button',{name:/^(发布设置|Release settings)$/}).click()
  await expect(page.getByRole('dialog')).toHaveCount(0)
  await expect(page.getByLabel('Variable value 1',{exact:true})).toHaveValue('same-private-draft')
  await page.getByRole('button',{name:'Add variable',exact:true}).click()
@@ -139,7 +150,8 @@ test('CD and .env share unsaved variables and save to the same project environme
  await expect(page.getByLabel('Variable value 2',{exact:true})).toHaveValue('extra-private')
  await page.getByRole('button',{name:'Save variables',exact:true}).click()
  await expect.poll(()=>writes.find(row=>row.path.endsWith('/environment'))?.body.environment).toEqual([{name:'API_TOKEN',has_value:true,value:'same-private-draft'},{name:'EXTRA',value:'extra-private'}])
- await page.getByRole('tab',{name:'CD',exact:true}).click()
+ await page.getByRole('tab',{name:/^(发布|Publish)$/}).click()
+ await page.getByRole('button',{name:/^(发布设置|Release settings)$/}).click()
  await expect(page.getByLabel('Variable value 1',{exact:true})).toHaveValue('')
  await page.getByRole('button',{name:'Show variable values',exact:true}).click()
  await expect(page.getByLabel('Variable value 1',{exact:true})).toHaveValue('same-private-draft')
@@ -148,14 +160,15 @@ test('CD and .env share unsaved variables and save to the same project environme
 
 test('project settings save the shared delivery policy and environment with a fixed node',async({page})=>{
  const {writes}=await setup(page)
- await page.getByRole('tab',{name:'CD',exact:true}).click()
- await page.getByRole('radio',{name:/^Auto\b/}).click()
- await page.getByRole('switch',{name:'Enable automatic delivery triggers',exact:true}).click()
+ await page.getByRole('tab',{name:/^(发布|Publish)$/}).click()
+ await page.getByRole('button',{name:/^(发布设置|Release settings)$/}).click()
+ await page.getByRole('radio',{name:/^Automatic publishing\b/}).click()
+ await page.getByRole('switch',{name:'Enable automatic checks',exact:true}).click()
  await page.getByRole('checkbox',{name:/Automatically roll back failed deployments/}).click()
  await page.getByRole('checkbox',{name:'Enable repository webhook',exact:true}).click()
  await page.getByLabel('Webhook secret',{exact:true}).fill('rotated-webhook-secret')
  await page.getByLabel('Variable value 1',{exact:true}).fill('from-cd-settings')
- await page.getByRole('button',{name:'Save CD settings',exact:true}).click()
+ await page.getByRole('button',{name:'Save settings only',exact:true}).click()
  await expect.poll(()=>writes.find(row=>row.path.endsWith('/gitops'))?.body.reconcile_mode).toBe('auto')
  const saved=writes.find(row=>row.path.endsWith('/gitops'))!.body
  expect(saved.node_ids).toEqual(['local'])
@@ -172,12 +185,12 @@ test('project settings save the shared delivery policy and environment with a fi
 
 test('initial repository connection reviews the original .env without deploying',async({page})=>{
  const {writes}=await setup(page,'en-US','dark',false)
- await page.getByRole('tab',{name:'CD',exact:true}).click()
+ await page.getByRole('tab',{name:/^(发布|Publish)$/}).click()
  await expect(page.getByRole('heading',{name:'Project CD · Single-node delivery',exact:true})).toHaveCount(0)
- await expect(page.getByRole('button',{name:'Connect and save',exact:true})).toBeDisabled()
+ await expect(page.getByRole('button',{name:'Save settings only',exact:true})).toBeDisabled()
  await page.getByRole('button',{name:'Review and import original .env',exact:true}).click()
  await expect(page.getByLabel('Variable name 1',{exact:true})).toHaveValue('APP_ENV')
- await page.getByRole('button',{name:'Connect and save',exact:true}).click()
+ await page.getByRole('button',{name:'Save settings only',exact:true}).click()
  await expect.poll(()=>writes.find(row=>row.path.endsWith('/gitops'))?.body.environment).toEqual([{name:'APP_ENV',value:'production'}])
  expect(writes.find(row=>row.path.endsWith('/gitops'))?.body.reviewed_environment).toBe(true)
  expect(writes.some(row=>row.path.endsWith('/apply')||row.path.endsWith('/check'))).toBe(false)
@@ -185,7 +198,8 @@ test('initial repository connection reviews the original .env without deploying'
 
 test('single-node and batch settings render the same sections except target nodes',async({page})=>{
  await setup(page)
- await page.getByRole('tab',{name:'CD',exact:true}).click()
+ await page.getByRole('tab',{name:/^(发布|Publish)$/}).click()
+ await page.getByRole('button',{name:/^(发布设置|Release settings)$/}).click()
  const single=await page.getByRole('form',{name:'Delivery project configuration',exact:true}).getByRole('heading').allTextContents()
  await page.route('**/api/v1/delivery-projects/app**',async route=>{
   const path=new URL(route.request().url()).pathname
@@ -193,6 +207,7 @@ test('single-node and batch settings render the same sections except target node
   if(path.endsWith('/configuration'))data={configured:true,repository:{clone_url:'https://git.example.test/app.git',ref_type:'branch',ref:'main',compose_files:['compose.yml'],environment_file:'',authentication:{source:'none'}},environment:[],node_ids:['local'],registry_credential_ids:[],reconcile_mode:'manual',automation_enabled:false,auto_rollback:false,sync_interval_seconds:300,deployment_timeout:120,webhook_enabled:false,desired_commit:'',observed_commit:''}
   else if(path.endsWith('/app'))data={id:1,name:'app',configured:true,node_ids:['local']}
   else if(path.endsWith('/drift'))data={nodes:[],status:'healthy',drifted:false}
+  else if(path.endsWith('/records'))data={items:[],total:0,counts:{}}
   await route.fulfill({json:{code:0,message:'',data}})
  })
  await page.goto('/continuous-delivery/app')

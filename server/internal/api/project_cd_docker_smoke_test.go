@@ -57,7 +57,7 @@ func projectCDTransportSmoke(t *testing.T, ctx context.Context, root, nodeID, tr
 		t.Fatal(err)
 	}
 	git := &projectCDSmokeGit{root: worktree, commit: strings.Repeat("c", 40)}
-	service := projectcd.New(db, git, gitrepo.NewCredentialService(db, store), credential.NewRegistryService(db, store), runner, tasks, audit.NewService(db), store, projectcd.Dependencies{Project: func(context.Context, string) (*compose.Service, error) { return current, nil }, Target: func(ctx context.Context, id string) (compose.Target, error) {
+	service := projectcd.New(db, git, gitrepo.NewCredentialService(db, store), credential.NewRegistryService(db, store), runner, tasks, audit.NewService(db), store, projectcd.Dependencies{PrepareTarget: nodes.ResolveDeploymentTarget, Project: func(context.Context, string) (*compose.Service, error) { return current, nil }, Target: func(ctx context.Context, id string) (compose.Target, error) {
 		target, _, err := nodes.ComposeTarget(ctx, id)
 		return target, err
 	}})
@@ -115,8 +115,21 @@ func projectCDTransportSmoke(t *testing.T, ctx context.Context, root, nodeID, tr
 	if err := db.Where("task_id = ?", checked.ID).First(&manual).Error; err != nil || manual.Status != "started" || manual.TriggeredBy != taskcenter.ReasonManual || manual.ScheduleID == nil {
 		t.Fatalf("project CD check bypassed unified admission: %+v %v", manual, err)
 	}
-	applied, err := service.Apply(ctx, nodeID, name, config.Candidate.ID, config.Revision, false, projectcd.Actor{Name: "Smoke"})
+	prepared, err := service.PrepareRelease(ctx, nodeID, name, deployment.PrepareReleaseInput{}, projectcd.Actor{Name: "Smoke"})
+	join(prepared, err)
+	plan, err := service.PreparedRelease(ctx, nodeID, name, prepared.ID)
+	if err != nil || !plan.ImagesPinned || len(plan.Nodes) != 1 || plan.Nodes[0].NodeID != nodeID {
+		t.Fatal("missing single-node pinned plan", err)
+	}
+	if rows, err := current.Services(ctx, name); err != nil || len(rows) != 0 {
+		t.Fatal("release preparation changed containers", err)
+	}
+	applied, err := service.ConfirmRelease(ctx, nodeID, name, plan.ID, deployment.ConfirmReleaseInput{}, projectcd.Actor{Name: "Smoke"})
 	join(applied, err)
+	replayed, err := service.ConfirmRelease(ctx, nodeID, name, plan.ID, deployment.ConfirmReleaseInput{}, projectcd.Actor{Name: "Smoke"})
+	if err != nil || replayed.ID != applied.ID {
+		t.Fatal("project publication confirmation was not idempotent", err)
+	}
 	before, err := current.Services(ctx, name)
 	if err != nil || len(before) != 1 || before[0].State != "running" {
 		t.Fatal("CD did not apply to selected node", err)

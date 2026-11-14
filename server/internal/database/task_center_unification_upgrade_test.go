@@ -71,6 +71,10 @@ func TestTaskCenterUnificationUpgradePreservesEvidence(t *testing.T) {
 				t.Helper()
 				projection := "to_jsonb(t)"
 				switch table {
+				case "delivery_projects":
+					projection += " - 'initial_application_required'"
+				case "project_cd_records":
+					projection += " - 'images_pinned'"
 				case "tasks":
 					projection += " - 'parent_task_id' - 'result_error'"
 					if baseline != "0011_task_center.sql" {

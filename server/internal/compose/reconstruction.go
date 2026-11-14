@@ -565,7 +565,7 @@ func inferRuntimeEnvironment(service string, runtime, image []string, imageOK bo
 }
 
 func newEnvironmentCandidate(service, key, value, source string) EnvironmentCandidate {
-	sensitive := sensitiveEnvironmentKey(key)
+	sensitive := IsSensitiveEnvironmentKey(key)
 	destination, reason := EnvironmentCompose, "Inferred as an explicit service environment value"
 	switch source {
 	case "compose_explicit":
@@ -1146,7 +1146,7 @@ func environmentValue(value any) string {
 	}
 }
 
-func sensitiveEnvironmentKey(key string) bool {
+func IsSensitiveEnvironmentKey(key string) bool {
 	upper := strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(key, "-", "_"), ".", "_"))
 	for _, marker := range []string{"PASSWORD", "PASSWD", "TOKEN", "SECRET", "CREDENTIAL", "API_KEY", "APIKEY", "PRIVATE_KEY", "PRIVATEKEY", "ACCESS_KEY", "ACCESSKEY", "AUTH"} {
 		if strings.Contains(upper, marker) {

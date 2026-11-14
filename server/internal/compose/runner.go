@@ -34,18 +34,23 @@ type Runner interface {
 }
 
 type ExecutionSpec struct {
-	Environment   map[string]string `json:"-"`
-	Services      []string          `json:"-"`
-	Replicas      map[string]int    `json:"-"`
-	ForceRecreate bool              `json:"-"`
-	ProjectName   string
-	ProjectDir    string
-	Files         []string
-	EnvFiles      []string
-	Profiles      []string
+	ImageOverrides    map[string]string `json:"-"`
+	PlatformOverrides map[string]string `json:"-"`
+	Environment       map[string]string `json:"-"`
+	Services          []string          `json:"-"`
+	Replicas          map[string]int    `json:"-"`
+	ForceRecreate     bool              `json:"-"`
+	ProjectName       string
+	ProjectDir        string
+	Files             []string
+	EnvFiles          []string
+	Profiles          []string
 }
 
 type Target struct {
+	OS              string
+	Architecture    string
+	Variant         string
 	RuntimeIdentity string
 	RemoteSources   bool
 	NodeID          string
@@ -115,6 +120,11 @@ func (r *CLIRunner) managedArguments(project string) ([]string, error) {
 	return r.arguments(ExecutionSpec{ProjectName: name, ProjectDir: project})
 }
 func (r *CLIRunner) runSpec(ctx context.Context, spec ExecutionSpec, output io.Writer, args ...string) error {
+	spec, cleanImages, err := prepareImageOverrides(spec)
+	if err != nil {
+		return err
+	}
+	defer cleanImages()
 	spec, cleanEnvironment, err := prepareEnvironment(spec)
 	if err != nil {
 		return err
@@ -148,6 +158,11 @@ func (r *CLIRunner) runSpec(ctx context.Context, spec ExecutionSpec, output io.W
 }
 
 func (r *CLIRunner) captureSpec(ctx context.Context, spec ExecutionSpec, output io.Writer, args ...string) (string, error) {
+	spec, cleanImages, err := prepareImageOverrides(spec)
+	if err != nil {
+		return "", err
+	}
+	defer cleanImages()
 	spec, cleanEnvironment, err := prepareEnvironment(spec)
 	if err != nil {
 		return "", err

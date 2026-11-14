@@ -23,6 +23,7 @@ export function RecordSnapshot({ record, projectName, zh }: { record: DeliveryRe
     : (zh ? '历史配置快照不完整，无法用于回滚。' : record.snapshot_note || 'The historical snapshot is incomplete and cannot be restored.')
   return <div className="flex min-w-0 flex-col gap-3 text-xs">
     {!record.snapshot_complete && <p className="text-amber-600 dark:text-amber-400">{snapshotNote}</p>}
+    {!record.images_pinned && <p className="text-xs text-muted-foreground">{zh ? '此历史记录未固定镜像内容，只能重新应用配置，不能保证恢复原版本。' : 'Historical image contents were not pinned. Reapplying configuration cannot guarantee the original version.'}</p>}
     <dl className="grid min-w-0 gap-2 rounded-lg bg-muted/40 p-3 sm:grid-cols-2 [&_dd]:break-all [&_dt]:text-muted-foreground">
       <div><dt>Commit</dt><dd>{record.commit_sha}</dd></div>
       <div><dt>{zh ? '配置 Hash' : 'Configuration hash'}</dt><dd>{record.config_hash || '—'}</dd></div>
@@ -42,7 +43,7 @@ export function RecordSnapshot({ record, projectName, zh }: { record: DeliveryRe
   </div>
 }
 
-export function DeliveryRecords({ projectName, releases, busy, canDeliver, zh, onRollback }: { projectName: string; releases: DeliveryRelease[]; busy: boolean; canDeliver: boolean; zh: boolean; onRollback: (record: DeliveryRecord) => void }) {
+export function DeliveryRecords({ projectName, releases, busy, canDeliver, zh, onRollback, onRetry, onRestoreFailed }: { projectName: string; releases: DeliveryRelease[]; busy: boolean; canDeliver: boolean; zh: boolean; onRollback: (record: DeliveryRecord) => void; onRetry?: (record: DeliveryRecord) => void; onRestoreFailed?: (record: DeliveryRecord) => void }) {
   const [operation, setOperation] = useState('all'), [status, setStatus] = useState('all'), [releaseID, setReleaseID] = useState('all')
   const [page, setPage] = useState(0), [pageSize, setPageSize] = useState<ListPageSize>(20)
   const { formatDateTime } = useDateTime()
@@ -66,7 +67,7 @@ export function DeliveryRecords({ projectName, releases, busy, canDeliver, zh, o
             <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground"><span>{zh ? `节点：成功 ${record.attempts.filter(a => a.status === 'succeeded').length} / 失败 ${failed}` : `Nodes: ${record.attempts.filter(a => a.status === 'succeeded').length} succeeded / ${failed} failed`}</span><span className="break-all">{zh ? '任务' : 'Task'}: {record.task_id ? <Link to="/tasks" hash={record.task_id} className="underline underline-offset-2">{record.task_id}</Link> : '—'}</span>{record.source_record_id && <span>{zh ? '来源记录' : 'Source record'} #{record.source_record_id}</span>}</div>
             <RecordSnapshot key={record.id} record={record} projectName={projectName} zh={zh} />
             {record.attempts.map(attempt => <div key={attempt.id} className="flex flex-wrap items-start gap-2 rounded-md bg-muted/30 p-2 text-xs"><span>{attempt.node_name || attempt.node_id}</span><ReleaseStatus status={attempt.status} zh={zh} /><span className="min-w-0 break-all text-destructive">{attempt.failure_reason}</span>{attempt.target_record_id && <span className="text-muted-foreground">{zh ? '配置记录' : 'Configuration record'} #{attempt.target_record_id}</span>}{attempt.target_record_id && attempt.target_record_id !== record.id && <NodeRecordSnapshot projectName={projectName} recordID={attempt.target_record_id} zh={zh} />}</div>)}
-            {canDeliver && <Button variant="outline" size="sm" className="w-fit" disabled={busy || !record.snapshot_complete} onClick={() => onRollback(record)}><RotateCcw />{zh ? '回滚' : 'Roll back'}</Button>}
+            {canDeliver && <div className="flex flex-wrap gap-2">{failed > 0 && record.images_pinned && onRetry && <Button size="sm" disabled={busy} onClick={() => onRetry(record)}>{zh ? `重试失败节点（${failed}）…` : `Retry failed nodes (${failed})…`}</Button>}{failed > 0 && onRestoreFailed && <Button variant="ghost" size="sm" disabled={busy} onClick={() => onRestoreFailed(record)}>{zh ? '恢复失败节点…' : 'Restore failed nodes…'}</Button>}{record.attempts.some(attempt => attempt.status === 'succeeded') && <Button variant="outline" size="sm" disabled={busy || !record.snapshot_complete} onClick={() => onRollback(record)}><RotateCcw />{record.images_pinned ? (zh ? '恢复到此版本…' : 'Restore this version…') : (zh ? '重新应用历史配置…' : 'Reapply historical configuration…')}</Button>}</div>}
           </div>
         </details>
       })}

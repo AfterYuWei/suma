@@ -113,6 +113,12 @@ func businessUpgradeFixture(t *testing.T, beforeUpgrade func(*testing.T, string,
 	snapshot := func(table string) string {
 		t.Helper()
 		projection := "to_jsonb(t)"
+		if table == "delivery_projects" {
+			projection += " - 'initial_application_required'"
+		}
+		if table == "project_cd_records" {
+			projection += " - 'images_pinned'"
+		}
 		if table == "tasks" {
 			projection += " - 'parent_task_id' - 'result_error'"
 		}

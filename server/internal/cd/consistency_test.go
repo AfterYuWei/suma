@@ -19,6 +19,8 @@ type delayedPSRunner struct {
 	delay time.Duration
 }
 
+func (r *delayedPSRunner) Targeted(compose.Target) compose.Runner { return r }
+
 func (r *delayedPSRunner) PS(ctx context.Context, spec compose.ExecutionSpec, output io.Writer) (string, error) {
 	timer := time.NewTimer(r.delay)
 	defer timer.Stop()

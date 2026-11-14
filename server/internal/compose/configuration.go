@@ -176,7 +176,7 @@ func (s *Service) ValidateConfiguration(ctx context.Context, name, content, envi
 func hasSensitiveEnvironment(environment string) bool {
 	for _, line := range strings.Split(environment, "\n") {
 		key, _, ok := strings.Cut(strings.TrimSpace(line), "=")
-		if ok && sensitiveEnvironmentKey(strings.TrimSpace(strings.TrimPrefix(key, "export "))) {
+		if ok && IsSensitiveEnvironmentKey(strings.TrimSpace(strings.TrimPrefix(key, "export "))) {
 			return true
 		}
 	}
@@ -208,7 +208,7 @@ func configurationRedactor(content, environment string) func(string) string {
 				complexInline = complexInline || strings.Contains(v, "$")
 				add(v)
 			}
-			if key, text, ok := strings.Cut(v, "="); ok && sensitiveEnvironmentKey(key) {
+			if key, text, ok := strings.Cut(v, "="); ok && IsSensitiveEnvironmentKey(key) {
 				complexInline = complexInline || strings.Contains(text, "$")
 				add(text)
 			}
@@ -218,7 +218,7 @@ func configurationRedactor(content, environment string) func(string) string {
 			}
 		case map[string]any:
 			for key, child := range v {
-				visit(child, sensitive || sensitiveEnvironmentKey(key))
+				visit(child, sensitive || IsSensitiveEnvironmentKey(key))
 			}
 		case []any:
 			for _, child := range v {
@@ -234,7 +234,7 @@ func configurationRedactor(content, environment string) func(string) string {
 	}
 	for _, line := range strings.Split(environment, "\n") {
 		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
-		if !ok || !sensitiveEnvironmentKey(strings.TrimSpace(strings.TrimPrefix(key, "export "))) {
+		if !ok || !IsSensitiveEnvironmentKey(strings.TrimSpace(strings.TrimPrefix(key, "export "))) {
 			continue
 		}
 		value = strings.TrimSpace(value)
@@ -293,7 +293,7 @@ func hasSensitiveConfiguration(content string) bool {
 		switch v := value.(type) {
 		case map[string]any:
 			for key, child := range v {
-				if sensitiveEnvironmentKey(key) {
+				if IsSensitiveEnvironmentKey(key) {
 					return true
 				}
 				if visit(child) {
@@ -305,7 +305,7 @@ func hasSensitiveConfiguration(content string) bool {
 				if text, ok := child.(string); ok {
 					for i, c := range text {
 						if c == '=' {
-							if sensitiveEnvironmentKey(text[:i]) {
+							if IsSensitiveEnvironmentKey(text[:i]) {
 								return true
 							}
 							break

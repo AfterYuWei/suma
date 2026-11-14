@@ -32,6 +32,7 @@ type ProjectCD struct {
 }
 
 type ProjectCDRecord struct {
+	ImagesPinned       bool       `json:"images_pinned"`
 	ID                 uint       `gorm:"primaryKey" json:"id"`
 	ProjectCDID        uint       `gorm:"index;not null" json:"project_cd_id"`
 	SourceRecordID     *uint      `json:"source_record_id,omitempty"`

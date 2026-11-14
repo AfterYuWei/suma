@@ -19,6 +19,9 @@ func fixtureRecord(t *testing.T, h *cdHarness, release *database.DeliveryRelease
 	t.Helper()
 	raw, _ := json.Marshal(nodes)
 	record := database.DeliveryRecord{ProjectID: h.project.ID, ReleaseID: release.ID, Operation: AttemptDeploy, ActorName: "fixture", Status: status, SnapshotComplete: true, ComposeFilesJSON: `["compose.yml"]`, ImageReferences: "[]", WorktreePath: release.WorktreePath, NodeIDsJSON: string(raw), RegistryCredentialIDsJSON: "[]", DeploymentTimeout: 60}
+	if _, err := h.service.freezeRecord(context.Background(), h.project, *release, &record); err != nil {
+		t.Fatal(err)
+	}
 	if err := h.db.Create(&record).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -161,20 +164,23 @@ func TestAutomaticSyncAfterTargetedRetryDoesNotRepublishHealthyNodes(t *testing.
 	}
 }
 
-func TestRollbackTemporaryNodesAndRejectsIncompleteCrossProjectSnapshots(t *testing.T) {
+func TestRollbackRequiresRecordedTargetsAndRejectsIncompleteCrossProjectSnapshots(t *testing.T) {
 	h := newCDHarness(t, ModeManual)
 	ctx := context.Background()
-	if err := h.db.Create(&[]database.Node{{ID: "local", Name: "Local", ConnectionType: "unix", Enabled: true}, {ID: "other", Name: "Other", ConnectionType: "unix", Enabled: true}}).Error; err != nil {
+	if err := h.db.Save(&[]database.Node{{ID: "local", Name: "Local", ConnectionType: "unix", Enabled: true}, {ID: "other", Name: "Other", ConnectionType: "unix", Enabled: true}}).Error; err != nil {
 		t.Fatal(err)
 	}
 	first := syncAndDeploy(t, h)
-	result, err := h.service.Rollback(ctx, h.project.Name, first.ID, *first.LatestRecordID, []string{"other"}, Actor{Name: "operator"})
+	if _, err := h.service.Rollback(ctx, h.project.Name, first.ID, *first.LatestRecordID, []string{"other"}, Actor{Name: "operator"}); err == nil {
+		t.Fatal("restore accepted a node outside the fixed snapshot")
+	}
+	result, err := h.service.Rollback(ctx, h.project.Name, first.ID, *first.LatestRecordID, []string{"local"}, Actor{Name: "operator"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitTask(t, h.db, result.ID, task.StatusSuccess)
 	record, err := h.service.GetRecord(ctx, h.project.Name, result.RecordID)
-	if err != nil || !reflect.DeepEqual(record.NodeIDs, []string{"other"}) {
+	if err != nil || !reflect.DeepEqual(record.NodeIDs, []string{"local"}) {
 		t.Fatal("override not recorded", err)
 	}
 	config, err := h.service.GetConfiguration(ctx, h.project.Name)

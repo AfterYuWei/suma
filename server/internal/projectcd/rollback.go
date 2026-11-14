@@ -35,10 +35,10 @@ func (s *Service) applyWithRollback(ctx context.Context, row database.ProjectCD,
 	if err != nil {
 		return errors.Join(applyErr, err)
 	}
-	if source.Status != "succeeded" || len(source.SnapshotCiphertext) == 0 {
+	if source.Status != "succeeded" || len(source.SnapshotCiphertext) == 0 || !source.ImagesPinned {
 		return errors.Join(applyErr, errors.New("automatic rollback requires a successful configuration snapshot"))
 	}
-	restore := database.ProjectCDRecord{ProjectCDID: row.ID, SourceRecordID: &record.ID, Operation: "auto_rollback", Trigger: "automatic_rollback", Status: "running", TaskID: record.TaskID, Actor: "SUMA", Revision: row.Revision, CommitSHA: source.CommitSHA, CommitMessage: source.CommitMessage, ConfigHash: source.ConfigHash, SnapshotCiphertext: source.SnapshotCiphertext}
+	restore := database.ProjectCDRecord{ImagesPinned: true, ProjectCDID: row.ID, SourceRecordID: &record.ID, Operation: "auto_rollback", Trigger: "automatic_rollback", Status: "running", TaskID: record.TaskID, Actor: "SUMA", Revision: row.Revision, CommitSHA: source.CommitSHA, CommitMessage: source.CommitMessage, ConfigHash: source.ConfigHash, SnapshotCiphertext: source.SnapshotCiphertext}
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(record).Updates(map[string]any{"status": "failed", "failure_reason": applyErr.Error(), "finished_at": time.Now().UTC()}).Error; err != nil {
 			return err

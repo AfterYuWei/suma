@@ -1,3 +1,4 @@
+import {mockReleasePlans, mockPlanNode} from './mock-release-plans'
 import type {ProjectCDConfiguration,ProjectCDRecord} from '../features/project-cd/queries'
 import { createMonitoringMock } from '../features/monitoring/mock'
 import type { Instance } from '../features/monitoring/types'
@@ -567,7 +568,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
         sanitizedAuthentication = { source: 'center', credential_id: credential.id }
       }
       if (input.webhook_enabled && !input.webhook_secret) generatedSecret = crypto.randomUUID().replaceAll('-', '') + crypto.randomUUID().replaceAll('-', '')
-      configuration = { ...input, environment: (input.environment ?? []).map(variable => ({ name: variable.name, has_value: true })), automation_enabled: input.automation_enabled !== false, repository: { ...input.repository, authentication: sanitizedAuthentication }, configured: true, webhook_secret: '', webhook_id: input.webhook_enabled ? `demo-${name}` : undefined, desired_commit: '', observed_commit: '' }
+      configuration = { ...input, initial_application_required: true, environment: (input.environment ?? []).map(variable => ({ name: variable.name, has_value: true })), automation_enabled: input.automation_enabled !== false, repository: { ...input.repository, authentication: sanitizedAuthentication }, configured: true, webhook_secret: '', webhook_id: input.webhook_enabled ? `demo-${name}` : undefined, desired_commit: '', observed_commit: '' }
       deliveryConfigurations.set(name, configuration)
       deliveryEnvironments.set(name, Object.fromEntries((input.environment ?? []).map(variable => [variable.name, variable.value ?? ''])))
     }
@@ -622,7 +623,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
       }
       return clone(deliveryConfigurations.get(name) || cdConfiguration(name)) as T
     }
-    if (suffix === '/drift') return clone({ drifted: false, status: 'healthy', desired_commit: project.desired_commit ?? '', observed_commit: project.observed_commit ?? '', active_commit: project.observed_commit ?? '', active_release_id: project.active_release_id, runtime_healthy: true, checked_at: now, nodes: project.node_ids.map((nodeID) => ({ node_id: nodeID, node_name: nodes.find((item) => item.id === nodeID)?.name ?? nodeID, status: 'healthy' as const, drifted: false, active_release_id: project.active_release_id, active_commit: project.observed_commit, health_summary: '[{"State":"running","Health":"healthy"}]', checked_at: now })) } satisfies CDDrift) as T
+    if (suffix === '/drift') return clone({ drifted: false, status: 'healthy', desired_commit: project.desired_commit ?? '', observed_commit: project.observed_commit ?? '', active_commit: project.observed_commit ?? '', active_release_id: project.active_release_id, runtime_healthy: true, checked_at: now, nodes: project.node_ids.map((nodeID) => ({ node_id: nodeID, node_name: nodes.find((item) => item.id === nodeID)?.name ?? nodeID, runtime_available: true, runtime_healthy: true, health_checks: 1, runtime_containers: 1, status: 'healthy' as const, drifted: false, active_release_id: project.active_release_id, active_commit: project.observed_commit, health_summary: '[{"State":"running","Health":"healthy"}]', checked_at: now })) } satisfies CDDrift) as T
     const recordRows: DeliveryRecord[] = releases.filter(release => release.project_id === project.id).map(release => ({
       id: release.id + 1000, project_id: project.id, release_id: release.id, operation: 'deploy', actor_name: release.trigger_actor, trigger_type: release.trigger_type, status: release.status,
       snapshot_complete: true, config_hash: release.config_hash, image_references: release.image_references, compose_files: release.compose_files, environment_file: '.env', environment: [], node_ids: [...project.node_ids], registry_credential_ids: [1], deployment_timeout: 180, auto_rollback: true, commit_sha: release.commit_sha, commit_message: release.commit_message, created_at: release.created_at,
@@ -630,6 +631,36 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     }))
     const projectRecords = deliveryRecords.get(name) || recordRows.filter(record => record.status !== 'awaiting_approval')
     deliveryRecords.set(name, projectRecords)
+    if (suffix.startsWith('/release-plans')) {
+      const config = clone(deliveryConfigurations.get(name) || cdConfiguration(name))
+      return clone(mockReleasePlans(`batch/${name}`, suffix, method, body, url.searchParams.get('task_id'), JSON.stringify(config), result => completedDemoTask({type: 'cd.prepare', name: `Prepare ${name}`, params: {project: name}, result}), request => {
+        const source = request.source_record_id ? projectRecords.find(record => record.id === request.source_record_id) : undefined
+        const releaseID = source?.release_id ?? request.release_id
+        let selectedRelease = releaseID ? releases.find(release => release.project_id === project.id && release.id === releaseID) : releases.find(release => release.project_id === project.id)
+        if (!selectedRelease && releaseID) throw new ApiError('Git version not found', 17730, 404)
+        if (!selectedRelease) {
+          selectedRelease = {...structuredClone(releases[0]), id: Math.max(0, ...releases.map(release => release.id)) + 1, project_id: project.id, repository_url: config.repository.clone_url, git_ref: config.repository.ref, commit_sha: 'd'.repeat(40), commit_message: 'Demo candidate prepared', status: 'awaiting_approval', latest_record_id: undefined, deployments: [], task_id: undefined, approved_by: undefined, approved_at: undefined, created_at: new Date().toISOString()}
+          releases.unshift(selectedRelease)
+        }
+        const release = selectedRelease
+        if (request.operation !== 'deploy' && !source) throw new ApiError('Publication record not found', 17730, 404)
+        if (source && !source.images_pinned && request.operation !== 'reapply') throw new ApiError('Historical image identity unavailable; reapply configuration explicitly', 17730, 422)
+        const targetIDs = request.operation === 'retry' || request.operation === 'restore-failed' ? source?.attempts.filter(attempt => ['failed', 'interrupted'].includes(attempt.status)).map(attempt => attempt.node_id) ?? [] : source?.node_ids ?? config.node_ids
+        return {view: {operation: request.operation ?? 'deploy', source_record_id: source?.id, release_id: release.id, commit_sha: release.commit_sha, commit_message: release.commit_message, compose_files: config.repository.compose_files, images_pinned: true, auto_rollback: config.auto_rollback, deployment_timeout: config.deployment_timeout, nodes: targetIDs.map(id => mockPlanNode(id, nodes.find(node => node.id === id)?.name ?? id, release.commit_sha, projectRecords.find(record => record.status === 'succeeded')?.id))}, execute: selected => {
+          if ((deliveryConfigurations.get(name) || config).reconcile_mode === 'observe') throw new ApiError('Observe mode does not allow publishing', 17730, 422)
+          const recordID = Math.max(1000, ...projectRecords.map(record => record.id)) + 1
+          const operation = request.operation === 'retry' ? 'retry' as const : request.operation === 'restore-failed' ? 'rollback_failed' as const : request.operation === 'restore' || request.operation === 'reapply' ? 'manual_rollback' as const : 'deploy' as const
+          const evidence = {project: name, record_id: recordID, release_id: release.id, operation}
+          const task = completedDemoTask({type: `cd.${operation}`, name: `Publish ${name}`, params: evidence, result: evidence})
+          const record: DeliveryRecord = {id: recordID, project_id: project.id, release_id: release.id, source_record_id: source?.id, operation, actor_name: user.username, trigger_type: 'manual', task_id: task.id, status: 'succeeded', snapshot_complete: true, images_pinned: true, config_hash: release.config_hash, image_references: JSON.stringify([`docker.io/library/busybox@sha256:${'7'.repeat(64)}`]), compose_files: JSON.stringify(config.repository.compose_files), environment_file: config.repository.environment_file, environment: config.environment ?? [], node_ids: selected, registry_credential_ids: config.registry_credential_ids, deployment_timeout: config.deployment_timeout, auto_rollback: config.auto_rollback, commit_sha: release.commit_sha, commit_message: release.commit_message, created_at: new Date().toISOString(), attempts: selected.map((id, index) => ({id: recordID * 100 + index, deployment_id: index + 1, operation, target_release_id: release.id, node_id: id, node_name: nodes.find(node => node.id === id)?.name ?? id, status: 'succeeded', created_at: new Date().toISOString()}))}
+          selected.forEach(id => completedDemoTask({type: 'cd.deploy.node', name: `Publish to ${id}`, node_id: id, parent_task_id: task.id, params: evidence, result: evidence}))
+          const liveConfig = deliveryConfigurations.get(name); if (liveConfig) liveConfig.initial_application_required = false
+          projectRecords.unshift(record); release.latest_record_id = record.id; release.status = 'succeeded'; release.task_id = task.id; project.active_release_id = release.id
+          if (operation === 'manual_rollback' || operation === 'rollback_failed') {const current = deliveryConfigurations.get(name); if (current) current.reconcile_mode = 'manual'}
+          return task
+        }}
+      })) as T
+    }
     if (suffix === '/records') {
       const filtered = projectRecords.filter(record => (!url.searchParams.has('release_id') || record.release_id === Number(url.searchParams.get('release_id'))) && (!url.searchParams.has('operation') || record.operation === url.searchParams.get('operation')) && (!url.searchParams.has('status') || record.status === url.searchParams.get('status')))
       const page = Number(url.searchParams.get('page') || 1), pageSize = Number(url.searchParams.get('page_size') || 20)
@@ -833,8 +864,24 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
       if(rest.startsWith('/gitops')){
         const action=rest.slice('/gitops'.length)
         if(action==='' && method==='GET')return clone(cd) as T
+        if(action.startsWith('/release-plans')) return clone(mockReleasePlans(`project/${configurationKey}`, action, method, body, url.searchParams.get('task_id'), JSON.stringify(cd), result => completedDemoTask({type: 'project.cd.prepare', name: `Prepare ${name}`, node_id: nodeID, params: {project: name}, result}), request => {
+          const source = request.source_record_id ? records.find(record => record.id === request.source_record_id) : undefined
+          if (request.operation !== 'deploy' && !source) throw new ApiError('Publication record not found', 17730, 404)
+          if (source && !source.images_pinned && request.operation !== 'reapply') throw new ApiError('Historical images are not pinned', 17730, 422)
+          return {view: {operation: request.operation ?? 'deploy', source_record_id: source?.id, commit_sha: source?.commit_sha ?? 'd'.repeat(40), commit_message: source?.commit_message ?? 'Demo Git configuration', compose_files: cd.repository.compose_files, images_pinned: true, auto_rollback: cd.auto_rollback, deployment_timeout: cd.deployment_timeout, nodes: [mockPlanNode(nodeID, nodes.find(node => node.id === nodeID)?.name ?? nodeID, cd.applied?.commit_sha ?? '', cd.applied?.id)]}, execute: () => {
+            if (cd.reconcile_mode === 'observe') throw new ApiError('Observe mode does not allow publishing', 17730, 422)
+            const recordID = Math.max(0, ...records.map(record => record.id)) + 1
+            const operation = request.operation === 'retry' ? 'retry' : request.operation === 'restore' || request.operation === 'reapply' ? 'rollback' : 'apply'
+            const task = completedDemoTask({type: `project.cd.${operation}`, name: `Publish ${name}`, node_id: nodeID, params: {project: name}, result: {project: name, record_id: recordID, operation}})
+            const record: ProjectCDRecord = {id: recordID, operation, status: 'succeeded', task_id: task.id, actor: user.username, revision: cd.revision, commit_sha: source?.commit_sha ?? 'd'.repeat(40), commit_message: 'Demo Git configuration', config_hash: 'e'.repeat(64), created_at: new Date().toISOString(), failure_reason: '', images_pinned: true}
+            records.unshift(record); projectCDRecords.set(configurationKey, records); cd.applied = record; cd.initial_application_required = false
+            if (operation === 'rollback') cd.reconcile_mode = 'manual'
+            projectCDConfigurations.set(configurationKey, cd)
+            return task
+          }}
+        })) as T
         if(action==='/test-connection')return {ref_checked:true,commit_sha:'d'.repeat(40)} as T
-        if(action==='/records')return clone({items:records.slice((Number(url.searchParams.get('page')||1)-1)*20,Number(url.searchParams.get('page')||1)*20),total:records.length}) as T
+        if(action==='/records'){const history=url.searchParams.get('include_checks')==='true'?records:records.filter(record=>!['check','prepare'].includes(record.operation));return clone({items:history.slice((Number(url.searchParams.get('page')||1)-1)*20,Number(url.searchParams.get('page')||1)*20),total:history.length}) as T}
         if(action==='/preview')return clone({record_id:cd.candidate?.id ?? cd.applied?.id,commit_sha:'d'.repeat(40),applied:!!cd.applied,compose:detail.compose,files:cd.repository.compose_files.map(path=>({path,content:detail.compose})),repository_environment:'APP_ENV=production\n'}) as T
         if(action==='/environment/values')return clone(projectCDValues.get(configurationKey) ?? {}) as T
         if(action==='/environment' && method==='GET')return clone(cd.environment) as T

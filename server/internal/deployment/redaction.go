@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"github.com/suma/suma/server/internal/compose"
+	"strings"
 )
 
 // RedactConfiguration preserves structural keys and numeric types even when a
@@ -15,11 +16,37 @@ func RedactConfiguration(raw string, environment map[string]string) (string, err
 	if err := decoder.Decode(&document); err != nil {
 		return "", err
 	}
+	// Repository-provided and literal secrets can occur outside manual overrides.
+	values := make(map[string]string, len(environment))
+	for name, value := range environment {
+		values[name] = value
+	}
+	var collect func(any, bool)
+	collect = func(value any, sensitive bool) {
+		switch typed := value.(type) {
+		case string:
+			if sensitive && typed != "" {
+				values[typed] = typed
+			}
+			if name, text, ok := strings.Cut(typed, "="); ok && compose.IsSensitiveEnvironmentKey(name) && text != "" {
+				values[text] = text
+			}
+		case map[string]any:
+			for key, entry := range typed {
+				collect(entry, sensitive || compose.IsSensitiveEnvironmentKey(key))
+			}
+		case []any:
+			for _, entry := range typed {
+				collect(entry, sensitive)
+			}
+		}
+	}
+	collect(document, false)
 	var visit func(any) any
 	visit = func(value any) any {
 		switch typed := value.(type) {
 		case string:
-			return compose.RedactEnvironment(typed, environment)
+			return compose.RedactEnvironment(typed, values)
 		case map[string]any:
 			for key, entry := range typed {
 				typed[key] = visit(entry)

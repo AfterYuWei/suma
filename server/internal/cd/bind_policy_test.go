@@ -21,7 +21,20 @@ func (r bindTargetResolver) ResolveComposeTarget(_ context.Context, id string) (
 	if !ok {
 		return compose.Target{}, errors.New("unknown test target")
 	}
+	if target.RuntimeIdentity == "" {
+		target.RuntimeIdentity = "fixture-" + id
+	}
 	return target, nil
+}
+
+func (r bindTargetResolver) ResolveDeploymentTarget(ctx context.Context, id string) (compose.Target, error) {
+	target, err := r.ResolveComposeTarget(ctx, id)
+	target.OS = "linux"
+	target.Architecture = "amd64"
+	if target.RuntimeIdentity == "" {
+		target.RuntimeIdentity = "fixture-" + id
+	}
+	return target, err
 }
 
 func TestServiceHostBindPolicyAcrossNodeTransports(t *testing.T) {
@@ -117,7 +130,7 @@ func TestServiceHostBindEngineFailureIsReported(t *testing.T) {
 	writeTestFile(t, filepath.Join(h.git.revision.WorktreePath, "compose.yml"), "services:\n  app:\n    image: example/app:1\n    volumes:\n      - "+source+":/app/application.yml:ro\n")
 	h.runner.SetRendered(renderedBind(source, "/app/application.yml", true))
 	h.runner.up = errors.New("Docker Engine: bind source path does not exist on target host")
-	syncTask, err := h.service.Sync(context.Background(), h.project.Name, "manual", Actor{Name: "operator"})
+	syncTask, err := h.service.Sync(context.Background(), h.project.Name, "poll", Actor{Name: "operator"})
 	if err != nil {
 		t.Fatal(err)
 	}

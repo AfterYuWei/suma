@@ -1011,6 +1011,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		success(c, rows)
 	})
 	delivery := v1.Group("/delivery-projects", requireAuth(deps.Auth))
+	registerBatchReleasePlans(delivery, deps)
 	testGitConnection := func(c *gin.Context) {
 		c.Header("Cache-Control", "no-store")
 		var input cdService.ConnectionInput

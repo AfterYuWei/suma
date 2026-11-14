@@ -22,6 +22,7 @@ import (
 	"github.com/suma/suma/server/internal/deployment"
 	"github.com/suma/suma/server/internal/event"
 	gitrepo "github.com/suma/suma/server/internal/git"
+	"github.com/suma/suma/server/internal/imageupdate"
 	"github.com/suma/suma/server/internal/secret"
 	"github.com/suma/suma/server/internal/task"
 	"github.com/suma/suma/server/internal/taskcenter"
@@ -83,23 +84,24 @@ type ConfigureInput struct {
 }
 
 type Configuration struct {
-	AutomationVersion     uint64                `json:"automation_version,omitempty"`
-	Environment           []EnvironmentVariable `json:"environment"`
-	AutomationEnabled     bool                  `json:"automation_enabled"`
-	Configured            bool                  `json:"configured"`
-	Repository            gitrepo.Repository    `json:"repository"`
-	ReconcileMode         string                `json:"reconcile_mode"`
-	SyncIntervalSeconds   int                   `json:"sync_interval_seconds"`
-	DesiredCommit         string                `json:"desired_commit"`
-	ObservedCommit        string                `json:"observed_commit"`
-	ActiveReleaseID       *uint                 `json:"active_release_id,omitempty"`
-	AutoRollback          bool                  `json:"auto_rollback"`
-	DeploymentTimeout     int                   `json:"deployment_timeout"`
-	WebhookEnabled        bool                  `json:"webhook_enabled"`
-	WebhookID             string                `json:"webhook_id,omitempty"`
-	WebhookSecret         string                `json:"webhook_secret,omitempty"`
-	NodeIDs               []string              `json:"node_ids"`
-	RegistryCredentialIDs []uint                `json:"registry_credential_ids"`
+	InitialApplicationRequired bool                  `json:"initial_application_required"`
+	AutomationVersion          uint64                `json:"automation_version,omitempty"`
+	Environment                []EnvironmentVariable `json:"environment"`
+	AutomationEnabled          bool                  `json:"automation_enabled"`
+	Configured                 bool                  `json:"configured"`
+	Repository                 gitrepo.Repository    `json:"repository"`
+	ReconcileMode              string                `json:"reconcile_mode"`
+	SyncIntervalSeconds        int                   `json:"sync_interval_seconds"`
+	DesiredCommit              string                `json:"desired_commit"`
+	ObservedCommit             string                `json:"observed_commit"`
+	ActiveReleaseID            *uint                 `json:"active_release_id,omitempty"`
+	AutoRollback               bool                  `json:"auto_rollback"`
+	DeploymentTimeout          int                   `json:"deployment_timeout"`
+	WebhookEnabled             bool                  `json:"webhook_enabled"`
+	WebhookID                  string                `json:"webhook_id,omitempty"`
+	WebhookSecret              string                `json:"webhook_secret,omitempty"`
+	NodeIDs                    []string              `json:"node_ids"`
+	RegistryCredentialIDs      []uint                `json:"registry_credential_ids"`
 }
 
 type Project struct {
@@ -135,16 +137,20 @@ type Drift struct {
 }
 
 type NodeDrift struct {
-	NodeID          string    `json:"node_id"`
-	NodeName        string    `json:"node_name"`
-	Status          string    `json:"status"`
-	Drifted         bool      `json:"drifted"`
-	ActiveReleaseID *uint     `json:"active_release_id,omitempty"`
-	ActiveCommit    string    `json:"active_commit,omitempty"`
-	ReasonCode      string    `json:"reason_code,omitempty"`
-	Reason          string    `json:"reason,omitempty"`
-	HealthSummary   string    `json:"health_summary,omitempty"`
-	CheckedAt       time.Time `json:"checked_at"`
+	RuntimeAvailable  bool      `json:"runtime_available"`
+	RuntimeHealthy    bool      `json:"runtime_healthy"`
+	HealthChecks      int       `json:"health_checks"`
+	RuntimeContainers int       `json:"runtime_containers"`
+	NodeID            string    `json:"node_id"`
+	NodeName          string    `json:"node_name"`
+	Status            string    `json:"status"`
+	Drifted           bool      `json:"drifted"`
+	ActiveReleaseID   *uint     `json:"active_release_id,omitempty"`
+	ActiveCommit      string    `json:"active_commit,omitempty"`
+	ReasonCode        string    `json:"reason_code,omitempty"`
+	Reason            string    `json:"reason,omitempty"`
+	HealthSummary     string    `json:"health_summary,omitempty"`
+	CheckedAt         time.Time `json:"checked_at"`
 }
 
 type driftCacheEntry struct {
@@ -162,23 +168,24 @@ type Actor struct {
 }
 
 type Service struct {
-	automation  *taskcenter.Service
-	emit        event.Sink
-	db          *gorm.DB
-	git         gitrepo.Client
-	credentials *gitrepo.CredentialService
-	compose     compose.Runner
-	tasks       *task.Service
-	audit       *audit.Service
-	secrets     *secret.Store
-	mu          sync.Mutex
-	locks       map[uint]*sync.Mutex
-	queued      map[uint]bool
-	targets     TargetResolver
-	registries  *credentialrepo.RegistryService
-	driftMu     sync.Mutex
-	driftCache  map[uint]driftCacheEntry
-	driftFlight map[uint]chan struct{}
+	imageResolver imageupdate.Resolver
+	automation    *taskcenter.Service
+	emit          event.Sink
+	db            *gorm.DB
+	git           gitrepo.Client
+	credentials   *gitrepo.CredentialService
+	compose       compose.Runner
+	tasks         *task.Service
+	audit         *audit.Service
+	secrets       *secret.Store
+	mu            sync.Mutex
+	locks         map[uint]*sync.Mutex
+	queued        map[uint]bool
+	targets       TargetResolver
+	registries    *credentialrepo.RegistryService
+	driftMu       sync.Mutex
+	driftCache    map[uint]driftCacheEntry
+	driftFlight   map[uint]chan struct{}
 }
 
 type TargetResolver interface {
@@ -235,7 +242,7 @@ func (s *Service) CreateProjectOnNodes(ctx context.Context, name string, nodeIDs
 	if !validProjectName.MatchString(name) {
 		return Project{}, errors.New("project name must use 1-128 lowercase letters, numbers, hyphens or underscores, starting with a letter or number")
 	}
-	row := database.DeliveryProject{NodeID: "local", Name: name, DeploymentName: name, ReconcileMode: ModeManual, SyncIntervalSeconds: 300, DeploymentTimeout: 120}
+	row := database.DeliveryProject{InitialApplicationRequired: true, NodeID: "local", Name: name, DeploymentName: name, ReconcileMode: ModeManual, SyncIntervalSeconds: 300, DeploymentTimeout: 120}
 	if err := s.validateNodeIDs(ctx, nodeIDs); err != nil {
 		return Project{}, err
 	}
@@ -451,6 +458,9 @@ func (s *Service) Configure(ctx context.Context, name string, input ConfigureInp
 	if input.AutomationEnabled != nil {
 		updates["automation_enabled"] = *input.AutomationEnabled
 	}
+	if current.GitCloneURL != input.Repository.CloneURL || current.GitRefType != input.Repository.RefType || current.GitRef != input.Repository.Ref || current.ComposeFilesJSON != string(files) || current.EnvironmentFile != input.Repository.EnvironmentFile {
+		updates["initial_application_required"] = true
+	}
 	if !bytes.Equal(current.EnvironmentCiphertext, environment) || current.GitCloneURL != input.Repository.CloneURL || current.GitRefType != input.Repository.RefType || current.GitRef != input.Repository.Ref || current.ComposeFilesJSON != string(files) || current.EnvironmentFile != input.Repository.EnvironmentFile {
 		updates["desired_commit"] = ""
 		updates["observed_commit"] = ""
@@ -564,14 +574,15 @@ func (s *Service) GetConfiguration(ctx context.Context, name string) (Configurat
 	if project.GitCloneURL == "" {
 		nodeIDs, _ := s.projectNodeIDs(ctx, project.ID)
 		return Configuration{
-			AutomationVersion:   automationVersion,
-			AutomationEnabled:   project.AutomationEnabled,
-			Configured:          false,
-			Repository:          gitrepo.Repository{RefType: gitrepo.RefBranch, Ref: "main", Authentication: gitrepo.Authentication{Source: gitrepo.CredentialSourceNone}, ComposeFiles: []string{"compose.yml"}},
-			ReconcileMode:       ModeManual,
-			SyncIntervalSeconds: 300,
-			DeploymentTimeout:   120,
-			NodeIDs:             nodeIDs,
+			InitialApplicationRequired: project.InitialApplicationRequired,
+			AutomationVersion:          automationVersion,
+			AutomationEnabled:          project.AutomationEnabled,
+			Configured:                 false,
+			Repository:                 gitrepo.Repository{RefType: gitrepo.RefBranch, Ref: "main", Authentication: gitrepo.Authentication{Source: gitrepo.CredentialSourceNone}, ComposeFiles: []string{"compose.yml"}},
+			ReconcileMode:              ModeManual,
+			SyncIntervalSeconds:        300,
+			DeploymentTimeout:          120,
+			NodeIDs:                    nodeIDs,
 		}, nil
 	}
 	files := []string{}
@@ -601,12 +612,13 @@ func (s *Service) GetConfiguration(ctx context.Context, name string) (Configurat
 		return Configuration{}, err
 	}
 	return Configuration{
-		AutomationVersion: automationVersion,
-		Environment:       environment,
-		AutomationEnabled: project.AutomationEnabled,
-		Configured:        true,
-		Repository:        gitrepo.Repository{CloneURL: project.GitCloneURL, RefType: project.GitRefType, Ref: project.GitRef, CredentialID: project.GitCredentialID, Authentication: authentication, ComposeFiles: files, EnvironmentFile: project.EnvironmentFile},
-		ReconcileMode:     project.ReconcileMode, SyncIntervalSeconds: project.SyncIntervalSeconds,
+		AutomationVersion:          automationVersion,
+		InitialApplicationRequired: project.InitialApplicationRequired,
+		Environment:                environment,
+		AutomationEnabled:          project.AutomationEnabled,
+		Configured:                 true,
+		Repository:                 gitrepo.Repository{CloneURL: project.GitCloneURL, RefType: project.GitRefType, Ref: project.GitRef, CredentialID: project.GitCredentialID, Authentication: authentication, ComposeFiles: files, EnvironmentFile: project.EnvironmentFile},
+		ReconcileMode:              project.ReconcileMode, SyncIntervalSeconds: project.SyncIntervalSeconds,
 		DesiredCommit: project.DesiredCommit, ObservedCommit: project.ObservedCommit, ActiveReleaseID: project.ActiveReleaseID,
 		AutoRollback: project.AutoRollback, DeploymentTimeout: project.DeploymentTimeout,
 		WebhookEnabled: project.WebhookEnabled, WebhookID: project.WebhookID,
@@ -615,6 +627,9 @@ func (s *Service) GetConfiguration(ctx context.Context, name string) (Configurat
 }
 
 func (s *Service) Sync(ctx context.Context, name, trigger string, actor Actor) (database.Task, error) {
+	if trigger == "manual" {
+		actor.CheckOnly = true
+	}
 	if s.automation != nil && actor.TriggerRunID == 0 {
 		reason := taskcenter.ReasonManual
 		if trigger == "webhook" {
@@ -679,7 +694,7 @@ func (s *Service) syncLocked(ctx context.Context, projectID uint, taskID, trigge
 	if automaticTrigger(trigger) && !project.AutomationEnabled {
 		return result, ErrAutomationPaused
 	}
-	autoDeploy := project.ReconcileMode == ModeAuto && project.AutomationEnabled && !actor.CheckOnly
+	autoDeploy := project.ReconcileMode == ModeAuto && project.AutomationEnabled && !project.InitialApplicationRequired && !actor.CheckOnly
 	repository, err := repositoryFromProject(project)
 	if err != nil {
 		return result, err
@@ -1194,6 +1209,7 @@ func (s *Service) probeProjectDrift(ctx context.Context, project database.Delive
 	uniform := len(result.Nodes) > 0
 	for index := range result.Nodes {
 		node := result.Nodes[index]
+		result.RuntimeHealthy = result.RuntimeHealthy && node.RuntimeAvailable && node.RuntimeHealthy
 		if node.Status == DriftDegraded {
 			result.Status = DriftDegraded
 			result.Drifted = result.Drifted || node.Drifted
@@ -1227,7 +1243,6 @@ func (s *Service) probeProjectDrift(ctx context.Context, project database.Delive
 	} else if len(result.Nodes) > 1 && result.ReasonCode == "" {
 		result.ReasonCode, result.Reason = "mixed_active_releases", "target nodes do not share one active release"
 	}
-	result.RuntimeHealthy = result.Status == DriftHealthy
 	activeValue := any(nil)
 	if result.ActiveReleaseID != nil {
 		activeValue = *result.ActiveReleaseID
@@ -1278,20 +1293,18 @@ func (s *Service) probeNodeDrift(ctx context.Context, project database.DeliveryP
 		}
 		target, err := s.targets.ResolveComposeTarget(ctx, nodeID)
 		if err != nil {
-			if !result.Drifted {
-				result.Status, result.ReasonCode, result.Reason = DriftUnknown, "runtime_unavailable", err.Error()
-			}
+			result.Status, result.ReasonCode, result.Reason = DriftUnknown, "runtime_unavailable", err.Error()
 			return result
 		}
 		runner = targeted.Targeted(target)
 	}
 	runtime, err := runner.PS(ctx, spec, io.Discard)
 	if err != nil {
-		if !result.Drifted {
-			result.Status, result.ReasonCode, result.Reason = DriftUnknown, "runtime_unavailable", err.Error()
-		}
+		result.Status, result.ReasonCode, result.Reason = DriftUnknown, "runtime_unavailable", "unable to read node runtime"
 		return result
 	}
+	result.RuntimeAvailable = true
+	result.RuntimeHealthy, result.HealthChecks, result.RuntimeContainers = deployment.RuntimeHealth(runtime)
 	result.HealthSummary = runtime
 	if !runtimeIsHealthy(runtime) {
 		result.Status, result.Drifted, result.ReasonCode, result.Reason = DriftDegraded, true, "runtime_unhealthy", "active release has missing or unhealthy containers"

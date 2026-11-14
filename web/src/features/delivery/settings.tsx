@@ -51,6 +51,8 @@ function toDraft(value: CDConfiguration): CDConfigureInput {
 }
 
 interface CreationOptions {
+	prepareAfterSave: boolean
+	onPrepareChange: (prepare: boolean) => void
   name: string
   onNameChange: (name: string) => void
   submit: (input: CDConfigureInput) => Promise<CDConfiguration>
@@ -210,10 +212,11 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
     <CDWebhookSecretNotice secret={revealedWebhookSecret} webhookURL={creation?.created ? webhookURL : undefined} zh={zh}/>
 
     <div className="flex flex-wrap items-center gap-3">
+      {creation && !creation.created && <label className="flex items-start gap-2 text-xs text-muted-foreground"><Checkbox checked={creation.prepareAfterSave} onCheckedChange={checked => creation.onPrepareChange(!!checked)} /><span>{zh ? '保存后准备首次发布，确认前不改变容器' : 'Prepare the first release after saving; containers change only after confirmation'}</span></label>}
       {notice && <p role={save.isError ? 'alert' : 'status'} className={cn('text-sm', save.isError ? 'text-destructive' : 'text-muted-foreground')}>{notice}</p>}
       {creation?.created ? <Button type="button" onClick={creation.onDone}>{zh ? '打开交付项目' : 'Open delivery project'}</Button> : <>
         {creation && <Button type="button" variant="outline" className="ml-auto" disabled={save.isPending} onClick={creation.onCancel}>{zh ? '取消' : 'Cancel'}</Button>}
-        <Button type="submit" disabled={save.isPending || (creation && (!creation.name.trim() || !draft.node_ids.length))} className={!creation && !notice ? 'ml-auto' : ''}>{save.isPending && <Spinner />}<Save data-icon="inline-end" />{creation ? (zh ? '创建交付项目' : 'Create delivery project') : !configuration.configured ? (zh ? '连接并保存' : 'Connect and save') : (zh ? '保存 CD 配置' : 'Save CD settings')}</Button>
+        <Button type="submit" disabled={save.isPending || (creation && (!creation.name.trim() || !draft.node_ids.length))} className={!creation && !notice ? 'ml-auto' : ''}>{save.isPending && <Spinner />}<Save data-icon="inline-end" />{creation ? (creation.prepareAfterSave ? (zh ? '保存并准备首次发布' : 'Save and prepare first release') : (zh ? '仅创建并保存' : 'Create and save only')) : !configuration.configured ? (zh ? '连接并保存' : 'Connect and save') : (zh ? '保存发布设置' : 'Save release settings')}</Button>
       </>}
     </div>
   </form>
@@ -325,14 +328,14 @@ export function CDSettingsFields({projectName, configuration, draft, setDraft, c
 
     <SettingsSection title={zh ? '交付策略' : 'Delivery policy'} description={zh ? 'Observe 只生成待发布版本，Manual 需要人工发布，Auto 验证后自动发布。' : 'Observe records a candidate, Manual waits for an operator, and Auto deploys after validation.'}>
       <div className="flex items-start justify-between gap-4 rounded-lg bg-muted/40 p-3">
-        <div className="min-w-0"><Label htmlFor={automationID}>{zh ? '启用自动交付触发' : 'Enable automatic delivery triggers'}</Label><p id={`${automationID}-description`} className="mt-1 text-xs text-muted-foreground">{zh ? '关闭后停止轮询和 Webhook 触发；手动同步仅生成候选版本，仍可手动发布和回滚。已开始的任务会继续完成。' : 'When off, polling and webhooks stop. Manual sync creates candidates; manual deploy and rollback remain available. Started tasks finish normally.'}</p></div>
+        <div className="min-w-0"><Label htmlFor={automationID}>{zh ? '启用自动检查' : 'Enable automatic checks'}</Label><p id={`${automationID}-description`} className="mt-1 text-xs text-muted-foreground">{zh ? '关闭后停止轮询和 Webhook 触发；手动同步仅生成候选版本，仍可手动发布和回滚。已开始的任务会继续完成。' : 'When off, polling and webhooks stop. Manual sync creates candidates; manual deploy and rollback remain available. Started tasks finish normally.'}</p></div>
         <Switch id={automationID} checked={draft.automation_enabled} onCheckedChange={(automation_enabled) => setDraft((current) => ({ ...current, automation_enabled }))} aria-describedby={`${automationID}-description`} />
       </div>
       <RadioGroup value={draft.reconcile_mode} onValueChange={(value) => setDraft((current) => ({ ...current, reconcile_mode: value as CDConfigureInput['reconcile_mode'] }))} className="grid gap-2 sm:grid-cols-3">
         {([
-          ['observe', zh ? '观察' : 'Observe', zh ? '检测新提交但不自动应用' : 'Detect changes without applying'],
-          ['manual', zh ? '手动' : 'Manual', zh ? '同步后由用户确认发布' : 'Require an explicit deploy action'],
-          ['auto', zh ? '自动' : 'Auto', zh ? '验证通过后立即发布' : 'Deploy immediately after validation'],
+          ['observe', zh ? '仅检查' : 'Checks only', zh ? '只检查更新，禁止人工及自动发布' : 'Check updates; disable manual and automatic publishing'],
+          ['manual', zh ? '手动确认' : 'Manual confirmation', zh ? '有更新等待用户确认发布' : 'Updates await confirmation'],
+          ['auto', zh ? '自动发布' : 'Automatic publishing', zh ? '验证通过后发布；首次发布仍需确认' : 'Publish after validation; first release requires confirmation'],
         ] as [CDConfigureInput['reconcile_mode'], string, string][]).map(([value, label, detail]) => (
           <label key={value} className={cn('flex cursor-pointer items-start gap-2.5 rounded-lg border p-3 transition-colors', draft.reconcile_mode === value ? 'border-ring bg-muted/50 ring-ring/50 ring-2' : 'hover:bg-muted/40')}>
             <RadioGroupItem value={value} className="mt-0.5" />

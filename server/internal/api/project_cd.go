@@ -43,6 +43,32 @@ func registerProjectCDRoutes(v1 *gin.RouterGroup, deps Dependencies) {
 		a := requestActor(c)
 		return projectcd.Actor{UserID: a.UserID, Name: a.Name, IP: a.IP}
 	}
+	routes.POST("/release-plans", func(c *gin.Context) {
+		var input deployment.PrepareReleaseInput
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, 400, 20903, "Invalid release preparation")
+			return
+		}
+		value, err := deps.ProjectCD.PrepareRelease(c.Request.Context(), c.Param("nodeID"), c.Param("name"), input, actor(c))
+		releasePlanResponse(c, value, err, true)
+	})
+	routes.GET("/release-plans", func(c *gin.Context) {
+		value, err := deps.ProjectCD.PreparedRelease(c.Request.Context(), c.Param("nodeID"), c.Param("name"), c.Query("task_id"))
+		releasePlanResponse(c, value, err, false)
+	})
+	routes.GET("/release-plans/:planID", func(c *gin.Context) {
+		value, err := deps.ProjectCD.ReleasePlan(c.Request.Context(), c.Param("nodeID"), c.Param("name"), c.Param("planID"))
+		releasePlanResponse(c, value, err, false)
+	})
+	routes.POST("/release-plans/:planID/confirm", func(c *gin.Context) {
+		var input deployment.ConfirmReleaseInput
+		if c.ShouldBindJSON(&input) != nil {
+			failure(c, 400, 20903, "Invalid release confirmation")
+			return
+		}
+		value, err := deps.ProjectCD.ConfirmRelease(c.Request.Context(), c.Param("nodeID"), c.Param("name"), c.Param("planID"), input, actor(c))
+		releasePlanResponse(c, value, err, true)
+	})
 	routes.GET("", func(c *gin.Context) {
 		value, err := deps.ProjectCD.Get(c.Request.Context(), c.Param("nodeID"), c.Param("name"))
 		respond(c, value, err)
@@ -132,7 +158,7 @@ func registerProjectCDRoutes(v1 *gin.RouterGroup, deps Dependencies) {
 	})
 	routes.GET("/records", func(c *gin.Context) {
 		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-		rows, total, err := deps.ProjectCD.Records(c.Request.Context(), c.Param("nodeID"), c.Param("name"), page)
+		rows, total, err := deps.ProjectCD.Records(c.Request.Context(), c.Param("nodeID"), c.Param("name"), page, c.Query("include_checks") == "true")
 		respond(c, gin.H{"items": rows, "total": total}, err)
 	})
 	routes.POST("/records/:recordID/rollback", func(c *gin.Context) {

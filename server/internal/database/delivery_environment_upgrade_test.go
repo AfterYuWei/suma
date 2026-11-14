@@ -51,7 +51,7 @@ func TestDeliveryEnvironmentUpgradeRetainsProductionEvidence(t *testing.T) {
 		t.Helper()
 		var value string
 		// Exclude only the new field and migration ledger entry being introduced.
-		projection := "to_jsonb(t) - 'environment_ciphertext' - 'canonical_release_id' - 'latest_record_id' - 'legacy_snapshot_json'"
+		projection := "to_jsonb(t) - 'environment_ciphertext' - 'canonical_release_id' - 'latest_record_id' - 'legacy_snapshot_json' - 'initial_application_required'"
 		if table == "tasks" {
 			// 0011 adds nullable params/result columns; row evidence itself is unchanged.
 			projection += " - 'params' - 'result' - 'parent_task_id' - 'result_error'"

@@ -75,6 +75,9 @@ func (s *Service) Drift(ctx context.Context, node, name string) (Drift, error) {
 		return result, err
 	}
 	spec.Environment = value.Environment
+	if value.Frozen != nil {
+		spec = value.Frozen.Apply(spec)
+	}
 	runner := s.runner.ForTarget(target)
 	hashes, err := runner.Hashes(ctx, spec, io.Discard)
 	if err != nil {

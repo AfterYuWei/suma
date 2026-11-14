@@ -50,7 +50,7 @@ func TestProjectCDPolicyUpgradePreservesSnapshotsAndAutomation(t *testing.T) {
 	snapshot := func() string {
 		t.Helper()
 		var value string
-		if err := conn.QueryRow(`SELECT jsonb_build_object('config',(SELECT jsonb_agg(to_jsonb(t)-'reconcile_mode'-'auto_rollback' ORDER BY id) FROM project_cds t),'records',(SELECT jsonb_agg(to_jsonb(t)-'source_record_id' ORDER BY id) FROM project_cd_records t))::text`).Scan(&value); err != nil {
+		if err := conn.QueryRow(`SELECT jsonb_build_object('config',(SELECT jsonb_agg(to_jsonb(t)-'reconcile_mode'-'auto_rollback' ORDER BY id) FROM project_cds t),'records',(SELECT jsonb_agg(to_jsonb(t)-'source_record_id'-'images_pinned' ORDER BY id) FROM project_cd_records t))::text`).Scan(&value); err != nil {
 			t.Fatal(err)
 		}
 		return value

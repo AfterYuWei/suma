@@ -9,13 +9,14 @@ async function setup(page: Page, language = 'en-US', theme = 'dark') {
   }, { language, theme })
 }
 
-async function openCreation(page: Page, zh = false) {
+async function openCreation(page: Page, zh = false, prepare = false) {
   await page.goto('/continuous-delivery')
   await page.getByRole('button', { name: zh ? '新建项目' : 'New project', exact: true }).click()
   await expect(page).toHaveURL('/continuous-delivery/new/project')
   await expect(page.getByRole('dialog')).toHaveCount(0)
   const form = page.getByRole('form', { name: zh ? '新建交付项目配置' : 'New delivery project configuration', exact: true })
   await expect(form.getByLabel(zh ? '项目名称' : 'Project name', { exact: true })).toBeVisible()
+  if (!prepare) await form.getByRole('checkbox', {name: zh ? '保存后准备首次发布，确认前不改变容器' : 'Prepare the first release after saving; containers change only after confirmation', exact: true}).uncheck()
   return form
 }
 
@@ -70,7 +71,7 @@ for (const language of ['en-US', 'zh-CN']) for (const theme of ['dark', 'light']
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
     await page.locator('main > div').first().evaluate(element => { element.scrollTop = 0 })
     await page.screenshot({ path: `/tmp/suma-delivery-create-${language}-${theme}-${width}.png`, fullPage: true })
-    await form.getByRole('button', { name: zh ? '创建交付项目' : 'Create delivery project', exact: true }).click()
+    await form.getByRole('button', { name: zh ? '仅创建并保存' : 'Create and save only', exact: true }).click()
     await expect(page).toHaveURL(`/continuous-delivery/${name}`)
     const deploymentName = await page.evaluate(async name => {
       // @ts-expect-error Vite serves source imports in the browser.
@@ -117,7 +118,7 @@ test('failed creation preserves the full form and allows retry without an empty 
   const name = 'invalid-path-delivery'
   const form = await basics(page, name)
   await form.getByLabel('Compose file 1', { exact: true }).fill('../outside.yml')
-  await form.getByRole('button', { name: 'Create delivery project', exact: true }).click()
+  await form.getByRole('button', { name: 'Create and save only', exact: true }).click()
   await expect(form.getByRole('alert')).toContainText('Invalid repository or Compose file path')
   await expect(form.getByLabel('Project name', { exact: true })).toHaveValue(name)
   const names = await page.evaluate(async () => {
@@ -127,7 +128,7 @@ test('failed creation preserves the full form and allows retry without an empty 
   })
   expect(names).not.toContain(name)
   await form.getByLabel('Compose file 1', { exact: true }).fill('compose.yml')
-  await form.getByRole('button', { name: 'Create delivery project', exact: true }).click()
+  await form.getByRole('button', { name: 'Create and save only', exact: true }).click()
   await expect(page).toHaveURL(`/continuous-delivery/${name}`)
 })
 
@@ -142,7 +143,7 @@ for (const center of [false, true]) {
     await form.getByLabel('Token', { exact: true }).fill('test-only-browser-token')
     await expect(form.getByLabel('Token', { exact: true })).toHaveAttribute('type', 'password')
     if (center) await form.getByRole('checkbox', { name: 'Also save to Authentication Center and authorize selected nodes', exact: true }).click()
-    await form.getByRole('button', { name: 'Create delivery project', exact: true }).click()
+    await form.getByRole('button', { name: 'Create and save only', exact: true }).click()
     await expect(page).toHaveURL(`/continuous-delivery/${name}`)
     await expect(page.getByRole('dialog')).toHaveCount(0)
     const saved = await configuration(page, name)
@@ -156,7 +157,7 @@ test('generated webhook secret can be copied once before opening the project', a
   const name = 'webhook-delivery'
   const form = await basics(page, name)
   await form.getByRole('checkbox', { name: 'Enable repository webhook', exact: true }).click()
-  await form.getByRole('button', { name: 'Create delivery project', exact: true }).click()
+  await form.getByRole('button', { name: 'Create and save only', exact: true }).click()
   await expect(form.getByRole('button', { name: 'Open delivery project', exact: true })).toBeVisible()
   await expect(page).toHaveURL('/continuous-delivery/new/project')
   await expect(form.getByLabel('Project name', { exact: true })).toBeDisabled()
@@ -178,15 +179,15 @@ test('complete form remains available when editing an existing delivery project'
   const form = page.getByRole('form', { name: 'Delivery project configuration', exact: true })
   await expect(form.getByLabel('Project name', { exact: true })).toHaveCount(0)
   await form.getByLabel('Git Clone URL', { exact: true }).fill('https://git.example.com/updated/deploy.git')
-  await form.getByRole('button', { name: 'Save CD settings', exact: true }).click()
-  await expect(page.getByRole('tab', { name: 'Overview', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await form.getByRole('button', { name: 'Save release settings', exact: true }).click()
+  await expect(page.getByRole('tab', { name: 'Publish', exact: true })).toHaveAttribute('aria-selected', 'true')
   expect((await configuration(page, 'gateway-prod')).repository.clone_url).toBe('https://git.example.com/updated/deploy.git')
 })
 
 test('a project named new remains reachable independently of the creation page', async ({ page }) => {
   await setup(page)
   const form = await basics(page, 'new')
-  await form.getByRole('button', { name: 'Create delivery project', exact: true }).click()
+  await form.getByRole('button', { name: 'Create and save only', exact: true }).click()
   await expect(page).toHaveURL('/continuous-delivery/new')
   await expect(page.getByRole('heading', { name: 'new', exact: true })).toBeVisible()
   await expect(page.getByRole('form', { name: 'New delivery project configuration', exact: true })).toHaveCount(0)
@@ -195,10 +196,10 @@ test('a project named new remains reachable independently of the creation page',
 test('delivery creation can start with automatic triggers paused', async ({ page }) => {
   await setup(page)
   const form = await basics(page, 'created-paused')
-  const toggle = form.getByRole('switch', { name: 'Enable automatic delivery triggers', exact: true })
+  const toggle = form.getByRole('switch', { name: 'Enable automatic checks', exact: true })
   await expect(toggle).toBeChecked()
   await toggle.click()
-  await form.getByRole('button', { name: 'Create delivery project', exact: true }).click()
+  await form.getByRole('button', { name: 'Create and save only', exact: true }).click()
   await expect(page).toHaveURL('/continuous-delivery/created-paused')
   await expect(page.getByRole('switch', { name: 'created-paused automatic delivery triggers' })).not.toBeChecked()
   const saved = await configuration(page, 'created-paused')
@@ -213,7 +214,7 @@ test('manual variables can be preserved, replaced, emptied and removed in delive
   await form.getByRole('button', { name: 'Add variable', exact: true }).click()
   await form.getByLabel('Variable name 1', { exact: true }).fill('PASSWORD')
   await form.getByLabel('Variable value 1', { exact: true }).fill('test-only-original-value')
-  await form.getByRole('button', { name: 'Create delivery project', exact: true }).click()
+  await form.getByRole('button', { name: 'Create and save only', exact: true }).click()
   await expect(page).toHaveURL('/continuous-delivery/manual-environment')
   const settings = page.getByRole('tab', { name: 'Settings', exact: true })
   await settings.click()
@@ -225,8 +226,8 @@ test('manual variables can be preserved, replaced, emptied and removed in delive
   await expect(edit.getByLabel('Variable value 1', { exact: true })).toHaveValue('test-only-original-value')
   await edit.getByRole('button', { name: 'Hide variable values', exact: true }).click()
   const saveAndReopen = async () => {
-    await edit.getByRole('button', { name: 'Save CD settings', exact: true }).click()
-    await expect(page.getByRole('tab', { name: 'Overview', exact: true })).toHaveAttribute('aria-selected', 'true')
+    await edit.getByRole('button', { name: 'Save release settings', exact: true }).click()
+    await expect(page.getByRole('tab', { name: 'Publish', exact: true })).toHaveAttribute('aria-selected', 'true')
     await settings.click()
     await expect(edit.getByLabel('Variable name 1', { exact: true })).toHaveValue('PASSWORD')
   }
@@ -243,7 +244,28 @@ test('manual variables can be preserved, replaced, emptied and removed in delive
   await expect(edit.getByLabel('Variable value 1', { exact: true })).toBeEditable()
   await saveAndReopen()
   await edit.getByRole('button', { name: 'Remove variable 1', exact: true }).click()
-  await edit.getByRole('button', { name: 'Save CD settings', exact: true }).click()
-  await expect(page.getByRole('tab', { name: 'Overview', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await edit.getByRole('button', { name: 'Save release settings', exact: true }).click()
+  await expect(page.getByRole('tab', { name: 'Publish', exact: true })).toHaveAttribute('aria-selected', 'true')
   expect((await configuration(page, 'manual-environment')).environment).toEqual([])
+})
+
+
+test('creation prepares the first release and waits for explicit confirmation', async ({ page }) => {
+  await setup(page)
+  const name = 'prepare-first-release'
+  const form = await openCreation(page, false, true)
+  await form.getByLabel('Project name', { exact: true }).fill(name)
+  await form.getByLabel('Git Clone URL', { exact: true }).fill('https://git.example.com/team/deploy.git')
+  await form.getByRole('button', { name: 'Save and prepare first release', exact: true }).click()
+  await expect(page).toHaveURL(`/continuous-delivery/${name}`)
+  const panel = page.getByRole('dialog')
+  await expect(panel.getByRole('heading', { name: 'Review this release', exact: true })).toBeVisible()
+  const recordCount = await page.evaluate(async name => {
+    // @ts-expect-error Vite serves source imports in the browser.
+    const { api } = await import('/src/lib/api.ts')
+    return (await api(`/delivery-projects/${name}/records`)).total
+  }, name)
+  expect(recordCount).toBe(0)
+  await panel.getByRole('button', { name: 'Publish to 1 node', exact: true }).click()
+  await expect(panel.getByRole('heading', { name: 'Release result', exact: true })).toBeVisible()
 })

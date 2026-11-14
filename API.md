@@ -203,13 +203,13 @@ Delivery Project responses include `deployment_name`, the saved Compose project 
 - `GET /delivery-projects/:name/environment` explicitly reads the project's saved manual interpolation values as a name/value object, including empty strings. Requires a session, returns `Cache-Control: no-store`, and audits `cd.environment.read` using project/actor metadata only. It does not change configuration or queue work. Missing projects return 404; decryption/read failures return a generic 500 (`17718`). The UI calls it only when showing saved values and clears the temporary result when hiding values, saving, or leaving the form.
 - `PUT /delivery-projects/:name/automation` accepts `{ "enabled": false }` to pause polling and Webhook triggers, or `true` to resume. Returns the project with `automation_enabled` and records a control-plane audit. Requires a session; missing/non-boolean `enabled` returns 400, unknown projects return 404. It does not queue a task or change the saved delivery policy, credentials, target nodes, or release history. Queued automatic syncs recheck before fetching; started operations finish normally. Manual sync remains available while paused, creating candidates for an explicitly confirmed deployment rather than deploying under Auto policy.
 - `POST /delivery-projects/test-connection` (new draft) or `POST /delivery-projects/:name/test-connection` (existing project) reads remote refs with `{ "repository": { "clone_url": "https://git.example.test/team/repo", "ref_type": "branch", "ref": "main", "authentication": { "source": "none" } }, "node_ids": ["local"] }`. Uses draft credentials or retained project secrets without saving configuration, cloning, creating tasks/releases, or deploying. Center credentials require grants for the requested targets (saved targets when omitted on an existing project). Returns `{ "ref_checked": true, "commit_sha": "..." }` for a resolved branch/tag; annotated tags resolve to their commit. Commit refs return `ref_checked: false`: arbitrary commits and Compose files are verified during sync. Requests cancel on disconnect and time out after 30 seconds; failures return `422` (code `17715`) with sanitized Git diagnostics. Responses use `Cache-Control: no-store`.
-- `POST /delivery-projects/:name/sync` queues a manual Git synchronization and returns `202 Accepted` with a task.
-- `GET /delivery-projects/:name/drift` compares the desired Git commit with the active release.
+- `POST /delivery-projects/:name/sync` queues a read-only manual Git check and returns `202 Accepted` with a task. Manual checks never deploy implicitly, including under Auto policy.
+- `GET /delivery-projects/:name/drift` compares desired Git evidence with per-node active records, and independently returns Docker `runtime_available`, `runtime_healthy`, `health_checks` and `runtime_containers` fields. Git equality is not proof of runtime health; unreachable nodes remain unknown.
 - `GET /delivery-projects/:name/releases` lists up to 100 Git releases in discovery order, newest first. Identity is project/repository/commit; repeated operations do not add releases. Reads of legacy alias IDs resolve to the canonical release.
 - `GET /delivery-projects/:name/releases/:releaseID` reads one release.
 - `POST /delivery-projects/:name/releases/:releaseID/deploy` confirms approval and starts deployment using current saved settings and the selected Git commit. Returns `202` with `{ "task": {...}, "record_id": 123 }`; there is no separate `approve` route or approved intermediate status. Candidates use `ready`.
 - `POST /delivery-projects/:name/releases/:releaseID/reject` rejects a ready candidate.
-- `POST /delivery-projects/:name/releases/:releaseID/rollback` requires `{ "record_id": 123 }`, optionally with `"node_ids": ["local"]` to override targets for this operation only. Complete failed/partial snapshots are eligible; source ownership, nodes, credentials and policy are validated. An absent override uses the source snapshot nodes; an empty override is rejected. Returns `{ "task": {...}, "record_id": 124 }` with `202`.
+- `POST /delivery-projects/:name/releases/:releaseID/rollback` is the legacy snapshot endpoint and requires `{ "record_id": 123 }`, optionally with `"node_ids": ["local"]`. Execution requires complete pinned-image evidence; requested nodes must be a subset of the fixed source snapshot. Source ownership, nodes, credentials and policy are validated. An absent override uses source targets; an empty override is rejected. Returns `{ "task": {...}, "record_id": 124 }` with `202`. New clients should prepare and confirm a `restore` plan instead.
 - `POST /delivery-projects/:name/releases/:releaseID/remediations/retry-failed` requires `{ "source_record_id": 123 }` and retries only server-selected failed or interrupted nodes using that record’s configuration, including nodes recovered by automatic rollback. Stale source records are rejected. Returns the task, new `record_id`, release and selected nodes.
 - `POST /delivery-projects/:name/releases/:releaseID/remediations/rollback-failed` requires `{ "source_record_id": 123 }` and restores eligible failed targets to their own previous configuration records; it appends an operation record without creating a release.
 
@@ -218,6 +218,27 @@ Delivery Project responses include `deployment_name`, the saved Compose project 
 - `GET /delivery-projects/:name/records/:recordID/environment` explicitly reads saved snapshot variables; session required, `Cache-Control: no-store`, audited as `cd.record.environment.read` without values.
 
 Release reads include optional `approved_by_name`, resolved from the account identified by the existing `approved_by`. This display field is omitted when the account is missing; it is not stored in a new database column.
+
+### Prepared publication (0013)
+
+The new UI uses these authenticated routes under `/api/v1/delivery-projects/:name`:
+
+| Method/path | Contract |
+| --- | --- |
+| `POST /release-plans` | Body `{operation?,release_id?,source_record_id?}`. Starts a read-only preparation Task; `202` returns the Task. Operation defaults to `deploy`; `retry`, `restore`, `restore-failed` and `reapply` require a source record. Optional `release_id` chooses a discovered Git version for deploy. |
+| `GET /release-plans?task_id=ID` | Reads the prepared view after that preparation Task succeeds. |
+| `GET /release-plans/:planID` | Reads a plan belonging to this project. |
+| `POST /release-plans/:planID/confirm` | Body `{node_ids?,force_recreate?}`. Confirms the frozen plan and returns `202` with `{task,record_id}`. Omitted targets mean all reviewed targets; an empty list, duplicates or targets outside the reviewed set are rejected. Completely unchanged deploys require explicit `force_recreate:true`. |
+
+Views contain `id`, `expires_at`, `operation`, source/Git record references, Commit, file list, timeout/recovery policy, warnings and per-node configuration/image/service/variable changes. Variable values and likely secrets are masked; encrypted payloads, internal versions, credentials and private worktree paths are excluded. Plan reads and confirmation responses use `Cache-Control:no-store`.
+
+Preparation fixes Git, effective configuration, encrypted variables, target Engine identity, service image digest and platform. Plans expire after ten minutes. Configuration/policy/target changes or a changed successful baseline require a new preparation. Expired/conflicting/busy confirmations return `409` (`17730`); missing or differently owned plans return `404`; invalid JSON returns `400` (`17731`); other validation errors return `422`. Failed preparation remains a failed Task without deployment.
+
+Task creation and plan claim share a transaction. Reconfirming an already consumed plan returns its original Task/record even after execution ends; it never starts new work. This does not promise exactly-once Docker side effects across a process failure. Retry uses only eligible failed/interrupted targets and original inputs, including after automatic recovery; later independent publications invalidate that source.
+
+`restore` only uses successful source targets with complete pinned-image evidence. `restore-failed` prepares each eligible failed target's own previous successful snapshot and identifies exclusions; it cannot silently substitute another version. Both recheck current authorization and node identity. `reapply` explicitly uses historical configuration with images resolved now and cannot promise the original image version. Recovery confirmation switches the policy to manual; data volumes remain, database contents are not rolled back.
+
+Project/configuration responses expose `initial_application_required`: new projects and changed source scopes require first manual success before automatic delivery. Migration 0013 preserves old projects' behavior with false and old records' `images_pinned:false`; historical image identities are not inferred. Operation records expose `images_pinned`, while private frozen input remains encrypted and excluded from normal responses. Existing Git Release identity and historical IDs remain intact.
 
 A representative `PUT /delivery-projects/:name/configuration` body is:
 
@@ -431,6 +452,8 @@ Delivery evidence includes `chat_id`. Schema incompatibility returns HTTP 503 / 
 项目摘要新增 `deployment_mode: manual | cd`。CD 是当前节点项目的部署模式；菜单「持续交付」保留批量多节点交付语义，两者共用单节点部署流程。
 
 Git 来源接口前缀：`/api/v1/nodes/:nodeID/projects/compose/:name/gitops`。提供 GET/PUT 配置，POST `test-connection` / `check` / `apply` / `detach`，PUT `automation`，GET/PUT `environment`，GET `environment/values` / `preview` / `drift` / `records`，POST `records/:recordID/rollback`。配置、变量、自动化、应用及退出请求传 `expected_revision`；应用另传 `candidate_id`，冲突为 409。记录每页 20 条，`records?page=1` 返回 `{items,total}`。长操作返回节点 Task。Webhook 为 `POST /api/v1/webhooks/gitops/:hookID`，暂停时有效请求返回 `{ignored:true}`。
+
+0013 新页面在同一前缀下增加 `POST release-plans`、`GET release-plans?task_id=ID`、`GET release-plans/:planID`、`POST release-plans/:planID/confirm`，与上方 Prepared publication 契约共用视图、有效期、授权和错误语义。节点项目接受 `deploy|retry|restore|reapply`，目标固定当前节点；确认返回节点 Task 本身（全局批量返回 `{task,record_id}`）。配置版本及成功基线由方案绑定，无需客户端再传 `expected_revision`。重复确认返回原 Task；准备和人工 check 均不改变容器。`records` 默认隐藏 `check`／`prepare`，可传 `include_checks=true` 查看全部历史；每条记录保留原 ID，并返回 `images_pinned`。实现已通过测试环境的发布业务验收，具体范围及限制详见 `doc/cd-release-implementation-2026-11-14.md`。
 
 配置 PUT 支持 `reconcile_mode: observe|manual|auto`、`auto_rollback`、`automation_enabled` 和 `webhook_secret`（留空保留）。节点由路径固定，不提供目标节点切换；`environment` 与配置 .env 是同一份加密本地覆盖变量。观察模式不允许应用／回滚；首次成功前自动触发仅检查，自动模式在首次确认后可自动应用。失败自动回滚使用最近成功快照，独立保存 `auto_rollback` 记录并通过 `source_record_id` 关联失败记录，恢复后改为手动策略。
 

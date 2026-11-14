@@ -411,6 +411,11 @@ func newCDHarness(t *testing.T, mode string) *cdHarness {
 	}
 	credentialService := gitrepo.NewCredentialService(db, secrets)
 	service := NewService(db, gitClient, credentialService, runner, task.NewService(db), nil, secrets)
+	if err := db.Create(&database.Node{ID: "local", Name: "Local", ConnectionType: "unix", Endpoint: "unix:///fixture.sock", Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	service.SetTargetResolver(fakeTargetResolver{})
+	service.SetImageResolver(fixtureImageResolver{})
 	return &cdHarness{db: db, service: service, project: project, git: gitClient, runner: runner, secrets: secrets}
 }
 
@@ -570,7 +575,16 @@ type fakeComposeRunner struct {
 type fakeTargetResolver struct{}
 
 func (fakeTargetResolver) ResolveComposeTarget(_ context.Context, id string) (compose.Target, error) {
-	return compose.Target{NodeID: id, NodeName: id, Host: "unix:///" + id + ".sock"}, nil
+	return compose.Target{OS: "linux", Architecture: "amd64", RuntimeIdentity: "fixture-" + id, NodeID: id, NodeName: id, Host: "unix:///" + id + ".sock"}, nil
+}
+
+func (r fakeTargetResolver) ResolveDeploymentTarget(ctx context.Context, id string) (compose.Target, error) {
+	return r.ResolveComposeTarget(ctx, id)
+}
+func (f *fakeComposeRunner) Targeted(compose.Target) compose.Runner { return f }
+
+func (fakeTargetResolver) InspectComposeNamespace(context.Context, string, string) (compose.RuntimeProjectSnapshot, error) {
+	return compose.RuntimeProjectSnapshot{}, nil
 }
 
 type targetedFakeRunner struct {

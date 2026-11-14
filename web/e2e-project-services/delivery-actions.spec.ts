@@ -1,335 +1,47 @@
-import { expect, test, type Page } from '@playwright/test'
-import type { CDConfiguration, DeliveryRecord, DeliveryRelease } from '../src/features/delivery/types'
+import { expect, test } from '@playwright/test'
+import { setupReleaseFlow } from './release-flow-fixture'
 
-const created = '2026-10-27T06:00:00Z'
-const commit = 'a'.repeat(40)
-
-async function openReleases(page: Page, language = 'zh-CN', theme = 'light', width = 1440) {
-  await page.setViewportSize({ width, height: 1100 })
-  await page.addInitScript(({ language, theme }) => {
-    localStorage.setItem('suma-language', language)
-    localStorage.setItem('suma-theme', theme)
-    localStorage.setItem('suma-node', 'local')
-  }, { language, theme })
-  const configuration: CDConfiguration = {
-    automation_enabled: true, configured: true,
-    repository: { clone_url: 'https://git.example.test/app.git', ref_type: 'branch', ref: 'main', authentication: { source: 'none' }, compose_files: ['compose.yml'], environment_file: '' },
-    reconcile_mode: 'manual', sync_interval_seconds: 300, desired_commit: commit, observed_commit: commit,
-    active_release_id: 73, auto_rollback: false, deployment_timeout: 60, webhook_enabled: false, node_ids: ['local', 'other'], registry_credential_ids: [],
-  }
-  const release = (id: number, status: string, extra: Partial<DeliveryRelease> = {}): DeliveryRelease => ({
-    id, project_id: 1, repository_url: configuration.repository.clone_url, git_ref: 'main', commit_sha: id.toString(16).padStart(40, '0'),
-    commit_message: `fix(deploy): release ${id}`, commit_author: 'operator', config_hash: 'hash', image_references: '[]', latest_record_id: id + 1000, status,
-    trigger_type: 'manual', trigger_actor: 'operator', compose_files: '["compose.yml"]', created_at: created, updated_at: created,
-    remediation: { retry_failed_node_ids: [], rollback_failed_node_ids: [] }, ...extra,
-  })
-  const releases = [
-    release(73, 'succeeded', { approved_by: 1, approved_by_name: 'yuwei' }),
-    release(72, 'ready'),
-    release(71, 'failed', { approved_by: 1, approved_by_name: 'yuwei', remediation: { source_record_id: 1071, retry_failed_node_ids: ['local'], rollback_failed_node_ids: ['local'] }, deployments: [{ id: 1, node_id: 'local', node_name: 'Aliyun', status: 'failed' }, { id: 2, node_id: 'other', node_name: 'Healthy node', status: 'succeeded' }] }),
-    release(70, 'ready', { approved_by: 1, approved_by_name: 'reviewer' }),
-    release(69, 'failed'),
-    release(68, 'rejected', { failure_reason: 'Rejected by reviewer' }),
-    release(67, 'succeeded'),
-    release(66, 'partial_failed', { remediation: { source_record_id: 1066, retry_failed_node_ids: ['other'], rollback_failed_node_ids: [] } }),
-    release(65, 'rollback_failed', { remediation: { source_record_id: 1065, retry_failed_node_ids: [], rollback_failed_node_ids: ['local'] } }),
-  ]
-  const records: DeliveryRecord[] = releases.filter(release => release.status !== 'ready').map(release => ({
-    id: release.id + 1000, project_id: 1, release_id: release.id, operation: 'deploy', actor_name: 'operator', trigger_type: 'manual', status: release.status,
-    snapshot_complete: true, config_hash: `snapshot-${release.id}`, image_references: '["example/app:latest"]', compose_files: '["compose.yml"]', environment_file: '.env', environment: [{ name: 'TOKEN', has_value: true }], node_ids: ['local'], registry_credential_ids: [], deployment_timeout: 60, auto_rollback: false, commit_sha: release.commit_sha, commit_message: release.commit_message, created_at: created, attempts: [],
-  }))
-  records.push({ ...records[0], id: 2001, release_id: 71, status: 'succeeded', config_hash: 'snapshot-success' }, { ...records[0], id: 2002, release_id: 71, status: 'failed', snapshot_complete: false, snapshot_note: 'Historical policy missing' })
-  const writes: { path: string; method: string; body?: unknown }[] = []
-  const errors: string[] = []
-  let finishWrite: (() => void) | undefined
-  let holdWrites = false
-  page.on('pageerror', error => errors.push(error.message))
-  await page.route('**/api/v1/**', async route => {
-    const request = route.request(), path = new URL(request.url()).pathname.replace('/api/v1', '')
-    if (request.method() !== 'GET') {
-      writes.push({ path, method: request.method(), ...(request.postData() ? { body: request.postDataJSON() } : {}) })
-      if (holdWrites) await new Promise<void>(resolve => { finishWrite = resolve })
-    }
-    let data: unknown = []
-    if (path === '/auth/status') data = { needs_setup: false }
-    else if (path === '/auth/session') data = { id: 1, username: 'admin', has_avatar: false }
-    else if (path === '/settings') data = { 'general.timezone': 'Asia/Shanghai' }
-    else if (path === '/nodes') data = [{ id: 'local', name: 'Aliyun', enabled: true, connection_type: 'unix', status: 'online', group_ids: [] }, { id: 'other', name: 'Healthy node', enabled: true, connection_type: 'unix', status: 'online', group_ids: [] }]
-    else if (path === '/notifications/inbox') data = { items: [], unread: 0 }
-    else if (path === '/delivery-projects/app') data = { id: 1, name: 'app', configured: true, automation_enabled: true, node_ids: ['local'], created_at: created, updated_at: created }
-    else if (path.endsWith('/configuration')) data = configuration
-    else if (path.endsWith('/drift')) data = { drifted: false, status: 'healthy', runtime_healthy: true, active_release_id: 73, active_commit: commit, nodes: [], desired_commit: commit, observed_commit: commit }
-    else if (path.endsWith('/releases')) data = releases
-    else if (path.endsWith('/records')) {
-      const params = new URL(request.url()).searchParams
-      const filtered = records.filter(record => (!params.has('release_id') || record.release_id === Number(params.get('release_id'))) && (!params.has('operation') || record.operation === params.get('operation')) && (!params.has('status') || record.status === params.get('status')))
-      const page = Number(params.get('page') || 1), size = Number(params.get('page_size') || 20)
-      data = { items: filtered.slice((page - 1) * size, page * size), total: filtered.length, page, page_size: size, counts: { deploy: records.length } }
-    } else if (/\/records\/\d+\/environment$/.test(path)) data = { TOKEN: 'private-snapshot-value' }
-    await route.fulfill({ json: { code: 0, message: '', data } })
-  })
-  await page.goto('/continuous-delivery/app')
-  await page.getByRole('tab', { name: language === 'zh-CN' ? 'Release' : 'Releases', exact: true }).click()
-  return { configuration, releases, records, writes, errors, hold: () => { holdWrites = true }, finish: () => { holdWrites = false; finishWrite?.() } }
-}
-
-const row = (page: Page, id: number) => page.locator('[data-slot=collapsible]').filter({ has: page.locator('[data-slot=collapsible-trigger]').filter({ hasText: `release ${id}` }) })
-const more = (page: Page, id: number, zh = true) => page.getByRole('button', { name: zh ? `Release #${id} 更多操作` : `More actions for release #${id}`, exact: true })
-
-for (const language of ['zh-CN', 'en-US']) for (const theme of ['light', 'dark']) for (const width of [390, 1440]) {
-  test(`delivery action hierarchy ${language} ${theme} ${width}`, async ({ page }) => {
+// Publication-owned actions replace the obsolete Release-row menus.
+for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']) for (const width of [390, 1440]) {
+  test(`restore a successful publication ${language} ${theme} ${width}`, async ({page}, testInfo) => {
+    const state = await setupReleaseFlow(page, {language, theme, width})
     const zh = language === 'zh-CN'
-    const state = await openReleases(page, language, theme, width)
-    await expect(row(page, 73).getByRole('status')).toContainText('yuwei')
-    await expect(row(page, 73).getByRole('button', { name: zh ? '发布' : 'Deploy', exact: true })).toBeVisible()
-    await expect(row(page, 72).getByRole('button', { name: zh ? '发布' : 'Deploy', exact: true })).toBeVisible()
-    await expect(row(page, 71).getByRole('button', { name: zh ? '重试（1）' : 'Retry (1)', exact: true })).toBeVisible()
-    await expect(row(page, 71).getByRole('button', { name: /重新发布|Redeploy/ })).toHaveCount(0)
-    await expect(row(page, 70).getByRole('button', { name: zh ? '发布' : 'Deploy', exact: true })).toBeVisible()
-    await expect(row(page, 69).getByRole('button', { name: zh ? '重新发布全部节点' : 'Redeploy all nodes', exact: true })).toBeVisible()
-    await expect(row(page, 68).getByRole('status')).toContainText('reviewer')
-    await expect(row(page, 68).getByRole('group')).toHaveCount(0)
-    await expect(row(page, 67).getByRole('group').getByRole('button')).toHaveCount(2)
-    await expect(row(page, 66).getByRole('button', { name: zh ? '重试（1）' : 'Retry (1)', exact: true })).toBeVisible()
-    await expect(row(page, 65).getByRole('group').getByRole('button')).toHaveCount(1)
-
-    const trigger = more(page, 71, zh)
-    await trigger.click()
-    const menu = page.getByRole('menu')
-    await expect(menu.getByRole('menuitem')).toHaveCount(3)
-    await expect(menu).toContainText(zh ? '重新发布全部节点' : 'Redeploy all nodes')
-    await expect(menu).toContainText(zh ? '回滚失败节点（1）' : 'Roll back failed (1)')
-    await expect.poll(async () => {
-      const bounds = (await menu.boundingBox())!, anchor = (await trigger.boundingBox())!
-      return bounds.x >= 0 && bounds.x + bounds.width <= width && (bounds.y >= anchor.y + anchor.height || bounds.y + bounds.height <= anchor.y)
-    }).toBe(true)
-    expect(await menu.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
-    await expect(row(page, 71).locator('[data-slot=collapsible-trigger]')).toHaveAttribute('aria-expanded', 'false')
-    await page.screenshot({ path: `/private/tmp/suma-delivery-actions-menu-${language}-${theme}-${width}.png`, animations: 'disabled' })
-    await page.keyboard.press('Escape')
-    await expect(trigger).toBeFocused()
-    await expect(menu).toHaveCount(0)
-
-    await page.getByRole('button', { name: zh ? '项目更多操作' : 'More project actions', exact: true }).click()
-    await expect(menu.getByRole('menuitem')).toHaveCount(2)
-    await expect(menu).toContainText(zh ? '保留运行中的容器' : 'keep running containers')
-    await expect(menu).toContainText(zh ? '默认删除命名卷和数据' : 'data are deleted by default')
-    await page.keyboard.press('Escape')
-    await expect(menu).toHaveCount(0)
-    await page.screenshot({ path: `/private/tmp/suma-delivery-actions-${language}-${theme}-${width}.png`, animations: 'disabled' })
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-    expect(state.writes).toEqual([])
+    await page.getByRole('tab', {name: zh ? '发布记录' : 'Publications', exact: true}).click()
+    const record = page.locator('details').filter({has: page.locator('summary').filter({hasText: '#184'})}).first()
+    await record.locator('summary').first().click()
+    await record.getByRole('button', {name: zh ? '恢复到此版本…' : 'Restore this version…', exact: true}).click()
+    const sheet = page.getByRole('dialog')
+    await expect(sheet).toContainText(zh ? '保留数据卷，数据库内容不会回退' : 'Volumes remain; database contents are not restored')
+    await expect(sheet).toContainText('6'.repeat(64))
+    await expect(sheet.getByRole('button', {name: zh ? '确认恢复' : 'Restore version', exact: true})).toBeEnabled()
+    expect(state.writes.find(write => write.path.endsWith('/release-plans'))?.body).toEqual({operation: 'restore', source_record_id: 184})
+    await page.screenshot({path: testInfo.outputPath('restore-publication.png'), fullPage: true})
+    await sheet.getByRole('button', {name: zh ? '确认恢复' : 'Restore version', exact: true}).click()
+    await expect(sheet.getByRole('heading', {name: zh ? '本次发布结果' : 'Release result'})).toBeVisible()
     expect(state.errors).toEqual([])
   })
 }
 
-test('delivery actions confirm scope, cancel safely, and lock while pending', async ({ page }) => {
-  const state = await openReleases(page)
-  const dialog = page.getByRole('dialog')
-  await row(page, 71).getByRole('button', { name: '重试（1）', exact: true }).click()
-  await expect(dialog.getByRole('region', { name: '失败节点' })).toContainText('Aliyun')
-  await expect(dialog.getByRole('listitem')).toHaveCSS('color', 'oklch(0.577 0.245 27.325)')
-  await expect(dialog).not.toContainText('Healthy node')
-  expect(state.writes).toEqual([])
-  await dialog.getByRole('button', { name: '取消', exact: true }).click()
-  expect(state.writes).toEqual([])
-
-  await more(page, 71).click()
-  await page.getByRole('menuitem').filter({ hasText: '重新发布全部节点' }).click()
-  await expect(dialog).toContainText('包含此前已成功的节点')
-  await expect(dialog).toContainText('设置页当前已保存的配置')
-  await dialog.getByRole('button', { name: '重新发布全部节点', exact: true }).click()
-  await expect.poll(() => state.writes).toEqual([{ path: '/delivery-projects/app/releases/71/deploy', method: 'POST' }])
-  const feedback = page.getByRole('status').filter({ hasText: '交付任务已启动。' })
-  await expect(feedback).toBeVisible()
-  const feedbackBounds = await feedback.boundingBox()
-  const tabsBounds = await page.getByRole('tablist').boundingBox()
-  expect(Math.abs(feedbackBounds!.y + feedbackBounds!.height / 2 - tabsBounds!.y - tabsBounds!.height / 2)).toBeLessThan(3)
-  await page.getByRole('button', { name: '关闭操作提示' }).click()
-  await expect(feedback).toHaveCount(0)
-
-  state.hold()
-  await row(page, 71).getByRole('button', { name: '重试（1）', exact: true }).click()
-  await dialog.getByRole('button', { name: '重试', exact: true }).click()
-  await expect(row(page, 72).getByRole('button', { name: '发布', exact: true })).toBeDisabled()
-  await expect(more(page, 71)).toBeDisabled()
-  await expect(row(page, 71).getByRole('button', { name: /重试（/ }).locator('[data-slot=spinner]')).toHaveCount(1)
-  await expect(page.getByRole('button', { name: '同步 Git', exact: true })).toBeDisabled()
-  state.finish()
-  await expect(row(page, 72).getByRole('button', { name: '发布', exact: true })).toBeEnabled()
-  expect(state.writes.at(-1)).toEqual({ path: '/delivery-projects/app/releases/71/remediations/retry-failed', method: 'POST', body: { source_record_id: 1071 } })
-
-  await more(page, 71).click()
-  await page.getByRole('menuitem').filter({ hasText: '回滚失败节点' }).click()
-  await expect(dialog.getByRole('region', { name: '失败节点' })).toContainText('Aliyun')
-  await dialog.getByRole('button', { name: '回滚失败节点', exact: true }).click()
-  await expect.poll(() => state.writes.at(-1)?.path).toBe('/delivery-projects/app/releases/71/remediations/rollback-failed')
-
-  await more(page, 72).click()
-  await page.getByRole('menuitem').filter({ hasText: '拒绝此版本' }).click()
-  await expect(dialog).toContainText('该候选 Release 将不能再发布')
-  state.hold()
-  await dialog.getByRole('button', { name: '拒绝', exact: true }).click()
-  await expect.poll(() => state.writes.at(-1)?.path).toBe('/delivery-projects/app/releases/72/reject')
-  await expect(more(page, 72).locator('[data-slot=spinner]')).toHaveCount(1)
-  await expect(row(page, 72).getByRole('button', { name: '发布', exact: true }).locator('[data-slot=spinner]')).toHaveCount(0)
-  state.finish()
-  await expect(more(page, 72)).toBeEnabled()
-
-  await more(page, 67).click()
-  await page.getByRole('menuitem').filter({ hasText: '回滚' }).click()
-  await expect(dialog).toContainText('保留存储卷数据')
-  await dialog.getByRole('button', { name: '取消', exact: true }).click()
-  expect(state.errors).toEqual([])
+test('legacy configuration reapplication explains historical image limitations', async ({page}) => {
+  const state = await setupReleaseFlow(page, {legacy: true})
+  await page.getByRole('tab', {name: '发布记录', exact: true}).click()
+  const record = page.locator('details').filter({has: page.locator('summary').filter({hasText: '#184'})}).first()
+  await record.locator('summary').first().click()
+  await expect(record.getByRole('button', {name: '恢复到此版本…', exact: true})).toHaveCount(0)
+  await record.getByRole('button', {name: '重新应用历史配置…', exact: true}).click()
+  await expect(page.getByRole('dialog')).toContainText('不能保证恢复原版本')
+  expect(state.writes.find(write => write.path.endsWith('/release-plans'))?.body).toEqual({operation: 'reapply', source_record_id: 184})
 })
 
-test('project deletion keeps typed confirmation and volume warning', async ({ page }) => {
-  const state = await openReleases(page)
-  const dialog = page.getByRole('dialog')
-  await page.getByRole('button', { name: '项目更多操作', exact: true }).click()
-  await page.getByRole('menuitem').filter({ hasText: '强制删除' }).click()
-  await expect(dialog).toContainText('永久删除命名存储卷及其中的数据')
-  await expect(dialog.getByRole('button', { name: '强制删除', exact: true })).toBeDisabled()
-  await dialog.getByRole('textbox').fill('app')
-  await expect(dialog.getByRole('button', { name: '强制删除', exact: true })).toBeEnabled()
-  await dialog.getByRole('button', { name: '取消', exact: true }).click()
-  await page.getByRole('button', { name: '项目更多操作', exact: true }).click()
-  await page.getByRole('menuitem').filter({ hasText: '删除项目', hasNotText: '强制删除' }).click()
-  await expect(dialog).toContainText('不会停止或删除仍在运行的容器')
-  await expect(dialog.getByRole('button', { name: '删除项目', exact: true })).toBeDisabled()
-  await dialog.getByRole('button', { name: '取消', exact: true }).click()
-  expect(state.writes).toEqual([])
-})
-
-test('delivery busy state and observe mode retain appropriate controls', async ({ page }) => {
-  const state = await openReleases(page)
-  state.releases[0].status = 'deploying'
-  await page.reload()
-  await page.getByRole('tab', { name: 'Release', exact: true }).click()
-  await expect(row(page, 72).getByRole('button', { name: '发布', exact: true })).toBeDisabled()
-  await expect(more(page, 71)).toBeDisabled()
-  await page.getByRole('button', { name: '项目更多操作', exact: true }).click()
-  for (const item of await page.getByRole('menuitem').all()) await expect(item).toHaveAttribute('aria-disabled', 'true')
-  await page.keyboard.press('Escape')
-
-  state.releases[0].status = 'succeeded'
-  state.configuration.reconcile_mode = 'observe'
-  state.releases[1].commit_message = 'LongCommitWithoutSpaces'.repeat(20)
-  state.releases[0].approved_by_name = 'very-long-approval-name-'.repeat(18)
-  await page.setViewportSize({ width: 320, height: 1100 })
-  await page.reload()
-  await page.getByRole('tab', { name: 'Release', exact: true }).click()
-  await expect(page.getByRole('button', { name: '发布', exact: true })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '发布', exact: true })).toHaveCount(0)
-  await expect(more(page, 67)).toHaveCount(0)
-  await expect(row(page, 73).getByRole('status')).toContainText(state.releases[0].approved_by_name!)
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-  expect(state.writes).toEqual([])
-  expect(state.errors).toEqual([])
-})
-
-for (const language of ['zh-CN', 'en-US']) for (const theme of ['light', 'dark']) for (const width of [390, 1440]) {
-  test(`rollback snapshots and temporary targets ${language} ${theme} ${width}`, async ({ page }) => {
-    const zh = language === 'zh-CN', state = await openReleases(page, language, theme, width)
-    await more(page, 71, zh).click()
-    await page.getByRole('menuitem').filter({ hasText: zh ? '重新应用此版本' : 'Reapply this release' }).click()
-    const dialog = page.getByRole('dialog'), snapshots = dialog.getByRole('group', { name: zh ? '配置快照' : 'Configuration snapshots' })
-    const confirm = dialog.getByRole('button', { name: zh ? '回滚' : 'Roll back', exact: true })
-    await expect(confirm).toBeDisabled()
-    const failed = snapshots.getByRole('button').filter({ hasText: '#1071' })
-    await expect(failed).toContainText(zh ? '失败' : 'failed')
-    await expect(snapshots.getByRole('button').filter({ hasText: '#2002' })).toBeDisabled()
-    await failed.click()
-    await expect(confirm).toBeEnabled()
-    await expect(dialog).toContainText('snapshot-71')
-    await expect(dialog.getByText('private-snapshot-value', { exact: false })).toHaveCount(0)
-    await dialog.getByText(zh ? '高级选项' : 'Advanced options', { exact: true }).click()
-    await dialog.getByRole('checkbox', { name: zh ? '临时覆盖目标节点' : 'Override target nodes for this operation' }).check()
-    await dialog.getByRole('checkbox', { name: /Healthy node/ }).check()
-    await page.screenshot({ path: `/private/tmp/suma-cd-rollback-${language}-${theme}-${width}.png`, animations: 'disabled' })
-    expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
-    await dialog.getByRole('button', { name: zh ? '取消' : 'Cancel', exact: true }).click()
-    expect(state.writes).toEqual([])
-    await more(page, 71, zh).click()
-    await page.getByRole('menuitem').filter({ hasText: zh ? '重新应用此版本' : 'Reapply this release' }).click()
-    await snapshots.getByRole('button').filter({ hasText: '#1071' }).click()
-    await expect(dialog.getByRole('checkbox', { name: zh ? '临时覆盖目标节点' : 'Override target nodes for this operation' })).not.toBeVisible()
-    await confirm.click()
-    await expect.poll(() => state.writes.at(-1)).toEqual({ path: '/delivery-projects/app/releases/71/rollback', method: 'POST', body: { record_id: 1071 } })
-    expect(state.configuration.node_ids).toEqual(['local', 'other'])
-    expect(state.errors).toEqual([])
-  })
-}
-
-test('records filter, snapshot visibility, and direct record rollback', async ({ page }) => {
-  const state = await openReleases(page)
-  await page.getByRole('tab', { name: '记录', exact: true }).click()
-  await expect(page.getByText('#1071 · 发布', { exact: true })).toBeVisible()
-  const record = page.locator('details').filter({ has: page.getByText('#1071 · 发布', { exact: true }) })
-  await record.locator('summary').click()
-  await expect(record.getByText('TOKEN=••••••', { exact: true })).toBeVisible()
-  await record.getByRole('button', { name: '显示变量值' }).click()
-  await expect(record.getByText('TOKEN=private-snapshot-value', { exact: true })).toBeVisible()
-  await record.getByRole('button', { name: '隐藏变量值' }).click()
-  await expect(record.getByText('TOKEN=••••••', { exact: true })).toBeVisible()
-  await record.getByRole('button', { name: '回滚', exact: true }).click()
-  const dialog = page.getByRole('dialog')
-  await expect(dialog.getByRole('button', { name: '回滚', exact: true })).toBeEnabled()
-  await expect(dialog.getByRole('button').filter({ hasText: '#1071' })).toHaveAttribute('aria-pressed', 'true')
-  await dialog.getByRole('button', { name: '取消', exact: true }).click()
-  await page.getByRole('combobox', { name: '记录状态' }).click()
-  await page.getByRole('option', { name: '失败', exact: true }).click()
-  await expect(page.getByText('#1073 · 发布', { exact: true })).toHaveCount(0)
-  await expect(page.getByText('#1071 · 发布', { exact: true })).toBeVisible()
-  expect(state.writes).toEqual([])
-  expect(state.errors).toEqual([])
-})
-
-test('temporary rollback override is submitted without changing settings', async ({ page }) => {
-  const state = await openReleases(page)
-  await more(page, 71).click()
-  await page.getByRole('menuitem').filter({ hasText: '重新应用此版本' }).click()
-  const dialog = page.getByRole('dialog')
-  await dialog.getByRole('group', { name: '配置快照' }).getByRole('button').filter({ hasText: '#1071' }).click()
-  await dialog.getByText('高级选项', { exact: true }).click()
-  await dialog.getByRole('checkbox', { name: '临时覆盖目标节点' }).check()
-  await dialog.getByRole('checkbox', { name: /Healthy node/ }).check()
-  await dialog.getByRole('checkbox', { name: /Aliyun/ }).uncheck()
-  await dialog.getByRole('button', { name: '回滚', exact: true }).click()
-  await expect.poll(() => state.writes.at(-1)).toEqual({ path: '/delivery-projects/app/releases/71/rollback', method: 'POST', body: { record_id: 1071, node_ids: ['other'] } })
-  expect(state.configuration.node_ids).toEqual(['local', 'other'])
-})
-
-test('records paginate on the server and filters reset to the first page', async ({ page }) => {
-  const state = await openReleases(page)
-  for (let index = 0; index < 25; index++) state.records.push({ ...state.records[0], id: 3000 + index })
-  await page.getByRole('tab', { name: '记录', exact: true }).click()
-  await expect(page.getByRole('navigation', { name: '列表分页' })).toContainText(`共 ${state.records.length} 条`)
-  await page.getByRole('button', { name: '下一页', exact: true }).click()
-  await expect(page.getByText('#3024 · 发布', { exact: true })).toBeVisible()
-  await page.getByRole('combobox', { name: '记录状态' }).click()
-  await page.getByRole('option', { name: '失败', exact: true }).click()
-  await expect(page.getByRole('button', { name: '上一页', exact: true })).toBeDisabled()
-  await expect(page.getByText('#3024 · 发布', { exact: true })).toHaveCount(0)
-  expect(state.writes).toEqual([])
-})
-
-test('deleted snapshot nodes can be explicitly removed in a temporary override', async ({ page }) => {
-  const state = await openReleases(page)
-  state.records.find(record => record.id === 1071)!.node_ids = ['deleted-node']
-  await more(page, 71).click()
-  await page.getByRole('menuitem').filter({ hasText: '重新应用此版本' }).click()
-  const dialog = page.getByRole('dialog')
-  await dialog.getByRole('group', { name: '配置快照' }).getByRole('button').filter({ hasText: '#1071' }).click()
-  const confirm = dialog.getByRole('button', { name: '回滚', exact: true })
-  await expect(confirm).toBeDisabled()
-  await dialog.getByText('高级选项', { exact: true }).click()
-  await dialog.getByRole('checkbox', { name: '临时覆盖目标节点' }).check()
-  await dialog.getByRole('checkbox', { name: /deleted-node/ }).click()
-  await expect(dialog.getByRole('checkbox', { name: /deleted-node/ })).toHaveCount(0)
-  await dialog.getByRole('checkbox', { name: /Healthy node/ }).check()
-  await expect(confirm).toBeEnabled()
-  await confirm.click()
-  await expect.poll(() => state.writes.at(-1)).toEqual({ path: '/delivery-projects/app/releases/71/rollback', method: 'POST', body: { record_id: 1071, node_ids: ['other'] } })
-  expect(state.configuration.node_ids).toEqual(['local', 'other'])
+test('failed-node recovery stays scoped to the failed publication', async ({page}) => {
+  const state = await setupReleaseFlow(page, {fail: true})
+  await page.getByRole('button', {name: '发布…', exact: true}).click()
+  await page.getByRole('dialog').getByRole('button', {name: '发布到 2 个节点'}).click()
+  await expect(page.getByRole('dialog').getByRole('heading', {name: '本次发布结果'})).toBeVisible()
+  await page.getByRole('dialog').getByRole('button', {name: '关闭', exact: true}).click()
+  await page.getByRole('button', {name: '恢复失败节点…', exact: true}).click()
+  const sheet = page.getByRole('dialog')
+  await expect(sheet.getByRole('checkbox')).toHaveCount(1)
+  await expect(sheet).toContainText('Other')
+  expect(state.writes.filter(write => write.path.endsWith('/release-plans'))[1].body).toEqual({operation: 'restore-failed', source_record_id: 185})
 })

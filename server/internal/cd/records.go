@@ -187,6 +187,7 @@ func (s *Service) snapshotRecord(ctx context.Context, p database.DeliveryProject
 func copyRecordSnapshot(source database.DeliveryRecord, operation string, actor Actor) database.DeliveryRecord {
 	id := source.ID
 	return database.DeliveryRecord{ProjectID: source.ProjectID, ReleaseID: source.ReleaseID, SourceRecordID: &id, Operation: operation, ActorIP: actor.IP, ActorID: actor.UserID, ActorName: actor.Name, TriggerType: "manual", Status: task.StatusPending,
+		FrozenInputCiphertext: append([]byte(nil), source.FrozenInputCiphertext...), ImagesPinned: source.ImagesPinned,
 		RestoreRecordsJSON: source.RestoreRecordsJSON, SnapshotComplete: source.SnapshotComplete, SnapshotNote: source.SnapshotNote, ConfigHash: source.ConfigHash, ImageReferences: source.ImageReferences, ComposeFilesJSON: source.ComposeFilesJSON, EnvironmentFile: source.EnvironmentFile, EnvironmentCiphertext: append([]byte(nil), source.EnvironmentCiphertext...), WorktreePath: source.WorktreePath,
 		NodeIDsJSON: source.NodeIDsJSON, RegistryCredentialIDsJSON: source.RegistryCredentialIDsJSON, GitCredentialID: source.GitCredentialID, DeploymentTimeout: source.DeploymentTimeout, AutoRollback: source.AutoRollback}
 }
@@ -304,6 +305,17 @@ func (s *Service) startRecordOperation(ctx context.Context, name string, release
 	if err := json.Unmarshal([]byte(record.NodeIDsJSON), &record.NodeIDs); err != nil {
 		return OperationResult{}, err
 	}
+	if sourceID != 0 && record.RestoreRecordsJSON == "" {
+		frozen, err := s.frozenInput(record)
+		if err != nil {
+			return OperationResult{}, err
+		}
+		for _, nodeID := range record.NodeIDs {
+			if _, ok := frozen.Nodes[nodeID]; !ok {
+				return OperationResult{}, errors.New("restore targets must belong to the fixed source snapshot")
+			}
+		}
+	}
 	if err := s.validateNodeIDs(ctx, record.NodeIDs); err != nil {
 		return OperationResult{}, err
 	}
@@ -406,7 +418,32 @@ func (s *Service) executeRecord(ctx context.Context, p database.DeliveryProject,
 		}
 		runErr = errors.Join(runErr, s.finishRecord(context.Background(), release, r, status, errorMessage(runErr), health))
 	}()
-	if err := s.db.WithContext(ctx).Model(&r).Updates(map[string]any{"task_id": taskID, "status": StatusValidating, "started_at": now}).Error; err != nil {
+	if r.RestoreRecordsJSON == "" {
+		if r.Operation != AttemptDeploy && !r.ImagesPinned {
+			return errors.New("historical image identity is unavailable; explicitly reapply configuration instead")
+		}
+		if _, err := s.freezeRecord(ctx, p, release, &r); err != nil {
+			return err
+		}
+		if automaticTrigger(r.TriggerType) {
+			current, err := s.project(ctx, p.Name)
+			if err != nil {
+				return err
+			}
+			version, err := s.configurationVersion(ctx, s.db, current)
+			if err != nil {
+				return err
+			}
+			input, err := s.frozenInput(r)
+			if err != nil {
+				return err
+			}
+			if version != input.ConfigurationVersion {
+				return deployment.ErrPlanChanged
+			}
+		}
+	}
+	if err := s.db.WithContext(ctx).Model(&r).Updates(map[string]any{"task_id": taskID, "status": StatusValidating, "started_at": now, "frozen_input_ciphertext": r.FrozenInputCiphertext, "images_pinned": r.ImagesPinned}).Error; err != nil {
 		return err
 	}
 	if err := s.validateNodeIDs(ctx, r.NodeIDs); err != nil {
@@ -451,6 +488,23 @@ func (s *Service) executeRecord(ctx context.Context, p database.DeliveryProject,
 		}
 		r.ConfigHash = computedHash
 		images := imageReferences(rendered)
+		if r.ImagesPinned {
+			input, err := s.frozenInput(r)
+			if err != nil {
+				return err
+			}
+			images = []string{}
+			seen := map[string]bool{}
+			for _, node := range input.Nodes {
+				for _, image := range node.Images {
+					if !seen[image.Reference] {
+						images = append(images, image.Reference)
+						seen[image.Reference] = true
+					}
+				}
+			}
+			sort.Strings(images)
+		}
 		for i := range images {
 			images[i] = compose.RedactEnvironment(images[i], spec.Environment)
 		}
@@ -600,7 +654,7 @@ func (s *Service) executeRecord(ctx context.Context, p database.DeliveryProject,
 					failures = append(failures, "automatic rollback snapshot is unavailable")
 					continue
 				}
-				if !source.SnapshotComplete {
+				if !source.SnapshotComplete || !source.ImagesPinned {
 					failures = append(failures, "automatic rollback snapshot is incomplete")
 					continue
 				}
@@ -632,6 +686,11 @@ func (s *Service) executeRecord(ctx context.Context, p database.DeliveryProject,
 		}
 		failure := strings.Join(failures, "; ")
 		return errors.New(failure)
+	}
+	if r.Operation == AttemptDeploy {
+		if err := s.db.WithContext(ctx).Model(&database.DeliveryProject{}).Where("id = ?", p.ID).Update("initial_application_required", false).Error; err != nil {
+			return err
+		}
 	}
 	report(100, "Delivery completed")
 	return nil
@@ -708,7 +767,31 @@ func (s *Service) executeRecordNode(ctx context.Context, p database.DeliveryProj
 			return "", err
 		}
 	}
-	spec.ForceRecreate = r.Operation != AttemptDeploy || (previous.ActiveReleaseID != nil && *previous.ActiveReleaseID == release.ID)
+	frozen, err := s.frozenInput(r)
+	if err != nil {
+		return "", err
+	}
+	input, ok := frozen.Nodes[d.NodeID]
+	if !ok {
+		return "", errors.New("snapshot has no image identity for this node")
+	}
+	target, err := s.targets.ResolveComposeTarget(ctx, d.NodeID)
+	if err != nil {
+		return "", err
+	}
+	if target.RuntimeIdentity != input.RuntimeIdentity {
+		return "", errors.New("node runtime changed; prepare a new release")
+	}
+	rendered, err := runner.Render(ctx, spec, io.Discard)
+	if err != nil {
+		return "", errors.New("snapshot validation failed (private diagnostic hidden)")
+	}
+	if deployment.ConfigurationHash(rendered, spec.Environment) != input.ConfigHash {
+		return "", errors.New("snapshot content changed; prepare a new release")
+	}
+	baseSpec := spec
+	spec = input.Apply(spec)
+	spec.ForceRecreate = frozen.ForceRecreate || r.Operation != AttemptDeploy || (previous.ActiveReleaseID != nil && *previous.ActiveReleaseID == release.ID)
 	if err := s.claimDeploymentNamespace(ctx, p, d.NodeID, spec); err != nil {
 		return "", err
 	}
@@ -730,7 +813,23 @@ func (s *Service) executeRecordNode(ctx context.Context, p database.DeliveryProj
 			report(85, "Checking service health")
 		}
 		return &reportWriter{report: report, progress: progress}, nil
-	}, nil)
+	}, func(ctx context.Context) error {
+		target, err := s.targets.ResolveComposeTarget(ctx, d.NodeID)
+		if err != nil {
+			return err
+		}
+		if target.RuntimeIdentity != input.RuntimeIdentity {
+			return errors.New("node runtime changed during image pull")
+		}
+		if err := s.git.Verify(ctx, r.WorktreePath, release.CommitSHA); err != nil {
+			return err
+		}
+		current, err := runner.Render(ctx, baseSpec, io.Discard)
+		if err != nil || deployment.ConfigurationHash(current, baseSpec.Environment) != input.ConfigHash {
+			return errors.New("configuration snapshot changed during image pull")
+		}
+		return s.validateRecordCredentials(ctx, r)
+	})
 	if err != nil {
 		return health, err
 	}

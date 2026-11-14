@@ -5,6 +5,8 @@ import "time"
 // DeliveryRecord owns immutable operation settings. Validation adds their
 // fingerprint; execution updates progress and outcome. Release owns Git identity.
 type DeliveryRecord struct {
+	FrozenInputCiphertext     []byte                       `json:"-"`
+	ImagesPinned              bool                         `json:"images_pinned"`
 	ID                        uint                         `gorm:"primaryKey" json:"id"`
 	ProjectID                 uint                         `gorm:"index;not null" json:"project_id"`
 	ReleaseID                 uint                         `gorm:"index;not null" json:"release_id"`

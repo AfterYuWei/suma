@@ -289,32 +289,33 @@ type DeliveryTargetState struct {
 // intentionally independent from the Docker-label Compose inventory: Compose
 // is a deployment adapter used by a release, not the identity or lifecycle owner of CD.
 type DeliveryProject struct {
-	ID                    uint   `gorm:"primaryKey"`
-	NodeID                string `gorm:"size:64;not null;default:local;index"`
-	Name                  string `gorm:"uniqueIndex;size:128;not null"`
-	DeploymentName        string `gorm:"size:128;not null"`
-	GitCloneURL           string
-	GitCredentialID       *uint  `gorm:"index"`
-	GitRefType            string `gorm:"size:16"`
-	GitRef                string
-	ComposeFilesJSON      string
-	EnvironmentFile       string
-	EnvironmentCiphertext []byte `json:"-"`
-	ReconcileMode         string `gorm:"size:16;not null;default:manual"`
-	AutomationEnabled     bool   `gorm:"not null;default:true"`
-	SyncIntervalSeconds   int    `gorm:"not null;default:300"`
-	DesiredCommit         string `gorm:"size:64"`
-	ObservedCommit        string `gorm:"size:64"`
-	ActiveCommit          string `gorm:"size:64"`
-	ActiveReleaseID       *uint  `gorm:"index"`
-	AutoRollback          bool
-	DeploymentTimeout     int    `gorm:"not null;default:120"`
-	WebhookID             string `gorm:"size:64;uniqueIndex:idx_delivery_webhook_id,where:webhook_id <> ''"`
-	WebhookSecret         []byte `json:"-"`
-	WebhookEnabled        bool
-	LastSyncAt            *time.Time `gorm:"index"`
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	InitialApplicationRequired bool
+	ID                         uint   `gorm:"primaryKey"`
+	NodeID                     string `gorm:"size:64;not null;default:local;index"`
+	Name                       string `gorm:"uniqueIndex;size:128;not null"`
+	DeploymentName             string `gorm:"size:128;not null"`
+	GitCloneURL                string
+	GitCredentialID            *uint  `gorm:"index"`
+	GitRefType                 string `gorm:"size:16"`
+	GitRef                     string
+	ComposeFilesJSON           string
+	EnvironmentFile            string
+	EnvironmentCiphertext      []byte `json:"-"`
+	ReconcileMode              string `gorm:"size:16;not null;default:manual"`
+	AutomationEnabled          bool   `gorm:"not null;default:true"`
+	SyncIntervalSeconds        int    `gorm:"not null;default:300"`
+	DesiredCommit              string `gorm:"size:64"`
+	ObservedCommit             string `gorm:"size:64"`
+	ActiveCommit               string `gorm:"size:64"`
+	ActiveReleaseID            *uint  `gorm:"index"`
+	AutoRollback               bool
+	DeploymentTimeout          int    `gorm:"not null;default:120"`
+	WebhookID                  string `gorm:"size:64;uniqueIndex:idx_delivery_webhook_id,where:webhook_id <> ''"`
+	WebhookSecret              []byte `json:"-"`
+	WebhookEnabled             bool
+	LastSyncAt                 *time.Time `gorm:"index"`
+	CreatedAt                  time.Time
+	UpdatedAt                  time.Time
 }
 
 type GitCredential struct {

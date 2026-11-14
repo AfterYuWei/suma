@@ -43,6 +43,7 @@ async function setup(page: Page, language = 'en-US', theme = 'dark') {
       }
       data = { ...configuration, automation_version: rules[2].version, sync_interval_seconds: rules[2].interval_seconds }
     } else if (path === '/delivery-projects/blog/drift') data = { drifted: false, status: 'unknown', runtime_healthy: false, nodes: [], desired_commit: '', observed_commit: '', active_commit: '' }
+    else if (path === '/delivery-projects/blog/records') data = { items: [], total: 0, page: 1, page_size: 10, counts: {} }
     else if (path === '/task-center/kinds') data = rules.map(row => ({ type: row.kind, requires_node: !!row.node_id, schedule_types: [row.schedule_type], actions: [row.kind === 'system.cleanup' ? 'run' : 'check'], webhook: row.webhook_enabled, business_owned: row.kind !== 'image.update' }))
     else if (path === '/task-center/records') {
       const rows = (url.searchParams.get('status') === 'active' ? [active] : records).filter(row => (!url.searchParams.get('source') || row.triggered_by === url.searchParams.get('source')) && (!url.searchParams.get('schedule_id') || row.schedule_id === Number(url.searchParams.get('schedule_id'))) && (!url.searchParams.get('search') || row.name.includes(url.searchParams.get('search')!)))
@@ -203,7 +204,7 @@ test('business CD editor keeps its draft and shared version when center changes 
   await page.clock.install(); await page.clock.fastForward(6000)
   await expect(page.getByText('Configuration changed elsewhere. Your draft and its starting version are preserved.', { exact: true })).toBeVisible()
   await expect(cloneURL).toHaveValue('https://git.example.test/unsaved-draft.git')
-  await page.getByRole('button', { name: 'Save CD settings', exact: true }).click()
+  await page.getByRole('button', { name: 'Save release settings', exact: true }).click()
   await expect(page.getByRole('alert').filter({ hasText: 'concurrently' })).toBeVisible()
   expect(state.writes.at(-1)).toMatchObject({ expected_automation_version: 2, repository: { clone_url: 'https://git.example.test/unsaved-draft.git' } })
   await expect(cloneURL).toHaveValue('https://git.example.test/unsaved-draft.git')
