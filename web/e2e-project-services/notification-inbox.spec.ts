@@ -36,7 +36,7 @@ async function openInbox(page: Page, language = 'en-US', theme = 'dark', width =
 }
 
 for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']) for (const width of [390, 1440]) {
-  test(`bulk inbox read ${language} ${theme} ${width}`, async ({ page }) => {
+  test(`bulk inbox read ${language} ${theme} ${width}`, async ({ page }, testInfo) => {
     const { state } = await openInbox(page, language, theme, width), zh = language === 'zh-CN'
     const all = page.getByRole('button', { name: zh ? '全部已读' : 'Mark all read', exact: true })
     const bell = page.getByRole('button', { name: zh ? '站内消息' : 'Inbox', exact: true })
@@ -50,7 +50,7 @@ for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']
     await expect(page.locator('article')).toHaveCount(3)
     expect(state.writes).toEqual(['/notifications/inbox/read-all'])
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-    await page.screenshot({ path: `/private/tmp/suma-inbox-read-all-${language}-${theme}-${width}.png` })
+    await page.screenshot({ path: testInfo.outputPath(`suma-inbox-read-all-${language}-${theme}-${width}.png`) })
     state.inbox.items.unshift({ ...state.inbox.items[0], id: 'later-event', read: false })
     state.inbox.unread = 1
     await page.reload()

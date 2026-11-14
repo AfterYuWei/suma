@@ -72,7 +72,7 @@ async function setup(page: Page, language = 'en-US', theme = 'dark') {
 }
 
 for (const language of ['en-US', 'zh-CN']) for (const theme of ['dark', 'light']) for (const width of [390, 1440]) {
-  test(`shared scope and registered kinds ${language} ${theme} ${width}`, async ({ page }) => {
+  test(`shared scope and registered kinds ${language} ${theme} ${width}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 950 })
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
     const state = await setup(page, language, theme), zh = language === 'zh-CN'
@@ -87,7 +87,7 @@ for (const language of ['en-US', 'zh-CN']) for (const theme of ['dark', 'light']
     await expect(page.getByText('rule-1', { exact: true })).toHaveCount(0)
     await page.getByRole('tab', { name: zh ? '全部' : 'All', exact: true }).click()
     for (const row of state.rules) await expect(page.getByText(row.name, { exact: true })).toBeVisible()
-    if (language === 'zh-CN' && theme === 'dark') await page.screenshot({ path: `/private/tmp/suma-task-center-${width}.png`, fullPage: true, animations: 'disabled' })
+    if (language === 'zh-CN' && theme === 'dark') await page.screenshot({ path: testInfo.outputPath(`suma-task-center-${width}.png`), fullPage: true, animations: 'disabled' })
     await page.getByRole('button', { name: zh ? '新建自动化' : 'New automation', exact: true }).click()
     const dialog = page.getByRole('dialog'), trigger = dialog.getByRole('combobox').first()
     await trigger.click()

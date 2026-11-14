@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']) for (const width of [390, 1440]) {
- test(`notification incident evidence ${language} ${theme} ${width}`, async ({ page }) => {
+ test(`notification incident evidence ${language} ${theme} ${width}`, async ({ page }, testInfo) => {
   await page.setViewportSize({ width, height: 900 })
   await page.addInitScript(({ language, theme }) => {
    sessionStorage.setItem('suma-demo-session', '1')
@@ -38,7 +38,7 @@ for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']
   await expect(ongoing).toContainText(zh ? '累计 1234 次' : '1234 observations')
   await expect(ongoing.getByRole('button')).toHaveCount(0)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy()
-  if (language === 'zh-CN' && theme === 'dark' && width === 1440) await page.screenshot({ path: '/private/tmp/suma-notification-incidents-desktop.png', fullPage: true })
+  if (language === 'zh-CN' && theme === 'dark' && width === 1440) await page.screenshot({ path: testInfo.outputPath('suma-notification-incidents-desktop.png'), fullPage: true })
  })
 }
 

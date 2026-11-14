@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 
 const created = '2026-10-26T06:00:00Z'
 for (const language of ['zh-CN', 'en-US']) for (const theme of ['light', 'dark']) for (const width of [390, 1440]) {
-  test(`CD project names ${language} ${theme} ${width}`, async ({ page }) => {
+  test(`CD project names ${language} ${theme} ${width}`, async ({ page }, testInfo) => {
     const zh = language === 'zh-CN'
     await page.setViewportSize({ width, height: 1000 })
     await page.addInitScript(({ language, theme }) => {
@@ -39,7 +39,7 @@ for (const language of ['zh-CN', 'en-US']) for (const theme of ['light', 'dark']
     await search.fill('suma-cd-1')
     await expect(row).toHaveCount(1)
     await search.fill('')
-    await page.screenshot({ path: `/private/tmp/suma-cd-names-${language}-${theme}-${width}.png` })
+    await page.screenshot({ path: testInfo.outputPath(`suma-cd-names-${language}-${theme}-${width}.png`) })
     await row.getByRole('link', { name: 'eizhu_admin', exact: true }).click()
     await expect(page).toHaveURL(/\/projects\/compose\/suma-cd-1$/)
     await expect(page.getByRole('heading', { name: 'eizhu_admin', exact: true })).toBeVisible()

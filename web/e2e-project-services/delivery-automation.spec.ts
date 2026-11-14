@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import type { CDConfiguration } from '../src/features/delivery/types'
 
 for (const language of ['zh-CN', 'en-US']) for (const theme of ['light', 'dark']) for (const width of [390, 1440]) {
-  test(`delivery automation ${language} ${theme} ${width}`, async ({ page }) => {
+  test(`delivery automation ${language} ${theme} ${width}`, async ({ page }, testInfo) => {
     const zh = language === 'zh-CN'
     await page.setViewportSize({ width, height: 1000 })
     await page.addInitScript(({ language, theme }) => {
@@ -71,7 +71,7 @@ for (const language of ['zh-CN', 'en-US']) for (const theme of ['light', 'dark']
     await expect(page.getByText(zh ? '同步任务已启动。' : 'Synchronization task started.')).toBeVisible()
     await page.reload()
     await expect(toggle).not.toBeChecked()
-    await page.screenshot({ path: `/private/tmp/suma-delivery-automation-${language}-${theme}-${width}.png` })
+    await page.screenshot({ path: testInfo.outputPath(`suma-delivery-automation-${language}-${theme}-${width}.png`) })
     await page.getByRole('tab', { name: zh ? '设置' : 'Settings', exact: true }).click()
     const setting = page.getByRole('switch', { name: zh ? '启用自动交付触发' : 'Enable automatic delivery triggers', exact: true })
     await expect(setting).not.toBeChecked()

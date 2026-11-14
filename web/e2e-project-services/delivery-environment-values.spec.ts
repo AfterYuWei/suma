@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import type { CDConfiguration, CDConfigureInput } from '../src/features/delivery/types'
 
 for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']) for (const width of [390, 1440]) {
-  test(`saved delivery environment ${language} ${theme} ${width}`, async ({ page }) => {
+  test(`saved delivery environment ${language} ${theme} ${width}`, async ({ page }, testInfo) => {
     const zh = language === 'zh-CN'
     await page.setViewportSize({ width, height: 1000 })
     await page.addInitScript(({ language, theme }) => {
@@ -104,7 +104,7 @@ for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']
     await hide().click()
     expect(await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }).includes('test-only'))).toBe(false)
     const section = form.locator('section').filter({ has: page.getByRole('heading', { name: zh ? '手动环境变量' : 'Manual environment variables', exact: true }) })
-    await section.screenshot({ path: `/private/tmp/suma-environment-values-${language}-${theme}-${width}.png` })
+    await section.screenshot({ path: testInfo.outputPath(`suma-environment-values-${language}-${theme}-${width}.png`) })
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.reload()
     await settings.click()

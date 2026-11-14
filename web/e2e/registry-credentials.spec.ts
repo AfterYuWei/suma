@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 for(const language of ['zh-CN','en-US']) for(const theme of ['dark','light']) for(const width of [390,1440]){
- test(`registry access token guidance ${language} ${theme} ${width}`,async({page})=>{
+ test(`registry access token guidance ${language} ${theme} ${width}`,async({page},testInfo)=>{
   const zh=language==='zh-CN'
   await page.addInitScript(({language,theme})=>{sessionStorage.setItem('suma-demo-session','1');localStorage.setItem('suma-language',language);localStorage.setItem('suma-theme',theme)}, {language,theme})
   await page.setViewportSize({width,height:900});await page.goto('/authentication')
@@ -27,6 +27,6 @@ for(const language of ['zh-CN','en-US']) for(const theme of ['dark','light']) fo
   await type.click();await page.getByRole('option',{name:basic,exact:true}).click()
   await expect(sheet.getByLabel(zh?'用户名':'Username',{exact:true})).toBeVisible()
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
-  if(zh&&theme==='dark')await sheet.screenshot({path:`/private/tmp/suma-registry-guidance-${width}.png`})
+  if(zh&&theme==='dark')await sheet.screenshot({path:testInfo.outputPath(`suma-registry-guidance-${width}.png`)})
  })
 }

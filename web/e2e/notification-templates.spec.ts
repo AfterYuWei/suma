@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 for(const provider of ['feishu_app','telegram','webhook']) for(const language of ['zh-CN','en-US']) for(const theme of ['dark','light']) for(const width of [390,1440]) {
- test(`platform notification cards ${provider} ${language} ${theme} ${width}`,async({page})=>{
+ test(`platform notification cards ${provider} ${language} ${theme} ${width}`,async({page},testInfo)=>{
   const zh=language==='zh-CN'
   await page.addInitScript(({provider,language,theme})=>{
    sessionStorage.setItem('suma-demo-session','1');localStorage.setItem('suma-language',language);localStorage.setItem('suma-theme',theme)
@@ -56,7 +56,7 @@ for(const provider of ['feishu_app','telegram','webhook']) for(const language of
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
   if(provider==='feishu_app' && language==='zh-CN') {
    await page.setViewportSize({width,height:2200})
-   await preview.screenshot({path:`/private/tmp/suma-notification-card-${theme}-${width}.png`})
+   await preview.screenshot({path:testInfo.outputPath(`suma-notification-card-${theme}-${width}.png`)})
    await page.setViewportSize({width,height:1000})
   }
   await sheet.getByRole('button',{name:zh?'保存并完成':'Save and finish',exact:true}).click()
