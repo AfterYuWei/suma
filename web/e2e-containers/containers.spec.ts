@@ -3,6 +3,9 @@ import type { Instance, QueryResult } from '../src/features/monitoring/types'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import type { ContainerMetrics, ContainerRuntime, ContainerSummary } from '../src/features/containers/types'
 
+// Keep the device fallback deterministic; saved timezones are set per scenario.
+test.use({ timezoneId: 'UTC' })
+
 const started = '2026-10-12T00:00:00Z'
 const names = ['suma', 'vaultwarden', 'derp-server', 'traefik', 'postgres', 'redis']
 const containers: ContainerSummary[] = names.map((name, index) => ({
@@ -25,7 +28,7 @@ const gate = () => { let resolve!: () => void; const promise = new Promise<void>
 const browserErrors=new WeakMap<Page,string[]>()
 test.afterEach(async({page})=>{expect(browserErrors.get(page)??[]).toEqual([])})
 
-async function setup(page: Page, language = 'en-US', theme = 'dark') {
+async function setup(page: Page, language = 'en-US', theme = 'dark', savedTimeZone = '') {
   const state = { calls: [] as string[], gates: new Map<string, Promise<void>>(), failures: new Set<string>(), rows: structuredClone(containers), metadata: structuredClone(runtime), seconds: 0, start: started, rollback: false, cpu: 0.2, memory: 19 * 1024 ** 2 }
   const errors:string[]=[];browserErrors.set(page,errors);page.on('pageerror',error=>errors.push(error.message))
   // Match the controlled browser clock so fixed samples do not age out in Node.
@@ -47,7 +50,7 @@ async function setup(page: Page, language = 'en-US', theme = 'dark') {
     let data: unknown = []
     if (path === '/auth/status') data = { needs_setup: false }
     else if (path === '/auth/session') data = { id: 1, username: 'admin', nickname: 'Admin', email: 'admin@example.test' }
-    else if (path === '/settings') data = {}
+    else if (path === '/settings') data = savedTimeZone ? { 'general.timezone': savedTimeZone } : {}
     else if (path === '/nodes') data = nodes
     else if (/^\/nodes\/[^/]+$/.test(path)) data=nodes.find(n=>n.id===path.split('/').at(-1))
     else if (path.startsWith('/monitoring')) data=monitoring(path,route.request().method(),JSON.parse(route.request().postData()??'{}'),new URL(route.request().url()))
@@ -654,7 +657,7 @@ test('monitoring automatic and manual refresh preserve reading position', async 
 
 for (const [language, theme, width] of [['zh-CN', 'light', 1440], ['en-US', 'dark', 390]] as const) {
   test('monitoring organized controls and chart columns ' + width, async ({ page }) => {
-    await setup(page, language, theme)
+    await setup(page, language, theme, 'Asia/Shanghai')
     await page.setViewportSize({ width, height: 1000 })
     await page.goto('/containers/' + containers[0].id + '#monitoring')
     const region = page.getByRole('region', { name: language === 'zh-CN' ? '容器监控' : 'Container monitoring' })

@@ -4,6 +4,8 @@ This file records the completed MVP implementation. Every checked phase was veri
 
 ## Current work
 
+- [x] CI 容器监控时区用例修复（2026-11-15）：原布局用例预期 Asia/Shanghai，但设置夹具返回空配置，实际跟随浏览器时区，之前 CST 测试环境掩盖了 CI 的 UTC 差异。固定容器用例的浏览器时区为 UTC，仅需已保存时区的场景明确提供 general.timezone=Asia/Shanghai，保留原显示与布局断言。验证均在新授权 CNB 测试机执行：UTC 下原两项失败完整复现，修复后两项通过，完整容器套件 87/87 通过（4.4 分钟），修改文件定向 lint 为 0 警告／0 错误，本地与远端测试文件 SHA-256 一致；未改产品时区逻辑，本地未测试。
+
 - [x] 持续交付与项目 CD 发布体验重设计（2026-11-14）：按 [需求评估与设计](doc/cd-release-redesign-2026-11-14.md) 实现双入口统一「发布 → 固定变更预览 → 确认 → 就地结果」，固定 Git／配置／镜像 digest／平台／目标，事务认领确认 Task，保留失败历史，支持失败节点重试、逐节点前序版本恢复、旧记录显式重新应用、首次人工保护和运行态区分；完整镜像身份按需展开。0013 增量迁移保留旧数据与密钥，不改已发布迁移或补造历史 digest。所有验证均在用户授权 CNB 测试机执行：完整 Go test／build、发布方案 race、Web lint／typecheck／production 与 Demo build、183 项 Vitest、六套 490 个唯一浏览器用例（失败夹具修正后定向复验）通过；Unix／mTLS TCP／HTTPS-WSS Agent 的双入口六项真实 CD 业务门禁、两独立 Engine 部分失败／重试／逐节点恢复及固定版本重复恢复通过。空库与保留数据升级、实际 pg_dump／pg_restore＋原密钥解密／文件一致恢复演练通过，605 个本地与远端源码逐项一致。测试结束隔离 schema 和本次容器均为 0，已移除临时凭据和私有转发，保留授权缓存；本地未测试，生产未部署；提交状态以 Git 历史为准。边界：旧完整 Project 统计冒烟因测试机无 cgroup 指标而未通过，保留原断言及失败证据，不计为通过；真实拉取中的取消未作为本轮单独 Docker 实测。详见 [验收记录](doc/cd-release-validation-2026-11-14.md) 与 [升级说明](doc/cd-release-implementation-2026-11-14.md)。
 
 - [x] CI 浏览器截图路径跨平台修复（2026-11-14）：GitHub Linux runner 的主站回归中，7 项用例因写死 `/private/tmp` 而在截图阶段报 ENOENT；主站、项目服务和任务中心全部同类截图改用 Playwright `testInfo.outputPath`，按用例输出到测试产物目录。验证：受影响文件定向 lint、diff 检查、本机已安装 Edge 的 23 项定向浏览器用例通过并生成 27 张截图；Demo build 通过。仅修改测试产物路径，远端完整回归尚未重跑。
