@@ -78,10 +78,15 @@ for (const language of ['en-US', 'zh-CN']) for (const theme of ['dark', 'light']
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
     const state = await setup(page, language, theme), zh = language === 'zh-CN'
     await page.goto('/tasks')
+    await expect(page.getByRole('tab', { name: zh ? '全部' : 'All', exact: true })).toHaveAttribute('aria-selected', 'true')
     await expect(page.getByText('Active check', { exact: true })).toBeVisible()
     await page.getByRole('tab', { name: zh ? '执行历史' : 'History', exact: true }).click()
     await expect(page.getByText('history-0', { exact: true })).toBeVisible()
-    expect(state.requests.filter(url => url.pathname.endsWith('/records')).at(-1)?.searchParams.get('node_id')).toBe('local')
+    const allQuery = state.requests.filter(url => url.pathname.endsWith('/records')).at(-1)!.searchParams
+    expect(allQuery.get('scope')).toBe('all')
+    expect(allQuery.has('node_id')).toBe(false)
+    await page.getByRole('tab', { name: zh ? '当前节点' : 'Current node', exact: true }).click()
+    await expect.poll(() => state.requests.filter(url => url.pathname.endsWith('/records')).at(-1)?.searchParams.get('node_id')).toBe('local')
     await page.getByRole('tab', { name: zh ? '控制平面' : 'Control plane', exact: true }).click()
     await page.getByRole('tab', { name: zh ? '自动化' : 'Automation', exact: true }).click()
     await expect(page.getByText('rule-3', { exact: true })).toBeVisible()
@@ -143,6 +148,7 @@ for (const width of [390, 1440]) test(`history filters reset pagination and pres
 test('all trigger history filters scope and loads snapshots on demand', async ({ page }) => {
   const state = await setup(page)
   await page.goto('/tasks?tab=schedules')
+  await page.getByRole('tab', { name: 'Current node', exact: true }).click()
   await page.getByRole('button', { name: 'All trigger history', exact: true }).click()
   const dialog = page.getByRole('dialog')
   await expect(dialog.getByText('busy · Previous task active', { exact: true })).toBeVisible()
@@ -157,6 +163,21 @@ test('all trigger history filters scope and loads snapshots on demand', async ({
   }).toEqual({ scope: 'node', node: 'local', source: 'scheduled', status: 'skipped', view: 'summary' })
   await dialog.getByText('View trigger snapshot', { exact: true }).click()
   await expect(dialog.locator('pre')).toContainText('image.update')
+})
+
+test('CD management opens global automation without a selected node', async ({ page }) => {
+  const state = await setup(page)
+  await page.route('**/api/v1/nodes', route => route.fulfill({ json: { code: 0, message: '', data: [] } }))
+  await page.goto('/continuous-delivery/blog')
+  await page.getByRole('tab', { name: 'Settings', exact: true }).click()
+  await page.getByRole('button', { name: 'Manage in task center', exact: true }).click()
+  await expect(page).toHaveURL('/tasks?tab=schedules')
+  await expect(page.getByRole('tab', { name: 'All', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByText('rule-3', { exact: true })).toBeVisible()
+  const query = state.requests.filter(url => url.pathname.endsWith('/task-center/schedules')).at(-1)!.searchParams
+  expect(query.get('scope')).toBe('all')
+  expect(query.has('node_id')).toBe(false)
+  expect(state.writes).toEqual([])
 })
 
 test('image editor keeps the draft and version through polling and conflict', async ({ page }) => {

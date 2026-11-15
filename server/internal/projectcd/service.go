@@ -424,15 +424,6 @@ func (s *Service) SetEnvironment(ctx context.Context, node, name string, revisio
 	return s.Configure(ctx, node, name, ConfigureInput{Repository: current.Repository, Environment: variables, RegistryCredentialIDs: current.RegistryCredentialIDs, DeploymentTimeout: current.DeploymentTimeout, SyncIntervalSeconds: current.SyncIntervalSeconds, WebhookEnabled: current.WebhookEnabled, ReconcileMode: current.ReconcileMode, AutoRollback: current.AutoRollback, ExpectedRevision: revision})
 }
 func (s *Service) SetAutomation(ctx context.Context, node, name string, enabled bool, revision uint64) (Configuration, error) {
-	project, err := s.deps.Project(ctx, node)
-	if err != nil {
-		return Configuration{}, err
-	}
-	release, err := project.ReserveProject(name)
-	if err != nil {
-		return Configuration{}, err
-	}
-	defer release()
 	row, err := s.row(ctx, node, name)
 	if err != nil {
 		return Configuration{}, err
@@ -612,7 +603,7 @@ func (s *Service) submit(ctx context.Context, node, name, operation, trigger str
 		if err != nil {
 			return nil, err
 		}
-		if !current.Enabled || current.Revision != row.Revision {
+		if !current.Enabled || projectVersion(current) != projectVersion(row) {
 			return nil, ErrConflict
 		}
 		if trigger != "manual" && !current.AutomationEnabled {

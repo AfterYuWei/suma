@@ -43,6 +43,10 @@ func registerProjectCDRoutes(v1 *gin.RouterGroup, deps Dependencies) {
 		a := requestActor(c)
 		return projectcd.Actor{UserID: a.UserID, Name: a.Name, IP: a.IP}
 	}
+	routes.GET("/release-activity", func(c *gin.Context) {
+		value, err := deps.ProjectCD.ReleaseActivity(c.Request.Context(), c.Param("nodeID"), c.Param("name"))
+		releasePlanResponse(c, value, err, false)
+	})
 	routes.POST("/release-plans", func(c *gin.Context) {
 		var input deployment.PrepareReleaseInput
 		if c.ShouldBindJSON(&input) != nil {

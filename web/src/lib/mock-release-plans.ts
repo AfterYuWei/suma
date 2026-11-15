@@ -5,6 +5,7 @@ import type { TaskRecord } from '../features/task-center/types'
 interface MockPlan {
   owner: string
   version: string
+  request: ReleaseRequest
   view: ReleasePlan
   preparation: TaskRecord
   result?: TaskRecord
@@ -14,6 +15,12 @@ interface PlanDraft { view: Omit<ReleasePlan, 'id' | 'expires_at'>; execute: Moc
 const plans = new Map<string, MockPlan>()
 
 export function mockReleasePlans(owner: string, suffix: string, method: string, body: Record<string, unknown>, taskID: string | null, version: string, createTask: (result: {plan_id: string}) => TaskRecord, prepare: (request: ReleaseRequest) => PlanDraft) {
+  if (suffix === '/release-activity' && method === 'GET') {
+    const current = [...plans.values()].reverse().find(plan => plan.owner === owner && plan.result && ['pending', 'running'].includes(plan.result.status))
+    if (current?.result) return {phase: 'running', task_id: current.result.id}
+    const review = [...plans.values()].reverse().find(plan => plan.owner === owner && !plan.result && plan.version === version && new Date(plan.view.expires_at).getTime() > Date.now())
+    return review ? {phase: 'review', task_id: review.preparation.id, plan_id: review.view.id, request: review.request} : {}
+  }
   if (suffix === '/release-plans' && method === 'POST') {
     const operation = body.operation ?? 'deploy'
     if (operation !== 'deploy' && operation !== 'retry' && operation !== 'restore' && operation !== 'restore-failed' && operation !== 'reapply') throw new ApiError('Invalid release operation', 17731, 400)
@@ -22,7 +29,7 @@ export function mockReleasePlans(owner: string, suffix: string, method: string, 
     const id = crypto.randomUUID().replaceAll('-', '')
     const view: ReleasePlan = {...draft.view, id, expires_at: new Date(Date.now() + 600000).toISOString()}
     const preparation = createTask({plan_id: id})
-    plans.set(id, {owner, version, view, preparation, execute: draft.execute})
+    plans.set(id, {owner, version, request, view, preparation, execute: draft.execute})
     return preparation
   }
   const id = suffix.split('/')[2]

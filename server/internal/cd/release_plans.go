@@ -32,6 +32,40 @@ type batchPlanPayload struct {
 
 func (s *Service) SetImageResolver(resolver imageupdate.Resolver) { s.imageResolver = resolver }
 
+func (s *Service) ReleaseActivity(ctx context.Context, name string) (deployment.ReleaseActivity, error) {
+	project, err := s.project(ctx, name)
+	if err != nil {
+		return deployment.ReleaseActivity{}, err
+	}
+	version, err := s.configurationVersion(ctx, s.db, project)
+	if err != nil {
+		return deployment.ReleaseActivity{}, err
+	}
+	activity, err := deployment.CurrentReleaseActivity(ctx, s.db, "batch", project.ID, "", name, version)
+	if err != nil || activity.Phase != "review" {
+		return activity, err
+	}
+	view, err := s.ReleasePlan(ctx, name, activity.PlanID)
+	if err != nil {
+		return deployment.ReleaseActivity{}, err
+	}
+	var states []database.DeliveryTargetState
+	if err := s.db.WithContext(ctx).Where("project_id = ?", project.ID).Find(&states).Error; err != nil {
+		return deployment.ReleaseActivity{}, err
+	}
+	baseline := make(map[string]*uint, len(states))
+	for _, state := range states {
+		baseline[state.NodeID] = state.ActiveRecordID
+	}
+	for _, node := range view.Nodes {
+		before, current := node.PreviousRecordID, baseline[node.NodeID]
+		if (before == nil) != (current == nil) || before != nil && current != nil && *before != *current {
+			return deployment.ReleaseActivity{}, nil
+		}
+	}
+	return activity, nil
+}
+
 func (s *Service) configurationVersion(ctx context.Context, db *gorm.DB, project database.DeliveryProject) (string, error) {
 	var nodes []string
 	var registries []uint

@@ -85,7 +85,7 @@ export function SchedulesTab({ scope, nodeID }: { scope: CenterScope; nodeID?: s
         })}
       </TableBody>
     </Table></ListShell>}
-    {form && <ScheduleForm key={form.row?.id ?? 'new'} open onOpenChange={open => { if (!open) setForm(undefined) }} initial={form.row} kind={form.row?.kind} nodeID={form.row?.node_id ?? (scope === 'current' ? nodeID : undefined)} subject={form.row?.subject} manual={form.manual} />}
+    {form && <ScheduleForm key={form.row?.id ?? 'new'} open onOpenChange={open => { if (!open) setForm(undefined) }} initial={form.row} kind={form.row?.kind} nodeID={form.row ? form.row.node_id : nodeID} subject={form.row?.subject} manual={form.manual} />}
     {history && <TriggerHistory key={history === 'all' ? 'all' : history.id} rule={history === 'all' ? undefined : history} scope={scope} nodeID={nodeID} onClose={() => setHistory(undefined)} onTask={setTaskID} />}
     <TaskRecordDetail id={taskID} open={!!taskID} onOpenChange={open => { if (!open) setTaskID(undefined) }} />
   </div>

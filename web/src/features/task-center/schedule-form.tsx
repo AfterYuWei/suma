@@ -8,7 +8,7 @@ import { Input } from '../../components/ui/input'
 import { Label } from '../../components/ui/label'
 import { LoadingState } from '../../components/ui/loading-state'
 import { ErrorState } from '../../components/ui/error-state'
-import { Sheet, SheetContent, SheetTitle } from '../../components/ui/sheet'
+import { Dialog, DialogContent, DialogTitle } from '../../components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select'
 import { useSchedule, useTaskKinds } from './queries'
 import { taskKindFor } from './kinds'
@@ -42,8 +42,8 @@ export function ScheduleForm({ open, onOpenChange, kind, nodeID, subject, initia
   const node = nodes.data?.find(entry => entry.id === target)
   const Editor = view?.Editor
   if (editing && info && Editor && !nodes.isError && !rule.isError && (!info.requires_node || node) && (!initial || rule.data)) return <Editor manual={manual} node={node} subject={project} initial={rule.data} open={open} onOpenChange={onOpenChange} businessHref={view?.businessHref?.(project)} />
-  return <Sheet open={open} onOpenChange={onOpenChange}><SheetContent className="overflow-y-auto"><div className="space-y-4 p-4">
-    <SheetTitle>{initial ? (zh ? '编辑自动化' : 'Edit automation') : zh ? '新建自动化' : 'New automation'}</SheetTitle>
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto p-0 sm:max-w-lg"><div className="space-y-4 p-4">
+    <DialogTitle>{initial ? (zh ? '编辑自动化' : 'Edit automation') : zh ? '新建自动化' : 'New automation'}</DialogTitle>
     {kinds.isError || nodes.isError || rule.isError ? <ErrorState description={(kinds.error ?? nodes.error ?? rule.error)?.message ?? (zh ? '无法加载自动化配置' : 'Unable to load automation configuration')} /> : kinds.isPending || nodes.isPending || (initial && rule.isPending) ? <LoadingState label={zh ? '正在加载配置' : 'Loading configuration'} /> : <>
       {!kind && !initial && <div className="space-y-1.5"><Label>{zh ? '业务类型' : 'Kind'}</Label><Select value={effectiveKind} onValueChange={value => { setPickedKind(value ?? ''); setProject('') }}><SelectTrigger className="w-full"><SelectValue>{view?.label(zh)}</SelectValue></SelectTrigger><SelectContent>{kinds.data.filter(entry => taskKindFor(entry.type)).map(entry => <SelectItem key={entry.type} value={entry.type}>{taskKindFor(entry.type)?.label(zh)}</SelectItem>)}</SelectContent></Select></div>}
       {!view ? <ErrorState description={zh ? '该业务类型尚无编辑入口' : 'No editor is available for this kind'} /> : view.createHref && !initial ? <>
@@ -56,5 +56,5 @@ export function ScheduleForm({ open, onOpenChange, kind, nodeID, subject, initia
         <Button disabled={(info?.requires_node && !node) || (view.requiresSubject && !project.trim())} onClick={() => setEditing(true)}>{zh ? '配置自动化' : 'Configure automation'}</Button>
       </>}
     </>}
-  </div></SheetContent></Sheet>
+  </div></DialogContent></Dialog>
 }

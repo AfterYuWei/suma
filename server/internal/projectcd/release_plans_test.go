@@ -15,6 +15,7 @@ import (
 	"github.com/suma/suma/server/internal/database"
 	"github.com/suma/suma/server/internal/deployment"
 	"github.com/suma/suma/server/internal/imageupdate"
+	"github.com/suma/suma/server/internal/task"
 )
 
 type fixtureImageResolver struct{}
@@ -41,6 +42,10 @@ func projectPreparedPlan(t *testing.T, f *projectCDFixture, input deployment.Pre
 	if err != nil {
 		t.Fatal(err)
 	}
+	activity, err := f.service.ReleaseActivity(context.Background(), "local", "app")
+	if err != nil || activity.Phase != "review" || activity.PlanID != view.ID || activity.TaskID != operation.ID {
+		t.Fatal("prepared project release cannot be restored", activity, err)
+	}
 	return view
 }
 
@@ -51,6 +56,7 @@ func TestProjectPreparedReleaseConfirmsOnceAndRetainsPinnedHistory(t *testing.T)
 		t.Fatal(err)
 	}
 	view := projectPreparedPlan(t, f, deployment.PrepareReleaseInput{})
+	_ = projectPreparedPlan(t, f, deployment.PrepareReleaseInput{})
 	raw, err := os.ReadFile(f.calls)
 	if err != nil {
 		t.Fatal(err)
@@ -71,6 +77,9 @@ func TestProjectPreparedReleaseConfirmsOnceAndRetainsPinnedHistory(t *testing.T)
 	duplicate, err := f.service.ConfirmRelease(ctx, "local", "app", view.ID, deployment.ConfirmReleaseInput{}, Actor{Name: "operator"})
 	if err != nil || duplicate.ID != operation.ID {
 		t.Fatal("duplicate publication", err)
+	}
+	if activity, err := f.service.ReleaseActivity(ctx, "local", "app"); err != nil || activity.TaskID != "" {
+		t.Fatal("a stale project preview survived publication", activity, err)
 	}
 	config, err := f.service.Get(ctx, "local", "app")
 	if err != nil || config.Applied == nil || !config.Applied.ImagesPinned || config.InitialApplicationRequired {
@@ -104,6 +113,40 @@ func TestProjectPreparedReleaseRejectsChangedSettingsAndExpiredPlans(t *testing.
 	if _, err := f.service.ConfirmRelease(ctx, "local", "app", view.ID, deployment.ConfirmReleaseInput{}, Actor{}); !errors.Is(err, deployment.ErrPlanChanged) {
 		t.Fatal("expired preview accepted", err)
 	}
+}
+
+func TestProjectManualPublicationSurvivesPausingAutomaticTriggers(t *testing.T) {
+	f := newProjectCDFixture(t)
+	ctx := context.Background()
+	enabled := true
+	f.input.AutomationEnabled = &enabled
+	config, err := f.service.Configure(ctx, "local", "app", f.input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := projectPreparedPlan(t, f, deployment.PrepareReleaseInput{})
+	project, err := f.service.deps.Project(ctx, "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := project.ReserveProject("app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	paused, err := f.service.SetAutomation(ctx, "local", "app", false, config.Revision)
+	release()
+	if err != nil || paused.AutomationEnabled || paused.Revision != config.Revision+1 {
+		t.Fatal("pausing future triggers required the publication lock", err)
+	}
+	activity, err := f.service.ReleaseActivity(ctx, "local", "app")
+	if err != nil || activity.PlanID != view.ID {
+		t.Fatal("pausing invalidated the manual preview", activity, err)
+	}
+	operation, err := f.service.ConfirmRelease(ctx, "local", "app", view.ID, deployment.ConfirmReleaseInput{}, Actor{Name: "operator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.wait(t, operation, nil, task.StatusSuccess)
 }
 
 func TestProjectPreparedRetryPreservesOriginalFailureAndConfiguration(t *testing.T) {

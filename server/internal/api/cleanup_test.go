@@ -148,6 +148,13 @@ func TestCleanupHTTPAuthorizationValidationAndIsolation(t *testing.T) {
 	if run.Status != "success" {
 		t.Fatal(run.Status)
 	}
+	// The domain status is saved before its final audit and Task completion.
+	// Wait for both before inspecting evidence or tearing down the schema.
+	completion, cancelCompletion := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelCompletion()
+	if err := tasks.Wait(completion, run.TaskID); err != nil {
+		t.Fatal(err)
+	}
 	if out = request("GET", "/api/v1/nodes/local/cleanup/runs/"+run.ID, "", "", true); out.Code != 404 {
 		t.Fatal("cross-node run exposed", out.Code)
 	}

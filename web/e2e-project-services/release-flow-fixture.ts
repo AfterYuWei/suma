@@ -13,9 +13,10 @@ export async function setupReleaseFlow(page: Page, options: {language?: string; 
   const record: DeliveryRecord = {id: 184, project_id: 1, release_id: 1, operation: 'deploy', actor_name: 'Operator', trigger_type: 'manual', status: 'succeeded', snapshot_complete: true, images_pinned: options.legacy !== true, config_hash: 'baseline', image_references: '[]', compose_files: '["compose.yml"]', environment_file: '', environment: [], node_ids: ['local', 'other'], registry_credential_ids: [], deployment_timeout: 120, auto_rollback: false, commit_sha: 'a'.repeat(40), commit_message: 'Baseline', created_at: '2026-11-14T00:00:00Z', attempts: []}
   record.attempts = ['local', 'other'].map((node_id, index) => ({id: index + 1, deployment_id: index + 1, operation: 'deploy', target_release_id: 1, node_id, node_name: node_id, status: 'succeeded', created_at: record.created_at}))
   const records: DeliveryRecord[] = [record]
-  const release: DeliveryRelease = {id: 1, project_id: 1, repository_url: configuration.repository.clone_url, git_ref: 'main', commit_sha: 'b'.repeat(40), commit_message: 'Fix session recovery', commit_author: 'Operator', config_hash: 'next', image_references: '[]', status: 'ready', trigger_type: 'manual', trigger_actor: 'Operator', compose_files: '["compose.yml"]', created_at: record.created_at, updated_at: record.created_at, remediation: {retry_failed_node_ids: [], rollback_failed_node_ids: []}}
+  const release: DeliveryRelease = {id: 1, project_id: 1, repository_url: configuration.repository.clone_url, git_ref: 'main', commit_sha: (options.sameCommit || options.changed === false ? 'a' : 'b').repeat(40), commit_message: 'Fix session recovery', commit_author: 'Operator', config_hash: 'next', image_references: '[]', status: 'ready', trigger_type: 'manual', trigger_actor: 'Operator', compose_files: '["compose.yml"]', created_at: record.created_at, updated_at: record.created_at, remediation: {retry_failed_node_ids: [], rollback_failed_node_ids: []}}
   const tasks = new Map<string, {id: string; status: string; message: string; result?: {record_id: number}}>()
   const plans = new Map<string, ReleasePlan>()
+  const confirmedPlans = new Set<string>()
   let preparations = 0, confirmations = 0, runningID = ''
   await page.route('**/api/v1/**', async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname.replace('/api/v1', '')
@@ -29,21 +30,27 @@ export async function setupReleaseFlow(page: Page, options: {language?: string; 
     else if (path === '/notifications/inbox') data = {items: [], unread: 0}
     else if (path === '/delivery-projects/app') data = {id: 1, name: 'app', configured: true, automation_enabled: false, node_ids: ['local', 'other'], created_at: record.created_at, updated_at: record.created_at}
     else if (path.endsWith('/configuration')) data = configuration
-    else if (path.endsWith('/releases')) data = [release]
+    else if (path.endsWith('/releases')) data = [release, {...release, id: 2, commit_sha: 'c'.repeat(40), commit_message: 'Previous version'}]
     else if (path.endsWith('/drift')) data = {status: 'healthy', runtime_healthy: true, checked_at: record.created_at, nodes: ['local', 'other'].map(node_id => ({node_id, node_name: node_id, status: 'healthy', runtime_available: true, runtime_healthy: true, health_checks: 1, active_commit: record.commit_sha}))}
     else if (path.endsWith('/records')) data = {items: records.slice(0, Number(url.searchParams.get('page_size') ?? 20)), total: records.length, page: 1, page_size: 20, counts: {deploy: records.length}}
+    else if (path.endsWith('/release-activity')) {
+      const active = tasks.get(runningID)
+      const review = [...plans.values()].reverse().find(plan => !confirmedPlans.has(plan.id) && new Date(plan.expires_at).getTime() > Date.now())
+      data = active?.status === 'running' ? {phase: 'running', task_id: active.id} : review ? {phase: 'review', task_id: `prepare-${Number(review.id)}`, plan_id: review.id, request: {operation: review.operation, source_record_id: review.source_record_id}} : {}
+    }
     else if (path.endsWith('/release-plans') && request.method() === 'POST') {
       preparations++
-      const operation = typeof body.operation === 'string' ? body.operation : 'deploy'
+      const operation = body.operation === 'retry' || body.operation === 'restore' || body.operation === 'restore-failed' || body.operation === 'reapply' ? body.operation : 'deploy'
       const id = String(preparations).padStart(32, '0'), taskID = `prepare-${preparations}`
       const targetIDs = operation === 'retry' || operation === 'restore-failed' ? ['other'] : ['local', 'other']
-      const plan: ReleasePlan = {id, expires_at: new Date(Date.now() + (options.expired ? -1000 : 600000)).toISOString(), operation, source_record_id: typeof body.source_record_id === 'number' ? body.source_record_id : undefined, release_id: 1, commit_sha: (options.sameCommit || options.changed === false || operation === 'restore' || operation === 'restore-failed' ? 'a' : 'b').repeat(40), commit_message: 'Fix session recovery', compose_files: ['compose.yml'], images_pinned: true, auto_rollback: false, deployment_timeout: 120, nodes: targetIDs.map(node_id => ({node_id, node_name: node_id === 'local' ? 'Local' : 'Other', previous_record_id: 184, previous_commit: 'a'.repeat(40), changed: options.changed !== false, runtime_healthy: true, health_checked: true, can_restore: true, compose_before: '{"services":{"app":{"image":"example/app:latest"}}}', compose_after: '{"services":{"app":{"image":"example/app:latest"}}}', images: [{service: 'app', declared: 'example/app:latest', previous: 'example/app@sha256:' + '6'.repeat(64), reference: 'example/app@sha256:' + (options.changed === false || operation === 'restore' ? '6' : '7').repeat(64), platform: 'linux/amd64', changed: options.changed !== false}], services: [{name: 'app', action: 'recreate'}], environment: [{name: 'API_TOKEN', action: 'modify'}]}))}
+      const plan: ReleasePlan = {id, expires_at: new Date(Date.now() + (options.expired ? -1000 : 600000)).toISOString(), operation, release_id: typeof body.release_id === 'number' ? body.release_id : 1, source_record_id: typeof body.source_record_id === 'number' ? body.source_record_id : undefined, commit_sha: body.release_id === 2 ? 'c'.repeat(40) : (options.sameCommit || options.changed === false || operation === 'restore' || operation === 'restore-failed' ? 'a' : 'b').repeat(40), commit_message: 'Fix session recovery', compose_files: ['compose.yml'], images_pinned: true, auto_rollback: false, deployment_timeout: 120, nodes: targetIDs.map(node_id => ({node_id, node_name: node_id === 'local' ? 'Local' : 'Other', previous_record_id: 184, previous_commit: 'a'.repeat(40), changed: options.changed !== false, runtime_healthy: true, health_checked: true, can_restore: true, compose_before: '{"services":{"app":{"image":"example/app:latest"}}}', compose_after: '{"services":{"app":{"image":"example/app:latest"}}}', images: [{service: 'app', declared: 'example/app:latest', previous: 'example/app@sha256:' + '6'.repeat(64), reference: 'example/app@sha256:' + (options.changed === false || operation === 'restore' ? '6' : '7').repeat(64), platform: 'linux/amd64', changed: options.changed !== false}], services: [{name: 'app', action: 'recreate'}], environment: [{name: 'API_TOKEN', action: 'modify'}]}))}
       plans.set(id, plan); tasks.set(taskID, {id: taskID, status: 'success', message: 'Prepared'}); data = tasks.get(taskID)
     } else if (path.endsWith('/release-plans') && request.method() === 'GET') data = plans.get((url.searchParams.get('task_id')?.replace('prepare-', '') ?? '').padStart(32, '0'))
     else if (/\/release-plans\/[^/]+$/.test(path)) data = plans.get(path.split('/').at(-1) ?? '')
     else if (path.endsWith('/confirm')) {
       if (options.conflict && preparations === 1) return route.fulfill({status: 409, json: {code: 17730, message: 'Configuration changed; prepare again', data: null}})
       confirmations++
+      confirmedPlans.add(path.split('/').at(-2) ?? '')
       const requestPlan = plans.get(path.split('/').at(-2) ?? '')
       const nodeIDs = Array.isArray(body.node_ids) ? body.node_ids.filter((value): value is string => typeof value === 'string') : []
       const failed = options.fail && confirmations === 1

@@ -140,7 +140,12 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
   }
 
   const save = useMutation({
-    mutationFn: (input: CDConfigureInput) => creation ? creation.submit(input) : api<CDConfiguration>(`/delivery-projects/${encodeURIComponent(projectName)}/configuration`, { method: 'PUT', body: JSON.stringify(input) }),
+    mutationFn: (input: CDConfigureInput) => {
+      if (creation) return creation.submit(input)
+      const {automation_enabled, ...settings} = input
+      return api<CDConfiguration>(`/delivery-projects/${encodeURIComponent(projectName)}/configuration`, { method: 'PUT', body: JSON.stringify(configuration.configured ? settings : {...settings, automation_enabled}) })
+    },
+    onMutate: () => setNotice(''),
     onSuccess: (value) => {
       resetDraft(value)
       setRevealedWebhookSecret(value.webhook_secret || '')
@@ -206,7 +211,7 @@ export function CDSettings({ projectName, configuration, zh, onSaved, creation, 
       </Field>
     </SettingsSection>}
 
-    <CDSettingsFields projectName={projectName} configuration={configuration} draft={draft} setDraft={setDraft} composeFiles={composeFiles} setComposeFiles={setComposeFiles} zh={zh} creating={!!creation} created={!!creation?.created} webhookURL={webhookURL} environmentValues={{environmentValues, showEnvironment, environmentLoading, environmentError, toggleEnvironment}} />
+    <CDSettingsFields projectName={projectName} configuration={configuration} draft={draft} setDraft={setDraft} composeFiles={composeFiles} setComposeFiles={setComposeFiles} zh={zh} creating={!!creation} created={!!creation?.created} showAutomationToggle={!!creation || !configuration.configured} webhookURL={webhookURL} environmentValues={{environmentValues, showEnvironment, environmentLoading, environmentError, toggleEnvironment}} />
     </fieldset>
 
     <CDWebhookSecretNotice secret={revealedWebhookSecret} webhookURL={creation?.created ? webhookURL : undefined} zh={zh}/>
@@ -252,7 +257,7 @@ export function CDEnvironmentSettings({variables, onChange, zh, values, children
   )
 }
 
-export function CDSettingsFields({projectName, configuration, draft, setDraft, composeFiles, setComposeFiles, zh, creating = false, created = false, fixedNodeID, connectionEndpoint, webhookURL, environmentValues}: {
+export function CDSettingsFields({projectName, configuration, draft, setDraft, composeFiles, setComposeFiles, zh, creating = false, created = false, showAutomationToggle = true, fixedNodeID, connectionEndpoint, webhookURL, environmentValues}: {
   projectName: string
   configuration: Pick<CDConfiguration, 'webhook_id' | 'webhook_secret'>
   draft: CDConfigureInput
@@ -262,6 +267,7 @@ export function CDSettingsFields({projectName, configuration, draft, setDraft, c
   zh: boolean
   creating?: boolean
   created?: boolean
+  showAutomationToggle?: boolean
   fixedNodeID?: string
   connectionEndpoint?: string
   webhookURL: string
@@ -326,11 +332,11 @@ export function CDSettingsFields({projectName, configuration, draft, setDraft, c
       <RegistryCredentialSelector rows={(registries.data || []).filter((row) => draft.node_ids.every((id) => row.authorized_node_ids.includes(id)))} value={draft.registry_credential_ids} zh={zh} onChange={(registry_credential_ids) => setDraft((current) => ({ ...current, registry_credential_ids }))} />
     </SettingsSection>
 
-    <SettingsSection title={zh ? '交付策略' : 'Delivery policy'} description={zh ? 'Observe 只生成待发布版本，Manual 需要人工发布，Auto 验证后自动发布。' : 'Observe records a candidate, Manual waits for an operator, and Auto deploys after validation.'}>
-      <div className="flex items-start justify-between gap-4 rounded-lg bg-muted/40 p-3">
-        <div className="min-w-0"><Label htmlFor={automationID}>{zh ? '启用自动检查' : 'Enable automatic checks'}</Label><p id={`${automationID}-description`} className="mt-1 text-xs text-muted-foreground">{zh ? '关闭后停止轮询和 Webhook 触发；手动同步仅生成候选版本，仍可手动发布和回滚。已开始的任务会继续完成。' : 'When off, polling and webhooks stop. Manual sync creates candidates; manual deploy and rollback remain available. Started tasks finish normally.'}</p></div>
+    <SettingsSection title={zh ? '交付策略' : 'Delivery policy'} description={zh ? '选择发现更新后的处理方式；周期和 Webhook 负责触发检查。' : 'Choose what happens after updates are found. Timers and webhooks trigger checks.'}>
+      {showAutomationToggle && <div className="flex items-start justify-between gap-4 rounded-lg bg-muted/40 p-3">
+        <div className="min-w-0"><Label htmlFor={automationID}>{zh ? '允许自动触发' : 'Allow automatic triggers'}</Label><p id={`${automationID}-description`} className="mt-1 text-xs text-muted-foreground">{zh ? '关闭后停止轮询和 Webhook 触发；手动同步仅生成候选版本，仍可手动发布和回滚。已开始的任务会继续完成。' : 'When off, polling and webhooks stop. Manual sync creates candidates; manual deploy and rollback remain available. Started tasks finish normally.'}</p></div>
         <Switch id={automationID} checked={draft.automation_enabled} onCheckedChange={(automation_enabled) => setDraft((current) => ({ ...current, automation_enabled }))} aria-describedby={`${automationID}-description`} />
-      </div>
+      </div>}
       <RadioGroup value={draft.reconcile_mode} onValueChange={(value) => setDraft((current) => ({ ...current, reconcile_mode: value as CDConfigureInput['reconcile_mode'] }))} className="grid gap-2 sm:grid-cols-3">
         {([
           ['observe', zh ? '仅检查' : 'Checks only', zh ? '只检查更新，禁止人工及自动发布' : 'Check updates; disable manual and automatic publishing'],

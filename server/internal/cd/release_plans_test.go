@@ -56,6 +56,10 @@ func preparedPlan(t *testing.T, h *cdHarness, input deployment.PrepareReleaseInp
 	if err != nil {
 		t.Fatal(err)
 	}
+	activity, err := h.service.ReleaseActivity(context.Background(), h.project.Name)
+	if err != nil || activity.Phase != "review" || activity.PlanID != view.ID || activity.TaskID != row.ID {
+		t.Fatal("prepared release cannot be restored", activity, err)
+	}
 	return view
 }
 
@@ -65,6 +69,7 @@ func TestPreparedReleaseFreezesImagesAndDeduplicatesConfirmation(t *testing.T) {
 	resolver := &movingImageResolver{digest: "sha256:" + strings.Repeat("a", 64)}
 	h.service.SetImageResolver(resolver)
 	view := preparedPlan(t, h, deployment.PrepareReleaseInput{})
+	_ = preparedPlan(t, h, deployment.PrepareReleaseInput{})
 	if len(h.runner.UpSpecs()) != 0 {
 		t.Fatal("preparation changed containers")
 	}
@@ -77,6 +82,9 @@ func TestPreparedReleaseFreezesImagesAndDeduplicatesConfirmation(t *testing.T) {
 	duplicate, err := h.service.ConfirmRelease(ctx, h.project.Name, view.ID, deployment.ConfirmReleaseInput{}, Actor{Name: "operator"})
 	if err != nil || duplicate.ID != started.ID || duplicate.RecordID != started.RecordID {
 		t.Fatal("confirmation was not idempotent", err)
+	}
+	if activity, err := h.service.ReleaseActivity(ctx, h.project.Name); err != nil || activity.TaskID != "" {
+		t.Fatal("a stale preview survived a completed publication", activity, err)
 	}
 	specs := h.runner.UpSpecs()
 	if len(specs) != 1 || !strings.HasSuffix(specs[0].ImageOverrides["web"], strings.Repeat("a", 64)) {

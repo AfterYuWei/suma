@@ -33,6 +33,13 @@ func TestReleasePlanHTTPAuthenticationOwnershipAndPrivateInputBoundary(t *testin
 		t.Fatal(err)
 	}
 	base := "/api/v1/delivery-projects/plan-owner/release-plans"
+	activityPath := "/api/v1/delivery-projects/plan-owner/release-activity"
+	if response := h.request(http.MethodGet, activityPath, nil); response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" || strings.Contains(response.Body.String(), "private-version") || strings.Contains(response.Body.String(), "private-encrypted-input") {
+		t.Fatal("release activity boundary failed", response.Code)
+	}
+	if response := h.request(http.MethodGet, "/api/v1/delivery-projects/missing/release-activity", nil); response.Code != http.StatusNotFound {
+		t.Fatal("missing activity owner accepted", response.Code)
+	}
 	for _, path := range []string{base + "/" + id, base + "?task_id=prepare-task"} {
 		response := h.request(http.MethodGet, path, nil)
 		if response.Code != 200 || response.Header().Get("Cache-Control") != "no-store" {
@@ -55,7 +62,7 @@ func TestReleasePlanHTTPAuthenticationOwnershipAndPrivateInputBoundary(t *testin
 	for _, request := range []struct {
 		method, path string
 		body         []byte
-	}{{http.MethodGet, base + "/" + id, nil}, {http.MethodPost, base, []byte(`{}`)}, {http.MethodPost, base + "/" + id + "/confirm", []byte(`{}`)}} {
+	}{{http.MethodGet, activityPath, nil}, {http.MethodGet, base + "/" + id, nil}, {http.MethodPost, base, []byte(`{}`)}, {http.MethodPost, base + "/" + id + "/confirm", []byte(`{}`)}} {
 		if response := h.request(request.method, request.path, request.body); response.Code != 401 {
 			t.Fatal("unauthenticated release endpoint", response.Code)
 		}

@@ -6,9 +6,21 @@ for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']
   test(`unified release preview ${language} ${theme} ${width}`, async ({page}, testInfo) => {
     const state = await setup(page, {language, theme, width, sameCommit: true})
     const zh = language === 'zh-CN'
-    await page.getByRole('button', {name: zh ? '发布…' : 'Publish…', exact: true}).click()
+    await page.getByRole('button', {name: zh ? '发布' : 'Publish', exact: true}).click()
     const sheet = page.getByRole('dialog')
     await expect(sheet.getByRole('heading', {name: zh ? '审阅本次发布' : 'Review this release'})).toBeVisible()
+    await expect(sheet.locator('[data-slot="dialog-description"]')).toContainText('app')
+    await expect(page.locator('[data-slot="sheet-content"]')).toHaveCount(0)
+    const bounds = await sheet.boundingBox()
+    expect(Math.abs(bounds!.x + bounds!.width / 2 - width / 2)).toBeLessThanOrEqual(1)
+    await expect(sheet.getByRole('button', {name: zh ? '发布到 2 个节点' : 'Publish to 2 nodes'})).toBeInViewport()
+    const version = sheet.getByRole('combobox', {name: zh ? '发布版本' : 'Release version', exact: true})
+    await expect(version).toContainText('aaaaaaaa')
+    await version.click()
+    const menu = page.getByRole('listbox')
+    await expect.poll(async () => { const trigger = await version.boundingBox(), popup = await menu.boundingBox(); return !!(trigger && popup && Math.abs(trigger.width - popup.width) <= 1 && (popup.y >= trigger.y + trigger.height - 1 || popup.y + popup.height <= trigger.y + 1)) }).toBe(true)
+    await page.keyboard.press('Escape')
+    await expect(sheet).toBeVisible()
     await expect(sheet).toContainText('a'.repeat(40))
     await expect(sheet).toContainText('7'.repeat(64))
     const imageDetails = sheet.locator('details').filter({has: page.getByText(zh ? '完整镜像标识' : 'Full image references', {exact: true})}).first()
@@ -31,10 +43,10 @@ for (const language of ['zh-CN', 'en-US']) for (const theme of ['dark', 'light']
 
 test('failed publication retries only failed nodes and preserves source identity', async ({page}) => {
   const state = await setup(page, {fail: true})
-  await page.getByRole('button', {name: '发布…', exact: true}).click()
+  await page.getByRole('button', {name: '发布', exact: true}).click()
   const sheet = page.getByRole('dialog')
   await sheet.getByRole('button', {name: '发布到 2 个节点', exact: true}).click()
-  await sheet.getByRole('button', {name: '重试失败节点…', exact: true}).click()
+  await sheet.getByRole('button', {name: '重试失败节点', exact: true}).click()
   await expect(sheet).toContainText('原配置和固定镜像')
   await expect(sheet.getByRole('checkbox')).toHaveCount(1)
   await sheet.getByRole('button', {name: '重试 1 个失败节点', exact: true}).click()
@@ -43,9 +55,66 @@ test('failed publication retries only failed nodes and preserves source identity
   expect(state.errors).toEqual([])
 })
 
+test('review survives a page refresh without another preparation', async ({page}) => {
+  const state = await setup(page)
+  await page.getByRole('button', {name: '发布', exact: true}).click()
+  await expect(page.getByRole('dialog').getByRole('heading', {name: '审阅本次发布'})).toBeVisible()
+  await page.reload()
+  await page.getByRole('button', {name: '继续发布', exact: true}).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('heading', {name: '审阅本次发布'})).toBeVisible()
+  expect(state.preparations).toBe(1)
+  await dialog.getByRole('button', {name: '发布到 2 个节点'}).click()
+  expect(state.confirmations).toBe(1)
+})
+
+test('switching to checks only blocks confirmation of an open preview', async ({page}) => {
+  const state = await setup(page)
+  await page.getByRole('button', {name: '发布', exact: true}).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('heading', {name: '审阅本次发布'})).toBeVisible()
+  state.configuration.reconcile_mode = 'observe'
+  await page.waitForResponse(async response => response.url().endsWith('/configuration') && (await response.json()).data.reconcile_mode === 'observe')
+  await expect(dialog.getByRole('button', {name: '发布到 2 个节点'})).toBeDisabled()
+  await expect(dialog).toContainText('当前为仅检查策略')
+  expect(state.confirmations).toBe(0)
+})
+
+test('active execution survives a page refresh without another confirmation', async ({page}) => {
+  const state = await setup(page, {running: true})
+  await page.getByRole('button', {name: '发布', exact: true}).click()
+  await page.getByRole('dialog').getByRole('button', {name: '发布到 2 个节点'}).click()
+  await page.reload()
+  await page.getByRole('button', {name: '查看发布进度', exact: true}).click()
+  await expect(page.getByRole('dialog')).toContainText('Pulling deployment images')
+  expect(state.confirmations).toBe(1)
+  expect(state.preparations).toBe(1)
+  state.finish()
+  await expect(page.getByRole('dialog').getByRole('heading', {name: '本次发布结果'})).toBeVisible()
+})
+
+test('Git version selection stays inside the project dialog', async ({page}) => {
+  const state = await setup(page)
+  await expect(page.getByText('选择其他 Git 版本发布', {exact: true})).toHaveCount(0)
+  await page.getByRole('button', {name: '发布', exact: true}).click()
+  const dialog = page.getByRole('dialog'), version = dialog.getByRole('combobox', {name: '发布版本', exact: true})
+  await version.click()
+  const menu = page.getByRole('listbox')
+  await expect(menu).toBeVisible()
+  await expect.poll(async () => {
+    const trigger = await version.boundingBox(), bounds = await menu.boundingBox()
+    return !!(trigger && bounds && Math.abs(trigger.width - bounds.width) <= 1 && (bounds.y >= trigger.y + trigger.height - 1 || bounds.y + bounds.height <= trigger.y + 1))
+  }).toBe(true)
+  await page.getByRole('option', {name: 'cccccccc · Previous version', exact: true}).click()
+  await expect.poll(() => state.preparations).toBe(2)
+  expect(state.writes.filter(write => write.path.endsWith('/release-plans')).at(-1)?.body).toEqual({operation: 'deploy', release_id: 2})
+  await expect(dialog).toContainText('c'.repeat(40))
+  expect(state.confirmations).toBe(0)
+})
+
 test('background publishing reopens the same execution', async ({page}) => {
   const state = await setup(page, {running: true})
-  await page.getByRole('button', {name: '发布…', exact: true}).click()
+  await page.getByRole('button', {name: '发布', exact: true}).click()
   await page.getByRole('dialog').getByRole('button', {name: '发布到 2 个节点'}).click()
   await page.getByRole('dialog').getByRole('button', {name: '收起到后台', exact: true}).click()
   await page.getByRole('button', {name: '查看发布进度', exact: true}).click()
@@ -56,7 +125,7 @@ test('background publishing reopens the same execution', async ({page}) => {
 
 test('unchanged release requires explicit recreation', async ({page}) => {
   const state = await setup(page, {changed: false})
-  await page.getByRole('button', {name: '发布…', exact: true}).click()
+  await page.getByRole('button', {name: '发布', exact: true}).click()
   const sheet = page.getByRole('dialog'), confirm = sheet.getByRole('button', {name: '发布到 2 个节点'})
   await expect(confirm).toBeDisabled()
   await sheet.getByRole('checkbox', {name: '即使无变化也重建所选节点'}).check()
@@ -66,7 +135,7 @@ test('unchanged release requires explicit recreation', async ({page}) => {
 
 test('expired or changed plans stay reviewable and require preparation again', async ({page}) => {
   const state = await setup(page, {conflict: true})
-  await page.getByRole('button', {name: '发布…', exact: true}).click()
+  await page.getByRole('button', {name: '发布', exact: true}).click()
   const sheet = page.getByRole('dialog')
   await sheet.getByRole('button', {name: '发布到 2 个节点'}).click()
   await expect(sheet).toContainText('Configuration changed; prepare again')
@@ -78,7 +147,7 @@ test('expired or changed plans stay reviewable and require preparation again', a
 
 test('expired preview cannot be confirmed', async ({page}) => {
   const state = await setup(page, {expired: true})
-  await page.getByRole('button', {name: '发布…', exact: true}).click()
+  await page.getByRole('button', {name: '发布', exact: true}).click()
   const sheet = page.getByRole('dialog')
   await expect(sheet).toContainText('方案已过期')
   await expect(sheet.getByRole('button', {name: '发布到 2 个节点'})).toBeDisabled()
@@ -87,7 +156,7 @@ test('expired preview cannot be confirmed', async ({page}) => {
 
 test('publishing a reviewed subset leaves other targets unselected', async ({page}) => {
   const state = await setup(page)
-  await page.getByRole('button', {name: '发布…', exact: true}).click()
+  await page.getByRole('button', {name: '发布', exact: true}).click()
   const sheet = page.getByRole('dialog')
   await sheet.getByRole('checkbox', {name: /Local/}).uncheck()
   await sheet.getByRole('button', {name: '发布到 1 个节点'}).click()

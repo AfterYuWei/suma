@@ -31,6 +31,10 @@ func releasePlanResponse(c *gin.Context, value any, err error, accepted bool) {
 }
 
 func registerBatchReleasePlans(routes *gin.RouterGroup, deps Dependencies) {
+	routes.GET("/:name/release-activity", func(c *gin.Context) {
+		value, err := deps.CD.ReleaseActivity(c.Request.Context(), c.Param("name"))
+		releasePlanResponse(c, value, err, false)
+	})
 	routes.POST("/:name/release-plans", func(c *gin.Context) {
 		var input deployment.PrepareReleaseInput
 		if c.ShouldBindJSON(&input) != nil {

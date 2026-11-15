@@ -631,7 +631,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
     }))
     const projectRecords = deliveryRecords.get(name) || recordRows.filter(record => record.status !== 'awaiting_approval')
     deliveryRecords.set(name, projectRecords)
-    if (suffix.startsWith('/release-plans')) {
+    if (suffix.startsWith('/release-plans') || suffix === '/release-activity') {
       const config = clone(deliveryConfigurations.get(name) || cdConfiguration(name))
       return clone(mockReleasePlans(`batch/${name}`, suffix, method, body, url.searchParams.get('task_id'), JSON.stringify(config), result => completedDemoTask({type: 'cd.prepare', name: `Prepare ${name}`, params: {project: name}, result}), request => {
         const source = request.source_record_id ? projectRecords.find(record => record.id === request.source_record_id) : undefined
@@ -864,7 +864,7 @@ export async function demoApi<T>(path: string, init?: RequestInit): Promise<T> {
       if(rest.startsWith('/gitops')){
         const action=rest.slice('/gitops'.length)
         if(action==='' && method==='GET')return clone(cd) as T
-        if(action.startsWith('/release-plans')) return clone(mockReleasePlans(`project/${configurationKey}`, action, method, body, url.searchParams.get('task_id'), JSON.stringify(cd), result => completedDemoTask({type: 'project.cd.prepare', name: `Prepare ${name}`, node_id: nodeID, params: {project: name}, result}), request => {
+        if(action.startsWith('/release-plans') || action === '/release-activity') return clone(mockReleasePlans(`project/${configurationKey}`, action, method, body, url.searchParams.get('task_id'), JSON.stringify(cd), result => completedDemoTask({type: 'project.cd.prepare', name: `Prepare ${name}`, node_id: nodeID, params: {project: name}, result}), request => {
           const source = request.source_record_id ? records.find(record => record.id === request.source_record_id) : undefined
           if (request.operation !== 'deploy' && !source) throw new ApiError('Publication record not found', 17730, 404)
           if (source && !source.images_pinned && request.operation !== 'reapply') throw new ApiError('Historical images are not pinned', 17730, 422)

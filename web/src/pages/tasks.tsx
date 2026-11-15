@@ -25,7 +25,7 @@ export function TasksPage() {
   const search = useSearch({ from: '/tasks' })
   const tab: CenterTab = search.tab === 'schedules' || search.tab === 'records' ? search.tab : 'tasks'
   const nodeID = useUIStore((state) => state.currentNodeID)
-  const [scope, setScope] = useState<CenterScope>('current')
+  const [scope, setScope] = useState<CenterScope>('all')
   const [cleanupOpen, setCleanupOpen] = useState(false)
   const nodes = useQuery({ queryKey: ['nodes'], queryFn: () => api<DockerNode[]>('/nodes') })
   const currentNode = nodes.data?.find(node => node.id === nodeID)

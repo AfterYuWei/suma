@@ -225,6 +225,7 @@ The new UI uses these authenticated routes under `/api/v1/delivery-projects/:nam
 
 | Method/path | Contract |
 | --- | --- |
+| `GET /release-activity` | Read-only current project operation: `{phase?,task_id?,plan_id?,request?}`. Active preparation/execution takes priority; otherwise returns an unconsumed, unexpired plan matching the current configuration. Empty pointers mean no resumable operation. This endpoint also exists under the node project GitOps prefix; authentication, owner isolation and `Cache-Control:no-store` apply. Private plan payloads and internal versions are excluded. |
 | `POST /release-plans` | Body `{operation?,release_id?,source_record_id?}`. Starts a read-only preparation Task; `202` returns the Task. Operation defaults to `deploy`; `retry`, `restore`, `restore-failed` and `reapply` require a source record. Optional `release_id` chooses a discovered Git version for deploy. |
 | `GET /release-plans?task_id=ID` | Reads the prepared view after that preparation Task succeeds. |
 | `GET /release-plans/:planID` | Reads a plan belonging to this project. |

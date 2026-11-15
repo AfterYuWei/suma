@@ -6,7 +6,7 @@ import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'
 import { Label } from '../../components/ui/label'
 import { Switch } from '../../components/ui/switch'
-import { Sheet, SheetContent, SheetTitle } from '../../components/ui/sheet'
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../../components/ui/dialog'
 import { PollIntervalInput } from '../delivery/poll-interval-input'
 import { useSchedule, useUpdateSchedule } from './queries'
 import type { KindEditorProps } from './kinds'
@@ -44,8 +44,9 @@ export function CDScheduleEditor({ initial, open, onOpenChange, businessHref, no
       setSaved(response.data); setName(response.data.name); setInterval(response.data.interval_seconds); setEnabled(response.data.enabled); setTimer(response.data.timer_enabled); setConflict(false); setError('')
     } catch (cause) { setError(cause instanceof Error ? cause.message : zh ? '重新加载失败' : 'Unable to reload') }
   }
-  return <Sheet open={open} onOpenChange={onOpenChange}><SheetContent className="overflow-y-auto"><div className="space-y-4 p-4">
-    <SheetTitle>{zh ? 'CD 自动化' : 'CD automation'}</SheetTitle>
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto p-0 sm:max-w-lg"><div className="space-y-4 p-4">
+    <DialogTitle>{zh ? 'CD 自动化' : 'CD automation'}</DialogTitle>
+    <DialogDescription className="break-words pr-6 text-xs">{initial?.subject} · {node?.name || (zh ? '控制平面' : 'Control plane')}</DialogDescription>
     <div className="space-y-1.5"><Label>{zh ? '名称' : 'Name'}</Label><Input value={name} onChange={event => setName(event.target.value)} maxLength={120} /></div>
     <PollIntervalInput value={interval} onChange={setInterval} zh={zh} />
     <label className="flex items-center justify-between gap-3 text-sm">{zh ? '允许自动触发' : 'Allow automatic triggers'}<Switch checked={enabled} onCheckedChange={setEnabled} /></label>
@@ -59,5 +60,5 @@ export function CDScheduleEditor({ initial, open, onOpenChange, businessHref, no
     {error && <p role="alert" className="break-words text-sm text-destructive">{error}</p>}
     {conflict && <Button variant="outline" onClick={() => void reload()}>{zh ? '重新加载配置' : 'Reload configuration'}</Button>}
     <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => onOpenChange(false)}>{zh ? '取消' : 'Cancel'}</Button><Button disabled={update.isPending || !saved} onClick={() => void submit()}>{zh ? '保存' : 'Save'}</Button></div>
-  </div></SheetContent></Sheet>
+  </div></DialogContent></Dialog>
 }

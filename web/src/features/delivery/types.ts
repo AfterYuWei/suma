@@ -232,11 +232,6 @@ export function shortCommit(value?: string) {
   return value ? value.slice(0, 8) : '—'
 }
 
-export function hasActiveRelease(releases?: DeliveryRelease[]) {
-  const active = new Set(['validating', 'pulling', 'deploying', 'verifying', 'rolling_back'])
-  return releases?.some((release) => active.has(release.status)) ?? false
-}
-
 export function parseStringList(value?: string) {
   if (!value) return []
   try {

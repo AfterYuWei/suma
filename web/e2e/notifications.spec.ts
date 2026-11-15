@@ -107,7 +107,7 @@ test('global audit links open node and control-plane task details', async ({ pag
  await page.goto('/audit-logs'); await page.getByRole('row').filter({ has: page.getByText('project.deploy', { exact: true }) }).getByRole('link', { name: 'View task', exact: true }).click()
  await expect(linked.getByRole('heading', { name: /^Deploy gateway-prod release #184/ })).toBeVisible(); await expect(linked.getByText('Control plane', { exact: false })).toBeVisible(); await expect(linked.getByText('Docker operation completed successfully', { exact: true })).toBeVisible()
  await linked.getByRole('button', { name: 'Close', exact: true }).click(); await expect(linked).toBeHidden()
- await expect(page.getByRole('tab', { name: 'Current node', exact: true })).toHaveAttribute('aria-selected', 'true')
+ await expect(page.getByRole('tab', { name: 'All', exact: true })).toHaveAttribute('aria-selected', 'true')
 })
 
 test('Telegram recipient discovery is an independent opt-in and does not subscribe automatically', async ({ page }) => {

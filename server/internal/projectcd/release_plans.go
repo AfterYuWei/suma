@@ -45,7 +45,9 @@ func (s *Service) snapshotCredential(ctx context.Context, row database.ProjectCD
 }
 
 func projectVersion(row database.ProjectCD) string {
-	raw, _ := json.Marshal([]any{row.Revision, row.Enabled, row.RepositoryJSON, row.EnvironmentCiphertext, row.RegistryCredentialIDsJSON, row.ReconcileMode, row.AutomationEnabled, row.AutoRollback, row.DeploymentTimeout})
+	// Trigger controls have their own optimistic revision. Pausing future checks
+	// must not invalidate a reviewed manual publication or stop admitted work.
+	raw, _ := json.Marshal([]any{row.Enabled, row.RepositoryJSON, row.GitCredentialID, row.CredentialCiphertext, row.EnvironmentCiphertext, row.RegistryCredentialIDsJSON, row.ReconcileMode, row.AutoRollback, row.DeploymentTimeout})
 	return deployment.ConfigurationHash(string(raw), nil)
 }
 
@@ -92,6 +94,28 @@ func (s *Service) freezeSnapshot(ctx context.Context, row database.ProjectCD, re
 	value.Frozen = &frozen
 	record.ImagesPinned = true
 	return nil
+}
+
+func (s *Service) ReleaseActivity(ctx context.Context, node, name string) (deployment.ReleaseActivity, error) {
+	row, err := s.row(ctx, node, name)
+	if err != nil {
+		return deployment.ReleaseActivity{}, err
+	}
+	activity, err := deployment.CurrentReleaseActivity(ctx, s.db, "project", row.ID, node, name, projectVersion(row))
+	if err != nil || activity.Phase != "review" {
+		return activity, err
+	}
+	view, err := s.ReleasePlan(ctx, node, name, activity.PlanID)
+	if err != nil {
+		return deployment.ReleaseActivity{}, err
+	}
+	for _, target := range view.Nodes {
+		before, current := target.PreviousRecordID, row.AppliedRecordID
+		if (before == nil) != (current == nil) || before != nil && current != nil && *before != *current {
+			return deployment.ReleaseActivity{}, nil
+		}
+	}
+	return activity, nil
 }
 
 func (s *Service) PrepareRelease(ctx context.Context, node, name string, input deployment.PrepareReleaseInput, actor Actor) (database.Task, error) {
